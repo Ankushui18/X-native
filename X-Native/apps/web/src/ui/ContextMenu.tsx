@@ -3,7 +3,10 @@ import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
-import { Icon } from "./icons";
+import { Icon, caretSize, kindIcon } from "./icons";
+import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
+import { DEV_LANGS, type DevFormat } from "./devPrefs";
+import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 
 export type MenuItem =
   | { kind: "action"; id: string; label: string; shortcut?: string; icon?: string; enabled?: boolean }
@@ -47,6 +50,10 @@ export function ContextMenu({
   const estimated = items.reduce((s, it) => s + (it.kind === "sep" ? 7 : 28), 10);
   const [h, setH] = useState(estimated);
   useLayoutEffect(() => {
+    // While a submenu is open the position has to hold still: re-measuring here
+    // shifts the whole list by a row or so, which moves the row the pointer is
+    // on, and the submenu you meant to open closes on the way.
+    if (openSub !== null) return;
     const el = ref.current;
     if (!el) return;
     const real = el.getBoundingClientRect().height;
@@ -66,13 +73,31 @@ export function ContextMenu({
             <div
               key={i}
               className="ctx-row sub"
+              role="menuitem"
+              aria-haspopup="menu"
+              aria-expanded={openSub === i}
+              tabIndex={0}
               onMouseEnter={() => setOpenSub(i)}
               onMouseLeave={() => setOpenSub((n) => (n === i ? null : n))}
+              // Click and the arrow keys open it too: hover alone left the submenu
+              // unreachable with a keyboard, and a touch pointer has no hover.
+              onClick={() => setOpenSub((n) => (n === i ? null : i))}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowRight" || e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpenSub(i);
+                }
+                if (e.key === "ArrowLeft" || e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setOpenSub(null);
+                }
+              }}
             >
               {it.icon && <Icon name={it.icon} size={14} />}
               <span>{it.label}</span>
               <span className="sc">
-                <Icon name="chevron-right" size={12} />
+                <Icon name="chevron-right" size={caretSize()} />
               </span>
               {openSub === i && (
                 <div className="ctx fly-sub">
@@ -120,20 +145,79 @@ export function ContextMenu({
   );
 }
 
-export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): MenuItem[] {
+/** The rows Figma puts above every canvas menu: pick one layer out of the stack
+ *  under the cursor, then the "everything that matches" commands. */
+function selectItems(under: XNode[]): MenuItem[] {
+  const out: MenuItem[] = [];
+  if (under.length > 1) {
+    out.push({
+      kind: "sub",
+      label: "Select layer",
+      icon: "layers",
+      items: under.map((n) => ({
+        kind: "action" as const,
+        id: `select-layer:${n.id}`,
+        label: n.name || n.kind,
+        icon: n.locked ? "lock" : kindIcon(n.kind, n.imageSrc),
+        shortcut: n.locked ? "locked" : undefined,
+      })),
+    });
+  }
+  out.push({
+    kind: "sub",
+    label: "Select all with same",
+    items: SAME_KINDS.map((k) => ({ kind: "action" as const, id: `select-same:${k.id}`, label: k.label })),
+  });
+  out.push({ kind: "action", id: "selectMatching", label: "Select matching layers", shortcut: "⌥A", icon: "rect" });
+  out.push({ kind: "action", id: "selectInverse", label: "Select inverse", shortcut: "⇧⌘A" });
+  out.push({ kind: "sep" });
+  return out;
+}
+
+export function canvasMenu(
+  sel: number,
+  isGroup: boolean,
+  hasImage: boolean,
+  under: XNode[] = [],
+  hasLayout = false,
+): MenuItem[] {
   if (sel === 0) {
     return [
+      ...selectItems(under),
       { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
       { kind: "action", id: "selectAll", label: "Select all", shortcut: "⌘A", icon: "rect" },
+      // Figma's docs: right-clicking an empty canvas is the second way to get
+      // to the UI-state commands, for people who never look at the menu bar.
+      { kind: "sep" },
+      { kind: "action", id: "minimizeUi", label: "Minimize UI", shortcut: "⇧⌘\\", icon: "minimize" },
+      { kind: "action", id: "hideUi", label: "Hide UI", shortcut: "⌘\\", icon: "eye-off" },
     ];
   }
   const items: MenuItem[] = [
+    ...selectItems(under),
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
     { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
-    { kind: "action", id: "copyCode", label: "Copy as code", icon: "code" },
+    {
+      // Figma groups these under "Copy/paste as", and the language list is the
+      // inspect panel's own, so the menu and the panel answer in one voice.
+      kind: "sub",
+      label: "Copy/paste as",
+      icon: "code",
+      items: [
+        ...DEV_LANGS.map((l) => ({
+          kind: "action" as const,
+          id: `copyCode:${l.id}`,
+          label: `Copy as ${l.label}`,
+          shortcut: l.id === "css" ? "⌥⇧⌘C" : undefined,
+          icon: "code",
+        })),
+        { kind: "action" as const, id: "copyPng", label: "Copy as PNG", icon: "image" },
+        { kind: "action" as const, id: "copyLink", label: "Copy link to selection", icon: "link" },
+      ],
+    },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
   ];
@@ -144,6 +228,7 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
   items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" });
   items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" });
   items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" });
+  items.push(...layoutMenuItems(hasLayout));
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
   items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
   if (hasImage) {
@@ -186,10 +271,37 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
   return items;
 }
 
-export function layerMenu(isGroup: boolean): MenuItem[] {
+/**
+ * The auto layout entries Figma puts on a layer's context menu, from "Toggle on
+ * auto layout in designs": Add auto layout (when there is none), Remove auto
+ * layout (when there is), and - either way - More layout options ▸ Suggest auto
+ * layout, Remove all auto layout.
+ *
+ * The article lists these under a frame's right-click menu, and the same items
+ * make sense on a plain layer because that is where "Figma will create an auto
+ * layout frame around them" happens.
+ */
+function layoutMenuItems(hasLayout: boolean): MenuItem[] {
+  return [
+    hasLayout
+      ? { kind: "action", id: "removeAutoLayout", label: "Remove auto layout", shortcut: "⌥⇧A", icon: "layout-none" }
+      : { kind: "action", id: "addAutoLayout", label: "Add auto layout", shortcut: "⇧A", icon: "layout" },
+    {
+      kind: "sub",
+      label: "More layout options",
+      items: [
+        { kind: "action", id: "suggestAutoLayout", label: "Suggest auto layout", shortcut: "⌃⇧A" },
+        { kind: "action", id: "removeAllAutoLayout", label: "Remove all auto layout" },
+      ],
+    },
+  ];
+}
+
+export function layerMenu(isGroup: boolean, hasLayout = false): MenuItem[] {
   return [
     { kind: "action", id: "rename", label: "Rename", shortcut: "⌘R", icon: "text" },
     { kind: "sep" },
+    ...selectItems([]),
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
@@ -201,6 +313,7 @@ export function layerMenu(isGroup: boolean): MenuItem[] {
     { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" },
     { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" },
     { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" },
+    ...layoutMenuItems(hasLayout),
     { kind: "sep" },
     ...(isGroup
       ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" }]
@@ -225,7 +338,40 @@ export function runMenu(
   id: string,
   extra?: { x?: number; y?: number; onRename?: () => void },
 ) {
+  if (id.startsWith("copyCode:")) {
+    const format = id.slice("copyCode:".length) as DevFormat;
+    window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format } }));
+    return;
+  }
+  if (id.startsWith("select-layer:")) {
+    // The whole point of the submenu is reaching a layer the click order hides.
+    engine.dispatch({ type: "select", ids: [id.slice("select-layer:".length)] });
+    return;
+  }
+  if (id.startsWith("select-same:")) {
+    const snapNow = engine.snapshot();
+    selectSame(engine, snapNow, id.slice("select-same:".length) as never);
+    return;
+  }
   switch (id) {
+    case "addAutoLayout":
+      addAutoLayout(engine, engine.snapshot());
+      break;
+    case "removeAutoLayout":
+      removeAutoLayout(engine, engine.snapshot());
+      break;
+    case "suggestAutoLayout":
+      suggestAutoLayout(engine, engine.snapshot());
+      break;
+    case "removeAllAutoLayout":
+      removeAllAutoLayout(engine, engine.snapshot());
+      break;
+    case "selectMatching":
+      selectMatching(engine, engine.snapshot());
+      break;
+    case "selectInverse":
+      selectInverse(engine, engine.snapshot());
+      break;
     case "cut":
       engine.dispatch({ type: "cut" });
       break;
@@ -239,10 +385,18 @@ export function runMenu(
       engine.dispatch({ type: "paste", x: extra?.x, y: extra?.y });
       break;
     case "copyCode":
-      engine.dispatch({ type: "copyCode" });
       // The result lands on the clipboard with no visible change on canvas, so
-      // without a toast the command looks like it did nothing.
-      toast("Copied as CSS");
+      // without a toast the command looks like it did nothing. The panel owns the
+      // renderer, hence the event: same language and units as the snippet shown.
+      window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } }));
+      break;
+    case "copyPng":
+      // The rasteriser lives beside the export code in the right panel, so the
+      // menu asks for it over an event rather than duplicating the renderer.
+      window.dispatchEvent(new CustomEvent("x-native-copy-png"));
+      break;
+    case "copyLink":
+      window.dispatchEvent(new CustomEvent("x-native-copy-link"));
       break;
     case "copyProperties":
       engine.dispatch({ type: "copyProperties" });
@@ -263,6 +417,14 @@ export function runMenu(
     }
     case "selectAll":
       engine.dispatch({ type: "selectAll" });
+      break;
+    // UI-state commands live in App (they are not document mutations), so the
+    // menu asks for them the same way the Actions palette does.
+    case "minimizeUi":
+      window.dispatchEvent(new CustomEvent("x-native-minimize-ui"));
+      break;
+    case "hideUi":
+      window.dispatchEvent(new CustomEvent("x-native-hide-ui"));
       break;
     case "group":
       engine.dispatch({ type: "group" });

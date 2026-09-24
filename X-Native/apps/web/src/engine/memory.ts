@@ -1,6 +1,6 @@
 import type {
-  SharedStyle,
   AutoLayout,
+  SharedStyle,
   Command,
   ComponentMaster,
   Effect,
@@ -8,6 +8,7 @@ import type {
   NodeKind,
   Page,
   PathPoint,
+  PixelPreview,
   Snapshot,
   Tool,
   XNode,
@@ -16,6 +17,24 @@ import type {
 } from "./types";
 import { copyText } from "./clipboard";
 import { loadDoc, type PersistedDoc } from "./persist";
+import { clampZoom, panForZoom } from "./view";
+import {
+  autoSpacing,
+  cellAlign,
+  cellAt,
+  cellBox,
+  fillPatch,
+  clampToPadding,
+  hugsCross,
+  hugsMain,
+  isAutoGap,
+  gridSpotForPoint,
+  planGrid,
+  widthIsMain,
+  textDimensionRule,
+  wraps,
+  type Spacing,
+} from "./layout";
 import {
   booleanPath,
   outlineStroke as outlineStrokePath,
@@ -29,9 +48,11 @@ import {
 } from "./geometry";
 
 let seq = 1;
-const uid = (p: string) => `${p}_${seq++}`;
+export const uid = (p: string) => `${p}_${seq++}`;
 
-function node(
+/** Node factory. Exported so the file store can seed new documents from the
+ *  dashboard templates with exactly the same defaults the editor uses. */
+export function node(
   kind: NodeKind,
   name: string,
   x: number,
@@ -49,6 +70,7 @@ function node(
     w,
     h,
     rotation: 0,
+    rotOrigin: [0.5, 0.5],
     fill:
       kind === "frame"
         ? "#ffffff"
@@ -79,6 +101,11 @@ function node(
     overflow: kind === "frame" ? "clip" : "visible",
     cornerRadii: [0, 0, 0, 0],
     cornerIndependent: false,
+    cornerSmoothing: 0,
+    strokeSides: "all",
+    strokeSideW: [0, 0, 0, 0],
+    strokeDashCap: "butt",
+    strokeMiterAngle: 0,
     aspectLocked: false,
     sizingW: "fixed",
     sizingH: "fixed",
@@ -108,6 +135,9 @@ function node(
     paragraphSpacing: 0,
     textAlign: "left",
     textAlignVertical: "top",
+    textWrap: "auto",
+    listStyle: "none",
+    paragraphIndent: 0,
     textDecoration: "none",
     textCase: "none",
     truncate: false,
@@ -172,6 +202,32 @@ function findInstanceRoot(root: XNode, id: string): XNode | null {
   return null;
 }
 
+/**
+ * True when the layer is an instance or sits inside one. Figma refuses a small
+ * set of edits there - the geometry belongs to the component, so per-corner
+ * radii in particular can only be set on the master.
+ */
+/**
+ * Strip auto layout from a node and from everything nested inside it, which is
+ * what "Remove all auto layout" does on the frame's context menu.
+ *
+ * Instances are left alone: a nested instance's own layout belongs to its main
+ * component, and the article is explicit that instance auto layout is not
+ * removable from here.
+ */
+export function stripLayout(n: XNode): void {
+  if (n.kind === "instance") return;
+  // The model stores "no auto layout" as null, the same value the panel sends.
+  n.layout = null;
+  for (const c of n.children) stripLayout(c);
+}
+
+export function insideInstance(root: XNode, id: string): boolean {
+  const node = find(root, id);
+  if (!node) return false;
+  return node.kind === "instance" || !!findInstanceRoot(root, id);
+}
+
 function clampDims(n: XNode) {
   if (n.minW != null && Number.isFinite(n.minW) && n.w < n.minW) n.w = n.minW;
   if (n.maxW != null && Number.isFinite(n.maxW) && n.w > n.maxW) n.w = n.maxW;
@@ -179,8 +235,15 @@ function clampDims(n: XNode) {
   if (n.maxH != null && Number.isFinite(n.maxH) && n.h > n.maxH) n.h = n.maxH;
 }
 
-function applyLayout(n: XNode) {
-  for (const c of n.children) applyLayout(c);
+/** Every size in the tree, rounded: what "settled" means for a reflow. */
+function sizeSignature(n: XNode): string {
+  let s = `${Math.round(n.w * 100)}:${Math.round(n.h * 100)}`;
+  for (const c of n.children) s += `|${sizeSignature(c)}`;
+  return s;
+}
+
+function applyLayout(n: XNode, gesture = false) {
+  for (const c of n.children) applyLayout(c, gesture);
   const l = n.layout;
   if (!l) {
     if (n.children.length && (n.sizingW === "hug" || n.sizingH === "hug")) {
@@ -194,26 +257,105 @@ function applyLayout(n: XNode) {
     return;
   }
   const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
+  /* The grid flow is its own geometry: cells, tracks and spans instead of one
+     run of objects. It shares the hug/fill rules above, so it is resolved with
+     the same two questions before the cells are worked out. */
+  if (l.direction === "grid") {
+    const hugW = hugsMain(l, n, flow);
+    const hugH = hugsCross(l, n, flow);
+    // With automatic positioning off the objects stay where they are put - a
+    // drop into a cell keeps it, empty cells and all - so their cells are read
+    // off the arrangement the tracks were resolved from.
+    const first = planGrid(n, flow, l, hugW, hugH);
+    const plan =
+      l.autoPosition === false && !gesture
+        ? planGrid(n, flow, l, hugW, hugH, flow.map((c) => cellAt(first, l, c)))
+        : first;
+    const [gl, gr, gt, gb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+    flow.forEach((c, i) => {
+      const cell = plan.cells[i];
+      if (!cell) return;
+      const box = cellBox(plan, cell);
+      // Where the object landed is written back, so the panel and the object's
+      // own record agree - and so switching automatic positioning off keeps the
+      // arrangement that is on screen.
+      c.gridCol = cell.col;
+      c.gridRow = cell.row;
+      // A gesture in a manually positioned grid is the one time an object is
+      // allowed to sit between cells: it follows the pointer, and the drop
+      // (the end of the gesture) is what puts it in a cell.
+      if (gesture && l.autoPosition === false) return;
+      const { h: ah, v: av } = cellAlign(c);
+      if (c.sizingW === "fill") {
+        const patch = fillPatch(c, "w", box.w, c.sizingH === "fill");
+        if (patch.w != null) c.w = patch.w;
+        if (patch.h != null) c.h = patch.h;
+      }
+      if (c.sizingH === "fill") {
+        const patch = fillPatch(c, "h", box.h, c.sizingW === "fill");
+        if (patch.w != null) c.w = patch.w;
+        if (patch.h != null) c.h = patch.h;
+      }
+      clampDims(c);
+      c.x = gl + box.x + (ah === "center" ? (box.w - c.w) / 2 : ah === "max" ? box.w - c.w : 0);
+      c.y = gt + box.y + (av === "center" ? (box.h - c.h) / 2 : av === "max" ? box.h - c.h : 0);
+    });
+    if (hugW) n.w = Math.max(1, gl + plan.totalW + gr);
+    if (hugH) n.h = Math.max(1, gt + plan.totalH + gb);
+    clampToPadding(n);
+    clampDims(n);
+    return;
+  }
   const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
   const horiz = l.direction === "horizontal";
+  // Figma offers Wrap on a horizontal flow only, so a vertical frame that still
+  // carries the flag lays out as a plain stack rather than wrapping.
+  const doesWrap = wraps(l);
   const gap = typeof l.gap === "number" ? l.gap : 0;
   const innerW = n.w - pl - pr;
   const innerH = n.h - pt - pb;
+  const crossInner = horiz ? innerH : innerW;
+  // Fill is per dimension: a child of a vertical stack can fill its *width*,
+  // which is what the nesting article's post and profile do ("Set their width
+  // resizing to Fill container ... Set their height resizing to Hug contents").
+  // This runs before anything is placed, since a cross-filling child also
+  // decides how tall a wrapped row is.
+  for (const c of flow) {
+    const fillsCross = (horiz ? c.sizingH : c.sizingW) === "fill";
+    if (!fillsCross) continue;
+    const patch = fillPatch(c, horiz ? "h" : "w", crossInner, false);
+    if (patch.w != null) c.w = patch.w;
+    if (patch.h != null) c.h = patch.h;
+    clampDims(c);
+  }
+  const auto = isAutoGap(l);
+  const spacing: Spacing = l.spacing ?? "between";
+  // Auto gap is the space left over, so it is zero whenever something is
+  // claiming that space: a frame that hugs its contents, or a child filling
+  // along the axis - which is also what the hug turns into, one rule above.
   const fillers = flow.filter((c) => (horiz ? c.sizingW : c.sizingH) === "fill");
+  const packedGap = auto && fillers.length ? 0 : gap;
   if (fillers.length) {
     const used = flow.reduce(
       (s, c) => s + ((horiz ? c.sizingW : c.sizingH) === "fill" ? 0 : horiz ? c.w : c.h),
       0,
     );
-    const leftover = Math.max(1, (horiz ? innerW : innerH) - used - gap * Math.max(0, flow.length - 1));
+    const leftover = Math.max(1, (horiz ? innerW : innerH) - used - packedGap * Math.max(0, flow.length - 1));
     const each = leftover / fillers.length;
     for (const c of fillers) {
-      if (horiz) c.w = Math.max(1, each);
-      else c.h = Math.max(1, each);
+      const otherFills = (horiz ? c.sizingH : c.sizingW) === "fill";
+      const patch = fillPatch(c, horiz ? "w" : "h", each, otherFills);
+      if (patch.w != null) c.w = patch.w;
+      if (patch.h != null) c.h = patch.h;
       clampDims(c);
     }
   }
-  if (l.wrap && flow.length) {
+  // A hug with something filling inside it is a Fixed frame - the filler has
+  // nothing to hug down to. `effectiveSizing` is the single answer to that, and
+  // the panel shows the same one.
+  const hugMain = hugsMain(l, n, flow);
+  const hugCross = hugsCross(l, n, flow);
+  if (doesWrap && flow.length) {
     let x = pl;
     let y = pt;
     let rowH = 0;
@@ -243,25 +385,35 @@ function applyLayout(n: XNode) {
         rowW = Math.max(rowW, c.w);
       }
     }
-    if (l.sizing === "hug" || n.sizingW === "hug" || n.sizingH === "hug") {
+    if (hugMain) {
       if (horiz) n.w = Math.max(n.w, x + pr);
       else n.h = Math.max(n.h, y + pb);
     }
-    if (l.cross === "hug") {
+    if (hugCross) {
       if (horiz) n.h = y + rowH + pb;
       else n.w = x + rowW + pr;
     }
     for (const c of flow) clampDims(c);
+    clampToPadding(n);
     clampDims(n);
     return;
   }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
+  const inner = horiz ? innerW : innerH;
+  const contentMain = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0);
+  // Auto gap distributes whatever is left after the objects have taken their
+  // share; a fixed gap and the older `justify` packing do what they always did.
+  const slack = hugMain || fillers.length ? 0 : Math.max(0, inner - contentMain);
+  const pack = auto ? autoSpacing(slack, flow.length, spacing) : { lead: 0, gap: packedGap };
   let origin = horiz ? pl : pt;
-  if (l.justify === "center") origin += Math.max(0, (horiz ? innerW : innerH) - mainTotal) / 2;
-  if (l.justify === "max") origin += Math.max(0, (horiz ? innerW : innerH) - mainTotal);
-  const free = Math.max(0, (horiz ? innerW : innerH) - flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0));
-  const between = l.justify === "between" && flow.length > 1 ? free / (flow.length - 1) : gap;
-  let cursor = origin;
+  if (!auto) {
+    if (l.justify === "center") origin += Math.max(0, inner - mainTotal) / 2;
+    if (l.justify === "max") origin += Math.max(0, inner - mainTotal);
+    if (l.justify === "between" && flow.length > 1) {
+      pack.gap = Math.max(0, inner - flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0)) / (flow.length - 1);
+    }
+  }
+  let cursor = origin + pack.lead;
   let crossMax = 0;
   const maxBaseline =
     horiz && l.align === "baseline"
@@ -273,35 +425,42 @@ function applyLayout(n: XNode) {
     const c = flow[i];
     if (horiz) {
       c.x = cursor;
-      const extra = innerH - c.h;
+      const extra = crossInner - c.h;
       if (l.align === "baseline") {
         const itemBaseline = c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8;
         c.y = pt + (maxBaseline - itemBaseline);
       } else {
         c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
       }
-      cursor += c.w + (i < flow.length - 1 ? between : 0);
+      cursor += c.w + (i < flow.length - 1 ? pack.gap : 0);
       crossMax = Math.max(crossMax, c.h);
     } else {
       c.y = cursor;
-      const extra = innerW - c.w;
+      const extra = crossInner - c.w;
       c.x = pl + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
-      cursor += c.h + (i < flow.length - 1 ? between : 0);
+      cursor += c.h + (i < flow.length - 1 ? pack.gap : 0);
       crossMax = Math.max(crossMax, c.w);
     }
     clampDims(c);
   }
+  // The hug follows the packing that was actually used, lead and all, so a hug
+  // never disagrees with where the objects were put.
+  const packedMain = auto
+    ? contentMain + pack.lead * 2 + pack.gap * Math.max(0, flow.length - 1)
+    : contentMain + packedGap * Math.max(0, flow.length - 1);
   if (horiz) {
-    if (l.sizing === "hug" || n.sizingW === "hug") n.w = Math.max(1, pl + mainTotal + pr);
-    if (l.cross === "hug" || n.sizingH === "hug") n.h = Math.max(1, crossMax + pt + pb);
+    if (hugMain) n.w = Math.max(1, pl + packedMain + pr);
+    if (hugCross) n.h = Math.max(1, crossMax + pt + pb);
   } else {
-    if (l.sizing === "hug" || n.sizingH === "hug") n.h = Math.max(1, pt + mainTotal + pb);
-    if (l.cross === "hug" || n.sizingW === "hug") n.w = Math.max(1, crossMax + pl + pr);
+    if (hugMain) n.h = Math.max(1, pt + packedMain + pb);
+    if (hugCross) n.w = Math.max(1, crossMax + pl + pr);
   }
+  // A frame is never narrower than its own padding.
+  clampToPadding(n);
   clampDims(n);
 }
 
-function demoPage(): Page {
+export function demoPage(): Page {
   const title = node("text", "Title", 24, 28, 300, 32, {
     text: "Explore Store",
     fontSize: 24,
@@ -477,7 +636,28 @@ function demoPage(): Page {
     guides: [],
     pixelGrid: false,
     pixelGridColor: "#cccccc",
+    pixelSnap: true,
     flowStart: phone.id,
+  };
+}
+
+/** An empty page, the way a new Figma file opens: one invisible root frame
+ *  that holds the top-level layers and no content of its own. */
+export function blankPage(name = "Page 1"): Page {
+  return {
+    id: uid("page"),
+    name,
+    root: node("frame", name, 0, 0, 4000, 4000, {
+      fill: "#00000000",
+      overflow: "visible",
+      showName: false,
+    }),
+    comments: [],
+    guides: [],
+    pixelGrid: false,
+    pixelGridColor: "#cccccc",
+    pixelSnap: true,
+    flowStart: "",
   };
 }
 
@@ -503,9 +683,13 @@ interface Internal {
   prototypeLiveInputs: boolean;
   prototypeSound: boolean;
   activeOverlay: Snapshot["activeOverlay"];
+  showFlows: boolean;
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
+  pixelPreview: PixelPreview;
+  viewLayoutGuides: boolean;
+  propertyLabels: boolean;
   openComment: string;
   variables: VariableItem[];
   annotations: AnnotationItem[];
@@ -567,6 +751,10 @@ export class MemoryEngine implements Engine {
   private listeners = new Set<() => void>();
   private snapCache: Snapshot;
   private grouping = false;
+  /** True between `begin` and `end`: a pointer gesture is in flight, and a
+   *  manually positioned grid lets its objects follow the pointer until the
+   *  gesture ends and they settle into a cell. */
+  private gesture = false;
   /** Last history-pushing command type and its timestamp, used to coalesce
    *  rapid repeats of the same command (e.g. holding an arrow key) into a
    *  single undo step, as Figma does. */
@@ -578,8 +766,12 @@ export class MemoryEngine implements Engine {
    *  tell the user their work was replaced rather than silently starting over. */
   readonly restoreFailed: boolean;
 
-  constructor(restore = true) {
-    const loaded = restore ? loadDoc() : { doc: null, corrupt: false };
+  constructor(restore = true, seed: Omit<PersistedDoc, "version"> | null = null) {
+    const loaded = seed
+      ? { doc: { version: 1, ...seed } as PersistedDoc, corrupt: false }
+      : restore
+        ? loadDoc()
+        : { doc: null, corrupt: false };
     let doc = loaded.doc;
     let corrupt = loaded.corrupt;
     // A stored node that is missing fields the UI reads (fill, cornerRadii,
@@ -618,9 +810,13 @@ export class MemoryEngine implements Engine {
       prototypeLiveInputs: true,
       prototypeSound: true,
       activeOverlay: null,
+      showFlows: true,
       showRulers: doc?.showRulers ?? false,
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
+      pixelPreview: "off",
+      viewLayoutGuides: true,
+      propertyLabels: false,
       openComment: "",
       variables: [
         { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
@@ -629,7 +825,8 @@ export class MemoryEngine implements Engine {
         { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
         { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
       ],
-      annotations: [],
+      // Handoff notes belong to the file, not to the session (see F1).
+      annotations: doc?.annotations ?? [],
       vecEdit: null,
       vecPoint: null,
       vecPoints: [],
@@ -650,9 +847,11 @@ export class MemoryEngine implements Engine {
       zoom: this.state.zoom,
       panX: this.state.panX,
       panY: this.state.panY,
+      showFlows: this.state.showFlows,
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
+      annotations: this.state.annotations,
     };
   }
 
@@ -670,10 +869,16 @@ export class MemoryEngine implements Engine {
       this.undo.push(clone(this.state));
       this.redo = [];
       this.grouping = true;
+      this.gesture = true;
       return;
     }
     if (cmd.type === "end") {
       this.grouping = false;
+      // The end of a gesture is a drop: a grid in manual positioning reads the
+      // cell the object was let go nearest to, so it settles here rather than
+      // mid-drag.
+      this.gesture = false;
+      this.relayout();
       const previous = this.undo[this.undo.length - 1];
       if (previous && JSON.stringify(previous) === JSON.stringify(this.state)) {
         this.undo.pop();
@@ -689,6 +894,10 @@ export class MemoryEngine implements Engine {
       "select",
       "selectAll",
       "toggleRulers",
+      "setPixelPreview",
+      "toggleLayoutGuides",
+      "togglePropertyLabels",
+      "toggleFlows",
       "toggleMinimap",
       // Comments are annotations layered over the design, not part of it.
       // Figma keeps them off the design undo stack entirely: ⌘Z after posting
@@ -751,8 +960,96 @@ export class MemoryEngine implements Engine {
     return this.state.pages[this.state.page].root;
   }
 
+  /**
+   * The index a new object takes in `parent`'s children, so that a grid places
+   * it in the cell it was aimed at rather than at the end of the flow.
+   *
+   * Figma: "when you add a cell object to the grid, Figma will try to place it
+   * between the cell objects - in layer order - nearest your cursor." Anything
+   * else - a frame with no layout, a linear flow, automatic positioning off -
+   * appends, which is where it always went.
+   */
+  /**
+   * The cell a point aims at in a grid parent, or null when it is not one.
+   *
+   * `x` and `y` are in the parent's own coordinates: `add` and `reparent` both
+   * carry the point already mapped into the destination, which is where the new
+   * object's own x/y are written from.
+   */
+  private gridSpotFor(parent: XNode, x: number, y: number): { index: number; col: number; row: number } | null {
+    const l = parent.layout;
+    if (!l || l.direction !== "grid" || l.autoPosition === false) return null;
+    const flow = parent.children.filter((c) => c.visible && !c.absolutePosition);
+    return gridSpotForPoint(parent, flow, l, hugsMain(l, parent, flow), hugsCross(l, parent, flow), x, y);
+  }
+
+  /**
+   * Put an auto layout frame around what was selected.
+   *
+   * Figma's note: "Auto layout is only supported on frames. If you have one or
+   * more layers selected, Figma will create an auto layout frame around them."
+   * A group is not wrapped but converted - it is already a container, and
+   * pressing ⇧A on one has always turned it into a frame.
+   *
+   * The new frame is placed so the objects do not move: its origin is the
+   * selection's bounding box minus the padding the layout puts around them, so
+   * the first layout pass lands every object back where it was.
+   */
+  private wrapAutoLayout(ids: string[], layout: AutoLayout): void {
+    const root = this.root();
+    const nodes = ids
+      .map((id) => find(root, id))
+      .filter((n): n is XNode => !!n && !n.locked);
+    if (!nodes.length) return;
+    if (nodes.length === 1 && nodes[0].kind === "group") {
+      nodes[0].kind = "frame";
+      nodes[0].name = nodes[0].name === "Group" ? "Frame" : nodes[0].name;
+      nodes[0].layout = layout;
+      this.publishMaster(nodes[0]);
+      return;
+    }
+    // Only siblings can be wrapped: the frame is created in their parent, and
+    // the frame itself is the standard wrap.
+    this.state.selection = nodes.map((n) => n.id);
+    this.wrapSel("Frame", {
+      kind: "frame",
+      fill: "#00000000",
+      fillVisible: false,
+      overflow: "visible",
+      layout,
+    });
+    const frame = find(this.root(), this.state.selection[0]);
+    if (!frame || frame.kind !== "frame" || !frame.layout) return;
+    // The frame takes the selection's bounding box plus the padding the layout
+    // wants around it, so the objects do not move when it appears.
+    const [pl, pr, pt, pb] = Array.isArray(layout.padding) ? layout.padding : [0, 0, 0, 0];
+    if (pl || pr || pt || pb) {
+      frame.x -= pl;
+      frame.y -= pt;
+      frame.w += pl + pr;
+      frame.h += pt + pb;
+      for (const c of frame.children) {
+        c.x += pl;
+        c.y += pt;
+      }
+    }
+    this.publishMaster(frame);
+  }
+
   private relayout() {
-    applyLayout(this.root());
+    // Fill cascades through nesting: a parent's pass resizes a nested auto
+    // layout frame, and that frame's own layout then has to run again at its new
+    // size - which is the whole point of the nesting article ("when you resize
+    // the frame ... the contents should resize and reflow accordingly"). Repeat
+    // until every size in the tree has stopped changing, capped so a document
+    // with a mutual dependency cannot spin.
+    let last = "";
+    for (let i = 0; i < 4; i++) {
+      applyLayout(this.root(), this.gesture);
+      const sig = sizeSignature(this.root());
+      if (sig === last) break;
+      last = sig;
+    }
   }
 
   private build(): Snapshot {
@@ -771,10 +1068,17 @@ export class MemoryEngine implements Engine {
       canRedo: this.redo.length > 0,
       components: this.state.components,
       styles: this.state.styles,
+      showFlows: this.state.showFlows,
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
+      pixelPreview: this.state.pixelPreview,
+      viewLayoutGuides: this.state.viewLayoutGuides,
+      propertyLabels: this.state.propertyLabels,
       openComment: this.state.openComment,
+      // View options live in the tab, not in the file: Figma's article is
+      // explicit that zoom (and the menu beside it) applies to the current tab
+      // only, so none of these are written into the document.
       presentFrame: this.state.presentFrame,
       presentStack: this.state.presentStack,
       prototypeDevice: this.state.prototypeDevice,
@@ -806,9 +1110,19 @@ export class MemoryEngine implements Engine {
       case "setTool":
         s.tool = cmd.tool;
         break;
-      case "setZoom":
-        s.zoom = Math.min(8, Math.max(0.1, cmd.zoom));
+      case "setZoom": {
+        const next = clampZoom(cmd.zoom);
+        // A zoom that names an anchor keeps that point of the canvas still -
+        // the middle of the viewport for the keyboard and the menu, the pointer
+        // for a wheel. One without an anchor only changes the scale, which is
+        // what restoring a saved viewport wants.
+        if (cmd.anchorX != null && cmd.anchorY != null) {
+          s.panX = panForZoom(s.panX, s.zoom, next, cmd.anchorX);
+          s.panY = panForZoom(s.panY, s.zoom, next, cmd.anchorY);
+        }
+        s.zoom = next;
         break;
+      }
       case "pan":
         s.panX += cmd.dx;
         s.panY += cmd.dy;
@@ -817,8 +1131,20 @@ export class MemoryEngine implements Engine {
         s.panX = cmd.x;
         s.panY = cmd.y;
         break;
+      case "setPixelPreview":
+        s.pixelPreview = cmd.preview;
+        break;
+      case "toggleLayoutGuides":
+        s.viewLayoutGuides = !s.viewLayoutGuides;
+        break;
+      case "togglePropertyLabels":
+        s.propertyLabels = !s.propertyLabels;
+        break;
       case "toggleRulers":
         s.showRulers = !s.showRulers;
+        break;
+      case "toggleFlows":
+        s.showFlows = cmd.enabled ?? !s.showFlows;
         break;
       case "toggleMinimap":
         s.showMinimap = !s.showMinimap;
@@ -898,18 +1224,28 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "add": {
-        const grid = s.pages[s.page].pixelGrid;
+        const grid = snapOn(this.state, s.page);
+        const parent = cmd.parent ? find(this.root(), cmd.parent) : this.root();
         const n = node(
           cmd.kind,
-          labelFor(cmd.kind),
+          freshLabel(this.root(), cmd.kind),
           grid ? Math.round(cmd.x) : cmd.x,
           grid ? Math.round(cmd.y) : cmd.y,
           grid ? Math.max(1, Math.round(cmd.w)) : cmd.w,
           grid ? Math.max(1, Math.round(cmd.h)) : cmd.h,
           cmd.extra,
         );
-        const parent = cmd.parent ? find(this.root(), cmd.parent) : this.root();
-        (parent ?? this.root()).children.push(n);
+        const into = parent ?? this.root();
+        const spot = this.gridSpotFor(into, cmd.x, cmd.y);
+        into.children.splice(spot?.index ?? into.children.length, 0, n);
+        // "Figma will try to place it between the cell objects - in layer order
+        // - nearest your cursor", so the cell that was clicked is the one it
+        // takes. The rest of the flow arranges itself around it.
+        if (spot) {
+          n.gridCol = spot.col;
+          n.gridRow = spot.row;
+          n.gridPinned = true;
+        }
         s.selection = [n.id];
         if (cmd.kind === "text" || cmd.extra?.imageSrc) s.tool = "select";
         break;
@@ -920,7 +1256,7 @@ export class MemoryEngine implements Engine {
           if (n && !n.locked) {
             n.x += cmd.dx;
             n.y += cmd.dy;
-            if (s.pages[s.page].pixelGrid) {
+            if (snapOn(this.state, s.page)) {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
             }
@@ -945,7 +1281,7 @@ export class MemoryEngine implements Engine {
           } else {
             n.x += cmd.dx;
             n.y += cmd.dy;
-            if (s.pages[s.page].pixelGrid) {
+            if (snapOn(this.state, s.page)) {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
             }
@@ -957,13 +1293,46 @@ export class MemoryEngine implements Engine {
         if (n && !n.locked) {
           const oldW = n.w;
           const oldH = n.h;
-          n.x = s.pages[s.page].pixelGrid ? Math.round(cmd.x) : cmd.x;
-          n.y = s.pages[s.page].pixelGrid ? Math.round(cmd.y) : cmd.y;
-          n.w = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.w) : cmd.w);
-          n.h = Math.max(1, s.pages[s.page].pixelGrid ? Math.round(cmd.h) : cmd.h);
+          // What the person asked for, before snapping: an axis counts as
+          // manually adjusted when its number changed, and a hug is only
+          // measured to a fraction of a pixel, so comparing the snapped box
+          // would call a typed width a change of height too - and fix a frame
+          // that should still be hugging.
+          const askedW = cmd.w;
+          const askedH = cmd.h;
+          n.x = snapOn(this.state, s.page) ? Math.round(cmd.x) : cmd.x;
+          n.y = snapOn(this.state, s.page) ? Math.round(cmd.y) : cmd.y;
+          n.w = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.w) : cmd.w);
+          n.h = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.h) : cmd.h);
           if (n.kind === "text" && !cmd.scaleProps) {
-            if (n.w !== oldW) n.sizingW = "fixed";
-            if (n.h !== oldH) n.sizingH = "fixed";
+            if (askedW !== oldW) n.sizingW = "fixed";
+            if (askedH !== oldH) n.sizingH = "fixed";
+          }
+          // Figma: "Any manual adjustments you make will set the layer to Fixed
+          // on the relevant axis" - so a typed width or a dragged edge turns a
+          // hug into Fixed. An auto layout frame keeps its resizing in two
+          // places, the layout's own pair and the layer's resizing menu, and the
+          // engine hugs if *either* asks for it; a manual resize therefore has
+          // to set both or the hug snaps back over the number just typed. The
+          // Scale tool is exempt: it scales the frame and its resizing together.
+          if (n.layout && !cmd.scaleProps) {
+            const l = n.layout;
+            const horiz = widthIsMain(l);
+            if (askedW !== oldW) {
+              if (horiz) l.sizing = "fixed";
+              else l.cross = "fixed";
+              // A fill would also keep looking for something to fill into.
+              if (n.sizingW !== "fixed") n.sizingW = "fixed";
+            }
+            if (askedH !== oldH) {
+              if (horiz) l.cross = "fixed";
+              else l.sizing = "fixed";
+              if (n.sizingH !== "fixed") n.sizingH = "fixed";
+            }
+          }
+          // A locked box that was resized by hand takes its new ratio with it.
+          if (n.aspectLocked && askedW !== oldW && askedH !== oldH && n.w > 0 && n.h > 0) {
+            n.aspectRatio = n.h / n.w;
           }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
@@ -980,10 +1349,18 @@ export class MemoryEngine implements Engine {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
           if (!p || !n || id === dest.id || !!find(n, dest.id)) continue;
+          // Where it lands is worked out against the destination as it stands,
+          // before this object joins it.
+          const spot = this.gridSpotFor(dest, cmd.x, cmd.y);
           p.children = p.children.filter((c) => c.id !== id);
           n.x = cmd.x;
           n.y = cmd.y;
-          dest.children.push(n);
+          dest.children.splice(spot?.index ?? dest.children.length, 0, n);
+          if (spot) {
+            n.gridCol = spot.col;
+            n.gridRow = spot.row;
+            n.gridPinned = true;
+          }
         }
         break;
       }
@@ -1055,7 +1432,13 @@ export class MemoryEngine implements Engine {
             copy.isComponent = false;
             copy.componentId = masterId;
           }
-          p.children.push(copy);
+          // Figma puts the duplicate directly above the one it came from, and
+          // "the new frames will fill the subsequent cells" - so a copy of an
+          // object that was placed on purpose is not itself placed.
+          copy.gridPinned = false;
+          const at = p.children.findIndex((c) => c.id === n.id);
+          if (at === -1) p.children.push(copy);
+          else p.children.splice(at + 1, 0, copy);
           created.push(copy.id);
         }
         s.selection = created;
@@ -1075,10 +1458,20 @@ export class MemoryEngine implements Engine {
           if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
           }
-          Object.assign(n, cmd.patch);
+          // Figma's text rule: a text layer cannot hold a max height and a max
+          // line count at once - setting either clears the other - so the pair
+          // is resolved here rather than in whichever panel did the writing.
+          const patch = n.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
+          // Turning the aspect lock on remembers the ratio it was taken at, so
+          // a later size that clamps to a pixel cannot leave the box square.
+          if (patch.aspectLocked === true && patch.aspectRatio === undefined && n.w > 0 && n.h > 0) {
+            patch.aspectRatio = n.h / n.w;
+          }
+          if (patch.aspectLocked === false) patch.aspectRatio = undefined;
+          Object.assign(n, patch);
           // Text layers follow their content until renamed, as in Figma.
-          if (n.kind === "text" && cmd.patch.text !== undefined && !n.nameLocked) {
-            const first = (cmd.patch.text || "").split("\n")[0].trim();
+          if (n.kind === "text" && patch.text !== undefined && !n.nameLocked) {
+            const first = (patch.text || "").split("\n")[0].trim();
             n.name = first ? first.slice(0, 60) : "Text";
           }
           if (n.isComponent && n.componentId) {
@@ -1103,6 +1496,20 @@ export class MemoryEngine implements Engine {
         const n = find(this.root(), cmd.id);
         if (n) {
           n.layout = cmd.layout;
+          this.publishMaster(n);
+        }
+        break;
+      }
+      case "wrapAutoLayout": {
+        this.wrapAutoLayout(cmd.ids, cmd.layout);
+        break;
+      }
+      case "removeAllLayout": {
+        const n = find(this.root(), cmd.id);
+        // "Auto layout cannot be removed from component instances. You will
+        // need to detach the instance from the component to make these edits."
+        if (n && !insideInstance(this.root(), cmd.id)) {
+          stripLayout(n);
           this.publishMaster(n);
         }
         break;
@@ -1144,7 +1551,7 @@ export class MemoryEngine implements Engine {
               ? findParent(this.root(), selected.id) ?? this.root()
               : this.root();
         const parentWorld = parent === this.root() ? { x: 0, y: 0 } : worldPos(this.root(), parent.id) ?? { x: 0, y: 0 };
-        const grid = s.pages[s.page].pixelGrid;
+        const grid = snapOn(this.state, s.page);
         for (const n of this.clip) {
           const copy = clone(n);
           reid(copy);
@@ -1210,6 +1617,10 @@ export class MemoryEngine implements Engine {
         }
         break;
       case "copyCode": {
+        // Engine-level "copy the box as CSS". The Dev Mode UI no longer routes
+        // through here: it renders through inspector.renderDevCode so the panel,
+        // the Copy/paste as menu and ⌥⇧⌘C all honour the chosen language and units.
+        // This stays because it is the command the menu-command parity list names.
         const n = s.selection[0] ? find(this.root(), s.selection[0]) : null;
         if (!n || typeof navigator === "undefined") break;
         const css = [
@@ -1255,6 +1666,12 @@ export class MemoryEngine implements Engine {
           blendMode: n.blendMode,
           cornerRadii: n.cornerRadii ? [...n.cornerRadii] : undefined,
           cornerIndependent: n.cornerIndependent,
+          cornerSmoothing: n.cornerSmoothing,
+          strokeSides: n.strokeSides,
+          strokeSideW: n.strokeSideW ? [...n.strokeSideW] : undefined,
+          strokeDashPattern: n.strokeDashPattern ? [...n.strokeDashPattern] : undefined,
+          strokeDashCap: n.strokeDashCap,
+          strokeMiterAngle: n.strokeMiterAngle,
           interactions: n.interactions ? clone(n.interactions) : undefined,
         };
         break;
@@ -1290,6 +1707,12 @@ export class MemoryEngine implements Engine {
           if (p.blendMode !== undefined) n.blendMode = p.blendMode;
           if (p.cornerRadii) n.cornerRadii = [...p.cornerRadii];
           if (p.cornerIndependent !== undefined) n.cornerIndependent = p.cornerIndependent;
+          if (p.cornerSmoothing !== undefined) n.cornerSmoothing = p.cornerSmoothing;
+          if (p.strokeSides !== undefined) n.strokeSides = p.strokeSides;
+          if (p.strokeSideW) n.strokeSideW = [...p.strokeSideW];
+          if (p.strokeDashPattern) n.strokeDashPattern = [...p.strokeDashPattern];
+          if (p.strokeDashCap !== undefined) n.strokeDashCap = p.strokeDashCap;
+          if (p.strokeMiterAngle !== undefined) n.strokeMiterAngle = p.strokeMiterAngle;
           if (p.interactions) n.interactions = clone(p.interactions);
         }
         break;
@@ -1716,9 +2139,36 @@ export class MemoryEngine implements Engine {
         );
         n.vectorNetwork = updated;
         n.kind = "vector";
+        let net = updated;
         const res = vectorNetworkToPath(updated);
         n.path = res.path;
         if (res.closed) n.closed = true;
+        // Vertices are local to the node, and every other command keeps the
+        // origin at the top-left of the geometry. Drawing a branch beyond the
+        // old box must therefore move the origin and grow the frame, or the
+        // path would reach outside a frame that still has the old size.
+        const vxs = net.vertices.map((v) => v.x);
+        const vys = net.vertices.map((v) => v.y);
+        const minX = Math.min(0, ...vxs);
+        const minY = Math.min(0, ...vys);
+        if (minX < 0 || minY < 0) {
+          const dx = minX < 0 ? -minX : 0;
+          const dy = minY < 0 ? -minY : 0;
+          net = {
+            ...net,
+            vertices: net.vertices.map((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
+          };
+          n.x -= dx;
+          n.y -= dy;
+          n.path = n.path.map((pt) => ({ ...pt, x: pt.x + dx, y: pt.y + dy }));
+          n.vectorNetwork = net;
+        }
+        const wxs = n.path.map((pt) => pt.x);
+        const wys = n.path.map((pt) => pt.y);
+        if (wxs.length) {
+          n.w = Math.max(1, Math.max(...wxs) - Math.min(0, ...wxs));
+          n.h = Math.max(1, Math.max(...wys) - Math.min(0, ...wys));
+        }
         break;
       }
       case "bendSegment": {
@@ -2057,7 +2507,7 @@ function focusFrame(s: Internal, root: XNode, id: string) {
   const availW = Math.max(300, vw - 160);
   const availH = Math.max(300, vh - 160);
   const z = Math.min(1.0, Math.max(0.2, Math.min(availW / Math.max(wp.node.w, 1), availH / Math.max(wp.node.h, 1))));
-  s.zoom = z;
+  s.zoom = clampZoom(z);
   s.panX = Math.round((vw - wp.node.w * z) / 2 - wp.x * z);
   s.panY = Math.round((vh - wp.node.h * z) / 2 - wp.y * z);
 }
@@ -2122,6 +2572,41 @@ function syncInstances(pages: Page[], master: XNode) {
       syncNode(n, master);
     });
   }
+}
+
+/**
+ * Is Figma's "snap to pixel grid" (View menu / Shift+Cmd+') switched on for this
+ * page? It is a *drawing* behaviour — objects are rounded to whole pixels as
+ * they are created, moved and resized — and is separate from the pixel-grid
+ * *overlay*, which is only a ruler-grade guide drawn above 400% zoom. The two
+ * used to be the same flag here, which meant the overlay's default of off
+ * silently disabled snapping for everyone.
+ */
+function snapOn(s: { pages: Page[]; page: number }, index: number): boolean {
+  return s.pages[index]?.pixelSnap ?? true;
+}
+
+/**
+ * Figma's default name for a new layer: the kind, then the lowest number that
+ * is not already taken in the page. "Frame" for every frame - which is what
+ * this used to do - makes the Layers list and the names on the canvas
+ * indistinguishable the moment there are two of them.
+ */
+function freshLabel(root: XNode, k: NodeKind): string {
+  const base = labelFor(k);
+  const taken = new Set<string>();
+  const walk = (n: XNode) => {
+    taken.add(n.name);
+    for (const c of n.children) walk(c);
+  };
+  walk(root);
+  // Always numbered, even the first: Figma's first frame is "Frame 1", not
+  // "Frame", so a document's names never change shape as it grows.
+  for (let i = 1; i < 10_000; i++) {
+    const candidate = `${base} ${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return base;
 }
 
 function labelFor(k: NodeKind): string {
@@ -2367,12 +2852,34 @@ function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: numbe
 function scaleProps(n: XNode, sx: number, sy: number) {
   const s = (Math.abs(sx) + Math.abs(sy)) / 2;
   n.strokeWidth *= s;
+  n.strokeDash *= s;
+  n.strokeGap *= s;
+  // A dashed outline keeps its rhythm when the layer is scaled, and so do the
+  // per-side weights. Smoothing is a ratio rather than a length, so it stays put.
+  if (n.strokeDashPattern?.length) n.strokeDashPattern = n.strokeDashPattern.map((v) => v * s);
+  if (n.strokeSideW) n.strokeSideW = n.strokeSideW.map((v) => v * s) as [number, number, number, number];
   n.fontSize *= s;
   n.letterSpacing *= s;
+  n.paragraphSpacing *= s;
+  n.paragraphIndent *= s;
   if (n.lineHeight) n.lineHeight *= s;
+  // Auto layout limits travel with the box, or a shrunk layer would still refuse
+  // to grow past the minimum it had before scaling.
+  for (const key of ["minW", "maxW", "minH", "maxH"] as const) {
+    const v = n[key];
+    if (v) n[key] = v * s;
+  }
   n.cornerRadii = n.cornerRadii.map((r) => r * s) as [number, number, number, number];
   if (n.strokes) {
-    for (const st of n.strokes) st.width *= s;
+    for (const st of n.strokes) {
+      st.width *= s;
+      // Extra strokes used to keep their dash and side weights unscaled,
+      // which left them visibly wrong against the scaled outline.
+      if (st.dash) st.dash *= s;
+      if (st.gap) st.gap *= s;
+      if (st.pattern?.length) st.pattern = st.pattern.map((v) => v * s);
+      if (st.sideW) st.sideW = st.sideW.map((v) => v * s) as [number, number, number, number];
+    }
   }
   if (n.effects) {
     for (const ef of n.effects) {
@@ -2460,18 +2967,12 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
               : 4,
     spread: kind === "texture" ? 4 : 0,
     visible: true,
+    blend: "Normal",
+    // Figma's checkbox starts unchecked, and only a drop shadow has one.
+    ...(kind === "drop-shadow" ? { showBehind: false } : {}),
   };
 }
 
-export function defaultLayout(): AutoLayout {
-  return {
-    direction: "horizontal",
-    gap: 8,
-    padding: [8, 8, 8, 8],
-    sizing: "hug",
-    cross: "hug",
-    wrap: false,
-    align: "min",
-    justify: "min",
-  };
-}
+/* The default auto layout frame lives in `layout.ts` with the rest of the
+ * auto layout rules; this re-export keeps the existing imports working. */
+export { defaultLayout } from "./layout";

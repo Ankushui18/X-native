@@ -8,20 +8,121 @@
  */
 import { snapMove, snapCandidates } from "../snapping.ts";
 import {
+  cornerPinPoints,
+  cornerRadiiOf,
+  cornerReach,
+  hasCornerSmoothing,
+  roundRectRadii,
+  shapePoly,
   simplifyPath,
   smoothPath,
+  squircleOutline,
   erasePath,
   pathToVectorNetwork,
   addVectorBranch,
   vertexDegree,
   vectorNetworkToSvgPath,
   bendSegment,
+  balanceLines,
   insertPointOnPath,
   projectPointOnSegment,
   computeFigmaNoodle,
 } from "../geometry.ts";
-import { MemoryEngine } from "../memory.ts";
+import { MemoryEngine, defaultEffect, find, findParent, insideInstance, worldPos } from "../memory.ts";
+import {
+  SPACING_MODES,
+  alignKey,
+  alignmentCells,
+  cellAlign,
+  cellBox,
+  defaultGrid,
+  fillersAlong,
+  fillPatch,
+  gridRows,
+  gridSpotForPoint,
+  hugsCross,
+  hugsMain,
+  placeCells,
+  planGrid,
+  widthIsMain,
+  autoSpacing,
+  clampToPadding,
+  defaultLayout,
+  effectiveSizing,
+  hasFillChild,
+  isAutoGap,
+  layoutKeyPatch,
+  parsePaddingShorthand,
+  suggestLayout,
+  textDimensionRule,
+  wraps,
+} from "../layout.ts";
+import { ASSET_PREFIX, assetCount, dehydrateDoc, hydrateDoc, putAsset, resetAssets } from "../assets.ts";
+import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
+import { rotateAboutOrigin, scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
+import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
+import {
+  SIDES,
+  dashArray,
+  miterLimitFromAngle,
+  parseDashPattern,
+  sideCones,
+  sideWidths,
+  sidesSupported,
+} from "../../engine/strokeModel.ts";
+import {
+  EFFECT_LIMITS,
+  canAddEffect,
+  canShowBehindTransparent,
+  countKind,
+  effectCanBlend,
+  effectCanShowBehind,
+  moveEffect,
+} from "../../ui/effectModel.ts";
+
+import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selectionColors.ts";
+import { compositeOver, contrastRatio, readableLabel } from "../../ui/color.ts";
+import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
+
 import { inspectFigFile, importFig } from "../figImport.ts";
+import {
+  DEFAULT_NUDGE,
+  NUDGE_MAX,
+  NUDGE_MIN,
+  clampNudge,
+  normalizeNudge,
+  nudgeStep,
+  parseNudge,
+} from "../../ui/nudgePrefs.ts";
+import {
+  DEFAULT_THEME_PREF,
+  THEME_OPTIONS,
+  normalizeThemePref,
+  resolveTheme,
+  themeLabel,
+} from "../../ui/themeModel.ts";
+import {
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_PRESETS,
+  normalizeWheelDelta,
+  panForZoom,
+  stepZoom,
+  wheelZoomFactor,
+} from "../view.ts";
+import { exportSvg, svgPath } from "../svgExport.ts";
+import {
+  FORMAT_CAPS,
+  FORMATS,
+  SCALE_PRESETS,
+  clampScale,
+  exportSize,
+  formatScale,
+  newPreset,
+  parseScale,
+  qualityValue,
+  resolveSettings,
+} from "../../ui/exportModel.ts";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../smartAnimate.ts";
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
@@ -559,10 +660,188 @@ console.log("component instance overrides:");
     t("OpenFigs.fig reports VECTOR layers", (oRep.nodesByType["VECTOR"] || 0) > 0);
 
     const imported = await importFig(oBuf.buffer.slice(oBuf.byteOffset, oBuf.byteOffset + oBuf.byteLength));
-    const importedVector = imported.nodes.find((n) => n.kind === "vector");
+    const flatten = (list) => list.flatMap((n) => [n, ...flatten(n.children ?? [])]);
+    const every = flatten(imported.nodes);
+    const importedVector = every.find((n) => n.kind === "vector");
     t("importFig imports vector node with path", !!importedVector?.path?.length);
     t("importFig imports vector node with vectorNetwork", !!importedVector?.vectorNetwork);
+    // The file is a frame holding a vector, so that is what the import has to
+    // be: the old importer put them side by side at the top level.
+    t("a .fig frame brings its children with it", imported.nodes.length === 1 && imported.nodes[0].kind === "frame");
+    t("the vector is inside the frame, not beside it", (imported.nodes[0].children ?? []).some((n) => n.kind === "vector"));
+    t("nesting does not duplicate layers", every.length === imported.nodes.length + (imported.nodes[0].children?.length ?? 0));
+    t("pages come from the file's canvases", (imported.pages ?? []).length === 1 && imported.pages[0].name === "Page 1");
+    t("Figma's internal canvas is not imported as a page", !(imported.pages ?? []).some((p) => /Internal/i.test(p.name)));
+    t("layer coordinates are kept as the file has them", Math.round(imported.nodes[0].x) === -655 && Math.round(imported.nodes[0].y) === -793);
+    t("the child is placed inside its parent, not at the page origin", imported.nodes[0].children[0].x === 0 && imported.nodes[0].children[0].y === 0);
+    t("a container reports no fill of its own", imported.nodes[0].fillVisible === false);
+    t("the vector keeps its own paint", importedVector.fill.toLowerCase() === "#fefefe" && importedVector.fillVisible === true);
+    // The logo is drawn as a dozen separate contours. Reading only the first
+    // one - which is what the importer used to do - drew a blob where the mark
+    // should be.
+    t("every contour of a multi-subpath vector arrives", (importedVector.vectorNetwork?.vertices.length ?? 0) > 150);
+    const loops = importedVector.vectorNetwork?.regions?.[0]?.loops ?? [];
+    t("each contour becomes one closed loop of the network", loops.length === 20);
+    t("no contour collapses to a punt", loops.every((l) => l.length >= 3));
+    t("the network is one layer, not twenty", every.filter((n) => n.kind === "vector").length === 1);
+    t("the whole mark is inside the node's box", importedVector.vectorNetwork.vertices.every((v) => v.x >= -1 && v.x <= importedVector.w + 1));
   }
+}
+
+{
+  console.log("zoom: one wheel notch is a step, not a leap; the keyboard doubles");
+  const notch = wheelZoomFactor({ deltaY: -100, deltaMode: 0, pinch: true });
+  t("one clipped wheel notch zooms 1.1x, not e", Math.abs(notch - 1.1) < 1e-9);
+  t("a notch the other way zooms out by the same step", Math.abs(wheelZoomFactor({ deltaY: 100 }) - 1 / 1.1) < 1e-9);
+  t("four notches in one event are four steps", Math.abs(wheelZoomFactor({ deltaY: -400 }) - 1.1 ** 4) < 1e-9);
+  t("a burst of notches cannot cross the zoom range in one event", wheelZoomFactor({ deltaY: -100000 }) <= 2);
+  const pinch = wheelZoomFactor({ deltaY: -20, deltaMode: 0, pinch: true });
+  t("a trackpad pinch stays exponential and tracks the fingers", Math.abs(pinch - Math.exp(0.2)) < 1e-9);
+  t("a pinch out is the exact inverse", Math.abs(pinch * wheelZoomFactor({ deltaY: 20, pinch: true }) - 1) < 1e-9);
+  t("prefixing ⌘ on a wheel event does not turn a notch into a pinch", wheelZoomFactor({ deltaY: -100, pinch: true }) === notch);
+  t("line-mode wheels are converted to pixels", normalizeWheelDelta(3, 1) === 48);
+  t("page-mode wheels are converted to pixels", normalizeWheelDelta(1, 2) === 100);
+  t(
+    "a three-line Firefox notch zooms like the 48 pixels it is",
+    Math.abs(wheelZoomFactor({ deltaY: -3, deltaMode: 1 }) - 1.1 ** 0.48) < 1e-9,
+  );
+  t(
+    "the same three units unconverted would be read as a pinch and zoom too little",
+    wheelZoomFactor({ deltaY: -3 }) === Math.exp(0.03),
+  );
+  t("zoom in doubles: 50% becomes 100%", stepZoom(0.5, 1) === 1);
+  t("zoom in from 100% is 200%, as in Figma", stepZoom(1, 1) === 2);
+  t("zoom out halves: 100, 50, 25, 12.5", [1, 0.5, 0.25].every((z) => stepZoom(z, -1) === z / 2));
+  t("zoom in stops at 6400%", stepZoom(ZOOM_MAX, 1) === ZOOM_MAX);
+  t("zoom out stops at 2%", stepZoom(ZOOM_MIN, -1) === ZOOM_MIN);
+  t("the menu lists Figma's default percentages", ZOOM_PRESETS.includes(0.25) && ZOOM_PRESETS.includes(0.64) && ZOOM_PRESETS.includes(1.28) && ZOOM_PRESETS.includes(10.24));
+  t("the default percentages are in ascending order", ZOOM_PRESETS.every((z, i) => i === 0 || z > ZOOM_PRESETS[i - 1]));
+  t("every default percentage is inside the range", ZOOM_PRESETS.every((z) => z >= ZOOM_MIN && z <= ZOOM_MAX));
+}
+
+{
+  console.log("svg export: the canvas, written out as a file");
+  const e = new MemoryEngine();
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 400, h: 320, extra: { name: "Card" } });
+  const frame = e.snapshot().selection[0];
+  const nodeIn = (id) => find(e.snapshot().pages[0].root, id);
+  const out = (id) => exportSvg(nodeIn(id), { format: "SVG", scale: 1, suffix: "" });
+
+  t("a plain rectangle exports as a path with its fill", /<path d="M 0 0 .*" fill="#[0-9a-f]{6}"/.test(out(frame)));
+
+  // 1. Effects: the canvas draws a shadow, the file must carry one.
+  e.dispatch({ type: "add", kind: "rect", x: 20, y: 20, w: 100, h: 80, parent: frame, extra: { name: "Shadowed" } });
+  const shadowed = e.snapshot().selection[0];
+  const plain = out(shadowed);
+  t("a layer with no effects exports no filter", !plain.includes("<filter"));
+  e.dispatch({
+    type: "patch",
+    id: shadowed,
+    patch: { effects: [{ kind: "drop-shadow", color: "#00000066", x: 0, y: 6, blur: 12, spread: 2, visible: true }] },
+  });
+  const shadowSvg = out(shadowed);
+  t("a drop shadow exports as a filter", shadowSvg.includes("<filter") && shadowSvg.includes("feGaussianBlur"));
+  t("the filter is applied to the layer", /filter="url\(#paint_/.test(shadowSvg));
+  t("an invisible effect exports nothing", !out((() => { e.dispatch({ type: "patch", id: shadowed, patch: { effects: [{ kind: "drop-shadow", color: "#00000066", x: 0, y: 6, blur: 12, spread: 0, visible: false }] } }); return shadowed; })()).includes("<filter"));
+  e.dispatch({ type: "patch", id: shadowed, patch: { effects: [] } });
+
+  // 2. Gradients: a three-stop ramp used to export as its first two colours.
+  e.dispatch({ type: "add", kind: "rect", x: 140, y: 20, w: 100, h: 80, parent: frame, extra: { name: "Ramp" } });
+  const ramp = e.snapshot().selection[0];
+  e.dispatch({
+    type: "patch",
+    id: ramp,
+    patch: {
+      fillType: "linear",
+      fillGX: 0,
+      fillGY: 0,
+      fillHX: 1,
+      fillHY: 0,
+      gradientStops: [
+        { color: "#ff0000ff", position: 0 },
+        { color: "#00ff00ff", position: 0.5 },
+        { color: "#0000ffff", position: 1 },
+      ],
+    },
+  });
+  const rampSvg = out(ramp);
+  t("a three-stop ramp exports three stops", (rampSvg.match(/<stop /g) || []).length === 3);
+  t("the middle colour survives", rampSvg.includes('stop-color="#00ff00"') && rampSvg.includes('offset="50%"'));
+
+  // 3. Stroke alignment: SVG has none, so it is clipped or masked.
+  e.dispatch({ type: "add", kind: "rect", x: 260, y: 20, w: 100, h: 80, parent: frame, extra: { name: "Stroked" } });
+  const stroked = e.snapshot().selection[0];
+  e.dispatch({
+    type: "patch",
+    id: stroked,
+    patch: { strokeVisible: true, strokePaint: "#000000", strokeWidth: 8, strokeAlign: "inside" },
+  });
+  const insideSvg = out(stroked);
+  t("an inside stroke is clipped to the shape", insideSvg.includes("<clipPath") && insideSvg.includes("stroke-width=\"16\""));
+  e.dispatch({ type: "patch", id: stroked, patch: { strokeAlign: "outside" } });
+  const outsideSvg = out(stroked);
+  t("an outside stroke is masked out of the shape", outsideSvg.includes("<mask") && outsideSvg.includes('mask="url(#mask_'));
+  t("an outside stroke is doubled too", outsideSvg.includes("stroke-width=\"16\""));
+  e.dispatch({ type: "patch", id: stroked, patch: { strokeAlign: "center" } });
+  t("a centre stroke needs neither", !out(stroked).includes("<mask") && out(stroked).includes("stroke-width=\"8\""));
+
+  // 4. A vector network: every loop, not just the first one.
+  e.dispatch({ type: "add", kind: "rect", x: 20, y: 140, w: 100, h: 80, parent: frame, extra: { name: "Donut" } });
+  const donut = e.snapshot().selection[0];
+  const ring = (x0, x1) => [
+    { x: x0, y: x0 },
+    { x: x1, y: x0 },
+    { x: x1, y: x1 },
+    { x: x0, y: x1 },
+  ];
+  e.dispatch({
+    type: "patch",
+    id: donut,
+    patch: {
+      kind: "vector",
+      path: ring(0, 100),
+      closed: true,
+      vectorNetwork: {
+        vertices: [...ring(0, 100), ...ring(30, 70)].map((p) => ({ x: p.x, y: p.y })),
+        segments: [],
+        regions: [{ windingRule: "EVENODD", loops: [[0, 1, 2, 3], [4, 5, 6, 7]] }],
+      },
+    },
+  });
+  const donutSvg = out(donut);
+  t("every loop of a vector network exports", (svgPath(nodeIn(donut)).match(/M /g) || []).length === 2);
+  t("the winding rule comes with it", donutSvg.includes('fill-rule="evenodd"'));
+
+  // 5. Extra fills and strokes stack on top, as they do on the canvas.
+  e.dispatch({ type: "add", kind: "rect", x: 140, y: 140, w: 100, h: 80, parent: frame, extra: { name: "Two fills" } });
+  const two = e.snapshot().selection[0];
+  e.dispatch({
+    type: "patch",
+    id: two,
+    patch: {
+      fill: "#ff0000",
+      fills: [{ type: "solid", color: "#00ff00", opacity: 0.5, visible: true }],
+      strokes: [{ color: "#0000ff", opacity: 1, visible: true, width: 3, align: "center" }],
+    },
+  });
+  const twoSvg = out(two);
+  t("an extra fill is exported", twoSvg.includes('fill="#00ff00"'));
+  t("an extra stroke is exported", twoSvg.includes('stroke="#0000ff"') && twoSvg.includes('stroke-width="3"'));
+
+  // 6. Rotation happens about the layer\'s own origin, not always its centre.
+  e.dispatch({ type: "add", kind: "rect", x: 260, y: 140, w: 100, h: 80, parent: frame, extra: { name: "Turned" } });
+  const turned = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: turned, patch: { rotation: 30, rotOrigin: [0, 0] } });
+  t("rotation uses the layer's rotation origin", out(turned).includes("rotate(30 0 0)"));
+  e.dispatch({ type: "patch", id: turned, patch: { rotOrigin: [0.5, 0.5] } });
+  t("and the centre when that is the origin", out(turned).includes("rotate(30 50 40)"));
+
+  // 7. A hidden layer is not in the file at all.
+  e.dispatch({ type: "patch", id: turned, patch: { visible: false } });
+  t("a hidden layer exports nothing", !out(turned).includes("<path"));
+
+  // 8. The export is a file the app can read back. The importer needs a DOM to
+  //    parse with, so this half runs in the browser probe rather than here.
 }
 
 {
@@ -1215,5 +1494,1751 @@ console.log("vector edit multi-selection & marquee (Figma parity):");
   t("clearing selection clears vecPoint and vecPoints", s2.vecEdit === null && s2.vecPoint === null && s2.vecPoints.length === 0);
 }
 
+// --- Figma's wrap style: Balance / Pretty (x-core's TextWrap) ---------------
+{
+  const w = (s) => s.length; // one column per character keeps the arithmetic readable
+  const maxW = 5;
+  const greedy = ["a b", "c d", "e"]; // 1-char words, two per line where it fits
+  const bal = balanceLines(greedy, maxW, w, "balance");
+  t("balance keeps every word", bal.join(" ").split(/\s+/).length === greedy.join(" ").split(/\s+/).length);
+  t("balance never overflows the box", bal.every((l) => w(l) <= maxW));
+  t("balance leaves a lone final word alone", JSON.stringify(bal) === JSON.stringify(greedy));
+  const pretty = balanceLines(greedy, maxW, w, "pretty");
+  t("pretty moves a word down instead of stranding one", pretty[pretty.length - 1].split(/\s+/).length === 2);
+  t("pretty keeps every word", pretty.join(" ").split(/\s+/).length === greedy.join(" ").split(/\s+/).length);
+  const wide = ["aaaa aaaa", "bb"]; // a short tail the greedy break left behind
+  const evened = balanceLines(wide, 11, w, "balance");
+  t("balance evens two unequal lines", Math.max(...evened.map(w)) < Math.max(...wide.map(w)));
+  t("balance is a no-op for a single line", balanceLines(["only line"], 10, w, "balance").length === 1);
+  t("balance is a no-op when nothing wraps (infinite width)", balanceLines(wide, Infinity, w, "pretty") === wide);
+  const para = "the quick brown fox jumps over the lazy dog and then keeps on going".split(" ");
+  const greedyMany = [];
+  {
+    let cur = "";
+    for (const word of para) {
+      if (cur && w(`${cur} ${word}`) > 26) { greedyMany.push(cur); cur = word; }
+      else cur = cur ? `${cur} ${word}` : word;
+    }
+    if (cur) greedyMany.push(cur);
+  }
+  const evenedMany = balanceLines(greedyMany, 26, w, "balance");
+  t("balance keeps the greedy line count", evenedMany.length === greedyMany.length);
+  t("balance never leaves a line wider than the greedy break",
+    Math.max(...evenedMany.map(w)) <= Math.max(...greedyMany.map(w)));
+  t("balance spreads the words of a long paragraph", new Set(evenedMany.map(w)).size > 1);
+  const huge = Array.from({ length: 240 }, (_, i) => `w${i}`);
+  const hugeLines = [huge.slice(0, 120).join(" "), huge.slice(120).join(" ")];
+  t("balance bails out on a very long paragraph instead of searching",
+    balanceLines(hugeLines, 1e6, w, "balance") === hugeLines);
+  const cjk = ["\u4e2d\u6587\u53e5\u5b50\u957f", "\u53e6\u4e00\u6bb5"];
+  t("balance leaves unspaced CJK lines to the wrapper", balanceLines(cjk, 6, w, "balance").length === 2);
+}
+
+
+console.log("wcag contrast (the picker's check):");
+{
+  t("black on white is 21:1", Math.abs(contrastRatio("#000000", "#ffffff") - 21) < 0.01);
+  t("the same color is 1:1", Math.abs(contrastRatio("#7f7f7f", "#7f7f7f") - 1) < 1e-6);
+  t("AA wants 4.5 for normal text and 3 for large",
+    contrastTarget("normal", "AA") === 4.5 && contrastTarget("large", "AA") === 3);
+  t("graphics has no AAA tier", contrastTarget("graphics", "AAA") === 3);
+  t("#767676 on white is the classic AA floor", passesContrast("#767676", "#ffffff", "normal", "AA"));
+  t("#777777 on white just misses it", !passesContrast("#777777", "#ffffff", "normal", "AA"));
+  const fixed = nearestAccessible("#777777", "#ffffff", contrastTarget("normal", "AA"));
+  t("fixing a failing gray clears the target", contrastRatio(fixed, "#ffffff") + 1e-6 >= 4.5);
+  t("fixing is the smallest change that works", fixed.toLowerCase() === "#767676");
+  const blue = nearestAccessible("#6fb3f2", "#ffffff", contrastTarget("normal", "AA"));
+  const from = rgbToHsv(parseHex("#6fb3f2").r, parseHex("#6fb3f2").g, parseHex("#6fb3f2").b);
+  const to = rgbToHsv(parseHex(blue).r, parseHex(blue).g, parseHex(blue).b);
+  t("a saturated color keeps its hue and chroma when repaired",
+    Math.abs(from.h - to.h) <= 1 && Math.abs(from.s - to.s) <= 0.02 && to.v < from.v);
+  t("repairing reaches the target without overshooting it", contrastRatio(blue, "#ffffff") >= 4.5 && contrastRatio(blue, "#ffffff") < 5.2);
+  t("an already passing color is left alone", nearestAccessible("#000000", "#ffffff", 7) === "#000000");
+  t("an unreachable target returns the best available",
+    contrastRatio(nearestAccessible("#808080", "#7f7f7f", 21), "#7f7f7f") > 1);
+}
+
+console.log("selection colors: only the paints that actually paint:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100 });
+  const a = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 120, y: 0, w: 100, h: 100 });
+  const b = e.snapshot().selection[0];
+  const rootOf = () => e.snapshot().pages[e.snapshot().page].root;
+  const get = (id) => {
+    let found = null;
+    const walk = (n) => { if (n.id === id) found = n; n.children?.forEach(walk); };
+    walk(rootOf());
+    return found;
+  };
+
+  e.dispatch({
+    type: "patch", id: a,
+    patch: {
+      fill: "#ff0000", fillType: "linear",
+      gradientStops: [{ color: "#00ff00", position: 0 }, { color: "#0000ff", position: 1 }],
+    },
+  });
+  let usage = colorUsage(rootOf());
+  t("a gradient is listed by the stops it paints",
+    usage.some((u) => u.hex === "#00ff00") && usage.some((u) => u.hex === "#0000ff"));
+  t("a gradient does not list the leftover base color", !usage.some((u) => u.hex === "#ff0000"));
+
+  e.dispatch({ type: "patch", id: b, patch: { fill: "#123456", fillType: "image", imageSrc: "data:image/png;base64,AAA" } });
+  t("an image fill contributes no color", !colorUsage(rootOf()).some((u) => u.hex === "#123456"));
+
+  e.dispatch({ type: "patch", id: a, patch: { fillVisible: false } });
+  usage = colorUsage(rootOf());
+  t("hidden fills are left out", !usage.some((u) => u.hex === "#00ff00" || u.hex === "#0000ff"));
+
+  e.dispatch({ type: "patch", id: a, patch: { fillVisible: true, fill: "#00ff00", fillType: "solid", gradientStops: [], fillOpacity: 0.5 } });
+  e.dispatch({ type: "patch", id: b, patch: { fill: "#00ff00", fillType: "solid", imageSrc: "", fillOpacity: 0.5 } });
+  usage = colorUsage(rootOf());
+  const green = usage.find((u) => u.hex === "#00ff00");
+  t("one row per color, counted across layers", !!green && green.count === 2);
+  t("a multi-layer selection merges into one list",
+    colorUsageAll([get(a), get(b)]).some((u) => u.hex === "#00ff00" && u.count === 2 && u.ids.length === 2));
+  t("a shared opacity is shown", green?.opacity === 0.5);
+  e.dispatch({ type: "patch", id: b, patch: { fillOpacity: 0.25 } });
+  t("mixed opacities report null so the field stays empty",
+    colorUsage(rootOf()).find((u) => u.hex === "#00ff00")?.opacity === null);
+
+  // a third layer shares the colour but was never selected
+  e.dispatch({ type: "add", kind: "rect", x: 240, y: 0, w: 100, h: 100 });
+  const c = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: c, patch: { fill: "#00ff00", fillType: "solid", fillOpacity: 0.2 } });
+
+  // the row the panel would build: from the selection, so it owns two layers
+  const row = colorUsageAll([get(a), get(b)]).find((u) => u.hex === "#00ff00");
+  const touched = setOpacityMatches(e, rootOf(), row, 75);
+  t("the field rewrites every selected paint carrying that color",
+    touched === 2 && get(a).fillOpacity === 0.75 && get(b).fillOpacity === 0.75);
+  t("a layer outside the selection keeps its own opacity", get(c).fillOpacity === 0.2);
+}
+
+
+console.log("field equations (X/Y/W/H, the way Figma reads them):");
+{
+  t("a plain number still parses", evalField("120", 0) === 120);
+  t("a leading minus is a sign", evalField("-8", 40) === -8);
+  t("division", evalField("120/3", 0) === 40);
+  t("exponent", evalField("2^3", 0) === 8);
+  t("parens and mixed operators", evalField("(40+8)*2", 0) === 96);
+  t("multiplication binds tighter than addition", evalField("2+3*4", 0) === 14);
+  t("a power chain is right associative", evalField("2^3^2", 0) === 512);
+  t("an operator up front applies to the current value", evalField("+10", 50) === 60);
+  t("a trailing operator does too", evalField("*2", 100) === 200);
+  t("unary minus inside an expression", evalField("40--10", 0) === 50);
+  t("decimals and whitespace", evalField(" 1.5 * 8 ", 0) === 12);
+  t("unit suffixes keep the old leniency", evalField("120px", 0) === 120);
+  t("division by zero is refused", evalField("120/0", 5) === null);
+  t("an unbalanced paren is refused", evalField("(120+3", 7) === null);
+  t("an empty field is refused, so the field reverts", evalField("   ", 9) === null);
+  t("NaN never reaches the document", evalField("0/0", 3) === null);
+  t("hasExpression leaves plain numbers alone", !hasExpression("120") && !hasExpression("-4.5") && hasExpression("120/2"));
+}
+
+console.log("the scale tool's geometry:");
+{
+  const b = { x: 100, y: 50, w: 200, h: 100 };
+  const tl = scaleBoxAround(b, 2, 0, 0);
+  t("scaling about the top-left leaves it in place", tl.x === 100 && tl.y === 50 && tl.w === 400 && tl.h === 200);
+  const mc = scaleBoxAround(b, 2, 0.5, 0.5);
+  t("scaling about the centre grows both ways", mc.x === 0 && mc.y === 0 && mc.w === 400 && mc.h === 200);
+  const br = scaleBoxAround(b, 0.5, 1, 1);
+  t("scaling about the bottom-right holds that corner", Math.abs(br.x + br.w - 300) < 1e-9 && Math.abs(br.y + br.h - 150) < 1e-9);
+  const pair = [b, { x: 400, y: 50, w: 100, h: 100 }];
+  const scaled = scaleMembers(unionBox(pair), pair, 2, "tl");
+  t("a multi-selection scales as one group, gaps included",
+    scaled[0].x === 100 && scaled[1].x === 700 && scaled[1].w === 200);
+  t("the union box is what the anchor is measured against",
+    unionBox(pair).w === 400 && unionBox(pair).h === 100);
+  const ratio = sizeKeepingRatio(b, { w: 400 });
+  t("typing a width while scaled keeps the ratio", ratio.h === 200);
+  t("a typed height drives the width", sizeKeepingRatio(b, { h: 50 }).w === 100);
+  t("both fields typed is taken literally", sizeKeepingRatio(b, { w: 10, h: 10 }).w === 10);
+}
+
+console.log("selection helpers:");
+{
+  const nd = (o) => ({
+    kind: "rect", name: "n", x: 0, y: 0, w: 100, h: 100, children: [],
+    strokeWidth: 0, opacity: 1, fillVisible: true, strokeVisible: false, ...o,
+  });
+  // two app screens, each Cart/Checkout > Header > Icon, the shape Figma's
+  // "matching objects" rule is written for
+  const aIcon = nd({ id: "a-icon", name: "Icon", fill: "#ff0000", x: 10, y: 10, w: 24, h: 24 });
+  const bIcon = nd({ id: "b-icon", name: "Icon", fill: "#0000ff", x: 12, y: 8, w: 24, h: 24 });
+  const badge = nd({ id: "badge", name: "Badge", x: 4, y: 4, w: 24, h: 24, children: [nd({ id: "badge-icon", name: "Icon", x: 2, y: 2, w: 8, h: 8 })] });
+  const avatar = nd({ id: "avatar", name: "Avatar", fill: "#00ff00", x: 40, y: 8, w: 24, h: 24 });
+  const otherIcon = nd({ id: "other-icon", name: "Icon", x: 60, y: 60, w: 24, h: 24 });
+  const headA = nd({ id: "a-head", name: "Header", x: 0, y: 0, w: 100, h: 40, children: [aIcon] });
+  const headB = nd({ id: "b-head", name: "Header", x: 0, y: 0, w: 100, h: 40, children: [bIcon, avatar, badge] });
+  const frameA = nd({ id: "fa", kind: "frame", name: "Cart", x: 0, y: 0, w: 100, h: 100, children: [headA, otherIcon] });
+  const frameB = nd({ id: "fb", kind: "frame", name: "Checkout", x: 200, y: 0, w: 100, h: 100, children: [headB] });
+  const page = nd({ id: "root", kind: "page", name: "Page", x: 0, y: 0, w: 0, h: 0, children: [frameA, frameB] });
+
+  t("the same layer in another frame matches", matchingIds(page, aIcon).includes("b-icon"));
+  t("a match does not care that the fills differ", matchingIds(page, aIcon).join() === "b-icon");
+  t("a differently named sibling never matches", !matchingIds(page, aIcon).includes("avatar"));
+  t("a different ancestor name breaks the match", !matchingIds(page, otherIcon).includes("b-icon"));
+  t("the same name one level deeper is a different object", !matchingIds(page, aIcon).includes("badge-icon"));
+  t("a match is never the layer itself", !matchingIds(page, aIcon).includes("a-icon"));
+  const idx = pathIndex(page);
+  t("a nested layer's key is its depth and the chain below its top-level frame",
+    idx.get("a-icon").key === "3:Header/Icon" && idx.get("badge-icon").key === "4:Header/Badge/Icon");
+  t("the top-level frame's own name is not part of a child's key",
+    idx.get("fa").key === "1:Cart" && idx.get("a-head").key === "2:Header");
+  // the shape the canvas test hit: a loose layer and a nested one may share a
+  // name without being the same object
+  const loose = nd({ id: "loose", name: "Icon", x: 0, y: 200, w: 24, h: 24 });
+  const page2 = nd({ id: "r5", kind: "page", children: [loose, frameA, frameB] });
+  t("a top-level layer never matches a nested one of the same name",
+    !matchingIds(page2, loose).includes("a-icon") && !matchingIds(page2, aIcon).includes("loose"));
+
+  t("same fill gathers every layer painted with that colour", sameIds(page, aIcon, "fill").length >= 0);
+  const red = nd({ id: "red", name: "Red", fill: "#ff0000" });
+  const redHidden = nd({ id: "red-hidden", name: "Hidden", fill: "#ff0000", fillVisible: false });
+  const withExtra = nd({ id: "extra", name: "Extra", fill: "#00000000", fillVisible: true, fills: [{ color: "#ff0000", type: "solid", visible: true }] });
+  const tree = nd({ id: "r2", kind: "page", children: [red, redHidden, withExtra, nd({ id: "blue", name: "Blue", fill: "#0000ff" })] });
+  const same = sameIds(tree, red, "fill");
+  t("same fill finds an extra paint that carries the colour", same.includes("extra"));
+  t("same fill ignores a hidden layer", !same.includes("hidden"));
+  t("same fill ignores a different colour", !same.includes("blue"));
+
+  const text = (id, over) => nd({ id, kind: "text", children: [], ...over });
+  const t1 = text("t1", { name: "Submit", text: "Submit", fontFamily: "Inter", fontSize: 16, fontWeight: 400 });
+  const t2 = text("t2", { name: "Send", text: "Send", fontFamily: "Inter", fontSize: 16, fontWeight: 400 });
+  const t3 = text("t3", { name: "Send", text: "Send", fontFamily: "serif", fontSize: 16, fontWeight: 700 });
+  const tree2 = nd({ id: "r3", kind: "page", children: [
+    nd({ id: "f1", kind: "frame", name: "A", children: [t1] }),
+    nd({ id: "f2", kind: "frame", name: "B", children: [t2, t3] }),
+  ] });
+  t("auto-named text matches on typography across frames", matchingIds(tree2, t1).includes("t2"));
+  t("text with different type does not match", !matchingIds(tree2, t1).includes("t3"));
+  t("same font finds both weights of the family", sameIds(tree2, t1, "font").includes("t2"));
+  t("same text properties needs the whole recipe", !sameIds(tree2, t1, "text").includes("t3") && sameIds(tree2, t1, "text").includes("t2"));
+
+  const stack = nd({ id: "r4", kind: "page", children: [
+    nd({ id: "bg", name: "BG", x: 0, y: 0, w: 100, h: 100 }),
+    // paint order runs left to right, so Chip (last) is the topmost layer and
+    // the first row the Layers panel - and the select-layer menu - shows
+    nd({ id: "card", name: "Card", x: 0, y: 0, w: 100, h: 100, children: [
+      nd({ id: "gone", name: "Gone", x: 10, y: 10, w: 20, h: 20, visible: false }),
+      nd({ id: "pad", name: "Locked", x: 10, y: 10, w: 20, h: 20, locked: true }),
+      nd({ id: "chip", name: "Chip", x: 10, y: 10, w: 20, h: 20 }),
+    ] }),
+  ] });
+  const at = layersAt(stack, 15, 15).map((n) => n.name);
+  t("the select-layer list reads like the Layers panel", at.join() === "Card,Chip,Locked,BG");
+  t("a parent sits above the layers it contains", at.indexOf("Card") < at.indexOf("Chip"));
+  t("hidden layers are left out of the list", !at.includes("Gone"));
+  t("locked layers are kept so they can still be picked", at.includes("Locked"));
+  t("a point outside every layer lists nothing", layersAt(stack, 500, 500).length === 0);
+}
+
+console.log("the scale tool scales content, not just the box:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 100, h: 50 });
+  const frame = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 20, h: 20 });
+  const kid = e.snapshot().selection[0];
+  e.dispatch({ type: "reparent", ids: [kid], parent: frame, x: 10, y: 10 });
+  e.dispatch({
+    type: "patch", id: frame,
+    patch: {
+      strokeWidth: 2, strokeDash: 6, strokeGap: 3,
+      cornerRadii: [8, 8, 8, 8], minW: 40, maxW: 400, paragraphSpacing: 4, paragraphIndent: 12,
+    },
+  });
+  const look = (id) => {
+    const sn = e.snapshot();
+    let out = null;
+    const walk = (n) => { if (n.id === id) out = n; n.children?.forEach(walk); };
+    walk(sn.pages[sn.page].root);
+    return out;
+  };
+  e.dispatch({ type: "resize", id: frame, x: 0, y: 0, w: 200, h: 100, scaleProps: true });
+  const f = look(frame);
+  t("stroke weight follows the box", f.strokeWidth === 4);
+  t("the dash pattern follows too", f.strokeDash === 12 && f.strokeGap === 6);
+  t("corner radii follow", f.cornerRadii[0] === 16);
+  t("auto layout limits follow", f.minW === 80 && f.maxW === 800);
+  t("paragraph metrics follow", f.paragraphSpacing === 8 && f.paragraphIndent === 24);
+  const k = look(kid);
+  t("children move and grow with the parent", k.x === 20 && k.y === 20 && k.w === 40 && k.h === 40);
+  e.dispatch({ type: "undo" });
+  t("one undo restores the whole scale", look(frame).strokeWidth === 2 && look(frame).w === 100);
+  e.dispatch({ type: "resize", id: frame, x: 0, y: 0, w: 200, h: 100 });
+  t("a plain resize leaves content alone", look(frame).strokeWidth === 2 && look(frame).cornerRadii[0] === 8);
+  t("and re-applies the child's constraints instead of scaling it", look(kid).w !== 40 || look(kid).x === 10);
+}
+
+
+const rect = (over = {}) => ({
+  id: "r", kind: "rect", name: "r", x: 0, y: 0, w: 200, h: 100,
+  path: [], closed: true, cornerRadii: [0, 0, 0, 0], cornerIndependent: false,
+  children: [], ...over,
+});
+
+console.log("corners: one storage order, read the same way everywhere:");
+{
+  // The array is [topLeft, topRight, bottomLeft, bottomRight]; a canvas
+  // roundRect and CSS both want [tl, tr, br, bl].
+  const n = rect({ cornerIndependent: true, cornerRadii: [10, 20, 30, 40] });
+  const c = cornerRadiiOf(n);
+  t("the stored order reads back by name", c.tl === 10 && c.tr === 20 && c.bl === 30 && c.br === 40);
+  t("the canvas order swaps the bottom pair", roundRectRadii(n).join() === "10,20,40,30");
+  const u = rect({ cornerRadii: [12, 99, 99, 99] });
+  t("a uniform shape repeats its first corner", cornerRadiiOf(u).br === 12 && cornerRadiiOf(u).bl === 12);
+  // The radius pins are laid out from the same helper the painter uses, so the
+  // handle drawn on a corner can only ever move that corner.
+  const pins = cornerPinPoints(200, 100, cornerRadiiOf(u), 1);
+  const byIndex = Object.fromEntries(pins.map((p) => [p.index, p]));
+  t("the bottom left pin sits bottom left", byIndex.bl.x < 100 && byIndex.bl.y > 50);
+  t("the bottom right pin sits bottom right", byIndex.br.x > 100 && byIndex.br.y > 50);
+  t("each pin sits further out as its own radius grows", (() => {
+    const small = cornerPinPoints(200, 100, { tl: 4, tr: 0, br: 0, bl: 0 }, 1)[0];
+    const big = cornerPinPoints(200, 100, { tl: 30, tr: 0, br: 0, bl: 0 }, 1)[0];
+    return big.x > small.x && big.y > small.y;
+  })());
+}
+
+console.log("corner smoothing makes a squircle, not a bigger circle:");
+{
+  const flat = rect({ cornerRadii: [40, 40, 40, 40] });
+  t("no smoothing keeps the plain rounded corner", !hasCornerSmoothing(flat) && !hasCornerSmoothing(rect({ cornerSmoothing: 0.6 })));
+  t("smoothing without a radius does nothing", !hasCornerSmoothing(rect({ cornerSmoothing: 0.6 })));
+  t("the corner reaches further along its edges as smoothing grows", cornerReach(40, 1) > cornerReach(40, 0.6) && cornerReach(40, 0.6) > 40);
+  const smooth = squircleOutline(200, 100, { tl: 40, tr: 40, br: 40, bl: 40 }, 1);
+  t("the outline keeps eight points so every consumer still fits", smooth.length === 8);
+  t("tangent points move out past the radius", smooth[0].x > 40);
+  const circ = shapePoly(rect({ cornerIndependent: true, cornerRadii: [40, 40, 40, 40] }));
+  const near = (pts) => {
+    let best = 1e9;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      for (let k = 0; k <= 24; k++) {
+        const t = k / 24;
+        const u = 1 - t;
+        const c1x = a.x + (a.ox || 0), c1y = a.y + (a.oy || 0);
+        const c2x = b.x + (b.ix || 0), c2y = b.y + (b.iy || 0);
+        const x = u * u * u * a.x + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * b.x;
+        const y = u * u * u * a.y + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t * t * t * b.y;
+        best = Math.min(best, (x + y) / Math.SQRT2);
+      }
+    }
+    return best;
+  };
+  t("the smoothed corner hugs the corner more tightly", near(smooth) < near(circ));
+  const mid = squircleOutline(200, 100, { tl: 40, tr: 40, br: 40, bl: 40 }, 0.6);
+  t("and is symmetric on a uniform shape", Math.abs(mid[0].x - (200 - mid[1].x)) < 1e-6 && Math.abs(mid[0].y - mid[1].y) < 1e-9);
+  // Two neighbours cannot overrun the edge between them: they shrink together.
+  const tight = squircleOutline(100, 100, { tl: 60, tr: 60, br: 0, bl: 0 }, 1);
+  t("neighbouring corners share an edge they would overrun", tight[0].x + (100 - tight[1].x) <= 100.0001);
+  t("and nothing escapes the box", tight.every((p) => p.x >= -1e-6 && p.x <= 200 + 1e-6 && p.y >= -1e-6 && p.y <= 100 + 1e-6));
+}
+
+console.log("individual strokes:");
+{
+  t("the picker offers Figma's six choices", SIDES.map((x) => x.id).join() === "all,top,right,bottom,left,custom");
+  t("All weights every side", sideWidths("all", undefined, 2).join() === "2,2,2,2");
+  t("Top leaves the others empty", sideWidths("top", undefined, 2).join() === "2,0,0,0");
+  t("Right is the second side", sideWidths("right", undefined, 3).join() === "0,3,0,0");
+  t("Bottom is the third", sideWidths("bottom", undefined, 3).join() === "0,0,3,0");
+  t("Left is the fourth", sideWidths("left", undefined, 3).join() === "0,0,0,3");
+  t("Custom reads the four fields", sideWidths("custom", [1, 2, 3, 4], 9).join() === "1,2,3,4");
+  t("Custom ignores the shared weight, and never goes negative", sideWidths("custom", [-4, 0, 2, 0], 9).join() === "0,0,2,0");
+  t("rectangles, frames, components and instances support it", [
+    sidesSupported("rect"), sidesSupported("frame"), sidesSupported("component"), sidesSupported("instance"),
+  ].every(Boolean));
+  t("ellipses, lines and text do not", !sidesSupported("ellipse") && !sidesSupported("line") && !sidesSupported("text"));
+  const [top, right, bottom, left] = sideCones(0, 0, 200, 100);
+  const inTri = (tri, [px, py]) => {
+    const [[ax, ay], [bx, by], [cx, cy]] = tri;
+    const s2 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    const w1 = ((px - ax) * (cy - ay) - (py - ay) * (cx - ax)) * Math.sign(s2);
+    const w2 = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) * Math.sign(s2);
+    return w1 >= 0 && w2 >= 0;
+  };
+  t("the top band owns the whole top edge", inTri(top, [100, 0]) && inTri(top, [10, 1]) && inTri(top, [190, 1]));
+  t("but not the bottom edge", !inTri(top, [100, 150]));
+  t("the left band owns the whole left edge", inTri(left, [0, 50]) && inTri(left, [1, 10]) && !inTri(left, [200, 50]));
+  t("right and bottom take the rest", inTri(right, [200, 50]) && inTri(bottom, [100, 100]));
+  t("each band holds its own corners and shares them at 45°", inTri(top, [0, 0]) && inTri(left, [0, 0]) && inTri(bottom, [200, 100]) && inTri(right, [200, 100]));
+}
+
+console.log("dashes, caps and the miter angle:");
+{
+  t("a comma list parses", parseDashPattern("10, 20, 80, 20").join() === "10,20,80,20");
+  t("spaces work as well", parseDashPattern("4 2 1").join() === "4,2,1");
+  t("an empty field means no custom pattern", parseDashPattern("   ").length === 0);
+  t("words are refused rather than truncated", parseDashPattern("4, x") === null);
+  t("negatives are refused", parseDashPattern("10, -2") === null);
+  t("decimals are allowed", parseDashPattern("1.5, 2").join() === "1.5,2");
+  t("the custom pattern wins over the dash/gap pair", dashArray([3, 4], 10, 10).join() === "3,4");
+  t("without one the pair is used, gap falling back to the dash", dashArray([], 6, 0).join() === "6,6");
+  t("the pattern is scaled with the zoom", dashArray([3, 4], 0, 0, 2).join() === "6,8");
+  t("no dash means no pattern at all", dashArray([], 0, 0).length === 0);
+  t("miter angle 60 gives the classic limit of 2", Math.abs(miterLimitFromAngle(60) - 2) < 1e-9);
+  t("a right angle gives sqrt(2)", Math.abs(miterLimitFromAngle(90) - Math.SQRT2) < 1e-9);
+  t("0 never bevels and 180 always does", miterLimitFromAngle(0) > 1e5 && miterLimitFromAngle(180) === 1);
+  t("an unset angle behaves like the miter join", miterLimitFromAngle(undefined) > 1e5);
+}
+
+console.log("effects stack like Figma allows:");
+{
+  const fx = (kind, i) => ({ kind, color: "#000", x: 0, y: 0, blur: 4, spread: 0, visible: true, id: i });
+  const many = (kind, n) => Array.from({ length: n }, (_, i) => fx(kind, i));
+  t("eight drop shadows fit, a ninth does not", canAddEffect(many("drop-shadow", 8), "drop-shadow") === false);
+  t("and eight is allowed", canAddEffect(many("drop-shadow", 7), "drop-shadow") === true);
+  t("inner shadows get their own eight", canAddEffect([...many("drop-shadow", 8), ...many("inner-shadow", 7)], "inner-shadow") === true);
+  t("one blur of each kind", canAddEffect(many("layer-blur", 1), "layer-blur") === false && canAddEffect(many("background-blur", 1), "background-blur") === false);
+  t("two noise rows, one texture, one glass", canAddEffect(many("noise", 2), "noise") === false && canAddEffect(many("texture", 1), "texture") === false && canAddEffect(many("glass", 1), "glass") === false);
+  t("the limits in the table are Figma's", EFFECT_LIMITS["drop-shadow"] === 8 && EFFECT_LIMITS.noise === 2 && EFFECT_LIMITS.glass === 1);
+  t("counts are per kind", countKind([...many("drop-shadow", 3), ...many("noise", 2)], "drop-shadow") === 3);
+  const list = ["a", "b", "c", "d"];
+  t("dragging a row moves it rather than swapping", moveEffect(list, 0, 2).join() === "b,c,a,d");
+  t("moving down lands before the target", moveEffect(list, 3, 1).join() === "a,d,b,c");
+  t("a row dropped where it started is left alone", moveEffect(list, 1, 1).join() === list.join());
+  t("out of range drops change nothing", moveEffect(list, 9, 0).join() === list.join() && moveEffect(list, -1, 2).join() === list.join());
+}
+
+console.log("the engine carries the new properties:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 50 });
+  const id = e.snapshot().selection[0];
+  const look = (nid) => {
+    const sn = e.snapshot();
+    let out = null;
+    const walk = (n) => { if (n.id === nid) out = n; n.children?.forEach(walk); };
+    walk(sn.pages[sn.page].root);
+    return out;
+  };
+  e.dispatch({
+    type: "patch", id,
+    patch: {
+      strokeWidth: 4, strokeSides: "custom", strokeSideW: [4, 2, 0, 6],
+      strokeDashPattern: [12, 6], strokeDashCap: "round", strokeMiterAngle: 90,
+      cornerRadii: [20, 20, 20, 20], cornerIndependent: true, cornerSmoothing: 0.6,
+      strokes: [{ color: "#ff0000", opacity: 1, visible: true, width: 2, align: "center", dash: 8, gap: 4, pattern: [6, 3], sideW: [2, 2, 0, 0], sides: "custom" }],
+    },
+  });
+  e.dispatch({ type: "resize", id, x: 0, y: 0, w: 200, h: 100, scaleProps: true });
+  const n = look(id);
+  t("per-side weights scale", n.strokeSideW.join() === "8,4,0,12");
+  t("the custom dash pattern scales", n.strokeDashPattern.join() === "24,12");
+  t("smoothing is a ratio, so it stays put", n.cornerSmoothing === 0.6);
+  t("extra strokes scale their dashes too", n.strokes[0].dash === 16 && n.strokes[0].gap === 8);
+  t("and their own pattern and side weights", n.strokes[0].pattern.join() === "12,6" && n.strokes[0].sideW.join() === "4,4,0,0");
+  e.dispatch({ type: "copyProperties" });
+  e.dispatch({ type: "add", kind: "rect", x: 300, y: 0, w: 40, h: 40 });
+  const other = e.snapshot().selection[0];
+  e.dispatch({ type: "pasteProperties" });
+  const p = look(other);
+  t("copy/paste properties carries the sides", p.strokeSides === "custom" && p.strokeSideW.join() === "8,4,0,12");
+  t("and the dash pattern, cap and miter angle", p.strokeDashPattern.join() === "24,12" && p.strokeDashCap === "round" && p.strokeMiterAngle === 90);
+  t("and the corner smoothing", p.cornerSmoothing === 0.6 && p.cornerIndependent === true);
+}
+
+console.log("images are stored by reference, not inside the document:");
+{
+  const png = (n) => "data:image/png;base64," + String(n).repeat(64);
+  const leaf = (id, src) => ({
+    id, name: id, kind: "rect", x: 0, y: 0, w: 10, h: 10, rotation: 0, fills: [], effects: [],
+    imageSrc: src, imageFit: "fill", children: [],
+  });
+  const doc = (kids) => ({
+    fileName: "t", page: 0, zoom: 1, panX: 0, panY: 0,
+    pages: [{ name: "Page 1", root: { id: "root", kind: "page", name: "root", x: 0, y: 0, w: 0, h: 0, rotation: 0, fills: [], effects: [], imageSrc: "", children: kids } }],
+    components: [{ id: "c1", name: "Comp", node: leaf("m", png(7)), variants: [], property: "" }],
+  });
+
+  resetAssets();
+  const a = png(1);
+  const b = png(2);
+  const d = doc([leaf("n1", a), leaf("n2", a), leaf("n3", b)]);
+  const stored = dehydrateDoc(d);
+
+  const refs = stored.pages[0].root.children.map((n) => n.imageSrc);
+  t("every inline image becomes a reference", refs.every((r) => r.startsWith(ASSET_PREFIX)));
+  t("the same image in two places gets one reference", refs[0] === refs[1]);
+  t("different images get different references", refs[0] !== refs[2]);
+  t("the stored document keeps no data: URL at all", !JSON.stringify(stored).includes("data:image"));
+  t("a component master's image is stored the same way", stored.components[0].node.imageSrc.startsWith(ASSET_PREFIX));
+
+  t(
+    "the live document is untouched - its nodes still hold the picture",
+    d.pages[0].root.children.every((n) => n.imageSrc.startsWith("data:")),
+  );
+  t(
+    "and dehydrating twice gives the same reference",
+    dehydrateDoc(d).pages[0].root.children[0].imageSrc === refs[0],
+  );
+
+  // The editor's own copy is the one that gets hydrated; work on a fresh one so
+  // the check is about the store, not about the object identity above.
+  const fresh = JSON.parse(JSON.stringify(stored));
+  await hydrateDoc(fresh);
+  t(
+    "loading a stored document brings the pictures back",
+    fresh.pages[0].root.children[0].imageSrc === a && fresh.pages[0].root.children[2].imageSrc === b,
+  );
+  t("and the component's too", fresh.components[0].node.imageSrc === png(7));
+
+  resetAssets();
+  const cold = JSON.parse(JSON.stringify(stored));
+  const unresolved = await hydrateDoc(cold);
+  t("a document from another browser reports what it could not load", unresolved > 0);
+  t("and leaves those references alone rather than blanking them", cold.pages[0].root.children[0].imageSrc.startsWith(ASSET_PREFIX));
+
+  resetAssets();
+  putAsset(a);
+  t("registering the same image twice stores it once", assetCount() === 1 && putAsset(a) === putAsset(a));
+}
+
+console.log("the rotation origin is the point that stays put:");
+{
+  const box = { x: 10, y: 20, w: 100, h: 50, rotation: 0 };
+  const centre = rotateAboutOrigin(box, [0.5, 0.5], 90);
+  t(
+    "a layer that never moved its origin turns in place",
+    Math.abs(centre.x - 10) < 1e-9 && Math.abs(centre.y - 20) < 1e-9 && centre.rotation === 90,
+  );
+
+  /** Where a point of the box ends up once it has turned by `deg` about the
+   *  box's own middle - the way the renderer and the SVG export do it. */
+  const after = (r, local, deg) => {
+    const cx = r.x + box.w / 2;
+    const cy = r.y + box.h / 2;
+    const rad = (deg * Math.PI) / 180;
+    const dx = local.x - cx;
+    const dy = local.y - cy;
+    return { x: cx + dx * Math.cos(rad) - dy * Math.sin(rad), y: cy + dx * Math.sin(rad) + dy * Math.cos(rad) };
+  };
+
+  const tl = rotateAboutOrigin(box, [0, 0], 90);
+  const tlAfter = after(tl, { x: tl.x, y: tl.y }, 90);
+  t(
+    "turning about the top left holds that corner still",
+    Math.abs(tlAfter.x - 10) < 1e-9 && Math.abs(tlAfter.y - 20) < 1e-9,
+  );
+
+  const left = rotateAboutOrigin(box, [0, 0.5], 180);
+  t(
+    "a half turn about the left edge mirrors the box across it",
+    Math.abs(left.x - (10 - 100)) < 1e-9 && Math.abs(left.y - 20) < 1e-9,
+  );
+
+  const quarter = rotateAboutOrigin(box, [0.5, 0.5], 90);
+  t("an origin on the edge does not move when the spin is zero", (() => {
+    const still = rotateAboutOrigin(box, [0, 1], 0);
+    return still.x === box.x && still.y === box.y;
+  })());
+  t("and the three-quarter case stays finite", Number.isFinite(quarter.x) && Number.isFinite(quarter.y));
+}
+
+console.log("effect blend modes, and what a drop shadow shows through:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const root = e.snapshot().pages[e.snapshot().page].root.id;
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100, parent: root });
+  const id = e.snapshot().selection[0];
+  const now = () => find(e.snapshot().pages[e.snapshot().page].root, id);
+
+  t(
+    "only inner shadows, drop shadows and noise offer a blend mode",
+    effectCanBlend("drop-shadow") &&
+      effectCanBlend("inner-shadow") &&
+      effectCanBlend("noise") &&
+      !effectCanBlend("layer-blur") &&
+      !effectCanBlend("background-blur") &&
+      !effectCanBlend("texture") &&
+      !effectCanBlend("glass"),
+  );
+  t(
+    "show-behind is the drop shadow's alone",
+    effectCanShowBehind("drop-shadow") &&
+      !effectCanShowBehind("inner-shadow") &&
+      !effectCanShowBehind("noise"),
+  );
+  const drop = defaultEffect("drop-shadow");
+  t(
+    "a new drop shadow is Normal with show-behind off",
+    drop.blend === "Normal" && drop.showBehind === false,
+  );
+  t(
+    "a new inner shadow has no show-behind field at all",
+    defaultEffect("inner-shadow").showBehind === undefined,
+  );
+
+  t(
+    "an opaque filled rectangle has nothing to show a shadow through",
+    canShowBehindTransparent(now()) === false,
+  );
+  e.dispatch({ type: "patch", id, patch: { fillOpacity: 0.5 } });
+  t("a half-transparent fill does", canShowBehindTransparent(now()) === true);
+  e.dispatch({ type: "patch", id, patch: { fillOpacity: 1, fillBlend: "Multiply" } });
+  t("so does a fill that blends", canShowBehindTransparent(now()) === true);
+  e.dispatch({
+    type: "patch",
+    id,
+    patch: { fillBlend: "Normal", fillVisible: false, strokeVisible: true, strokePaint: "#ff0000", strokeWidth: 2 },
+  });
+  t("and a stroke with no fill", canShowBehindTransparent(now()) === true);
+  e.dispatch({ type: "patch", id, patch: { strokeAlign: "inside" } });
+  t(
+    "a stroke-only layer qualifies whatever its alignment",
+    canShowBehindTransparent(now()) === true,
+  );
+  // The fourth criterion is narrower: a centre or outside stroke at less than
+  // full opacity, which is the only way a stroke can be translucent.
+  e.dispatch({
+    type: "patch",
+    id,
+    patch: { fillVisible: true, fillOpacity: 1, strokeOpacity: 0.5, strokeAlign: "inside" },
+  });
+  t(
+    "an opaque fill with an inside stroke has nothing transparent about it",
+    canShowBehindTransparent(now()) === false,
+  );
+  e.dispatch({ type: "patch", id, patch: { strokeAlign: "center" } });
+  t("a centre stroke at half opacity does", canShowBehindTransparent(now()) === true);
+}
+
+console.log("corners an instance is not allowed to own:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const root = e.snapshot().pages[e.snapshot().page].root.id;
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 200, h: 120, parent: root });
+  const rect = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "frame", x: 10, y: 10, w: 40, h: 40, parent: rect });
+  const kid = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: rect, patch: { kind: "instance", componentId: "c1" } });
+  const tree = () => e.snapshot().pages[e.snapshot().page].root;
+  t("an instance cannot carry individual corners", insideInstance(tree(), rect) === true);
+  t("nor can anything nested inside one", insideInstance(tree(), kid) === true);
+  e.dispatch({ type: "reparent", ids: [kid], parent: root, x: 400, y: 0 });
+  t("back at the top level it rounds freely again", insideInstance(tree(), kid) === false);
+}
+
+console.log("snap to pixel grid:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const pageOf = () => e.snapshot().pages[e.snapshot().page];
+  const nodeOf = (id) => find(pageOf().root, id);
+  const root = pageOf().root.id;
+  t("a page snaps to whole pixels out of the box", pageOf().pixelSnap !== false);
+  e.dispatch({ type: "add", kind: "rect", x: 10.4, y: 20.6, w: 30.4, h: 40.2, parent: root });
+  const id = e.snapshot().selection[0];
+  const n = nodeOf(id);
+  t(
+    "a layer created at fractional coordinates is rounded onto the grid",
+    n.x === 10 && n.y === 21 && n.w === 30 && n.h === 40,
+  );
+  e.dispatch({ type: "move", ids: [id], dx: 0.4, dy: 0.6 });
+  t("dragging it lands on whole pixels again", nodeOf(id).x === 10 && nodeOf(id).y === 22);
+  e.dispatch({ type: "nudge", dx: 1, dy: 1 });
+  t("arrow-key nudges stay on the grid", nodeOf(id).x === 11 && nodeOf(id).y === 23);
+  e.dispatch({ type: "resize", id, x: 5.5, y: 6.5, w: 12.5, h: 9.5 });
+  const r = nodeOf(id);
+  t("resizing rounds both corners", r.x === 6 && r.y === 7 && r.w === 13 && r.h === 10);
+  // The pixel-grid *overlay* is a different switch with a different default.
+  // It used to be the flag the engine read, so the overlay being off (the
+  // default) turned snapping off with it.
+  e.dispatch({ type: "patchPage", patch: { pixelSnap: false, pixelGrid: true } });
+  e.dispatch({ type: "move", ids: [id], dx: 0.25, dy: 0.25 });
+  t(
+    "with snapping off, showing the pixel grid does not start snapping",
+    nodeOf(id).x === 6.25 && nodeOf(id).y === 7.25,
+  );
+  e.dispatch({ type: "patchPage", patch: { pixelSnap: true, pixelGrid: false } });
+  e.dispatch({ type: "move", ids: [id], dx: 0.25, dy: 0.25 });
+  t(
+    "and with snapping on, hiding the pixel grid does not stop snapping",
+    nodeOf(id).x === 7 && nodeOf(id).y === 8,
+  );
+}
+
+console.log("the View menu:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const s = () => e.snapshot();
+  t("pixel preview starts off", s().pixelPreview === "off");
+  t("layout guides start visible", s().viewLayoutGuides !== false);
+  t("property labels start off", s().propertyLabels === false);
+  e.dispatch({ type: "setPixelPreview", preview: "2x" });
+  t("the pixel preview takes the density it is given", s().pixelPreview === "2x");
+  e.dispatch({ type: "toggleLayoutGuides" });
+  t("layout guides toggle off", s().viewLayoutGuides === false);
+  e.dispatch({ type: "togglePropertyLabels" });
+  t("property labels toggle on", s().propertyLabels === true);
+  t(
+    "view switches are not document edits, so they stay out of undo",
+    s().canUndo === false,
+  );
+  e.dispatch({ type: "undo" });
+  t("undo does not walk back a view switch", s().pixelPreview === "2x");
+}
+
+console.log("zoom keeps what you are looking at:");
+{
+  // The design point under the anchor is (anchor - pan) / zoom, and it has to
+  // still be under the anchor afterwards. Zooming without moving the pan drags
+  // the drawing towards the canvas's top-left corner, off the window.
+  t("zooming in about a point holds that point still", panForZoom(0, 1, 2, 400) === -400);
+  t("zooming back out undoes it exactly", panForZoom(-400, 2, 1, 400) === 0);
+  t("zooming out about a point moves the pan the other way", panForZoom(-400, 2, 0.5, 400) === 200);
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const start = { zoom: e.snapshot().zoom, x: e.snapshot().panX, y: e.snapshot().panY };
+  e.dispatch({ type: "setZoom", zoom: start.zoom * 2, anchorX: 400, anchorY: 300 });
+  let s = e.snapshot();
+  t(
+    "the engine carries the anchor into the pan",
+    s.panX === panForZoom(start.x, start.zoom, start.zoom * 2, 400) &&
+      s.panY === panForZoom(start.y, start.zoom, start.zoom * 2, 300),
+  );
+  t(
+    "so the middle of the canvas still shows the same design point",
+    Math.abs((400 - s.panX) / s.zoom - (400 - start.x) / start.zoom) < 1e-9,
+  );
+  e.dispatch({ type: "setZoom", zoom: start.zoom, anchorX: 400, anchorY: 300 });
+  s = e.snapshot();
+  t(
+    "and zooming back leaves the view where it started",
+    Math.abs(s.panX - start.x) < 1e-9 && Math.abs(s.panY - start.y) < 1e-9,
+  );
+  const panBefore = s.panX;
+  e.dispatch({ type: "setZoom", zoom: 4 });
+  t("an unanchored zoom is the one that leaves the pan alone", e.snapshot().panX === panBefore);
+}
+
+console.log("a name you can read:");
+{
+  // The canvas label is text on whatever the canvas is: a theme colour, or the
+  // page's own background when it has one. Half-transparent grey over a light
+  // canvas is what made frame names read as decoration.
+  t("a half-transparent label composites to what the eye sees", compositeOver("rgba(15,23,42,0.5)", "#f1f2f6") === "#808590");
+  t(
+    "which is under the 4.5:1 floor for text",
+    contrastRatio("#808590", "#f1f2f6") < 4.5,
+  );
+  const lightReadable = readableLabel("rgba(15,23,42,0.5)", "#f1f2f6", 4.5);
+  t("pushed until it clears the floor", contrastRatio(lightReadable, "#f1f2f6") >= 4.5);
+  t("without throwing the theme's hue away", /^#/.test(lightReadable) && lightReadable.length === 7);
+  const darkReadable = readableLabel("rgba(248,250,252,0.5)", "#101116", 4.5);
+  t("a light label on a dark canvas is pushed the other way", contrastRatio(darkReadable, "#101116") >= 4.5);
+  t(
+    "and a dark label on a dark canvas comes back as light text",
+    contrastRatio(readableLabel("#111111", "#101116", 4.5), "#101116") >= 4.5,
+  );
+  // A page can paint its own background over the theme's, and the label has to
+  // follow it rather than assuming the theme's grey.
+  const onPage = readableLabel("rgba(15,23,42,0.5)", "#1b1f2a", 4.5);
+  t("the page's own background decides the label colour", contrastRatio(onPage, "#1b1f2a") >= 4.5);
+  t("a label that already passes is left alone", readableLabel("#333333", "#ffffff", 4.5) === "#333333");
+}
+
+console.log("what a new layer is called:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const root = e.snapshot().pages[e.snapshot().page].root.id;
+  const names = () => e.snapshot().pages[e.snapshot().page].root.children.map((c) => c.name);
+  const add = (kind) => e.dispatch({ type: "add", kind, x: 0, y: 0, w: 10, h: 10, parent: root });
+  add("frame");
+  add("frame");
+  add("rect");
+  add("ellipse");
+  const added = names().slice(-4);
+  t(
+    "frames are numbered, as in Figma, rather than all being called Frame",
+    new Set(added).size === 4,
+  );
+  t("the numbering starts at one", added[0] === "Frame 1" && added[1] === "Frame 2");
+  t("each kind has its own count", added[2] === "Rectangle 1" && added[3] === "Ellipse 1");
+  add("frame");
+  t("and it keeps counting past the ones already there", names().slice(-1)[0] === "Frame 3");
+  // A rename must not be undone by the next layer: the counter skips names in
+  // use, it does not remember a count.
+  e.dispatch({ type: "patch", id: e.snapshot().pages[e.snapshot().page].root.children.slice(-1)[0].id, patch: { name: "Frame 3" } });
+  add("frame");
+  t("a taken number is skipped, not reused", names().slice(-1)[0] === "Frame 4");
+}
+
+console.log("nudge amounts:");
+{
+  t("small nudge is 1 and big nudge is 10, as Figma ships them", DEFAULT_NUDGE.small === 1 && DEFAULT_NUDGE.big === 10);
+  t("an arrow key uses the small value", nudgeStep(DEFAULT_NUDGE, false) === 1);
+  t("shift with an arrow key uses the big one", nudgeStep(DEFAULT_NUDGE, true) === 10);
+  const eight = normalizeNudge({ small: 8, big: 16 });
+  t("a set value is what the keys move by", nudgeStep(eight, false) === 8 && nudgeStep(eight, true) === 16);
+  t("a saved decimal survives", normalizeNudge({ small: 0.5 }).small === 0.5);
+  t("a comma is read as a decimal point", parseNudge("0,5") === 0.5);
+  t("a negative nudge is read as its distance", parseNudge("-4") === 4);
+  t("an empty field parses as nothing at all", parseNudge("") === null);
+  t("so does a half-typed decimal point", parseNudge(".") === null);
+  t("and a word", parseNudge("wide") === null);
+  t("a zero is refused: the keys would stop working", clampNudge(0) === NUDGE_MIN);
+  t("and an absurd one is clamped", clampNudge(1e9) === NUDGE_MAX);
+  t(
+    "one bad field does not take the other down with it",
+    normalizeNudge({ small: "nonsense", big: 24 }).small === 1 &&
+      normalizeNudge({ small: "nonsense", big: 24 }).big === 24,
+  );
+  t(
+    "a preference written by something else falls back to Figma's defaults",
+    normalizeNudge(null).small === 1 && normalizeNudge(undefined).big === 10,
+  );
+  t("a string number from storage is understood", normalizeNudge({ small: "12" }).small === 12);
+}
+
+console.log("three themes, not five:");
+{
+  t("there are exactly three options", THEME_OPTIONS.length === 3);
+  t(
+    "and they are light, dark and system",
+    THEME_OPTIONS.map((o) => o.id).join(",") === "light,dark,system",
+  );
+  t("an old graphite preference opens as dark", normalizeThemePref("graphite") === "dark");
+  t("an old daylight preference opens as light", normalizeThemePref("daylight") === "light");
+  t("the three real names are kept", normalizeThemePref("system") === "system");
+  t("an unreadable preference falls back", normalizeThemePref(null) === DEFAULT_THEME_PREF);
+  t("including one from another app entirely", normalizeThemePref("solarized") === DEFAULT_THEME_PREF);
+  t("capitalisation does not matter", normalizeThemePref(" Dark ") === "dark");
+  t("system follows the OS into dark", resolveTheme("system", true) === "dark");
+  t("and into light", resolveTheme("system", false) === "light");
+  t("an explicit choice ignores the OS", resolveTheme("light", true) === "light");
+  t("the label is the menu's word for it", themeLabel("dark") === "Dark");
+  t(
+    "every option has a label and none of them is the old name",
+    THEME_OPTIONS.every((o) => o.label && !/graphite|daylight/i.test(o.label)),
+  );
+}
+
+console.log("export formats and settings:");
+{
+  t("the four formats are PNG, JPG, SVG and PDF", FORMATS.join(",") === "PNG,JPG,SVG,PDF");
+  // Figma's published capability table.
+  t("PNG takes ignore-overlap and bounding box, not id or outline", FORMAT_CAPS.PNG.ignoreOverlap && FORMAT_CAPS.PNG.boundingBox && !FORMAT_CAPS.PNG.includeId && !FORMAT_CAPS.PNG.outlineText);
+  t("JPG adds image quality", FORMAT_CAPS.JPG.quality && !FORMAT_CAPS.PNG.quality);
+  t("SVG takes the three markup settings", FORMAT_CAPS.SVG.includeId && FORMAT_CAPS.SVG.outlineText && FORMAT_CAPS.SVG.simplifyStroke);
+  t("PDF takes none of them", !FORMAT_CAPS.PDF.ignoreOverlap && !FORMAT_CAPS.PDF.boundingBox && !FORMAT_CAPS.PDF.includeId);
+  t("but PDF does take quality and resampling", FORMAT_CAPS.PDF.quality && FORMAT_CAPS.PDF.resampling);
+  t("SVG exports at 1x only, as the article says", FORMAT_CAPS.SVG.oneToOne);
+  t("and so does PDF", FORMAT_CAPS.PDF.oneToOne);
+  t("PNG and JPG scale freely", !FORMAT_CAPS.PNG.oneToOne && !FORMAT_CAPS.JPG.oneToOne);
+}
+
+console.log("the scale field:");
+{
+  const node = { w: 200, h: 160 };
+  t("a bare number is a multiplier", parseScale("2").kind === "multiplier" && parseScale("2").value === 2);
+  t("2x is the same multiplier", exportSize(node, { format: "PNG", scale: "2x" }).width === 400);
+  t("and the height follows", exportSize(node, { format: "PNG", scale: "2x" }).height === 320);
+  t("1.5x is allowed", exportSize(node, { format: "PNG", scale: "1.5x" }).width === 300);
+  const w = exportSize(node, { format: "PNG", scale: "500w" });
+  t("500w sets the width exactly", w.width === 500);
+  t("and the height follows the aspect ratio", w.height === 400);
+  const h = exportSize(node, { format: "PNG", scale: "300h" });
+  t("300h sets the height exactly", h.height === 300);
+  t("and the width follows the aspect ratio", h.width === 375);
+  t("a comma is read as a decimal point", exportSize(node, { format: "PNG", scale: "1,5x" }).width === 300);
+  t("a nonsense scale falls back to 1x rather than to zero", exportSize(node, { format: "PNG", scale: "wide" }).width === 200);
+  t("the scale reads back the way it was written", formatScale("500w") === "500w" && formatScale(2) === "2x");
+  t("a scale of zero is refused", clampScale(0) === 1);
+  t("and an absurd one is clamped", clampScale(1e6) === 64);
+  // A vector format is pinned, whatever the field says.
+  t("an SVG at 2x still comes out at the design size", exportSize(node, { format: "SVG", scale: "2x" }).width === 200);
+  t("a PDF at 4x as well", exportSize(node, { format: "PDF", scale: "4x" }).width === 200);
+  t("but an SVG at 500w honours the width", exportSize(node, { format: "SVG", scale: "500w" }).width === 200);
+  t("a new PNG preset starts at 1x", newPreset("PNG").scale === 1);
+  t("a new SVG preset never claims a scale it cannot do", newPreset("SVG", 3).scale === 1);
+  t("the preset list still holds whole and half steps", SCALE_PRESETS.includes(0.5) && SCALE_PRESETS.includes(1.5));
+}
+
+console.log("what an export does by default:");
+{
+  const s = resolveSettings({ format: "PNG", scale: 1, suffix: "" });
+  t("overlapping layers are ignored, as Figma defaults", s.ignoreOverlap === true);
+  t("the bounding box is kept", s.boundingBox === true);
+  t("and the resampling is the detailed one", s.resampling === "detailed");
+  t("no id attribute unless asked", s.includeId === false);
+  t("a JPG defaults to high quality, as the article says", resolveSettings({ format: "JPG", scale: 1, suffix: "" }).quality === "high");
+  t("a PDF defaults to medium", resolveSettings({ format: "PDF", scale: 1, suffix: "" }).quality === "medium");
+  t("quality descends from high to low", qualityValue("high") > qualityValue("medium") && qualityValue("medium") > qualityValue("low"));
+  // A preset saved before these existed must not read as "everything off".
+  const old = resolveSettings({ format: "PNG", scale: 2, suffix: "" });
+  t("an older preset with no settings still ignores overlaps", old.ignoreOverlap === true);
+  const off = resolveSettings({ format: "PNG", scale: 1, suffix: "", ignoreOverlap: false });
+  t("an explicit off is respected", off.ignoreOverlap === false);
+  // A setting a format does not have reads as off, not as on.
+  t("id is off for a format that has no id", resolveSettings({ format: "JPG", scale: 1, suffix: "", includeId: true }).includeId === false);
+  t("outline text too", resolveSettings({ format: "PDF", scale: 1, suffix: "", outlineText: true }).outlineText === false);
+}
+
+console.log("the id an SVG is written with:");
+{
+  const named = rect({ name: "Card / Header" });
+  const withId = exportSvg(named, { format: "SVG", scale: 1, suffix: "", includeId: true });
+  const without = exportSvg(named, { format: "SVG", scale: 1, suffix: "" });
+  t("the id attribute is written when the setting is on", /<svg[^>]* id="/.test(withId));
+  t("and absent when it is off", !/<svg[^>]* id="/.test(without));
+  t("a name with a slash does not end the attribute early", withId.includes('id="Card-Header"'));
+  t("a name with nothing usable still gets an id", exportSvg(rect({ name: "///" }), { format: "SVG", scale: 1, suffix: "", includeId: true }).includes('id="layer"'));
+  t("the width follows the scale syntax in the svg element", exportSvg(named, { format: "SVG", scale: "300w", suffix: "" }).includes('width="300"'));
+}
+
+console.log("auto layout: the gap modes:");
+{
+  // Figma's Auto gap is CSS's three packing rules: Between pushes the objects
+  // to the padding, Around gives each object half a gap on either side, Evenly
+  // puts the same space everywhere including the edges.
+  const b = autoSpacing(60, 3, "between");
+  t("between puts no space before the first object", b.lead === 0);
+  t("and splits the slack between the objects", b.gap === 30);
+  const a = autoSpacing(60, 3, "around");
+  t("around gives the first object half a gap", a.lead === 10);
+  t("and a whole gap between objects", a.gap === 20);
+  const e = autoSpacing(60, 3, "evenly");
+  t("evenly gives the first object a whole gap", e.lead === 15);
+  t("the same one it gives between objects", e.gap === 15);
+  t("a frame with no slack adds no space at all", autoSpacing(0, 3, "between").gap === 0);
+  t("negative slack is treated as none", autoSpacing(-40, 3, "evenly").lead === 0);
+  t("a single object has nothing to be spaced from", autoSpacing(50, 1, "between").gap === 0);
+  t("an empty frame is not a divide by zero", autoSpacing(50, 0, "around").lead === 0);
+  t("the panel offers the three modes", SPACING_MODES.map((m) => m.id).join(",") === "between,around,evenly");
+  t("a numeric gap is not an auto gap", !isAutoGap({ gap: 8 }));
+  t("and an auto gap is", isAutoGap({ gap: 8, gapMode: "auto" }));
+}
+
+console.log("auto layout: wrap, and hugging with a filler inside:");
+{
+  const layout = (over = {}) => ({
+    direction: "horizontal", gap: 8, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed",
+    wrap: false, align: "min", justify: "min", ...over,
+  });
+  const child = (over = {}) => ({ id: "c", kind: "rect", name: "c", visible: true, w: 10, h: 10, ...over });
+  t("wrap applies to a horizontal flow", wraps(layout({ wrap: true })));
+  // Figma: "When you have the horizontal selected, Wrap becomes available."
+  t("a vertical flow does not wrap, whatever the flag says", !wraps(layout({ wrap: true, direction: "vertical" })));
+  t("and a horizontal flow without the flag does not wrap", !wraps(layout()));
+  t("no layout at all does not wrap", !wraps(undefined));
+  const filling = [child({ sizingW: "fill" })];
+  t("a filling child is a fill on the main axis of a row", hasFillChild(filling, "main", true));
+  t("and a fill on the cross axis of a column", hasFillChild(filling, "cross", false));
+  t("a fixed child is not", !hasFillChild([child()], "main", true));
+  // The article: "the parent frame will no longer hug contents and become Fixed
+  // for the axis".
+  const hugRule = effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "hug" }, [child()]);
+  t("a hug with no filler inside still hugs", hugRule.main === "hug");
+  const brokenHug = effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "hug" }, filling);
+  t("a hug with a filling child becomes fixed", brokenHug.main === "fixed");
+  t("and the cross axis is untouched by a main-axis filler", brokenHug.cross === "hug");
+  const crossFiller = [child({ sizingH: "fill" })];
+  t("a child filling the cross axis breaks the cross hug", effectiveSizing(layout({ cross: "hug" }), { sizingW: "fixed", sizingH: "hug" }, crossFiller).cross === "fixed");
+  t("and leaves the main one alone", effectiveSizing(layout({ sizing: "hug" }), { sizingW: "hug", sizingH: "fixed" }, crossFiller).main === "hug");
+}
+
+console.log("the grid flow: cells, tracks and spans:");
+{
+  const kid = (over = {}) => ({ id: "k", kind: "rect", name: "k", visible: true, x: 0, y: 0, w: 40, h: 20, ...over });
+  const grid = (over = {}) =>
+    ({ ...defaultGrid(), padding: [0, 0, 0, 0], ...over });
+
+  // "Objects will be placed in succession from left to right, top to bottom."
+  const four = [kid({ id: "a" }), kid({ id: "b" }), kid({ id: "c" }), kid({ id: "d" })];
+  const cells = placeCells(four, 2, true);
+  t("objects fill a row before moving down", cells.map((c) => `${c.col},${c.row}`).join(" ") === "0,0 1,0 0,1 1,1");
+  t("an auto row count follows the objects", gridRows(grid(), cells) === 2);
+  t("one more object needs a third row in a two-column grid", gridRows(grid(), placeCells([...four, kid({ id: "e" })], 2, true)) === 3);
+  t("a row count set by hand is a floor, not a ceiling", gridRows(grid({ rows: 5 }), cells) === 5);
+  t("and Figma adds rows rather than dropping objects", gridRows(grid({ rows: 1 }), cells) === 2);
+  t("an empty grid still has a row", gridRows(grid(), []) === 1);
+
+  // Spans.
+  const spanning = [kid({ id: "a", colSpan: 2 }), kid({ id: "b" }), kid({ id: "c" })];
+  const spanned = placeCells(spanning, 2, true);
+  t("a two-wide object takes the whole row", spanned[0].col === 0 && spanned[0].colSpan === 2);
+  t("and the next object starts on the row below", spanned[1].row === 1 && spanned[1].col === 0);
+  t("a span wider than the grid is clamped to it", placeCells([kid({ colSpan: 9 })], 2, true)[0].colSpan === 2);
+  t("a row span reaches down", placeCells([kid({ rowSpan: 2 }), kid()], 2, true)[1].col === 1);
+
+  // Automatic positioning off: objects stay where they were.
+  const pinned = [kid({ id: "a", gridCol: 1, gridRow: 2 }), kid({ id: "b", gridCol: 0, gridRow: 0 })];
+  const manual = placeCells(pinned, 2, false);
+  t("with automatic positioning off an object keeps its cell", manual[0].col === 1 && manual[0].row === 2);
+  t("empty cells stay empty", manual[1].col === 0 && manual[1].row === 0);
+  t("and the grid is as tall as the furthest object", gridRows(grid(), manual) === 3);
+  t("an object parked past the last column is pulled back", placeCells([kid({ gridCol: 7 })], 2, false)[0].col === 1);
+
+  // Track sizing.
+  const plan = (over, kids, cols) =>
+    planGrid({ w: 200, h: 100 }, kids ?? four, grid({ columns: cols ?? 2, ...over }), false, false);
+  // A track with no mode of its own is Figma's Auto, and its help says what
+  // that means: "by default, the size is set to auto, which means free space is
+  // divided evenly between all rows and columns".
+  const untouched = plan({ gapCols: 0, gapRows: 0 });
+  t("tracks are Auto until told otherwise, and share the space", untouched.colW[0] === 100 && untouched.colW[1] === 100);
+  t("rows are Auto too", untouched.rowH[0] === 50 && untouched.rowH[1] === 50);
+  const g0 = plan({ colTracks: [{ mode: "hug" }, { mode: "hug" }], rowTracks: [{ mode: "hug" }], gapCols: 0, gapRows: 0 });
+  t("a hug track is as wide as its widest object", g0.colW[0] === 40 && g0.colW[1] === 40);
+  t("and a hug row as tall as its tallest", g0.rowH[0] === 20);
+  t("a mix lets hug keep its size and Auto take the rest",
+    plan({ colTracks: [{ mode: "hug" }, { mode: "fill" }], gapCols: 0, gapRows: 0 }).colW[1] === 160);
+  // "fill container ... fractional units (fr) are used"
+  const fill = plan({ colTracks: [{ mode: "fill" }, { mode: "fill" }], gapCols: 0, gapRows: 0, rowTracks: [{ mode: "hug" }] });
+  t("two 1fr columns split the width evenly", fill.colW[0] === 100 && fill.colW[1] === 100);
+  const weighted = plan({ colTracks: [{ mode: "fill", fr: 1 }, { mode: "fill", fr: 3 }], gapCols: 0, gapRows: 0 });
+  t("a 1fr and a 3fr column split four ways", weighted.colW[0] === 50 && weighted.colW[1] === 150);
+  const mixed = plan({ colTracks: [{ mode: "fixed", size: 60 }, { mode: "fill" }], gapCols: 0, gapRows: 0 });
+  t("a fixed track keeps its size", mixed.colW[0] === 60);
+  t("and the fill track takes what is left", mixed.colW[1] === 140);
+  const withGaps = plan({ gapCols: 10, gapRows: 6, colTracks: [{ mode: "fill" }, { mode: "fill" }] });
+  t("gaps come out of the space before it is divided", withGaps.colW[0] === 95 && withGaps.colW[1] === 95);
+  t("and the plan totals include them", withGaps.totalW === 200);
+  t("a hugging frame has nothing to fill from, so fill falls back to hug", planGrid({ w: 0, h: 0 }, four, grid({ rows: "auto" }), true, true).colW[0] === 40);
+
+  // Cell geometry, and where an object sits in its cell.
+  const boxPlan = plan({ gapCols: 0, gapRows: 0 });
+  const b = cellBox(boxPlan, { col: 1, row: 0, colSpan: 1, rowSpan: 1 });
+  t("a cell's box starts where its track starts", b.x === 100 && b.y === 0);
+  const spannedBox = cellBox(boxPlan, { col: 0, row: 0, colSpan: 2, rowSpan: 1 });
+  t("a spanned box covers both tracks", spannedBox.w === 200);
+  t("and a spanned box's gap is inside it",
+    cellBox(plan({ gapCols: 10, colTracks: [{ mode: "hug" }, { mode: "hug" }] }), { col: 0, row: 0, colSpan: 2, rowSpan: 1 }).w === 90);
+  t("a spanned box over fill tracks runs to the frame's edge",
+    cellBox(plan({ gapCols: 10, colTracks: [{ mode: "fill" }, { mode: "fill" }] }), { col: 0, row: 0, colSpan: 2, rowSpan: 1 }).w === 200);
+
+  t("an object with no alignment sits at the cell's start", cellAlign(kid()).h === "min" && cellAlign(kid()).v === "min");
+  t("the Position buttons set the object's own cell alignment", cellAlign(kid({ constraintH: "center", constraintV: "max" })).h === "center" && cellAlign(kid({ constraintH: "center", constraintV: "max" })).v === "max");
+  t("a stray constraint value reads as the start", cellAlign(kid({ constraintH: "scale" })).h === "min");
+
+  // A grid measures width first, like a horizontal flow. Getting this wrong
+  // swaps a frame's width and height rules, and the hug then eats a typed
+  // width - which is exactly what the browser probe caught.
+  t("a grid's main axis is its width", widthIsMain({ direction: "grid" }));
+  t("so is a horizontal flow's", widthIsMain({ direction: "horizontal" }));
+  t("a vertical flow's is its height", !widthIsMain({ direction: "vertical" }));
+}
+
+console.log("the grid flow, through the engine:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const root = page().root.id;
+  const addRect = (w, h) => {
+    e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w, h, parent: root });
+    return e.snapshot().selection[0];
+  };
+  const frame = addRect(300, 200);
+  const kids = [addRect(40, 30), addRect(40, 30), addRect(40, 30), addRect(40, 30)];
+  for (const k of kids) e.dispatch({ type: "reparent", ids: [k], parent: frame, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: frame,
+    layout: {
+      direction: "grid", gap: 8, padding: [8, 8, 8, 8], sizing: "fixed", cross: "fixed",
+      wrap: false, align: "min", justify: "min",
+      columns: 2, rows: "auto", gapRows: 10, gapCols: 20, colTracks: [], rowTracks: [], autoPosition: true,
+    },
+  });
+  const node = () => find(page().root, frame);
+  const xs = () => node().children.map((c) => [Math.round(c.x), Math.round(c.y), Math.round(c.w), Math.round(c.h)]);
+  // Two Auto columns share 300 - 16 (padding) - 20 (one gap) = 264, so each is
+  // 132 wide and they start at 8 and 160. Two Auto rows share 200 - 16 - 10 =
+  // 174, so 87 each and they start at 8 and 105.
+  const colAt = (i) => 8 + i * (132 + 20);
+  const rowAt = (i) => 8 + i * (87 + 10);
+  t("objects fill the first row left to right", xs()[0][0] === 8 && xs()[1][0] === colAt(1));
+  t("then the next row", xs()[2][1] === rowAt(1) && xs()[3][1] === rowAt(1));
+  t("and the row count follows them", node().layout.rows === "auto");
+
+  // A typed width on a grid frame is a manual resize: Fixed on the width, and
+  // the grid's own `sizing` is the width rule, not the cross one.
+  e.dispatch({ type: "resize", id: frame, x: 0, y: 0, w: 300, h: 200 });
+  t("a resized grid frame sets its width rule", node().layout.sizing === "fixed");
+  t("and its own resizing too", node().sizingW === "fixed");
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout } });
+  t("so its width survives the next layout pass", Math.round(node().w) === 300);
+
+  // Track sizing, through a real dispatch.
+  e.dispatch({
+    type: "autoLayout",
+    id: frame,
+    // One Auto column beside a hugging one: it takes what the hug leaves.
+    layout: { ...node().layout, colTracks: [{ mode: "fill" }, { mode: "hug" }] },
+  });
+  t("an Auto column takes what a hug column leaves", Math.round(node().children[1].x) === 8 + 224 + 20);
+  t("and an object set to fill takes the cell", (() => {
+    e.dispatch({ type: "patch", id: kids[0], patch: { sizingW: "fill" } });
+    return Math.round(node().children[0].w) === 224;
+  })());
+  // Spans: with the first object filling two columns it takes both tracks.
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout, colTracks: [] } });
+  e.dispatch({ type: "patch", id: kids[0], patch: { colSpan: 2 } });
+  t("a two-column span reaches both tracks", Math.round(node().children[0].w) === 284);
+  t("and pushes the rest onto the next rows", node().children[1].gridRow === 1);
+  e.dispatch({ type: "patch", id: kids[0], patch: { colSpan: 1 } });
+  // Automatic positioning off keeps the arrangement.
+  const before = xs();
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout, autoPosition: false } });
+  t("switching automatic positioning off leaves the arrangement alone", JSON.stringify(xs()) === JSON.stringify(before));
+  t("and the cells are recorded on the objects", node().children[1].gridCol === 1 && node().children[1].gridRow === 0);
+  // A grid frame with wrap set does not wrap: it is its own flow.
+  t("wrap has no meaning in a grid", !wraps(node().layout));
+
+  // Automatic positioning off, per the article, "preserves empty cells" and
+  // lets you put an object in one. So where the object sits is its cell: a drop
+  // one cell over keeps the object there instead of snapping it back.
+  e.dispatch({ type: "autoLayout", id: frame, layout: { ...node().layout, autoPosition: false, columns: 3 } });
+  t("with automatic positioning off the cells stay put", node().children[0].gridRow === 0);
+  const c2 = node().children[1];
+  e.dispatch({ type: "move", ids: [c2.id], dx: 200, dy: 0 });
+  const moved = node().children[1];
+  t("dragging an object a column over lands it in that column", moved.gridCol === 2);
+  // Three Auto columns now: 244 / 3 each, so the third starts at 210.67.
+  t("and it is drawn in that cell, not snapped back", Math.round(moved.x) === Math.round(8 + 2 * (244 / 3 + 20)));
+  t("the cells it left behind stay empty", node().children[0].gridCol === 0 && node().children[2].gridCol === 0);
+  // A drag back over the first column brings it home again, so the mapping is
+  // the object's own position rather than a one-way latch.
+  e.dispatch({ type: "move", ids: [c2.id], dx: -200, dy: 0 });
+  t("and dragging it back puts it in the first column", node().children[1].gridCol === 0);
+  // A drag is a gesture: an object follows the pointer while the gesture is in
+  // flight, and the drop is what settles it into a cell. Snapping mid-drag
+  // would stop it ever crossing a track, since the snap pulls it back before
+  // the pointer has travelled that far.
+  const colAt3 = (i) => 8 + i * (244 / 3 + 20);
+  e.dispatch({ type: "begin" });
+  e.dispatch({ type: "move", ids: [c2.id], dx: 120, dy: 0 });
+  t("mid-drag the object is where the pointer left it", Math.round(node().children[1].x) === 128);
+  e.dispatch({ type: "end" });
+  t("and the drop settles it into the nearest cell",
+    node().children[1].gridCol === 1 && Math.round(node().children[1].x) === Math.round(colAt3(1)));
+}
+
+console.log("the alignment box: its cells, and its keys:");
+{
+  const flow = (over = {}) => ({
+    direction: "horizontal", gap: 8, padding: [8, 8, 8, 8], sizing: "hug", cross: "hug",
+    wrap: false, align: "min", justify: "min", ...over,
+  });
+  // Figma: nine options when the gap is a number, three when it is Auto.
+  t("a fixed gap offers all nine cells", alignmentCells(flow()).length === 9);
+  t("and they run from the top left to the bottom right", alignmentCells(flow())[0].j === "min" && alignmentCells(flow())[0].a === "min" && alignmentCells(flow())[8].a === "max");
+  const auto = flow({ gapMode: "auto" });
+  t("an Auto gap drops the box to three cells", alignmentCells(auto).length === 3);
+  t("which are the cross-axis positions", alignmentCells(auto).map((c) => c.a).join(",") === "min,center,max");
+  t("and leave the main axis where the Auto gap put it", alignmentCells(auto).every((c) => c.j === "min"));
+
+  const keys = (ch) => alignKey(ch);
+  t("an arrow key is the axis it points along", keys("ArrowRight").axis === "x" && keys("ArrowRight").dir === 1 && keys("ArrowUp").dir === -1);
+  t("W/A/S/D are edges", ["w", "a", "s", "d"].map((c) => keys(c).edge).join(",") === "top,left,bottom,right");
+  t("uppercase letters work too", keys("W").edge === "top");
+  t("B is baseline and X is the gap", keys("b").kind === "baseline" && keys("x").kind === "gap");
+  t("anything else is not an alignment key", alignKey("q") === null && alignKey("Enter") === null);
+
+  // Arrows step; the letters jump to an edge.
+  const right = layoutKeyPatch(flow({ justify: "min" }), keys("ArrowRight"));
+  t("an arrow steps one position along its axis", right.justify === "center");
+  t("and wraps round at the end", layoutKeyPatch(flow({ justify: "max" }), keys("ArrowRight")).justify === "min");
+  t("stepping back goes the other way", layoutKeyPatch(flow({ justify: "center" }), keys("ArrowLeft")).justify === "min");
+  t("down steps the cross axis of a row", layoutKeyPatch(flow(), keys("ArrowDown")).align === "center");
+  t("and leaves the main axis alone", layoutKeyPatch(flow(), keys("ArrowDown")).justify === undefined);
+  // A vertical flow turns the arrows with it: down is now the main axis.
+  const col = flow({ direction: "vertical" });
+  t("down steps the main axis of a column", layoutKeyPatch(col, keys("ArrowDown")).justify === "center");
+  t("and right steps the cross axis", layoutKeyPatch(col, keys("ArrowRight")).align === "center");
+  t("D packs a row to the end", layoutKeyPatch(flow({ justify: "min" }), keys("d")).justify === "max");
+  t("A packs it back to the start", layoutKeyPatch(flow({ justify: "max" }), keys("a")).justify === "min");
+  t("S drops the objects to the bottom of a row", layoutKeyPatch(flow({ align: "min" }), keys("s")).align === "max");
+  t("W lifts them to the top", layoutKeyPatch(flow({ align: "max" }), keys("w")).align === "min");
+  t("in a column, D is the right edge of the cross axis", layoutKeyPatch(col, keys("d")).align === "max");
+  t("and S the bottom of the main axis", layoutKeyPatch(col, keys("s")).justify === "max");
+  // Auto gap owns the main axis, which is why the box loses six cells.
+  t("an Auto gap refuses a main-axis key", layoutKeyPatch(auto, keys("d")) === null);
+  t("but still takes a cross-axis one", layoutKeyPatch(auto, keys("s")).align === "max");
+  t("X switches a number to Auto", layoutKeyPatch(flow(), keys("x")).gapMode === "auto");
+  t("and Auto back to a number", layoutKeyPatch(auto, keys("x")).gapMode === "fixed");
+  t("B turns baseline alignment on", layoutKeyPatch(flow(), keys("b")).align === "baseline");
+  t("and off again", layoutKeyPatch(flow({ align: "baseline" }), keys("b")).align === "min");
+  t("a vertical flow has no baseline", layoutKeyPatch(col, keys("b")) === null);
+  t("stepping off a baseline lands on a real position", layoutKeyPatch(flow({ align: "baseline" }), keys("ArrowDown")).align === "center");
+  t("Space between reads as the start when stepping", layoutKeyPatch(flow({ justify: "between" }), keys("ArrowRight")).justify === "center");
+}
+
+console.log("padding: the field's shorthand, and the frame's floor:");
+{
+  t("one value is every side", parsePaddingShorthand("10").join(",") === "10,10,10,10");
+  // CSS: 1,2 is top/bottom then left/right - the article's own example.
+  t("two values are vertical then horizontal", parsePaddingShorthand("1,2").join(",") === "2,2,1,1");
+  t("three values are top, sides, bottom", parsePaddingShorthand("1,2,3").join(",") === "2,2,1,3");
+  // CSS order is top, right, bottom, left.
+  t("four values are top, right, bottom, left", parsePaddingShorthand("1,2,3,4").join(",") === "4,2,1,3");
+  t("spaces work as well as commas", parsePaddingShorthand("4 8").join(",") === "8,8,4,4");
+  t("decimals survive", parsePaddingShorthand("1.5,2.5").join(",") === "2.5,2.5,1.5,1.5");
+  t("a negative side is clamped to nothing", parsePaddingShorthand("-4").join(",") === "0,0,0,0");
+  t("nonsense is refused", parsePaddingShorthand("wide") === null);
+  t("so is an empty entry", parsePaddingShorthand("") === null);
+  t("and so are five values", parsePaddingShorthand("1,2,3,4,5") === null);
+
+  const frame = { id: "f", kind: "frame", name: "f", visible: true, x: 0, y: 0, w: 10, h: 10 };
+  const padded = { ...frame, layout: { direction: "horizontal", gap: 8, padding: [24, 24, 16, 16], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min" } };
+  clampToPadding(padded);
+  t("a frame sizes up to fit its horizontal padding", padded.w === 48);
+  t("and its vertical padding", padded.h === 32);
+  const roomy = { ...padded, w: 100, h: 90 };
+  clampToPadding(roomy);
+  t("a frame that is already bigger is left alone", roomy.w === 100 && roomy.h === 90);
+}
+
+console.log("the alignment box, through the engine:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const root = page().root.id;
+  const addRect = (w, h) => {
+    e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w, h, parent: root });
+    return e.snapshot().selection[0];
+  };
+  const box = addRect(200, 100);
+  const kids = [addRect(40, 20), addRect(40, 20)];
+  for (const k of kids) e.dispatch({ type: "reparent", ids: [k], parent: box, x: 0, y: 0 });
+  const layout = { direction: "horizontal", gap: 8, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min" };
+  e.dispatch({ type: "autoLayout", id: box, layout });
+  const node = () => find(page().root, box);
+  const step = (key) => {
+    const patch = layoutKeyPatch(node().layout, alignKey(key));
+    if (patch) e.dispatch({ type: "autoLayout", id: box, layout: { ...node().layout, ...patch } });
+    return node().layout;
+  };
+  // 200 wide, 80 of objects: the packing shows up in the child positions.
+  t("the row starts packed left", Math.round(node().children[0].x) === 0);
+  step("d");
+  t("D packs it to the right edge", Math.round(node().children[0].x) === 112);
+  step("a");
+  t("A packs it back to the left", Math.round(node().children[0].x) === 0);
+  step("ArrowRight");
+  t("an arrow centres it", Math.round(node().children[0].x) === 56);
+  step("ArrowRight");
+  t("and one more packs it right", Math.round(node().children[0].x) === 112);
+  step("ArrowDown");
+  t("down steps the cross axis to the centre", Math.round(node().children[0].y) === 40);
+  step("ArrowDown");
+  t("and a second press drops them to the bottom", Math.round(node().children[0].y) === 80);
+  // X switches to Auto gap, which takes the main axis over: the objects spread
+  // to the edges and the packing stops mattering.
+  step("x");
+  t("X turns the gap Auto", node().layout.gapMode === "auto");
+  t("and the objects spread across the frame", Math.round(node().children[0].x) === 0 && Math.round(node().children[1].x) === 160);
+  t("the alignment box is down to three cells", alignmentCells(node().layout).length === 3);
+  step("x");
+  t("X turns it back into a number", node().layout.gapMode === "fixed" && node().layout.gap === 8);
+  // A frame cannot be sized under its own padding.
+  e.dispatch({ type: "autoLayout", id: box, layout: { ...node().layout, padding: [30, 30, 20, 20] } });
+  e.dispatch({ type: "resize", id: box, x: 0, y: 0, w: 10, h: 10 });
+  t("resizing under the padding bounces back up to it", Math.round(node().w) === 60 && Math.round(node().h) === 40);
+  // The article's single-child note: with the default Between spacing, one
+  // object in an Auto-gap stack sits at the start.
+  e.dispatch({ type: "autoLayout", id: box, layout: { ...node().layout, padding: [0, 0, 0, 0], gapMode: "auto", spacing: "between" } });
+  e.dispatch({ type: "patch", id: kids[1], patch: { visible: false } });
+  t("a lone object with an Auto gap sits at the start", Math.round(node().children[0].x) === 0);
+}
+
+
+{
+  const kid = (x, y, w = 40, h = 20) => ({ id: `k${x}-${y}`, kind: "rect", name: "k", visible: true, x, y, w, h });
+  const box = (w, h, kids) => ({ id: "f", kind: "frame", name: "f", visible: true, x: 0, y: 0, w, h, children: kids });
+  // A row: 8 of padding, four 40-wide objects 12 apart = 8+40+12+40+12+40+12+40+8.
+  const row = box(212, 36, [kid(8, 8), kid(60, 8), kid(112, 8), kid(164, 8)]);
+  const rowSug = suggestLayout(row);
+  t("a row of objects suggests a horizontal flow", rowSug.direction === "horizontal");
+  t("with the gap they are actually spaced by", rowSug.gap === 12);
+  t("and the frame's own inset as padding", rowSug.padding.join(",") === "8,8,8,8");
+  t("a frame that is exactly content plus padding hugs", rowSug.sizing === "hug" && rowSug.cross === "hug");
+  t("and the objects start at the top of the flow", rowSug.align === "min");
+  // A column that is centred across the frame, with 10px of slack down it.
+  const col = box(200, 160, [kid(70, 20, 60, 30), kid(70, 70, 60, 30), kid(70, 120, 60, 30)]);
+  const colSug = suggestLayout(col);
+  t("a stack of objects suggests a vertical flow", colSug.direction === "vertical");
+  t("with their own gap", colSug.gap === 20);
+  t("padding across the flow", colSug.padding[0] === 70);
+  t("and only the inset it can honour down it", colSug.padding[2] === 10);
+  t("a frame with slack down its main axis is Fixed", colSug.sizing === "fixed");
+  t("while a cross axis that fits still hugs", colSug.cross === "hug");
+  // A stray object must not drag the gap off.
+  const ragged = box(400, 36, [kid(8, 8), kid(60, 8), kid(112, 8), kid(300, 8)]);
+  t("one stray object does not move the suggested gap", suggestLayout(ragged).gap <= 40);
+  t("a single object has nothing to suggest from", suggestLayout(box(100, 60, [kid(8, 8)])).direction === defaultLayout().direction);
+  t("and neither has an empty frame", suggestLayout(box(100, 60, [])).gap === 8);
+  t("a hidden object is not part of the flow", suggestLayout(box(192, 56, [kid(8, 8), { ...kid(60, 8), visible: false }, kid(112, 8)])).gap === 64);
+  t("a layer that ignores auto layout is not either", suggestLayout(box(192, 56, [kid(8, 8), { ...kid(60, 8), absolutePosition: true }, kid(112, 8)])).gap === 64);
+}
+
+console.log("auto layout: a text layer's max height and max lines:");
+{
+  const both = textDimensionRule({ maxH: 40, maxLines: 3 });
+  t("a patch that sets both keeps both, because the caller said so", both.maxH === 40 && both.maxLines === 3);
+  const height = textDimensionRule({ maxH: 40 });
+  t("adding a max height sets max lines to auto", height.maxLines === 0);
+  const lines = textDimensionRule({ maxLines: 3 });
+  t("setting a max line count removes the max height", lines.maxH === 0);
+  t("setting max lines to auto does not touch a max height", textDimensionRule({ maxLines: 0 }).maxH === undefined);
+  const other = textDimensionRule({ maxW: 100 });
+  t("an unrelated patch is passed through untouched", other.maxW === 100 && other.maxH === undefined);
+  t("and is not the same object", other !== undefined);
+}
+
+console.log("text dimensions: the limits, and which axis a drag fixes:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const N = (id) => find(e.snapshot().pages[e.snapshot().page].root, id);
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 0, w: 320, h: 20, extra: { text: "A line of copy", sizingW: "hug", sizingH: "hug" } });
+  const t0 = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: t0, patch: { maxW: 200 } });
+  t("a max width clamps the box down to it", Math.round(N(t0).w) === 200);
+  e.dispatch({ type: "patch", id: t0, patch: { minW: 260 } });
+  t("a min above the max loses to it", Math.round(N(t0).w) === 200);
+  e.dispatch({ type: "patch", id: t0, patch: { maxW: undefined } });
+  t("lifting the max lets the min have the box", Math.round(N(t0).w) === 260);
+  e.dispatch({ type: "patch", id: t0, patch: { minW: undefined, maxW: 200 } });
+  e.dispatch({ type: "patch", id: t0, patch: { maxW: undefined } });
+  t("with nothing left to bind it, the engine leaves the box where the clamp put it",
+    Math.round(N(t0).w) === 200, "the panel re-fits a hugging layer; the engine only clamps:");
+
+  // The article: "If you manually resize a layer ... the resizing property will
+  // be set to fixed on the respective axis." Only the axis that moved.
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 200, w: 120, h: 20, extra: { text: "Copy", sizingW: "hug", sizingH: "hug" } });
+  const t1 = e.snapshot().selection[0];
+  e.dispatch({ type: "resize", id: t1, x: 0, y: 200, w: 240, h: N(t1).h });
+  t("a drag on the width fixes the width and leaves the height hugging",
+    N(t1).sizingW === "fixed" && N(t1).sizingH === "hug");
+  e.dispatch({ type: "resize", id: t1, x: 0, y: 200, w: N(t1).w, h: 60 });
+  t("and a drag on the height fixes the height too", N(t1).sizingW === "fixed" && N(t1).sizingH === "fixed");
+  t("with the copy still the layer's own", N(t1).text === "Copy" && N(t1).kind === "text");
+}
+
+console.log("auto layout, through the engine:");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const root = page().root.id;
+  const addRect = (w, h) => {
+    e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w, h, parent: root });
+    return e.snapshot().selection[0];
+  };
+  // A fixed 300-wide row with three 40-wide objects in it, Auto gap.
+  const row = addRect(300, 60);
+  const kids = [addRect(40, 20), addRect(40, 20), addRect(40, 20)];
+  e.dispatch({
+    type: "autoLayout",
+    id: row,
+    layout: {
+      direction: "horizontal", gap: 0, gapMode: "auto", spacing: "between",
+      padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min",
+    },
+  });
+  for (const k of kids) e.dispatch({ type: "reparent", ids: [k], parent: row, x: 0, y: 0 });
+  const rowNode = () => find(page().root, row);
+  const xs = () => rowNode().children.map((c) => Math.round(c.x));
+  const layoutWith = (spacing) => {
+    e.dispatch({
+      type: "autoLayout",
+      id: row,
+      layout: { ...rowNode().layout, spacing },
+    });
+    return xs();
+  };
+  // 300 wide, 3x40 of content: 180 slack.
+  t("between starts at the padding", layoutWith("between")[0] === 0);
+  t("and divides the slack between the gaps", layoutWith("between")[1] === 130);
+  t("around starts half a gap in", layoutWith("around")[0] === 30);
+  t("with a whole gap between", layoutWith("around")[1] === 130);
+  t("evenly starts a whole gap in", layoutWith("evenly")[0] === 45);
+  t("with the same gap between", layoutWith("evenly")[1] === 130);
+  // A hug with a filler inside is fixed, so the frame keeps the width it has.
+  const hugRow = addRect(300, 60);
+  const filler = addRect(50, 20);
+  e.dispatch({ type: "reparent", ids: [filler], parent: hugRow, x: 0, y: 0 });
+  e.dispatch({ type: "patch", id: filler, patch: { sizingW: "fill" } });
+  e.dispatch({
+    type: "autoLayout",
+    id: hugRow,
+    layout: {
+      direction: "horizontal", gap: 0, padding: [0, 0, 0, 0], sizing: "hug", cross: "fixed",
+      wrap: false, align: "min", justify: "min",
+    },
+  });
+  const hugNode = () => find(page().root, hugRow);
+  t("a hugging row with a filling child stops hugging, so it keeps its width", Math.round(hugNode().w) === 300);
+  t("and the child fills it", Math.round(hugNode().children[0].w) === 300);
+  // A hug with no filler does hug.
+  const plainHug = addRect(300, 60);
+  const plainKid = addRect(120, 20);
+  e.dispatch({ type: "reparent", ids: [plainKid], parent: plainHug, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: plainHug,
+    layout: {
+      direction: "horizontal", gap: 0, padding: [0, 0, 0, 0], sizing: "hug", cross: "fixed",
+      wrap: false, align: "min", justify: "min",
+    },
+  });
+  t("a hugging row with ordinary children shrinks to them", Math.round(find(page().root, plainHug).w) === 120);
+  // Auto gap on a hugging frame: the frame is the size of its objects, so there
+  // is no leftover space for the packing rule to give away.
+  const autoHug = addRect(300, 60);
+  const autoKids = [addRect(40, 20), addRect(40, 20), addRect(40, 20)];
+  for (const k of autoKids) e.dispatch({ type: "reparent", ids: [k], parent: autoHug, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: autoHug,
+    layout: {
+      direction: "horizontal", gap: 8, gapMode: "auto", spacing: "around",
+      padding: [8, 8, 8, 8], sizing: "hug", cross: "hug", wrap: false, align: "min", justify: "min",
+    },
+  });
+  const autoNode = () => find(page().root, autoHug);
+  t("a hugging frame with Auto gap is the size of its objects and padding", Math.round(autoNode().w) === 136);
+  t("and the objects keep their own widths", autoNode().children.map((c) => Math.round(c.w)).join(",") === "40,40,40");
+  t("with no space distributed that does not exist", autoNode().children.map((c) => Math.round(c.x)).join(",") === "8,48,88");
+  // Give the frame slack by making it Fixed and the packing rule comes alive.
+  e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout, sizing: "fixed" } });
+  e.dispatch({ type: "resize", id: autoHug, w: 344, h: 60 });
+  e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout, sizing: "fixed" } });
+  // 344 wide, 8 padding each side, 120 of objects: 208 to share between three.
+  t("a fixed frame with Auto around gives each object a third of the slack",
+    Math.abs(autoNode().children[0].x - 43) <= 1);
+  t("and leaves the rest between them",
+    Math.abs((autoNode().children[1].x - autoNode().children[0].x) - (40 + 69)) <= 1);
+
+  // A filling child and an Auto gap: the filler takes the leftover, so the Auto
+  // gap has nothing to distribute and packs at zero rather than overflowing.
+  const mixed = addRect(360, 60);
+  const fixedKid = addRect(40, 20);
+  const fillKid = addRect(40, 20);
+  e.dispatch({ type: "reparent", ids: [fixedKid], parent: mixed, x: 0, y: 0 });
+  e.dispatch({ type: "reparent", ids: [fillKid], parent: mixed, x: 0, y: 0 });
+  e.dispatch({ type: "patch", id: fillKid, patch: { sizingW: "fill" } });
+  e.dispatch({
+    type: "autoLayout",
+    id: mixed,
+    layout: {
+      direction: "horizontal", gap: 8, gapMode: "auto", spacing: "between",
+      padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min",
+    },
+  });
+  const mixedNode = () => find(page().root, mixed);
+  t("an Auto gap with a filling child packs at zero", Math.round(mixedNode().children[1].x) === 40);
+  t("so the filler takes every pixel that is left", Math.round(mixedNode().children[1].w) === 320);
+  t("and the row still fits its frame", Math.round(mixedNode().children[1].x + mixedNode().children[1].w) === 360);
+
+  // A typed width on a hugging frame is a manual resize, and Figma turns that
+  // into Fixed - otherwise the hug would swallow the number.
+  e.dispatch({ type: "resize", id: autoHug, x: 0, y: 0, w: 300, h: autoNode().h });
+  e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout } });
+  t("a typed width turns a hugging frame Fixed", autoNode().layout.sizing === "fixed");
+  t("on the layer's own resizing too, or the hug would snap back", autoNode().sizingW === "fixed");
+  t("so the width the user typed is the width the frame has", Math.round(autoNode().w) === 300);
+  t("and it survives the next layout pass", (e.dispatch({ type: "autoLayout", id: autoHug, layout: { ...autoNode().layout } }), Math.round(autoNode().w) === 300));
+
+  // Vertical wrap lays out as a plain stack.
+  const col = addRect(120, 300);
+  const a1 = addRect(80, 40);
+  const a2 = addRect(80, 40);
+  for (const k of [a1, a2]) e.dispatch({ type: "reparent", ids: [k], parent: col, x: 0, y: 0 });
+  e.dispatch({
+    type: "autoLayout",
+    id: col,
+    layout: {
+      direction: "vertical", gap: 10, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed",
+      wrap: true, align: "min", justify: "min",
+    },
+  });
+  const colKids = find(page().root, col).children;
+  t("a vertical flow with wrap set stacks instead of wrapping", Math.round(colKids[0].x) === 0 && Math.round(colKids[1].x) === 0);
+  t("and the second object sits below the first", Math.round(colKids[1].y) === 50);
+  // The text rule, through the real dispatch.
+  const text = addRect(100, 40);
+  e.dispatch({ type: "patch", id: text, patch: { kind: "text", text: "Hello", maxLines: 2, maxH: 60 } });
+  const textNode = () => find(page().root, text);
+  t("the text layer keeps both when the patch sets both", textNode().maxH === 60 && textNode().maxLines === 2);
+  e.dispatch({ type: "patch", id: text, patch: { maxH: 50 } });
+  t("a new max height zeroes the max line count", textNode().maxLines === 0);
+  e.dispatch({ type: "patch", id: text, patch: { maxLines: 3 } });
+  t("a new max line count clears the max height", textNode().maxH === 0);
+}
+
+console.log("the three ways in to auto layout, from \"Toggle on auto layout in designs\":");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const rootId = () => page().root.id;
+  const add = (kind, x, y, w, h) => {
+    e.dispatch({ type: "add", kind, x, y, w, h, parent: rootId() });
+    return e.snapshot().selection[0];
+  };
+  const node = (id) => find(page().root, id);
+  const kids = () => page().root.children;
+
+  // "Auto layout is only supported on frames. If you have one or more layers
+  // selected, Figma will create an auto layout frame around them."
+  const rect = add("rect", 100, 60, 80, 40);
+  e.dispatch({ type: "select", ids: [rect] });
+  e.dispatch({ type: "wrapAutoLayout", ids: [rect], layout: defaultLayout() });
+  const wrapped = node(e.snapshot().selection[0]);
+  t("a layer that cannot hold a layout gets a frame around it", wrapped.kind === "frame" && wrapped.layout?.direction === "horizontal");
+  t("the new frame is what is selected", page().root.children.some((c) => c.id === wrapped.id));
+  t("the layer moved into it", wrapped.children.length === 1 && wrapped.children[0].id === rect);
+  // The default layout has 8 of padding on every side, and the frame is placed
+  // so the layer does not move when it appears.
+  t("the frame leaves the padding around the layer", wrapped.x === 92 && wrapped.y === 52 && wrapped.w === 96 && wrapped.h === 56);
+  const wp = worldPos(page().root, rect);
+  t("and the layer itself has not moved", Math.round(wp.x) === 100 && Math.round(wp.y) === 60);
+  t("a frame keeps its own layout instead of being wrapped",
+    (() => {
+      const f = add("frame", 400, 60, 120, 60);
+      e.dispatch({ type: "select", ids: [f] });
+      e.dispatch({ type: "autoLayout", id: f, layout: defaultLayout() });
+      return node(f).layout?.direction === "horizontal" && !node(f).children.some((c) => c.kind === "frame");
+    })());
+
+  // Two layers wrap together, and the frame covers both.
+  const a = add("rect", 600, 100, 40, 40);
+  const b = add("rect", 700, 160, 40, 40);
+  e.dispatch({ type: "select", ids: [a, b] });
+  e.dispatch({ type: "wrapAutoLayout", ids: [a, b], layout: defaultLayout() });
+  const pair = node(e.snapshot().selection[0]);
+  t("several layers wrap in one frame", pair.children.length === 2 && pair.children.every((c) => c.id === a || c.id === b));
+  // The new frame starts at the selection's top-left corner, less its padding -
+  // so the first object does not move - and then the flow lays the objects out,
+  // which is what Figma does with them too: a horizontal frame puts them in a
+  // row, hugging both dimensions once it has.
+  t("the frame starts at the selection's corner", pair.x === 592 && pair.y === 92);
+  t("the objects are laid out by the new flow", pair.children[0].x === 8 && pair.children[1].x === 56 && pair.children[1].y === 8);
+  t("and the frame hugs them", pair.w === 104 && pair.h === 56);
+  t("the first object has not moved", Math.round(worldPos(page().root, a).x) === 600 && Math.round(worldPos(page().root, a).y) === 100);
+
+  // "Groups or other selections of layers and/or objects" - a group becomes a
+  // frame rather than being wrapped in another container.
+  const g1 = add("rect", 900, 100, 40, 40);
+  const g2 = add("rect", 900, 160, 40, 40);
+  e.dispatch({ type: "select", ids: [g1, g2] });
+  e.dispatch({ type: "group" });
+  const groupId = e.snapshot().selection[0];
+  t("the group starts as a group", node(groupId).kind === "group");
+  e.dispatch({ type: "wrapAutoLayout", ids: [groupId], layout: defaultLayout() });
+  t("a group is converted to a frame, not wrapped in one", node(groupId).kind === "frame" && !!node(groupId).layout);
+  t("and it keeps the layers it held", node(groupId).children.length === 2);
+
+  // "Remove all auto layout": the frame and every nested frame.
+  const outer = add("frame", 1200, 80, 200, 120);
+  const inner = add("frame", 0, 0, 100, 60);
+  e.dispatch({ type: "reparent", ids: [inner], parent: outer, x: 10, y: 10 });
+  e.dispatch({ type: "autoLayout", id: outer, layout: defaultLayout() });
+  e.dispatch({ type: "autoLayout", id: inner, layout: defaultLayout() });
+  const leaf = add("rect", 0, 0, 20, 20);
+  e.dispatch({ type: "reparent", ids: [leaf], parent: inner, x: 0, y: 0 });
+  e.dispatch({ type: "autoLayout", id: leaf, layout: defaultLayout() });
+  t("the nested frames are laid out to begin with", !!node(outer).layout && !!node(inner).layout && !!node(leaf).layout);
+  e.dispatch({ type: "removeAllLayout", id: outer });
+  t("Remove all auto layout takes the frame's own layout", !node(outer).layout);
+  t("and the nested frame's", !node(inner).layout);
+  t("and the layer's inside that", !node(leaf).layout);
+
+  // "Auto layout cannot be removed from component instances."
+  const master = add("frame", 1500, 80, 100, 100);
+  e.dispatch({ type: "autoLayout", id: master, layout: defaultLayout() });
+  e.dispatch({ type: "select", ids: [master] });
+  e.dispatch({ type: "makeComponent" });
+  const masterId = e.snapshot().selection[0];
+  const before = !!node(masterId).layout;
+  e.dispatch({ type: "select", ids: [masterId] });
+  e.dispatch({ type: "duplicate" });
+  const instanceId = e.snapshot().selection[0];
+  t("a duplicate of a main component is an instance", insideInstance(page().root, instanceId));
+  e.dispatch({ type: "removeAllLayout", id: instanceId });
+  // "Auto layout cannot be removed from component instances." In the engine that
+  // is a refusal - the instance keeps the layout its main component gave it.
+  t("Remove all auto layout refuses on an instance", !!node(instanceId).layout);
+  t("and the main component is untouched", before && !!node(masterId).layout);
+}
+
+console.log("nesting flows, from \"Combine vertical, horizontal, and grid auto layout flows\":");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const add = (kind, x, y, w, h, parent) => {
+    e.dispatch({ type: "add", kind, x, y, w, h, parent: parent ?? page().root.id });
+    return e.snapshot().selection[0];
+  };
+  const N = (id) => find(page().root, id);
+  const L = (dir, over = {}) => ({
+    direction: dir, gap: 0, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed",
+    wrap: false, align: "min", justify: "min", ...over,
+  });
+
+  // The article's newsfeed: name and date inside a vertical frame, that frame
+  // and an avatar inside a horizontal Profile, that inside a vertical Post, and
+  // the posts inside a vertical Newsfeed. Fill is per dimension, so the widths
+  // cascade while each frame keeps its own height rule.
+  const feed = add("frame", 0, 0, 400, 300);
+  const post = add("frame", 0, 0, 100, 60, feed);
+  const profile = add("frame", 0, 0, 50, 20, post);
+  const name = add("rect", 0, 0, 40, 10, profile);
+  e.dispatch({ type: "autoLayout", id: feed, layout: L("vertical", { padding: [16, 16, 16, 16], gap: 12 }) });
+  e.dispatch({ type: "autoLayout", id: post, layout: L("vertical", { padding: [12, 12, 12, 12], gap: 8 }) });
+  e.dispatch({ type: "autoLayout", id: profile, layout: L("horizontal", { padding: [4, 4, 4, 4], gap: 6 }) });
+  for (const id of [post, profile, name]) e.dispatch({ type: "patch", id, patch: { sizingW: "fill" } });
+  // A child's own height stays its own: wide fill, short fixed height.
+  t("a child filling the width of a vertical stack takes its inner width",
+    Math.round(N(post).w) === 368);
+  t("the next level in takes that frame's own padding off again",
+    Math.round(N(profile).w) === 344);
+  t("and the level inside that again", Math.round(N(name).w) === 336);
+  t("each level keeps its own padding, and so its own origin",
+    Math.round(N(post).x) === 16 && Math.round(N(profile).x) === 12 && Math.round(N(name).x) === 4);
+  t("a cross fill does not stretch the child's height",
+    Math.round(N(post).h) === 60 && Math.round(N(name).h) === 10);
+  e.dispatch({ type: "resize", id: feed, x: 0, y: 0, w: 300, h: 300 });
+  e.dispatch({ type: "autoLayout", id: feed, layout: { ...N(feed).layout } });
+  t("resizing the outer frame reflows all three levels", Math.round(N(post).w) === 268 && Math.round(N(profile).w) === 244 && Math.round(N(name).w) === 236);
+  // A frame cannot hug an axis while a child fills along it; a width-filling
+  // child inside a vertical stack is what turns that stack's cross axis fixed.
+  const wantingHug = { ...N(feed).layout, cross: "hug" };
+  t("a frame cannot hug the axis a child fills", hugsCross(wantingHug, N(feed), N(feed).children) === false);
+  t("an axis nothing fills is still free to hug", hugsCross({ ...wantingHug, cross: "hug" }, N(feed), []) === true);
+
+  // "Set the width resizing to Fill container. Toggle on Aspect ratio to
+  // maintain the current ratio of the image whenever it resizes."
+  const card = add("frame", 500, 0, 200, 300);
+  const img = add("rect", 0, 0, 100, 50, card);
+  e.dispatch({ type: "autoLayout", id: card, layout: L("vertical") });
+  e.dispatch({ type: "patch", id: img, patch: { aspectLocked: true, sizingW: "fill" } });
+  t("a filling image keeps its ratio", Math.round(N(img).w) === 200 && Math.round(N(img).h) === 100);
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 300, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  t("and follows the frame as it resizes", Math.round(N(img).w) === 300 && Math.round(N(img).h) === 150);
+  // A width is typed a digit at a time, so the box passes through sizes that
+  // clamp to a single pixel. The ratio the lock was taken at is remembered for
+  // exactly that reason - reading the box instead would leave it square.
+  t("turning the lock on remembers the ratio it was taken at", N(img).aspectRatio === 0.5);
+  t("a fill that sees a one-pixel box still knows the ratio",
+    JSON.stringify(fillPatch({ w: 1, h: 1, aspectLocked: true, aspectRatio: 1 / 3 }, "w", 300, false)) === '{"w":300,"h":100}');
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 1, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 400, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  t("a width typed through a one-pixel step leaves the ratio intact",
+    Math.round(N(img).w) === 400 && Math.round(N(img).h) === 200);
+  e.dispatch({ type: "resize", id: img, x: 0, y: 0, w: 200, h: 80 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  t("resizing a locked box by hand takes the new ratio with it",
+    Math.abs(N(img).aspectRatio - 0.4) < 1e-6 && Math.round(N(img).h) === 160);
+  e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 300, h: 300 });
+  e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
+  const unlocked = add("rect", 0, 0, 100, 50, card);
+  e.dispatch({ type: "patch", id: unlocked, patch: { sizingW: "fill" } });
+  t("an unlocked child keeps the height it was given", Math.round(N(unlocked).w) === 300 && Math.round(N(unlocked).h) === 50);
+  t("fillPatch leaves a free child's other axis alone",
+    JSON.stringify(fillPatch({ w: 100, h: 50, aspectLocked: false }, "w", 300, false)) === '{"w":300}');
+  t("and takes it along when the ratio is locked",
+    JSON.stringify(fillPatch({ w: 100, h: 50, aspectLocked: true }, "w", 300, false)) === '{"w":300,"h":150}');
+  t("a locked child whose other axis also fills is left to the framework",
+    JSON.stringify(fillPatch({ w: 100, h: 50, aspectLocked: true }, "w", 300, true)) === '{"w":300}');
+  t("filling along one axis is not filling along the other",
+    fillersAlong([{ sizingW: "fill", sizingH: "hug" }], "main", false).length === 0 &&
+      fillersAlong([{ sizingW: "fill", sizingH: "hug" }], "cross", false).length === 1);
+
+  // The grid example: a 3x6 home screen, objects created into the cell they
+  // were drawn in, and grids nested inside a folder that spans four cells.
+  const home = add("frame", 0, 500, 300, 400);
+  e.dispatch({ type: "autoLayout", id: home, layout: { ...L("grid", { columns: 3, rows: 6, gapCols: 8, gapRows: 8 }) } });
+  const spot = gridSpotForPoint(N(home), [], N(home).layout, false, false, 110, 20);
+  t("a point in the middle column reads as that column", spot.col === 1 && spot.row === 0);
+  t("and with nothing before it, the new object heads the order", spot.index === 0);
+  // The point is in the grid's own coordinates: that is what the canvas hands
+  // an `add`, already mapped into the frame the object is being drawn into.
+  const mid = add("frame", 110, 20, 60, 60, home);
+  t("an object created into a cell takes that cell", N(mid).gridCol === 1 && N(mid).gridRow === 0);
+  t("and is drawn there", Math.round(N(mid).x) === 103);
+  // "Click into one of the cells to place a frame": the cell is a real
+  // position, and the object keeps it while the rest of the flow goes on.
+  t("and it keeps that cell as the flow goes on", N(mid).gridPinned === true && N(mid).gridCol === 1);
+  const first = add("frame", 10, 20, 60, 60, home);
+  t("a second object aimed at the first cell takes it", N(first).gridCol === 0 && Math.round(N(first).x) === 0);
+  t("and the one already there stays where it was put", N(mid).gridCol === 1);
+  // "Selected the media post and duplicate it. Notice how the top-level frame
+  // resizes to accommodate."
+  e.dispatch({ type: "select", ids: [first] });
+  e.dispatch({ type: "duplicate" });
+  const copy = e.snapshot().selection[0];
+  t("a duplicate fills the next free cell", N(copy).gridCol === 2 && N(copy).gridRow === 0);
+  // "The new frames will fill the subsequent cells": each copy sits directly
+  // above the one it came from, so the flow picks up where the last one ended.
+  e.dispatch({ type: "duplicate" });
+  const copy2 = e.snapshot().selection[0];
+  t("and the next fills the cell after that", N(copy2).gridCol === 0 && N(copy2).gridRow === 1);
+  const folder = add("frame", 0, 0, 100, 100, home);
+  e.dispatch({ type: "patch", id: folder, patch: { sizingW: "fill", sizingH: "fill", colSpan: 2, rowSpan: 2 } });
+  // Three columns of 94.67 with 8 between them: two cells and the gap.
+  t("a folder spanning two columns takes both cells and the gap", Math.round(N(folder).w) === 197);
+  t("and two rows likewise", Math.round(N(folder).h) === 128);
+  e.dispatch({ type: "autoLayout", id: folder, layout: { ...L("grid", { columns: 3, rows: 3, gapCols: 4, gapRows: 4 }), padding: [6, 6, 6, 6] } });
+  // "Copy one of the app frames and paste it multiple times into this folder
+  // frame": the first one goes into the cell it was drawn in, the copies follow.
+  const icon = add("rect", 10, 20, 20, 20, folder);
+  e.dispatch({ type: "select", ids: [icon] });
+  e.dispatch({ type: "duplicate" });
+  e.dispatch({ type: "duplicate" });
+  const icons = N(folder).children;
+  t("a grid inside a spanning cell lays out on its own tracks",
+    icons.length === 3 && Math.round(icons[1].x) === 69 && Math.round(icons[2].x) === 132);
+  t("with the folder's own padding and gap, not the parent's",
+    Math.round(icons[0].x) === 6 && Math.round(icons[0].y) === 6);
+  t("and the inner cells are the folder's, not the home screen's",
+    Math.round(N(folder).w) === 197 && icons[0].w === 20);
+
+  // The browser turned this one up: a flow is applied with Hug, and Fill
+  // container from the resizing menu has to win, or the frame keeps hugging and
+  // a grid's automatic tracks have no free space to divide between them.
+  const filler = add("frame", 700, 0, 300, 60);
+  e.dispatch({ type: "patch", id: filler, patch: { sizingW: "fill", sizingH: "fill" } });
+  e.dispatch({ type: "autoLayout", id: filler, layout: { ...L("grid", { columns: 3, rows: 1, gapCols: 8 }), sizing: "hug", cross: "hug" } });
+  t("a flow applied with hug does not collapse a frame that fills", Math.round(N(filler).w) === 300 && Math.round(N(filler).h) === 60);
+  const f1 = add("rect", 10, 10, 20, 20, filler);
+  const f2 = add("rect", 110, 10, 20, 20, filler);
+  t("Fill container gives a grid's automatic tracks the free space", Math.round(N(f1).x) === 0 && Math.round(N(f2).x) === 103);
+
+  // Typing a width on a frame that hugs its height must leave the height
+  // alone: only the axis the person touched counts as a manual adjustment, and
+  // a hug measured to a fraction of a pixel would otherwise look like one.
+  const tracker = add("frame", 200, 0, 400, 300);
+  e.dispatch({ type: "autoLayout", id: tracker, layout: { ...L("vertical", { padding: [16, 16, 16, 16], gap: 12 }), sizing: "hug", cross: "hug" } });
+  add("rect", 0, 0, 100, 10, tracker);
+  const second = add("rect", 0, 0, 100, 11, tracker);
+  e.dispatch({ type: "patch", id: second, patch: { h: 10.25 } });
+  const hugged = N(tracker).h;
+  e.dispatch({ type: "resize", id: tracker, x: 200, y: 0, w: 300, h: hugged });
+  t("typing a width leaves the height hugging",
+    N(tracker).layout.sizing === "hug" && Math.abs(N(tracker).h - hugged) < 0.01);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
+

@@ -5,6 +5,19 @@ import type { Tool } from "../engine/types";
  * 16×16 Figma UI3 icon specification:
  * Sourced from Figma UI3 design language (3icons / ui3-figmas-ui-kit).
  * Standard: 16×16 grid, 1.25px stroke, round caps/joins, currentColor.
+ *
+ * Four sizes are used on purpose, and nothing else:
+ *   ICON_XS (12)  - a disclosure caret, or a glyph inside a line of small text.
+ *   ICON_SM (14)  - an icon in a panel row: layers, sections, property rows.
+ *   ICON_MD (16)  - a control in the toolbar, the rail, or its own button.
+ *   ICON_LG (20)  - a brand mark, or an empty state's illustration.
+ * Reach for the constant rather than a number. Before this the call sites
+ * picked their own: 9, 10, 11, 12, 13, 14, 16, 20, 22 and 28 all appeared, so
+ * the same chevron was drawn at four different weights - and at 9px the
+ * chevron's 1.4-unit stroke rendered at 0.79px, which reads as a different
+ * icon rather than a smaller one.
+ *
+ * `caretSize()` is the one a menu opener should call.
  */
 const S: SVGProps<SVGSVGElement> = {
   viewBox: "0 0 16 16",
@@ -15,6 +28,20 @@ const S: SVGProps<SVGSVGElement> = {
   strokeLinejoin: "round",
   "aria-hidden": true,
 };
+
+/** A caret, or a glyph inside a line of small text. */
+export const ICON_XS = 12;
+/** An icon in a panel row. */
+export const ICON_SM = 14;
+/** A toolbar, rail or standalone control. */
+export const ICON_MD = 16;
+/** A brand mark or an empty state's illustration. */
+export const ICON_LG = 20;
+
+/** The one size a disclosure caret is ever drawn at. */
+export const caretSize = (): number => ICON_XS;
+/** The one size a panel row's icon is ever drawn at. */
+export const rowIconSize = (): number => ICON_SM;
 
 export function Icon({
   name,
@@ -962,7 +989,7 @@ export function Icon({
     case "x-mark":
       return (
         <svg {...p}>
-          <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" strokeWidth={1.3} />
+          <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />
         </svg>
       );
     case "chevron":
@@ -970,32 +997,32 @@ export function Icon({
     case "chevron-down-large":
       return (
         <svg {...p}>
-          <path d="M4 6l4 4 4-4" strokeWidth={1.4} />
+          <path d="M4 6l4 4 4-4" />
         </svg>
       );
     case "chevron-right":
     case "chevron-right-large":
       return (
         <svg {...p}>
-          <path d="M6 4l4 4-4 4" strokeWidth={1.4} />
+          <path d="M6 4l4 4-4 4" />
         </svg>
       );
     case "chevron-up":
       return (
         <svg {...p}>
-          <path d="M4 10l4-4 4 4" strokeWidth={1.4} />
+          <path d="M4 10l4-4 4 4" />
         </svg>
       );
     case "chevrons-down":
       return (
         <svg {...p}>
-          <path d="M4 4.5l4 4 4-4M4 8.5l4 4 4-4" strokeWidth={1.3} />
+          <path d="M4 4.5l4 4 4-4M4 8.5l4 4 4-4" />
         </svg>
       );
     case "chevrons-up":
       return (
         <svg {...p}>
-          <path d="M4 7.5l4-4 4 4M4 11.5l4-4 4 4" strokeWidth={1.3} />
+          <path d="M4 7.5l4-4 4 4M4 11.5l4-4 4 4" />
         </svg>
       );
     case "more":
@@ -1059,6 +1086,13 @@ export function Icon({
       return (
         <svg {...p}>
           <path d="M3 8h10M6 5L3 8l3 3M10 5l3 3-3 3" strokeWidth={1.25} />
+        </svg>
+      );
+    case "open":
+      return (
+        <svg {...p}>
+          <path d="M9 3h4v4M13 3 7 9" strokeWidth={1.25} />
+          <path d="M12 10v3H3V4h3" strokeWidth={1.25} />
         </svg>
       );
     case "help":
@@ -1256,6 +1290,7 @@ export const TOOL_ICON: Record<Tool, string> = {
   eraser: "eraser",
   comment: "comment",
   hand: "hand",
+  zoom: "zoom-in",
 };
 
 export function kindIcon(k: string, imageSrc?: string): string {

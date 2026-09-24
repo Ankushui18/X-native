@@ -6,7 +6,7 @@
  * from a vector format, and it meant the app could not open any existing
  * artwork at all.
  *
- * This is the inverse of `svgNode()` in the inspector, so a document exported
+ * This is the inverse of `engine/svgExport.ts`, so a document exported
  * to SVG and re-imported comes back as layers rather than a picture. It
  * covers the shapes that exporter emits plus the common primitives real files
  * use: rect, circle, ellipse, line, polyline, polygon, path, text and nested
@@ -23,10 +23,38 @@
  * candidate, not the current authority.
  */
 
-import type { VectorNetwork } from "./types";
+import type {
+  Effect,
+  FillType,
+  GradientStop,
+  ImageFit,
+  NodeKind,
+  Overflow,
+  StrokeAlign,
+  StrokeCap,
+  StrokeJoin,
+  TextAlign,
+  VectorNetwork,
+} from "./types";
+
+export interface ImportedPaint {
+  type: FillType;
+  color: string;
+  opacity: number;
+  visible: boolean;
+  blend?: string;
+  /** Gradient ramp, and its geometry as 0..1 fractions of the node's box. */
+  stops?: GradientStop[];
+  gx?: number;
+  gy?: number;
+  hx?: number;
+  hy?: number;
+  imageSrc?: string;
+  imageFit?: ImageFit;
+}
 
 export interface ImportedNode {
-  kind: "rect" | "ellipse" | "line" | "text" | "vector";
+  kind: NodeKind;
   name: string;
   x: number;
   y: number;
@@ -39,14 +67,53 @@ export interface ImportedNode {
   strokeWidth: number;
   opacity: number;
   rotation: number;
+  /**
+   * The layers a container brought with it. A `.fig` frame holds its children
+   * and its children's coordinates are relative to it, so an imported file
+   * arrives as the tree its author drew rather than as a flat pile of shapes
+   * parked on top of each other.
+   */
+  children?: ImportedNode[];
+  fills?: ImportedPaint[];
+  fillType?: FillType;
+  gradientStops?: GradientStop[];
+  fillGX?: number;
+  fillGY?: number;
+  fillHX?: number;
+  fillHY?: number;
+  fillBlend?: string;
+  imageSrc?: string;
+  imageFit?: ImageFit;
+  effects?: Effect[];
+  blendMode?: string;
+  /** Figma's eye and lock states, carried over instead of dropping the layer. */
+  hidden?: boolean;
+  locked?: boolean;
+  overflow?: Overflow;
   cornerRadii?: [number, number, number, number];
+  cornerIndependent?: boolean;
+  cornerSmoothing?: number;
+  strokeAlign?: StrokeAlign;
+  strokeCap?: StrokeCap;
+  strokeJoin?: StrokeJoin;
+  strokeDash?: number;
+  strokeGap?: number;
   path?: { x: number; y: number; ix?: number; iy?: number; ox?: number; oy?: number }[];
   vectorNetwork?: VectorNetwork;
   closed?: boolean;
   text?: string;
   fontSize?: number;
   fontWeight?: number;
-  textAlign?: "left" | "center" | "right";
+  fontFamily?: string;
+  textAlign?: TextAlign;
+  lineHeight?: number;
+  letterSpacing?: number;
+}
+
+/** One canvas of a Figma file. A design file can hold several. */
+export interface ImportedPage {
+  name: string;
+  nodes: ImportedNode[];
 }
 
 export interface ImportResult {
@@ -55,6 +122,10 @@ export interface ImportResult {
   height: number;
   /** Elements recognised as drawable but not representable; surfaced to the user. */
   skipped: number;
+  /** Every page the file had, when the format has pages (`.fig` does). */
+  pages?: ImportedPage[];
+  /** Images pulled out of the file into the asset store. */
+  images?: number;
 }
 
 interface Mat {

@@ -1,13 +1,27 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableItem } from "../engine/types";
-import { collectColors, defaultLayout, find } from "../engine/memory";
-import { Icon, TOOL_ICON, kindIcon } from "./icons";
+import { collectColors, find } from "../engine/memory";
+import { alignKey } from "../engine/layout";
+import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
+import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
-import { useTheme, type ThemePref } from "./theme";
+import { selectInverse, selectMatching } from "./selectSame";
+import { popoverArmed } from "./popoverGuard";
+import {
+  DEFAULT_NUDGE,
+  getNudgePrefs,
+  parseNudge,
+  setNudgePrefs,
+  subscribeNudge,
+} from "./nudgePrefs";
+import { finishPenDraft } from "./penDraft";
+import { THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
-import { stepZoom, zoomTo } from "./zoom";
+import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo } from "./zoom";
+import { roundToPixel } from "./round";
+
 import { clearDoc } from "../engine/persist";
 import { copyText } from "../engine/clipboard";
 import { isNone } from "./color";
@@ -21,12 +35,15 @@ export function NavRail({
   setNav,
   onActions,
   onInspectFig,
+  onHome,
 }: {
   engine: Engine;
   nav: NavId;
   setNav: (n: NavId) => void;
   onActions: () => void;
   onInspectFig?: () => void;
+  /** Return to the dashboard. The document is already autosaved. */
+  onHome?: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   const { pref, setPref } = useTheme();
@@ -47,12 +64,20 @@ export function NavRail({
           <div className="menu" onMouseLeave={() => setMenu(false)}>
             <button
               onClick={() => {
+                setMenu(false);
+                onHome?.();
+              }}
+            >
+              <Icon name="navigate-back" size={14} /> Back to files
+            </button>
+            <button
+              onClick={() => {
                 engine.dispatch({ type: "select", ids: [] });
                 engine.dispatch({ type: "setPage", index: 0 });
                 setMenu(false);
               }}
             >
-              Back to files <span className="sc">⌘Esc</span>
+              <Icon name="layers" size={14} /> Collapse to page 1
             </button>
             <hr />
             <button onClick={onActions}>
@@ -81,18 +106,10 @@ export function NavRail({
             </button>
             <hr />
             <div className="kicker">Theme</div>
-            {(["light", "dark", "graphite", "daylight", "system"] as ThemePref[]).map((p) => (
-              <button key={p} className={pref === p ? "on" : ""} onClick={() => setPref(p)}>
-                {p === "light"
-                  ? "Light"
-                  : p === "dark"
-                    ? "Dark"
-                    : p === "graphite"
-                      ? "Graphite"
-                      : p === "daylight"
-                        ? "Daylight"
-                        : "System"}
-                {pref === p && <span className="sc">✓</span>}
+            {THEME_OPTIONS.map((o) => (
+              <button key={o.id} className={pref === o.id ? "on" : ""} onClick={() => setPref(o.id)}>
+                {o.label}
+                {pref === o.id && <span className="sc">✓</span>}
               </button>
             ))}
           </div>
@@ -123,10 +140,11 @@ export function NavRail({
       </button>
       <button
         className="nav"
-        title="File notifications"
-        onClick={() => window.alert("You're up to date. No file notifications.")}
+        title="File history (show every autosaved version)"
+        onClick={() => toast("This file autosaves locally · no history to show yet")}
       >
-        <Icon name="page" size={16} />
+        <Icon name="refresh" size={16} />
+        <span>Saved</span>
       </button>
     </nav>
   );
@@ -171,6 +189,7 @@ function LayerRow({
   drag,
   setDrag,
   onDrop,
+  collapseTick = 0,
 }: {
   n: XNode;
   depth: number;
@@ -181,8 +200,19 @@ function LayerRow({
   drag: LayerDrag | null;
   setDrag: (d: LayerDrag | null) => void;
   onDrop: (d: LayerDrag) => void;
+  /** Bumped by the panel's Collapse button; every row folds on the next value. */
+  collapseTick?: number;
 }) {
   const [open, setOpen] = useState(true);
+  const holds = sel.includes(n.id) || n.children.some(function test(c: XNode): boolean {
+    return sel.includes(c.id) || c.children.some(test);
+  });
+  useEffect(() => {
+    if (!collapseTick) return;
+    // Figma keeps the selected layer visible when it folds everything, so a row
+    // that contains it stays open.
+    if (!holds) setOpen(false);
+  }, [collapseTick]);
   const [renaming, setRenaming] = useState(false);
   const cancelRename = useRef(false);
   const lastDown = useRef(0);
@@ -293,7 +323,7 @@ function LayerRow({
               setOpen((v) => !v);
             }}
           >
-            <Icon name={open ? "chevron" : "chevron-right"} size={12} />
+            <Icon name={open ? "chevron" : "chevron-right"} size={caretSize()} />
           </button>
         ) : (
           <span style={{ width: 16 }} />
@@ -308,6 +338,11 @@ function LayerRow({
           }
           size={14}
         />
+        {/* "After you use this action, any nested auto layout frames that were
+            created are indicated with a blue dot in the layers section in the
+            left panel." The dot marks any auto layout frame, which is the same
+            thing Figma shows and is how a suggested frame is spotted. */}
+        {n.layout ? <span className="al-dot" title="Auto layout" /> : null}
         {renaming ? (
           <input
             className="name"
@@ -336,7 +371,7 @@ function LayerRow({
         )}
         <button
           className="mini"
-          title={n.visible ? "Hide" : "Show"}
+          title={`${n.visible ? "Hide" : "Show"} layer (⇧⌘H)`}
           onClick={(e) => {
             e.stopPropagation();
             engine.dispatch({ type: "patch", id: n.id, patch: { visible: !n.visible } });
@@ -346,7 +381,7 @@ function LayerRow({
         </button>
         <button
           className="mini"
-          title={n.locked ? "Unlock" : "Lock"}
+          title={`${n.locked ? "Unlock" : "Lock"} layer (⇧⌘L)`}
           onClick={(e) => {
             e.stopPropagation();
             engine.dispatch({ type: "patch", id: n.id, patch: { locked: !n.locked } });
@@ -368,13 +403,14 @@ function LayerRow({
             drag={drag}
             setDrag={setDrag}
             onDrop={onDrop}
+            collapseTick={collapseTick}
           />
         ))}
       {menu && (
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={layerMenu(isGroupNode(n))}
+          items={layerMenu(isGroupNode(n), !!n.layout)}
           onRun={(id) => runMenu(engine, id, { onRename: () => setRenaming(true) })}
           onClose={() => setMenu(null)}
         />
@@ -389,17 +425,22 @@ function LeftPanelImpl({
   nav,
   onMinimize,
   onActions,
+  onHome,
 }: {
   engine: Engine;
   snap: Snapshot;
   nav: NavId;
   onMinimize: () => void;
   onActions?: () => void;
+  onHome?: () => void;
 }) {
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
   const [pageMenuAt, setPageMenuAt] = useState<{ x: number; y: number; i: number } | null>(null);
   const [drag, setDrag] = useState<LayerDrag | null>(null);
+  // One counter for the whole tree: bumping it tells every row to fold, and the
+  // rows answer by themselves so no open-state has to be lifted up here.
+  const [collapseTick, setCollapseTick] = useState(0);
   const root = snap.pages[snap.page].root;
 
   /**
@@ -429,6 +470,13 @@ function LeftPanelImpl({
   return (
     <aside className="panel left">
       <div className="file-head">
+        {onHome && (
+          <Tooltip label="Back to files" placement="bottom">
+            <button className="icon-btn back" onClick={onHome} aria-label="Back to files">
+              <Icon name="navigate-back" size={14} />
+            </button>
+          </Tooltip>
+        )}
         <span
           style={{
             fontSize: 10,
@@ -452,7 +500,7 @@ function LeftPanelImpl({
           value={snap.fileName}
           onChange={(e) => engine.dispatch({ type: "setFileName", name: e.target.value })}
         />
-        <button className="icon-btn" title="Minimize UI" onClick={onMinimize}>
+        <button className="icon-btn" title={"Minimize UI (⇧⌘\\)"} onClick={onMinimize}>
           <Icon name="minimize" size={14} />
         </button>
       </div>
@@ -474,13 +522,13 @@ function LeftPanelImpl({
               aria-expanded={pagesOpen}
               onClick={() => setPagesOpen((v) => !v)}
             >
-              <Icon name={pagesOpen ? "chevron" : "chevron-right"} size={12} />
+              <Icon name={pagesOpen ? "chevron" : "chevron-right"} size={caretSize()} />
             </button>
             Pages
             <span className="grow" />
             <button
               className="icon-btn"
-              title="Add page"
+              title="Add page (a page is a top-level canvas)"
               onClick={() => engine.dispatch({ type: "addPage" })}
             >
               <Icon name="plus" size={14} />
@@ -507,8 +555,17 @@ function LeftPanelImpl({
               </div>
             ))}
           <div className="section-label">
-            <Icon name="chevron" size={12} />
+            <Icon name="chevron" size={caretSize()} />
             Layers
+            <span className="grow" />
+            <button
+              className="icon-btn"
+              title="Collapse all layers (the selected layer's path stays open)"
+              aria-label="Collapse all layers"
+              onClick={() => setCollapseTick((v) => v + 1)}
+            >
+              <Icon name="collapse-layers" size={rowIconSize()} />
+            </button>
           </div>
           <div
             className="tree"
@@ -529,6 +586,7 @@ function LeftPanelImpl({
                 drag={drag}
                 setDrag={setDrag}
                 onDrop={onDrop}
+                collapseTick={collapseTick}
               />
             ))}
           </div>
@@ -571,6 +629,7 @@ const GROUPS: Group[] = [
       { id: "select", label: "Move", shortcut: "V" },
       { id: "hand", label: "Hand", shortcut: "H" },
       { id: "scale", label: "Scale", shortcut: "K" },
+      { id: "zoom", label: "Zoom", shortcut: "Z" },
     ],
   },
   {
@@ -636,26 +695,27 @@ export function Toolbar({
 
   return (
     <div className="dock" role="toolbar" aria-label="Tools">
+      <div className="toolset">
       {GROUPS.map((g) => {
         const current = last(g);
         const active = g.tools.some((t) => t.id === snap.tool);
         const multi = g.tools.length > 1;
+        const cur = g.tools.find((t) => t.id === current);
         return (
           <div
             key={g.id}
-            className={`tool${active ? " active" : ""}${open === g.id ? " open" : ""}`}
+            className={`tool${active ? " active" : ""}${open === g.id ? " open" : ""}${multi ? " split" : ""}`}
             onMouseLeave={() => {
               if (hold.current) window.clearTimeout(hold.current);
               setOpen((o) => (o === g.id ? null : o));
             }}
           >
-            <Tooltip
-              label={g.tools.find((t) => t.id === current)?.label ?? ""}
-              shortcut={g.tools.find((t) => t.id === current)?.shortcut}
-            >
+            <Tooltip label={cur?.label ?? ""} shortcut={cur?.shortcut}>
             <button
               className="hit"
-              aria-label={g.tools.find((t) => t.id === current)?.label}
+              aria-label={cur?.label}
+              aria-haspopup={multi ? "menu" : undefined}
+              aria-expanded={multi ? open === g.id : undefined}
               onClick={() => engine.dispatch({ type: "setTool", tool: current })}
               onPointerDown={() => {
                 if (!multi) return;
@@ -673,19 +733,24 @@ export function Toolbar({
               {multi && (
                 <i
                   className="caret"
+                  title={`More tools (${g.tools.length})`}
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpen((o) => (o === g.id ? null : g.id));
                   }}
-                />
+                >
+                  <Icon name="chevron" size={caretSize()} />
+                </i>
               )}
             </button>
             </Tooltip>
             {multi && (
-              <div className="fly">
+              <div className="fly" role="menu">
                 {g.tools.map((t) => (
                   <button
                     key={t.id}
+                    role="menuitemradio"
+                    aria-checked={snap.tool === t.id}
                     className={snap.tool === t.id ? "on" : ""}
                     onClick={() => {
                       engine.dispatch({ type: "setTool", tool: t.id });
@@ -697,35 +762,46 @@ export function Toolbar({
                     {t.shortcut && <span className="sc">{t.shortcut}</span>}
                   </button>
                 ))}
+                <div className="fly-hint">Hold Space to pan · {g.id === "move" ? "V moves, H hands" : "click a tool to switch"}</div>
               </div>
             )}
           </div>
         );
       })}
+      </div>
       <div className="div" />
+      <div className="toolset right">
       <div className="tool">
-        <button className="hit" title="Resources" onClick={onActions}>
-          <Icon name="resources" size={16} />
-        </button>
+        <Tooltip label="Resources" shortcut="⌘/">
+          <button className="hit" aria-label="Resources" onClick={onActions}>
+            <Icon name="resources" size={16} />
+          </button>
+        </Tooltip>
       </div>
       <div className={`tool${snap.rightTab === "inspect" ? " active" : ""}`}>
-        <button
-          className="hit"
-          title="Dev Mode"
-          onClick={() =>
-            engine.dispatch({
-              type: "setRightTab",
-              tab: snap.rightTab === "inspect" ? "design" : "inspect",
-            })
-          }
-        >
-          <Icon name="dev" size={16} />
-        </button>
+        <Tooltip label={snap.rightTab === "inspect" ? "Exit Dev Mode" : "Dev Mode"} shortcut="⇧D">
+          <button
+            className="hit"
+            aria-label="Dev Mode"
+            aria-pressed={snap.rightTab === "inspect"}
+            onClick={() =>
+              engine.dispatch({
+                type: "setRightTab",
+                tab: snap.rightTab === "inspect" ? "design" : "inspect",
+              })
+            }
+          >
+            <Icon name="dev" size={16} />
+          </button>
+        </Tooltip>
       </div>
       <div className="tool">
-        <button className="hit" title="Actions" onClick={onActions}>
-          <Icon name="search" size={16} />
-        </button>
+        <Tooltip label="Actions" shortcut="⌘/">
+          <button className="hit" aria-label="Actions" onClick={onActions}>
+            <Icon name="search" size={16} />
+          </button>
+        </Tooltip>
+      </div>
       </div>
       {snap.vecEdit && (
         <>
@@ -780,6 +856,12 @@ export function Actions({
       run: () => onInspectFig?.(),
     },
     { label: "Move tool", sc: "V", run: () => engine.dispatch({ type: "setTool", tool: "select" }) },
+    { label: "Zoom tool", sc: "Z", run: () => engine.dispatch({ type: "setTool", tool: "zoom" }) },
+    {
+      label: "Round to whole pixels",
+      sc: "⇧⌘P",
+      run: () => roundToPixel(engine),
+    },
     { label: "Scale tool", sc: "K", run: () => engine.dispatch({ type: "setTool", tool: "scale" }) },
     { label: "Frame", sc: "F", run: () => engine.dispatch({ type: "setTool", tool: "frame" }) },
     { label: "Section", sc: "⇧S", run: () => engine.dispatch({ type: "setTool", tool: "section" }) },
@@ -804,6 +886,11 @@ export function Actions({
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
     { label: "Minimap", sc: "⇧M", run: () => engine.dispatch({ type: "toggleMinimap" }) },
+    { label: "Pixel preview: off", sc: "⌃P", run: () => engine.dispatch({ type: "setPixelPreview", preview: "off" }) },
+    { label: "Pixel preview: 1×", sc: "", run: () => engine.dispatch({ type: "setPixelPreview", preview: "1x" }) },
+    { label: "Pixel preview: 2×", sc: "⌃⌥P", run: () => engine.dispatch({ type: "setPixelPreview", preview: "2x" }) },
+    { label: "Layout guides", sc: "⇧G", run: () => engine.dispatch({ type: "toggleLayoutGuides" }) },
+    { label: "Property labels", sc: "", run: () => engine.dispatch({ type: "togglePropertyLabels" }) },
     {
       // With autosave the document is now sticky, so there has to be a way back
       // to a blank file. Destructive and unrecoverable, hence the confirm.
@@ -820,7 +907,16 @@ export function Actions({
     { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
+    { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
+    {
+      label: "Annotate selection",
+      sc: "⇧T",
+      run: () => {
+        engine.dispatch({ type: "setRightTab", tab: "inspect" });
+        window.dispatchEvent(new CustomEvent("x-native-annotate"));
+      },
+    },
     { label: "Prototype", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "prototype" }) },
     { label: "Design", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
     {
@@ -833,9 +929,12 @@ export function Actions({
     },
     { label: "Theme: Light", sc: "", run: () => setPref("light") },
     { label: "Theme: Dark", sc: "", run: () => setPref("dark") },
-    { label: "Theme: Graphite", sc: "", run: () => setPref("graphite") },
-    { label: "Theme: Daylight", sc: "", run: () => setPref("daylight") },
     { label: "Theme: System", sc: "", run: () => setPref("system") },
+    {
+      label: "Nudge amount…",
+      sc: "",
+      run: () => window.dispatchEvent(new CustomEvent("x-native-nudge-dialog")),
+    },
     { label: "Create component", sc: "⌘⌥K", run: () => engine.dispatch({ type: "makeComponent" }) },
     { label: "Detach instance", sc: "", run: () => engine.dispatch({ type: "detachInstance" }) },
     { label: "Union", sc: "⌥⇧U", run: () => engine.dispatch({ type: "boolean", op: "union" }) },
@@ -848,13 +947,20 @@ export function Actions({
     { label: "Use as mask", sc: "⌘⌥M", run: () => runMenu(engine, "useAsMask") },
     { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },
     { label: "Send to back", sc: "⇧⌘[", run: () => engine.dispatch({ type: "arrange", dir: "back" }) },
-    { label: "Add auto layout", sc: "⇧A", run: () => {
-      const id = engine.snapshot().selection[0];
-      if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
-    } },
+    {
+      label: "Copy as code",
+      sc: "⌥⇧⌘C",
+      run: () => window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } })),
+    },
+    { label: "Copy as PNG", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-copy-png")) },
+    { label: "Add auto layout", sc: "⇧A", run: () => addAutoLayout(engine, engine.snapshot()) },
+    { label: "Remove auto layout", sc: "⌥⇧A", run: () => removeAutoLayout(engine, engine.snapshot()) },
+    // "Select Suggest auto layout from the Actions menu."
+    { label: "Suggest auto layout", sc: "⌃⇧A", run: () => suggestAutoLayout(engine, engine.snapshot()) },
+    { label: "Remove all auto layout", sc: "", run: () => removeAllAutoLayout(engine, engine.snapshot()) },
     { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
     { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
-    { label: "Zoom to 100%", sc: "⇧0", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
+    { label: "Zoom to 100%", sc: "⇧0", run: () => zoomAboutCentre(engine, 1) },
     { label: "Zoom to fit", sc: "⇧1", run: () => zoomTo(engine, "fit") },
     { label: "Zoom to selection", sc: "⇧2", run: () => zoomTo(engine, "selection") },
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
@@ -873,9 +979,14 @@ export function Actions({
           }
         }}
       />
-      {items.map((i) => (
+      {items.length === 0 && (
+        <div className="actions-empty">
+          No command matches “{q.trim()}” — try “component”, “export” or “zoom”.
+        </div>
+      )}
+      {items.map((i, idx) => (
         <button
-          key={i.label}
+          key={`${i.label}-${idx}`}
           onClick={() => {
             i.run();
             onClose();
@@ -898,11 +1009,25 @@ export function bindHotkeys(
     onMinimize: () => void;
     onNav?: (n: NavId) => void;
     onPresentExit?: () => void;
+    /** Close the topmost modal; returns whether one was open. */
+    onEscapeOverlay?: () => boolean;
   },
 ) {
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
-    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
+    const typing = t.tagName === "INPUT" || t.tagName === "TEXTAREA";
+    // Escape belongs to the open sheet, even while one of its own fields has
+    // focus — so it is resolved before the typing guard below can skip it.
+    if (e.key === "Escape" && !engine.snapshot().presentFrame && extra.onEscapeOverlay?.()) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (typing) return;
+    // The alignment box in the right panel answers to its own keys while it has
+    // focus - arrows, W/A/S/D, B and X - so just those stand down. Everything
+    // else, tool letters included, still belongs to the app.
+    if (!e.metaKey && !e.ctrlKey && alignKey(e.key) && t.closest?.("[data-align-box]")) return;
     if (engine.snapshot().presentFrame && e.key !== "Escape") return;
     const meta = e.metaKey || e.ctrlKey;
     if (meta && e.altKey && e.key.toLowerCase() === "k") {
@@ -914,6 +1039,15 @@ export function bindHotkeys(
       e.preventDefault();
       engine.dispatch({ type: "detachInstance" });
       toast("Instance detached");
+      return;
+    }
+    // Figma's Copy/Paste as ▸ Copy as code chord, so the clipboard path works
+    // without hunting through a menu.
+    if (meta && e.altKey && e.shiftKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      // Ask the panel's renderer rather than building a second answer here, so
+      // the chord follows the language and units in the Dev Mode menu.
+      window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } }));
       return;
     }
     if (meta && e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
@@ -933,14 +1067,44 @@ export function bindHotkeys(
       extra.onActions();
       return;
     }
-    if (meta && e.shiftKey && e.key === "\\") {
+    // ⌘/ — the chord the shortcut sheet has always advertised for the Actions
+    // menu, and the one the article means by "select Suggest auto layout from
+    // the Actions menu". Forward slash is `Slash` on every layout.
+    if (meta && !e.shiftKey && !e.altKey && e.code === "Slash") {
+      e.preventDefault();
+      extra.onActions();
+      return;
+    }
+    // Keyed off `code`, not `key`: holding Shift turns this keyboard's
+    // backslash into another character, which silently broke the minimize half
+    // of the pair while ⌘\ (unshifted) kept working.
+    const backslash = e.code === "Backslash" || e.key === "\\" || e.key === "|";
+    if (meta && e.shiftKey && backslash) {
       e.preventDefault();
       extra.onMinimize();
       return;
     }
-    if (meta && e.key === "\\") {
+    if (meta && backslash) {
       e.preventDefault();
       extra.onHide();
+      return;
+    }
+    // ⇧T — Figma's Annotate: Dev Mode on, note field focused, ready to type.
+    if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "t") {
+      e.preventDefault();
+      if (engine.snapshot().rightTab !== "inspect") {
+        engine.dispatch({ type: "setRightTab", tab: "inspect" });
+      }
+      window.dispatchEvent(new CustomEvent("x-native-annotate"));
+      return;
+    }
+    // ⇧T — Figma's Annotate: Dev Mode on, note field focused, ready to type.
+    if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "t") {
+      e.preventDefault();
+      if (engine.snapshot().rightTab !== "inspect") {
+        engine.dispatch({ type: "setRightTab", tab: "inspect" });
+      }
+      window.dispatchEvent(new CustomEvent("x-native-annotate"));
       return;
     }
     if (e.shiftKey && e.key.toLowerCase() === "d" && !meta) {
@@ -1040,6 +1204,33 @@ export function bindHotkeys(
       engine.dispatch({ type: "paste", inPlace: e.shiftKey });
       return;
     }
+    // Auto layout, exactly as the guide's shortcut table has it: ⇧A adds one
+    // with the defaults, ⌥⇧A removes it, ⌃⇧A suggests the values from how the
+    // objects are already arranged. This is tested before the ⌘A family below,
+    // which owns ⌘⇧A: Figma's chord is ⌃ (Control), and Select inverse in this
+    // app has always been ⇧⌘A, so the two do not have to collide.
+    if (!e.metaKey && e.shiftKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      const snap = engine.snapshot();
+      if (!snap.selection.length) return;
+      if (e.ctrlKey) suggestAutoLayout(engine, snap);
+      else if (e.altKey) removeAutoLayout(engine, snap);
+      else addAutoLayout(engine, snap);
+      return;
+    }
+    // Figma's two selection helpers share the ⌘A chord with Select all: with ⌥ it
+    // gathers the same object in every other frame, with ⇧ it takes everything
+    // at this level that is not already picked.
+    if (meta && e.altKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      selectMatching(engine, engine.snapshot());
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      selectInverse(engine, engine.snapshot());
+      return;
+    }
     if (meta && e.key.toLowerCase() === "a") {
       e.preventDefault();
       engine.dispatch({ type: "selectAll" });
@@ -1090,6 +1281,17 @@ export function bindHotkeys(
       return;
     }
     if (e.key === "Escape") {
+      // A popover that is open owns Escape: its own handler closes it, and the
+      // selection behind it must survive the keypress.
+      if (popoverArmed()) return;
+      // An in-progress pen path owns it next: Escape finishes the shape and
+      // leaves it open, in Figma's words, instead of deselecting out from under
+      // the drawing. The tool stays the pen, so the next path starts at once.
+      if (finishPenDraft()) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       if (engine.snapshot().presentFrame) {
         extra.onPresentExit?.();
         return;
@@ -1199,27 +1401,88 @@ export function bindHotkeys(
       }
       return;
     }
-    if (!meta && e.shiftKey && e.key.toLowerCase() === "a") {
-      e.preventDefault();
-      const id = engine.snapshot().selection[0];
-      if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
-      return;
-    }
     if ((meta && e.key === "0") || (!meta && e.shiftKey && e.code === "Digit0")) {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: 1 });
+      zoomAboutCentre(engine, 1);
       return;
     }
     // Step through the zoom presets so the readout lands on round values
     // (25/50/100/200...) instead of compounding into 94% / 117% / 146%.
+    if (!meta && !e.altKey && e.shiftKey && (e.key === "=" || e.key === "+")) {
+      e.preventDefault();
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, 1));
+      return;
+    }
+    if (!meta && !e.altKey && e.shiftKey && (e.key === "-" || e.key === "_")) {
+      e.preventDefault();
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
+      return;
+    }
     if (meta && (e.key === "=" || e.key === "+")) {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, 1) });
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, 1));
       return;
     }
     if (meta && e.key === "-") {
       e.preventDefault();
-      engine.dispatch({ type: "setZoom", zoom: stepZoom(engine.snapshot().zoom, -1) });
+      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
+      return;
+    }
+    // ⇧F — Figma's "View > Prototype flows": hide the noodles and hotspot
+    // handles without leaving Design mode.
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleFlows" });
+      return;
+    }
+    // ⇧G — Figma's View > Layout guides: every frame's grid at once, so a
+    // reviewer can look at spacing without losing the grids themselves.
+    if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleLayoutGuides" });
+      return;
+    }
+    // ⌃P / ⌃⌥P cycle Figma's Pixel preview: the canvas as the raster it would
+    // export as. (Figma also offers 2× at ⌃⌥P.)
+    if (e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key.toLowerCase() === "p" || e.code === "KeyP")) {
+      e.preventDefault();
+      const cur = engine.snapshot().pixelPreview;
+      engine.dispatch({
+        type: "setPixelPreview",
+        preview: e.altKey ? (cur === "2x" ? "off" : "2x") : cur === "1x" ? "off" : "1x",
+      });
+      return;
+    }
+    // ⌘' shows the pixel grid, ⌘⇧' toggles snapping to it — Figma's pair.
+    // Matched on the physical key as well as the character, because with Shift
+    // held the quote key *is* a different character: on a US layout ⇧' arrives
+    // as `"`, on a German one ⇧2 as `@`, and matching only on those meant the
+    // snapping half of the pair did nothing at all.
+    if (meta && (e.code === "Quote" || e.key === "'" || e.key === "@")) {
+      e.preventDefault();
+      const cur = engine.snapshot();
+      const page = cur.pages[cur.page];
+      engine.dispatch({
+        type: "patchPage",
+        patch: e.shiftKey ? { pixelSnap: !(page.pixelSnap ?? true) } : { pixelGrid: !page.pixelGrid },
+      });
+      return;
+    }
+    // Sketch's zoom keyboard set. Figma's ⇧1/2 stay bound above, so both
+    // vocabularies work.
+    if (meta && !e.shiftKey && e.code === "Digit1") {
+      e.preventDefault();
+      zoomTo(engine, "fit");
+      return;
+    }
+    if (meta && !e.shiftKey && e.code === "Digit2") {
+      e.preventDefault();
+      zoomTo(engine, "selection");
+      return;
+    }
+    if (meta && !e.shiftKey && e.code === "Digit3") {
+      e.preventDefault();
+      zoomCenter(engine);
       return;
     }
     if (!meta && e.shiftKey && e.code === "Digit1") {
@@ -1240,6 +1503,17 @@ export function bindHotkeys(
     if (!meta && e.shiftKey && e.key.toLowerCase() === "v") {
       e.preventDefault();
       engine.dispatch({ type: "flip", axis: "v" });
+      return;
+    }
+    // ⇧⌘E — the same bulk-export command in Figma (File ▸ Export…) and Sketch.
+    if (meta && e.shiftKey && e.key.toLowerCase() === "e") {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("x-native-export-dialog"));
+      return;
+    }
+    if (meta && e.shiftKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      roundToPixel(engine);
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "k") {
@@ -1264,6 +1538,7 @@ export function bindHotkeys(
     const map: Record<string, Tool> = {
       v: "select",
       k: "scale",
+      z: "zoom",
       f: "frame",
       t: "text",
       r: "rect",
@@ -1279,7 +1554,12 @@ export function bindHotkeys(
     if (!meta && map[e.key.toLowerCase()]) {
       engine.dispatch({ type: "setTool", tool: map[e.key.toLowerCase()] });
     }
-    const step = e.shiftKey ? 10 : 1;
+    // Figma's Preferences > Nudge amount: 1 and 10 out of the box, both
+    // settable, ⇧ for the big one. Nudges are exact - they apply the number you
+    // asked for whether or not snap-to-pixel-grid is on - because an explicit
+    // distance is a request, while a drag is a gesture the grid may round.
+    const prefs = getNudgePrefs();
+    const step = e.shiftKey ? prefs.big : prefs.small;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       if (e.key === "ArrowLeft") engine.dispatch({ type: "nudge", dx: -step, dy: 0 });
@@ -1732,7 +2012,7 @@ function ToolsPane({ engine, onActions }: { engine: Engine; onActions?: () => vo
     { label: "Group", run: () => engine.dispatch({ type: "group" }) },
     { label: "Undo", run: () => engine.dispatch({ type: "undo" }) },
     { label: "Redo", run: () => engine.dispatch({ type: "redo" }) },
-    { label: "Zoom to 100%", run: () => engine.dispatch({ type: "setZoom", zoom: 1 }) },
+    { label: "Zoom to 100%", run: () => zoomAboutCentre(engine, 1) },
     { label: "All actions…", run: () => onActions?.() },
   ];
   return (
@@ -1821,10 +2101,15 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "duplicate", name: "Duplicate", keys: ["⌘", "D"] },
       { id: "delete", name: "Delete", keys: ["⌫"] },
       { id: "select-all", name: "Select all", keys: ["⌘", "A"] },
+      { id: "select-matching", name: "Select matching layers", keys: ["⌥", "⌘", "A"] },
+      { id: "select-inverse", name: "Select inverse", keys: ["⇧", "⌘", "A"] },
       { id: "search", name: "Quick actions / Search", keys: ["⌘", "/"] },
       { id: "hide-ui", name: "Show / hide UI", keys: ["⌘", "\\"] },
       { id: "dev-mode", name: "Dev Mode toggle", keys: ["⇧", "D"] },
+      { id: "annotate", name: "Annotate selection", keys: ["⇧", "T"] },
       { id: "measure", name: "Measure distance", keys: ["⌥ (hold)"] },
+      { id: "export-all", name: "Export assets", keys: ["⇧", "⌘", "E"] },
+      { id: "export-all", name: "Export assets", keys: ["⇧", "⌘", "E"] },
     ],
   },
   {
@@ -1857,7 +2142,15 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
       { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
       { id: "rulers", name: "Rulers", keys: ["⇧", "R"] },
-      { id: "pixel-grid", name: "Pixel grid", keys: ["⇧", "'"] },
+      { id: "pixel-grid", name: "Pixel grid", keys: ["⌘", "'"] },
+      { id: "pixel-snap", name: "Snap to pixel grid", keys: ["⌘", "⇧", "'"] },
+      { id: "pixel-preview", name: "Pixel preview 1×", keys: ["⌃", "P"] },
+      { id: "pixel-preview-2", name: "Pixel preview 2×", keys: ["⌃", "⌥", "P"] },
+      { id: "zoom-tool", name: "Zoom tool", keys: ["Z"] },
+      { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
+      { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
+      { id: "zoom-center", name: "Center selection", keys: ["⌘", "3"] },
+      { id: "round-pixel", name: "Round to whole pixels", keys: ["⇧", "", "P"] },
       { id: "layout-grids", name: "Layout grids", keys: ["⇧", "G"] },
       { id: "outline", name: "Outline mode", keys: ["⌘", "Y"] },
     ],
@@ -1892,6 +2185,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "align-b", name: "Align bottom", keys: ["⌥", "S"] },
       { id: "align-h", name: "Align horizontal centers", keys: ["⌥", "H"] },
       { id: "align-v", name: "Align vertical centers", keys: ["⌥", "V"] },
+      { id: "rot-origin", name: "Change the rotation origin", keys: ["⌥", "R"] },
     ],
   },
   {
@@ -1902,6 +2196,11 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "comp-reset", name: "Reset all overrides", keys: ["⌥", "⌘", "/"] },
       { id: "auto-layout", name: "Add auto layout", keys: ["⇧", "A"] },
       { id: "remove-layout", name: "Remove auto layout", keys: ["⌥", "⇧", "A"] },
+      { id: "suggest-layout", name: "Suggest auto layout (from how the objects sit)", keys: ["⌃", "⇧", "A"] },
+      { id: "align-box-keys", name: "Alignment box, once clicked: arrows step, W/A/S/D jump to an edge", keys: ["↑", "↓", "←", "→"] },
+      { id: "align-box-baseline", name: "Alignment box: text baseline alignment on and off", keys: ["B"] },
+      { id: "align-box-gap", name: "Alignment box: switch the gap between a number and Auto", keys: ["X"] },
+      { id: "pad-shorthand", name: "Padding field: ⌘-click, then type CSS shorthand (1,2,3 or 1,2,3,4)", keys: ["⌘", "click"] },
       { id: "mask", name: "Use as mask", keys: ["⌘", "⌥", "M"] },
       { id: "flatten", name: "Flatten selection", keys: ["⌘", "E"] },
       { id: "union", name: "Union selection", keys: ["⌥", "⇧", "U"] },
@@ -1910,11 +2209,104 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
   },
 ];
 
+/**
+ * Figma's Preferences → "Nudge amount…" dialog: two fields, and it applies as
+ * you leave them - there is no OK button in Figma's, and there should not be
+ * one here. Typing a decimal point, or clearing the field to retype, must not
+ * write a value, so a field only commits when it parses.
+ */
+export function NudgeDialog({ onClose }: { onClose: () => void }) {
+  const prefs = useSyncExternalStore(subscribeNudge, getNudgePrefs, getNudgePrefs);
+  const [small, setSmall] = useState(String(prefs.small));
+  const [big, setBig] = useState(String(prefs.big));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const commit = (which: "small" | "big", raw: string) => {
+    const n = parseNudge(raw);
+    if (n == null) {
+      // Nothing usable typed: put back what is actually in effect rather than
+      // leaving the field showing something the app is not using.
+      if (which === "small") setSmall(String(prefs.small));
+      else setBig(String(prefs.big));
+      return;
+    }
+    setNudgePrefs({ [which]: n });
+    if (which === "small") setSmall(String(n));
+    else setBig(String(n));
+  };
+
+  return (
+    <div className="help-pop" onClick={onClose}>
+      <div
+        className="help-card nudge-dialog"
+        role="dialog"
+        aria-label="Nudge amount"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="shortcuts-head">
+          <h3>Nudge amount</h3>
+          <button className="shortcuts-close" onClick={onClose} aria-label="Close">
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+        <div className="nudge-body">
+          <label>
+            <span>Small nudge</span>
+            <input
+              aria-label="Small nudge"
+              value={small}
+              onChange={(e) => setSmall(e.target.value)}
+              onBlur={(e) => commit("small", e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit("small", (e.target as HTMLInputElement).value);
+              }}
+            />
+          </label>
+          <label>
+            <span>Big nudge</span>
+            <input
+              aria-label="Big nudge"
+              value={big}
+              onChange={(e) => setBig(e.target.value)}
+              onBlur={(e) => commit("big", e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit("big", (e.target as HTMLInputElement).value);
+              }}
+            />
+          </label>
+          <p className="hint">
+            Arrow keys move a layer by the small nudge, ⇧ with the arrow keys by the big one.
+            Defaults are {DEFAULT_NUDGE.small} and {DEFAULT_NUDGE.big}.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function HelpBtn() {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("Essential");
   const [query, setQuery] = useState("");
   const [usedKeys, setUsedKeys] = useState<Set<string>>(() => new Set(["undo", "move"]));
+
+  // The dashboard's header has no editor to hang a sheet on, so it asks for
+  // this one through an event instead of duplicating the modal.
+  useEffect(() => {
+    const on = () => setOpen(true);
+    window.addEventListener("x-native-shortcuts", on);
+    return () => window.removeEventListener("x-native-shortcuts", on);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1940,12 +2332,17 @@ export function HelpBtn() {
       else if (meta && k === "c") matchedId = "copy";
       else if (meta && k === "v") matchedId = "paste";
       else if (meta && k === "d") matchedId = "duplicate";
+      else if (meta && e.altKey && k === "a") matchedId = "select-matching";
+      else if (e.metaKey && e.shiftKey && k === "a") matchedId = "select-inverse";
       else if (meta && k === "a") matchedId = "select-all";
       else if (meta && k === "g") matchedId = e.shiftKey ? "ungroup" : "group";
       else if (meta && k === "b") matchedId = "bold";
       else if (meta && k === "u") matchedId = "underline";
-      else if (e.shiftKey && k === "a") matchedId = "auto-layout";
+      else if (e.shiftKey && !e.metaKey && k === "a")
+        matchedId = e.ctrlKey ? "suggest-layout" : e.altKey ? "remove-layout" : "auto-layout";
       else if (e.shiftKey && k === "d") matchedId = "dev-mode";
+      else if (e.shiftKey && k === "t") matchedId = "annotate";
+      else if (e.shiftKey && e.metaKey && k === "e") matchedId = "export-all";
       else if (
         !meta &&
         !e.shiftKey &&

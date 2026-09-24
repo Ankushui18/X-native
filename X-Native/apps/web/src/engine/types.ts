@@ -20,15 +20,54 @@ export type NodeKind =
 
 export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth";
 export type Sizing = "fixed" | "hug" | "fill";
-export type LayoutDirection = "horizontal" | "vertical";
+export type LayoutDirection = "horizontal" | "vertical" | "grid";
+/**
+ * How a grid track is sized, Figma's three options for a column or a row.
+ *
+ * - `hug` keeps the smallest track the objects in it need.
+ * - `fill` shares the leftover space by fractional unit - the article's `fr`:
+ *   "Track proportion = Number of fractional units applied to the current track
+ *   ÷ Total number of fractional units across all tracks on the same dimension".
+ * - `fixed` stays the size it is, whatever the frame does.
+ */
+export type TrackMode = "fixed" | "fill" | "hug";
+
+export interface GridTrack {
+  mode: TrackMode;
+  /** Fractional units, only meaningful when `mode` is `"fill"` (1fr default). */
+  fr?: number;
+  /** The pinned size, only meaningful when `mode` is `"fixed"`. */
+  size?: number;
+}
 export type LayoutAlign = "min" | "center" | "max" | "baseline";
 export type LayoutJustify = "min" | "center" | "max" | "between";
 export type TextAlign = "left" | "center" | "right" | "justified";
 export type TextAlignVertical = "top" | "middle" | "bottom";
+/**
+ * How a wrapped paragraph breaks its lines - the type setting Figma exposes as
+ * "Wrap style". Mirrors x-core's TextWrap enum, which rides the node as the
+ * "tw" binding: Auto is the greedy first-fit, Balance evens the line lengths
+ * out per paragraph, Pretty balances and keeps a lone word off the last line.
+ */
+export type TextWrap = "auto" | "balance" | "pretty";
+/**
+ * Paragraph markers, x-core's ListStyle. Bulleted and numbered both hang a
+ * marker in the gutter and indent the paragraph beside it.
+ */
+export type ListStyle = "none" | "bulleted" | "numbered";
 export type TextDecoration = "none" | "underline" | "strikethrough";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
-export type StrokeCap = "none" | "round" | "square" | "arrow" | "triangle";
+export type StrokeCap =
+  | "none"
+  | "round"
+  | "square"
+  | "arrow"
+  | "triangle"
+  | "reverse-triangle"
+  | "diamond";
+/** Figma's Individual strokes picker; `custom` keeps a weight per side. */
+export type StrokeSides = "all" | "top" | "right" | "bottom" | "left" | "custom";
 export type StrokeJoin = "miter" | "bevel" | "round";
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
@@ -77,9 +116,11 @@ export type ProtoAnim =
 
 export type ProtoDevice =
   | "iphone-16-pro"
+  | "iphone-se"
   | "pixel-9"
   | "ipad-pro"
   | "macbook-pro"
+  | "desktop"
   | "apple-watch"
   | "none";
 
@@ -209,8 +250,21 @@ export interface ComponentMaster {
 
 export interface ExportPreset {
   format: ExportFormat;
-  scale: number;
+  /** Figma's scale field: a multiplier, or a size with a unit. A number is
+   *  read as a multiplier, the strings "500w" and "300h" as a fixed width or
+   *  height with the other side following the aspect ratio. */
+  scale: number | string;
   suffix: string;
+  /** Format-specific settings. All optional: a preset saved before these
+   *  existed reads through `resolveSettings`, which fills in Figma's defaults
+   *  rather than treating a missing boolean as off. */
+  ignoreOverlap?: boolean;
+  boundingBox?: boolean;
+  includeId?: boolean;
+  outlineText?: boolean;
+  simplifyStroke?: boolean;
+  quality?: "low" | "medium" | "high";
+  resampling?: "detailed" | "basic";
 }
 
 /**
@@ -284,6 +338,11 @@ export interface StrokeLayer {
   gap?: number;
   cap?: StrokeCap;
   join?: StrokeJoin;
+  /** Same per-side picker the base stroke has, per stroke layer. */
+  sides?: StrokeSides;
+  sideW?: [number, number, number, number];
+  /** Custom dash sequence for this stroke, `dash, gap, dash, gap…`. */
+  pattern?: number[];
 }
 
 export interface Effect {
@@ -294,6 +353,14 @@ export interface Effect {
   blur: number;
   spread: number;
   visible: boolean;
+  /** How this effect blends with what is already on the canvas. Only inner
+   *  shadows, drop shadows and noise offer it in Figma; "Normal" is the
+   *  default, and "Pass through" is not available to fills or effects. */
+  blend?: string;
+  /** Drop shadows only. Figma's checkbox; off by default, which means the
+   *  shadow is masked by whatever the layer actually paints, so a stroke-only
+   *  layer casts the shadow of its ring rather than of the whole outline. */
+  showBehind?: boolean;
 }
 
 export type Tool =
@@ -315,7 +382,9 @@ export type Tool =
   | "brush"
   | "eraser"
   | "comment"
-  | "hand";
+  | "hand"
+  /** Sketch's Zoom tool: click to zoom in, ⌥-click out, drag to a region. */
+  | "zoom";
 
 export interface AutoLayout {
   direction: LayoutDirection;
@@ -326,8 +395,34 @@ export interface AutoLayout {
   wrap: boolean;
   align: LayoutAlign;
   justify: LayoutJustify;
+  /** Figma's Auto gap. When `"auto"`, `gap` is ignored and the space left over
+   *  is distributed by `spacing` - which is what makes a frame's contents sit
+   *  against its padding, or evenly through it, as the frame is resized. */
+  gapMode?: "fixed" | "auto";
+  spacing?: "between" | "around" | "evenly";
   /** Canvas stacking: true = First on top, false = Last on top (Figma parity) */
   itemReverseZIndex?: boolean;
+  /* ── The grid flow ────────────────────────────────────────────────────────
+   * Figma's third flow, "Use the grid in auto layout flow": cells arranged
+   * into columns and rows, where an object can span several of each. Only read
+   * when `direction` is `"grid"`. */
+  /** Number of columns. */
+  columns?: number;
+  /** Number of rows, or `"auto"` - the default, where rows appear and vanish
+   *  with the objects that need them. */
+  rows?: number | "auto";
+  /** "Gap between rows" - the vertical gap between tracks. */
+  gapRows?: number;
+  /** "Gap between columns" - falls back to `gap` for documents written before
+   *  the two were separate. */
+  gapCols?: number;
+  /** Per-track sizing; a missing entry is a hug. */
+  colTracks?: GridTrack[];
+  rowTracks?: GridTrack[];
+  /** Figma's automatic positioning, on by default: objects flow left to right
+   *  from the top row. Switching it off keeps every object in the cell it is
+   *  in, which is how empty cells survive a deletion. */
+  autoPosition?: boolean;
 }
 
 export type GridPattern = "columns" | "rows" | "grid";
@@ -360,6 +455,10 @@ export interface XNode {
   w: number;
   h: number;
   rotation: number;
+  /** Where the layer turns about, as a fraction of its own box: [0.5, 0.5] is
+   *  the centre, which is Figma's default. `⌥R` reveals a target that drags
+   *  this point, and rotating then slides the box so the point stays put. */
+  rotOrigin?: [number, number];
   fill: string;
   fillOpacity: number;
   fillVisible: boolean;
@@ -400,7 +499,32 @@ export interface XNode {
   overflow: Overflow;
   cornerRadii: [number, number, number, number];
   cornerIndependent: boolean;
+  /**
+   * Figma's corner smoothing, 0-1: keeps the radius but flattens the corner's
+   * shoulders into a squircle. A whole-shape property, never per corner, which
+   * is why it sits next to `cornerIndependent` rather than inside `cornerRadii`.
+   */
+  cornerSmoothing?: number;
+  /**
+   * Which sides of a rectangle/frame/component/instance carry the stroke.
+   * Figma exposes this as "Individual strokes": the four pickers plus `custom`,
+   * which lets every side keep its own weight.
+   */
+  strokeSides?: StrokeSides;
+  /** Per-side weights in [top, right, bottom, left] order, used by `custom`. */
+  strokeSideW?: [number, number, number, number];
+  /** Custom dash sequence (Figma's `dash, gap, dash, gap…` syntax). Wins over the dash/gap pair. */
+  strokeDashPattern?: number[];
+  /** Cap drawn on each dash segment. */
+  strokeDashCap?: "butt" | "round" | "square";
+  /** Figma's "Miter angle": joins sharper than this bevel instead of pointing. */
+  strokeMiterAngle?: number;
   aspectLocked: boolean;
+  /** The ratio the lock was taken at (height ÷ width), remembered so a size
+   *  that clamps to a pixel on the way to a new one cannot leave a locked box
+   *  square. Written when the lock is turned on; a locked resize keeps it up to
+   *  date. */
+  aspectRatio?: number;
   sizingW: Sizing;
   sizingH: Sizing;
   constraintH: Constraint;
@@ -430,6 +554,20 @@ export interface XNode {
   maxH?: number;
   /** Figma's Absolute position inside auto-layout frame */
   absolutePosition?: boolean;
+  /* ── Inside a grid ──────────────────────────────────────────────────────
+   * "Column span" / "Row span": how many cells the object stretches across.
+   * `gridCol`/`gridRow` are where it sits, written by the engine while
+   * automatic positioning is on and read back when it is switched off, so
+   * turning the setting off keeps the arrangement the objects already have. */
+  colSpan?: number;
+  rowSpan?: number;
+  gridCol?: number;
+  gridRow?: number;
+  /** A cell this object was placed into on purpose - the frame tool clicked
+   *  into one. Automatic positioning keeps it there and flows the rest of the
+   *  objects around it, which is also what puts `⌘D` in the next cell: the
+   *  copy sits directly above its original, so the flow picks up after it. */
+  gridPinned?: boolean;
   /** Rich text formatting runs */
   textRuns?: TextRun[];
   /** Preserved per-instance property overrides */
@@ -443,6 +581,10 @@ export interface XNode {
   paragraphSpacing: number;
   textAlign: TextAlign;
   textAlignVertical: TextAlignVertical;
+  textWrap: TextWrap;
+  listStyle: ListStyle;
+  /** First-line offset of every paragraph, in points (x-core's paragraph_indent). */
+  paragraphIndent: number;
   textDecoration: TextDecoration;
   textCase: TextCase;
   truncate: boolean;
@@ -514,6 +656,10 @@ export interface Page {
   guides: RulerGuide[];
   pixelGrid: boolean;
   pixelGridColor: string;
+  /** Figma separates the visual grid from "Snap to pixel grid", which is the
+   *  behaviour (whole-pixel coordinates while moving/resizing). Optional so
+   *  documents written before the split keep loading; the default is on. */
+  pixelSnap?: boolean;
   flowStart: string;
 }
 
@@ -548,10 +694,23 @@ export interface Snapshot {
     backdrop?: boolean;
     backdropColor?: string;
   } | null;
+  /** Figma's View > Prototype flows. When off the canvas hides connection
+   *  noodles and hotspot handles, which is what makes Design mode look like
+   *  Design mode. */
+  showFlows: boolean;
   /** Figma's View > Rulers (⇧R). */
   showRulers: boolean;
   /** Figma's View > Minimap. Off by default; it costs its own render pass. */
   showMinimap: boolean;
+  /** Figma's "Pixel preview" in the Zoom/view options menu: vectors drawn as
+   *  the raster they would export as, at 1x or 2x device pixels. */
+  pixelPreview: PixelPreview;
+  /** Figma's "Layout guides" in the same menu: one switch to hide every
+   *  frame's layout grid without deleting any of them. */
+  viewLayoutGuides: boolean;
+  /** Figma's "Property labels": names beside the icon-only controls in the
+   *  right sidebar, for someone still learning what each one does. */
+  propertyLabels: boolean;
   /** Comment pins are hidden unless the comment tool is active or the user
    *  has explicitly turned them on, as in Figma. */
   showComments: boolean;
@@ -569,15 +728,22 @@ export interface Snapshot {
   vecPoints?: number[];
 }
 
+/** Off, or the density a rasterised preview is drawn at. */
+export type PixelPreview = "off" | "1x" | "2x";
+
 export type Command =
   | { type: "select"; ids: string[] }
   | { type: "setTool"; tool: Tool }
-  | { type: "setZoom"; zoom: number }
+  | { type: "setZoom"; zoom: number; anchorX?: number; anchorY?: number }
   | { type: "pan"; dx: number; dy: number }
   | { type: "setPan"; x: number; y: number }
   | { type: "setRightTab"; tab: RightTab }
   | { type: "toggleRulers" }
+  | { type: "setPixelPreview"; preview: PixelPreview }
+  | { type: "toggleLayoutGuides" }
+  | { type: "togglePropertyLabels" }
   | { type: "toggleMinimap" }
+  | { type: "toggleFlows"; enabled?: boolean }
   | { type: "toggleComments" }
   | { type: "addComment"; x: number; y: number; body: string }
   | { type: "replyComment"; id: string; body: string }
@@ -614,6 +780,13 @@ export type Command =
   | { type: "redo" }
   | { type: "patch"; id: string; patch: Partial<XNode> }
   | { type: "autoLayout"; id: string; layout: AutoLayout | null }
+  // "Auto layout is only supported on frames. If you have one or more layers
+  // selected, Figma will create an auto layout frame around them." Selecting a
+  // frame sets the layout on it; anything else - a plain layer, a group, a
+  // multi-selection - is wrapped in a new frame that gets the layout.
+  | { type: "wrapAutoLayout"; ids: string[]; layout: AutoLayout }
+  // "Remove all auto layout": the frame and everything nested inside it.
+  | { type: "removeAllLayout"; id: string }
   | { type: "nudge"; dx: number; dy: number }
   | { type: "begin" }
   | { type: "end" }
@@ -635,7 +808,7 @@ export type Command =
   | { type: "duplicatePage" }
   | { type: "deletePage" }
   | { type: "renamePage"; name: string }
-  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "name" | "flowStart">> }
+  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
   | { type: "boolean"; op: BooleanOp }
   /** Create a named style from the selection's current fill or stroke and

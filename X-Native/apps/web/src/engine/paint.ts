@@ -1,5 +1,6 @@
 import type { GradientStop, XNode } from "./types";
-import { cssRgba, parseHex, toHexA } from "../ui/color";
+import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
+import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
 /** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and Figma’s default). */
 function mixHex(a: string, b: string, t: number): string {
@@ -168,9 +169,8 @@ export function paintFill(
       fills: undefined,
     };
     ctx.save();
-    if (p.blend && p.blend !== "normal") {
-      ctx.globalCompositeOperation = p.blend as GlobalCompositeOperation;
-    }
+    const op = canvasBlend(p.blend);
+    if (op !== "source-over") ctx.globalCompositeOperation = op;
     if (p.opacity != null && p.opacity < 1) ctx.globalAlpha *= p.opacity;
     paintOnePaint(ctx, layer, sx, sy, sw, sh);
     ctx.restore();
@@ -428,55 +428,101 @@ export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: num
     const { r, g, b, a } = parseHex(drop.color);
     if (a <= 0) continue;
     ctx.save();
+    // A shadow can carry its own blend mode; source-over (Normal) is the
+    // default and needs no operation change.
+    const op = canvasBlend(drop.blend);
+    if (op !== "source-over") ctx.globalCompositeOperation = op;
     const blur = Math.max(0, drop.blur) * z;
     if (blur) ctx.filter = `blur(${blur}px)`;
     ctx.translate(drop.x * z, drop.y * z);
     ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
-    ctx.fill();
-    if (drop.spread) {
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-      ctx.lineWidth = Math.max(0, drop.spread * 2) * z;
+    // "Show behind transparent areas" is off by default, and off means the
+    // shadow is masked by what the layer paints. A layer with a fill paints
+    // its whole outline, so it casts the same shadow either way - but a
+    // stroke-only layer paints a ring, and that is the shadow it casts.
+    const paintsFill =
+      n.fillVisible !== false &&
+      !!n.fill &&
+      !isNone(n.fill) &&
+      n.kind !== "line" &&
+      n.kind !== "arrow";
+    const ring =
+      drop.showBehind !== true &&
+      !paintsFill &&
+      n.strokeVisible !== false &&
+      n.strokeWidth > 0 &&
+      !isNone(n.strokePaint);
+    if (ring) {
+      ctx.lineJoin = "miter";
+      ctx.lineCap = "butt";
+      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z) + Math.max(0, drop.spread) * 2 * z;
       ctx.strokeStyle = ctx.fillStyle;
       ctx.stroke();
+    } else {
+      ctx.fill();
+      if (drop.spread) {
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.lineWidth = Math.max(0, drop.spread * 2) * z;
+        ctx.strokeStyle = ctx.fillStyle;
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
 }
 
-export function paintInnerShadows(ctx: CanvasRenderingContext2D, n: XNode, z: number) {
+export function paintInnerShadows(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  z: number,
+  /** Re-traces the node's outline. The shadow's source is the ring of canvas
+   *  outside that outline, so the outline is needed twice: once to clip to the
+   *  shape, once to punch it out of the ring. */
+  trace?: () => void,
+  /** Screen box of the node, used to pull the ring inwards by `spread`. */
+  box?: { x: number; y: number; w: number; h: number },
+) {
   const inners = (n.effects ?? []).filter((e) => e.kind === "inner-shadow" && e.visible);
-  if (!inners.length) return;
+  if (!inners.length || !trace) return;
   for (const inner of inners) {
     const { r, g, b, a } = parseHex(inner.color);
     if (a <= 0) continue;
     ctx.save();
-    // Draw an offset, blurred copy of the shape, then remove the original
-    // interior. The remaining pixels are the shadow constrained to the edge.
+    const op = canvasBlend(inner.blend);
+    if (op !== "source-over") ctx.globalCompositeOperation = op;
+    trace();
     ctx.clip();
-    const color = `rgba(${r},${g},${b},${a})`;
-    ctx.shadowColor = color;
+    // An inner shadow is the shadow of everything *outside* the shape, cast
+    // inwards and seen through the shape. Filling the ring between the outline
+    // and the edge of the canvas - even-odd, offset and blurred - produces it
+    // without ever touching the shape's own paint. The previous version filled
+    // the shape with the shadow colour and then punched the shape back out,
+    // which erased the layer's fill and whatever sat underneath it.
+    ctx.beginPath();
+    const spread = Math.max(0, inner.spread) * z;
+    if (box && spread > 0 && box.w > 0 && box.h > 0) {
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.h / 2;
+      // CSS grows an inset shadow by deflating its hole; center it on the box.
+      ctx.translate(cx, cy);
+      ctx.scale(
+        Math.max(0.01, (box.w - spread * 2) / box.w),
+        Math.max(0.01, (box.h - spread * 2) / box.h),
+      );
+      ctx.translate(-cx, -cy);
+    }
+    trace();
+    ctx.rect(-1e6, -1e6, 2e6, 2e6);
+    ctx.shadowColor = `rgba(${r},${g},${b},${a})`;
     ctx.shadowBlur = Math.max(0, inner.blur) * z;
     ctx.shadowOffsetX = inner.x * z;
     ctx.shadowOffsetY = inner.y * z;
-    ctx.fillStyle = color;
-    ctx.fill();
-    if (inner.spread > 0) {
-      ctx.lineWidth = inner.spread * 2 * z;
-      ctx.strokeStyle = color;
-      ctx.stroke();
-    }
-    ctx.shadowColor = "transparent";
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.fillStyle = "#000";
-    ctx.fill();
+    ctx.fillStyle = ctx.shadowColor;
+    ctx.fill("evenodd");
     ctx.restore();
   }
 }
-
 
 /**
  * Paint the extra strokes in `n.strokes` over an already-traced path.
@@ -494,6 +540,8 @@ export function paintExtraStrokes(
   n: XNode,
   z: number,
   trace: () => void,
+  /** Screen box of the node, needed to clip per-side strokes. */
+  box?: { x: number; y: number; w: number; h: number },
 ) {
   for (const s of n.strokes ?? []) {
     if (s.visible === false || !(s.width > 0)) continue;
@@ -502,39 +550,64 @@ export function paintExtraStrokes(
     ctx.save();
     ctx.globalAlpha *= s.opacity ?? 1;
     ctx.strokeStyle = cssRgba(colour);
-    const lw = Math.max(0.5, s.width * z);
     ctx.lineCap = s.cap === "round" ? "round" : s.cap === "square" ? "square" : "butt";
     ctx.lineJoin = s.join === "round" ? "round" : s.join === "bevel" ? "bevel" : "miter";
+    ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
     const dash = s.dash ?? 0;
-    ctx.setLineDash(dash > 0 ? [dash * z, (s.gap || dash) * z] : []);
-    trace();
-    if (s.align === "inside") {
-      ctx.save();
-      ctx.clip();
-      ctx.lineWidth = lw * 2;
-      ctx.stroke();
+    const dashes = dashArray(s.pattern, dash, s.gap ?? 0, z);
+    ctx.setLineDash(dashes);
+    // A second stroke carries its own per-side settings, the way Figma's stroke
+    // rows each own their weight, alignment and dashes.
+    const widths = sideWidths(s.sides, s.sideW, s.width);
+    const perSide = box && sidesSupported(n.kind) && (s.sides ?? "all") !== "all";
+    const strokePass = (weight: number) => {
+      const w = Math.max(0.5, weight * z);
+      if (s.align === "inside") {
+        ctx.save();
+        ctx.clip();
+        ctx.lineWidth = w * 2;
+        ctx.stroke();
+        ctx.restore();
+      } else if (s.align === "outside") {
+        // Canvas only centres a stroke, so an outside stroke is drawn at double
+        // width with the shape interior clipped out — "clip to everything except
+        // the shape" — leaving just the outer half. Erasing the interior with
+        // destination-out instead would also destroy the base stroke's inside
+        // band and anything else already painted there.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(-1e6, -1e6, 2e6, 2e6);
+        trace();
+        ctx.clip("evenodd");
+        trace();
+        ctx.lineWidth = w * 2;
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.lineWidth = w;
+        ctx.stroke();
+      }
+    };
+    if (perSide) {
+      const cones = sideCones(box!.x, box!.y, box!.w, box!.h);
+      for (let i = 0; i < 4; i++) {
+        if (widths[i] <= 0) continue;
+        ctx.save();
+        ctx.beginPath();
+        cones[i].forEach(([bx, by], k) => (k ? ctx.lineTo(bx, by) : ctx.moveTo(bx, by)));
+        ctx.closePath();
+        ctx.clip();
+        // The cone is now the current path, so re-trace the shape before
+        // stroking it, or the band's own edges get the stroke instead.
+        trace();
+        strokePass(widths[i]);
+        ctx.restore();
+      }
       ctx.restore();
-    } else if (s.align === "outside") {
-      // Canvas only centres a stroke, so an outside stroke is drawn at double
-      // width with the shape interior clipped out — "clip to everything except
-      // the shape" — leaving just the outer half. Erasing the interior with
-      // destination-out instead would also destroy the base stroke's inside
-      // band and anything else already painted there.
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(-1e6, -1e6, 2e6, 2e6);
-      trace();
-      // The outer rect plus the shape, filled even-odd, is the region outside
-      // the shape; clipping to it protects everything already drawn inside.
-      ctx.clip("evenodd");
-      trace();
-      ctx.lineWidth = lw * 2;
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      ctx.lineWidth = lw;
-      ctx.stroke();
+      continue;
     }
+    trace();
+    strokePass(s.width);
     ctx.restore();
   }
 }

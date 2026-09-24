@@ -2,24 +2,149 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
 import { copyText } from "./engine/clipboard";
+import { worldPos } from "./engine/memory";
+import { zoomTo } from "./ui/zoom";
 import {
   Actions,
   HelpBtn,
   LeftPanel,
   NavRail,
+  NudgeDialog,
   Toolbar,
   bindHotkeys,
   usePanelDrag,
   type NavId,
 } from "./ui/chrome";
-import { RightPanel } from "./ui/inspector";
+import { Icon } from "./ui/icons";
+import { RightPanel, copyLayerCode, copyPng } from "./ui/inspector";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
+import { Dashboard } from "./ui/Dashboard";
+import { ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import { dehydrateDoc, hydrateDoc } from "./engine/assets";
+
+/** The dashboard is the app's front door; a file opens at `#/file/<id>`. The
+ *  hash is the source of truth so reload, back and a shared link all behave. */
+function readRoute(): { view: "home" } | { view: "file"; id: string } {
+  const m = /#\/file\/([^/?#]+)/.exec(window.location.hash || "");
+  return m ? { view: "file", id: decodeURIComponent(m[1]) } : { view: "home" };
+}
 
 export default function App() {
-  const engine = useMemo(() => new MemoryEngine(), []);
+  const [route, setRoute] = useState(readRoute);
+  // The document is resolved before the editor mounts: seeding the engine is
+  // synchronous, so the canvas never paints half a file. Large documents live in
+  // IndexedDB, which is only readable asynchronously — hence this small state
+  // machine rather than a direct render.
+  const [seed, setSeed] = useState<{ id: string; doc: DocSeed | null; missing: boolean } | null>(null);
+
+  useEffect(() => {
+    const on = () => setRoute(readRoute());
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+
+  // A pre-dashboard autosave becomes a Draft rather than vanishing behind the
+  // new front door, and a brand-new store gets the bundled sample file.
+  useEffect(() => {
+    if (route.view === "home") {
+      ensureDemoFile();
+      migrateLegacyDoc();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (route.view !== "file") {
+      setSeed(null);
+      return;
+    }
+    let alive = true;
+    const present = (doc: DocSeed | null) => {
+      // Images are references in storage; the editor needs the bytes. Resolve
+      // them first, so a document never reaches the engine half-loaded.
+      if (!doc) return Promise.resolve(setSeed({ id: route.id, doc: null, missing: !!getFile(route.id) }));
+      return hydrateDoc(doc as never).then((unresolved) => {
+        if (!alive) return;
+        if (unresolved) toastMsg(`${unresolved} image${unresolved > 1 ? "s" : ""} could not be loaded`);
+        setSeed({ id: route.id, doc, missing: false });
+      });
+    };
+    const sync = readDocSync(route.id);
+    if (sync) {
+      void present(sync);
+      return () => {
+        alive = false;
+      };
+    }
+    setSeed(null);
+    readDoc(route.id)
+      .then((doc) => {
+        if (!alive) return;
+        // An id that was never stored opens as a scratch document — that is how
+        // a direct link to a file in another browser should behave, and it is
+        // what the e2e harness drives. An id that exists but whose bytes are
+        // gone must NOT be overwritten by a blank file.
+        setSeed({ id: route.id, doc: doc ?? null, missing: !!doc === false && !!getFile(route.id) });
+      })
+      .catch(() => {
+        if (alive) setSeed({ id: route.id, doc: null, missing: !!getFile(route.id) });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [route]);
+
+  if (route.view === "file") {
+    if (seed && seed.missing) {
+      return (
+        <div className="open-screen">
+          <div className="open-card">
+            <b>This file is not in this browser</b>
+            <span>Its document is stored locally, and nothing was found here. Start a new file instead.</span>
+            <button className="primary" onClick={() => (window.location.hash = "#/")}>
+              Back to files
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (!seed || seed.id !== route.id) {
+      return (
+        <div className="open-screen">
+          <div className="open-card">
+            <b>Opening file…</b>
+            <span>Reading the document from local storage.</span>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <Editor
+        key={route.id}
+        fileId={route.id}
+        seed={seed.doc}
+        onHome={() => {
+          window.location.hash = "#/";
+        }}
+      />
+    );
+  }
+  return <Dashboard onOpen={(id) => (window.location.hash = `#/file/${encodeURIComponent(id)}`)} />;
+}
+
+/** A file link, narrowed to one layer when exactly one is selected, so the
+ *  receiver opens on that layer rather than somewhere on the page. */
+function linkForSelection(snap: { selection: string[] }, fileId: string): string {
+  const base = `#/file/${encodeURIComponent(fileId)}`;
+  const one = snap.selection.length === 1 ? snap.selection[0] : null;
+  return `${window.location.origin}${window.location.pathname}${base}${one ? `?f=${encodeURIComponent(one)}` : ""}`;
+}
+
+function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null; onHome: () => void }) {
+  const engine = useMemo(() => new MemoryEngine(!seed, seed), [seed]);
   const snap = useSyncExternalStore(
     (fn) => engine.subscribe(fn),
     () => engine.snapshot(),
@@ -44,7 +169,16 @@ export default function App() {
     let timer = 0;
     let warned = false;
     const write = () => {
-      const status = saveDoc(engine.toDoc());
+      // Stored form: image bytes live in the asset store, so this JSON is a few
+      // kilobytes per image instead of its full data URL - which is what made a
+      // 50-photo file take a fifth of a second to save.
+      const doc = dehydrateDoc(engine.toDoc() as never);
+      const status = saveDoc(doc);
+      try {
+        saveFile(fileId, doc as never);
+      } catch {
+        /* the per-file index is a convenience; the autosave above is the copy */
+      }
       if (status !== "saved" && !warned) {
         warned = true; // one warning per session, not once per keystroke
         toastMsg(
@@ -69,7 +203,18 @@ export default function App() {
       window.clearTimeout(timer);
       window.removeEventListener("pagehide", flush);
     };
-  }, [engine]);
+  }, [engine, fileId]);
+
+  // Figma's View > Property labels. It is a stylesheet concern rather than a
+  // prop: the right sidebar is built from a hundred small field components and
+  // threading a boolean through all of them would touch every one of them for
+  // what is a single text-versus-icon decision.
+  useEffect(() => {
+    document.documentElement.dataset.proplabels = snap.propertyLabels ? "on" : "off";
+    return () => {
+      delete document.documentElement.dataset.proplabels;
+    };
+  }, [snap.propertyLabels]);
 
   // If a stored document existed but could not be read, say so rather than
   // silently presenting an empty file as if nothing was lost. This sets the
@@ -97,11 +242,151 @@ export default function App() {
     };
   }, []);
 
+  // Opening a file shows the whole page - Figma's default for a file you have
+  // not seen before - rather than whatever viewport the last session left in
+  // the document. A link that names a layer fits that layer instead, so this
+  // stands down when one is present.
+  useEffect(() => {
+    if (/[?&]f=/.test(window.location.hash || "")) return undefined;
+    let timer = 0;
+    let tries = 0;
+    const attempt = () => {
+      const wrap = document.querySelector(".canvas-wrap");
+      // Fit needs the size of the canvas that is really on screen; on the first
+      // frame the panels have been laid out but the canvas has not measured.
+      if (!wrap || wrap.getBoundingClientRect().width < 40) {
+        if (++tries < 8) timer = window.setTimeout(attempt, 40);
+        return;
+      }
+      zoomTo(engine, "fit");
+    };
+    timer = window.setTimeout(attempt, 0);
+    return () => window.clearTimeout(timer);
+  }, [engine]);
+
+  // The zoom menu offers "Hide UI", which is this component's state, so it asks
+  // through an event rather than threading another prop through the inspector.
+  // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, because
+  // Escape has to be resolved by the central hotkey handler: listeners a modal
+  // attaches itself are starved by the app's own capture-phase handler.
+  const [exportOpen, setExportOpen] = useState(false);
+  const [nudgeOpen, setNudgeOpen] = useState(false);
+  const overlayRef = useRef({ exportOpen, nudgeOpen, actions, figInspector });
+  // Handoff plumbing that needs the live document: land on the layer a shared
+  //  link points at, then answer the two copy commands the menu asks for.
+  useEffect(() => {
+    const linked = /[?&]f=([^/?#]+)/.exec(window.location.hash || "");
+    if (!linked) return undefined;
+    const id = decodeURIComponent(linked[1]);
+    let tries = 0;
+    let timer = 0;
+    // The node lives in whichever page the file last had open, so search every
+    // page and switch if the link points elsewhere. Retrying covers the first
+    // paint, where the restored page index and the tree land in the same tick.
+    const attempt = () => {
+      const s = engine.snapshot();
+      const at = s.pages.findIndex((pg) => !!worldPos(pg.root, id));
+      if (at < 0) {
+        if (++tries < 3) {
+          timer = window.setTimeout(attempt, 220);
+          return false;
+        }
+        // Say so: a link that silently opens the wrong view is worse than one
+        // that admits the layer is not in this copy of the file.
+        setToast("That link points at a layer this copy of the file does not have");
+        window.setTimeout(() => setToast(""), 3200);
+        return false;
+      }
+      if (at !== s.page) engine.dispatch({ type: "setPage", index: at });
+      // Sketch's handoff is a view anyone can inspect without touching the file;
+      // the closest thing we have is opening such a link already in Dev Mode.
+      engine.dispatch({ type: "setRightTab", tab: "inspect" });
+      engine.dispatch({ type: "select", ids: [id] });
+      zoomTo(engine, "selection");
+      return true;
+    };
+    attempt();
+    return () => window.clearTimeout(timer);
+  }, [engine]);
+  useEffect(() => {
+    const selected = () => {
+      const s = engine.snapshot();
+      const id = s.selection[0];
+      return id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
+    };
+    const flash = (msg: string) => {
+      setToast(msg);
+      window.setTimeout(() => setToast(""), 1800);
+    };
+    const onCopyLink = () => {
+      const s = engine.snapshot();
+      if (!s.selection.length) flash("Select a layer first · this link opens one layer");
+      else {
+        copyText(linkForSelection(s, fileId));
+        flash(s.selection.length === 1 ? "Link to that layer copied" : "Link copied · opens this file");
+      }
+    };
+    const onCopyCode = (e: Event) => {
+      const s = engine.snapshot();
+      const id = s.selection[0];
+      const node = id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
+      if (!node) {
+        flash("Select one layer to copy its code");
+        return;
+      }
+      const detail = (e as CustomEvent<{ format?: string | null }>).detail;
+      copyLayerCode(node, (detail?.format ?? undefined) as never);
+    };
+    const onCopyPng = () => {
+      const node = selected();
+      if (!node) flash("Select a layer to copy it as a PNG");
+      else copyPng(node);
+    };
+    window.addEventListener("x-native-copy-link", onCopyLink);
+    window.addEventListener("x-native-copy-png", onCopyPng);
+    window.addEventListener("x-native-copy-code", onCopyCode);
+    return () => {
+      window.removeEventListener("x-native-copy-link", onCopyLink);
+      window.removeEventListener("x-native-copy-png", onCopyPng);
+      window.removeEventListener("x-native-copy-code", onCopyCode);
+    };
+  }, [engine, fileId]);
+
+  overlayRef.current = { exportOpen, nudgeOpen, actions, figInspector };
+  const closeOverlay = () => {
+    const o = overlayRef.current;
+    if (o.nudgeOpen) setNudgeOpen(false);
+    else if (o.exportOpen) setExportOpen(false);
+    else if (o.actions) setActions(false);
+    else if (o.figInspector) setFigInspector(false);
+    else return false;
+    return true;
+  };
+  useEffect(() => {
+    const on = () => setHideUi((v) => !v);
+    const onMin = () => setMinUi((v) => !v);
+    const onExport = () => setExportOpen(true);
+    const onNudge = () => setNudgeOpen(true);
+    window.addEventListener("x-native-hide-ui", on);
+    window.addEventListener("x-native-minimize-ui", onMin);
+    window.addEventListener("x-native-export-dialog", onExport);
+    window.addEventListener("x-native-nudge-dialog", onNudge);
+    return () => {
+      window.removeEventListener("x-native-hide-ui", on);
+      window.removeEventListener("x-native-minimize-ui", onMin);
+      window.removeEventListener("x-native-export-dialog", onExport);
+      window.removeEventListener("x-native-nudge-dialog", onNudge);
+    };
+  }, []);
+
   const share = () => {
     const page = snap.pages[snap.page];
-    const text = `${snap.fileName} · ${page.name} · ${window.location.href}`;
-    copyText(text);
-    setToast("Link copied");
+    // The clipboard gets the link alone — a recipient pastes it into Slack or a
+    // ticket and it stays clickable. The file/page names are in the message.
+    // The button shares the *file*; a link to one layer comes from the layer's
+    // own right-click menu, so a teammate never receives a deep link by accident.
+    copyText(`${window.location.origin}${window.location.pathname}#/file/${encodeURIComponent(fileId)}`);
+    setToast(`Link copied — opens ${snap.fileName} · ${page.name}`);
     window.setTimeout(() => setToast(""), 1600);
   };
   const present = () => {
@@ -118,6 +403,7 @@ export default function App() {
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,
+        onEscapeOverlay: closeOverlay,
         onPresentExit: () => {
           const s = engine.snapshot();
           if (s.presentFrame) {
@@ -154,6 +440,7 @@ export default function App() {
         setNav={setNav}
         onActions={() => setActions(true)}
         onInspectFig={() => setFigInspector(true)}
+        onHome={onHome}
       />
       <LeftPanel
         engine={engine}
@@ -161,6 +448,7 @@ export default function App() {
         nav={nav}
         onMinimize={() => setMinUi((v) => !v)}
         onActions={() => setActions(true)}
+        onHome={onHome}
       />
       <div
         className="split l"
@@ -168,6 +456,22 @@ export default function App() {
         {...leftDrag}
       />
       <div className="canvas-col">
+        {minUi && !hideUi && !snap.presentFrame && (
+          // Figma keeps the file name and a way out of the minimized state on
+          // screen; ours lives at the top of the left panel, which is hidden
+          // here, so the same two controls float in its place.
+          <div className="min-chip">
+            <button className="icon-btn" title="Back to files" onClick={onHome}>
+              <Icon name="back" size={14} />
+            </button>
+            <span className="min-chip-name" title="UI minimized · ⇧⌘\ restores the panels">
+              {snap.fileName}
+            </span>
+            <button className="icon-btn" title="Restore UI (⇧⌘\)" onClick={() => setMinUi(false)}>
+              <Icon name="minimize" size={14} />
+            </button>
+          </div>
+        )}
         <Canvas
           engine={engine}
           snap={snap}
@@ -218,10 +522,12 @@ export default function App() {
         snap={snap}
         onPresent={present}
         onShare={share}
-        onInspectFig={() => setFigInspector(true)}
+        exportOpen={exportOpen}
+        onCloseExport={() => setExportOpen(false)}
       />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
       {toast && <div className="toast">{toast}</div>}
+      {nudgeOpen && <NudgeDialog onClose={() => setNudgeOpen(false)} />}
       {figInspector && <FigInspectorModal engine={engine} onClose={() => setFigInspector(false)} />}
     </div>
   );

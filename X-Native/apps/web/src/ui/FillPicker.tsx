@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GradientStop } from "../engine/types";
-import { Icon } from "./icons";
+import { Icon, caretSize } from "./icons";
 import {
   armEyedrop,
   BLENDS,
   COLOR_MODELS,
   COLOR_PRESETS,
+  CONTRAST_KINDS,
+  contrastRatio,
+  contrastTarget,
   eyedropArmed,
   FILL_TYPES,
   handlesForFill,
@@ -16,6 +19,7 @@ import {
   IMAGE_FITS,
   isNone,
   justEyedropped,
+  nearestAccessible,
   nextColorModel,
   parseCssColor,
   parseHex,
@@ -27,6 +31,8 @@ import {
   type FillType,
   type ImageFit,
 } from "./color";
+import { rememberImage } from "../engine/assets";
+import { armPopover } from "./popoverGuard";
 
 export interface FillValue {
   color: string;
@@ -66,6 +72,8 @@ export function FillPicker({
   value,
   recents,
   anchor,
+  background,
+  largeText,
   onChange,
   onClose,
 }: {
@@ -73,6 +81,11 @@ export function FillPicker({
   value: FillValue;
   recents: string[];
   anchor: DOMRect;
+  /** What the colour is painted over, resolved from the layer's own ancestry so
+   *  the check means something on the canvas rather than only against white. */
+  background?: string;
+  /** WCAG's large-text exemption: 24px, or 19px and bold. */
+  largeText?: boolean;
   onChange: (v: FillValue) => void;
   onClose: () => void;
 }) {
@@ -82,6 +95,9 @@ export function FillPicker({
   const [hex, setHex] = useState(value.color.replace("#", "").slice(0, 8).toUpperCase());
   const [css, setCss] = useState(toCss(r, g, b, value.opacity / 100));
   const [model, setModel] = useState<ColorModel>("hex");
+  const [a11y, setA11y] = useState(false);
+  const [bgOverride, setBgOverride] = useState<string | null>(null);
+  const [a11yKind, setA11yKind] = useState<"auto" | "large" | "normal" | "graphics">("auto");
   const [typeOpen, setTypeOpen] = useState(false);
   const [blendOpen, setBlendOpen] = useState(false);
   /** Index of the gradient stop the colour area is currently editing. */
@@ -122,9 +138,12 @@ export function FillPicker({
     };
     window.addEventListener("mousedown", on);
     window.addEventListener("keydown", key);
+    // Escape closes the picker; it should not also drop the selection behind it.
+    const disarm = armPopover();
     return () => {
       window.removeEventListener("mousedown", on);
       window.removeEventListener("keydown", key);
+      disarm();
     };
   }, [onClose, value]);
 
@@ -180,8 +199,47 @@ export function FillPicker({
   };
 
   const hueCss = `hsl(${hsv.h} 100% 50%)`;
-  const left = Math.max(8, Math.min(anchor.left - 248, window.innerWidth - 256));
-  const top = Math.max(8, Math.min(anchor.top, window.innerHeight - 520));
+  /* Contrast, measured the way WCAG defines it. The layer's own background is
+     only ever an approximation of what sits behind the fill, so the field is
+     editable; the fill's opacity is composited in because a 40% fill is not the
+     colour it looks like. */
+  const bg = bgOverride ?? (background && background.length >= 7 ? background.slice(0, 7) : "#ffffff");
+  const fg = (() => {
+    const c = parseHex(value.color);
+    const g0 = parseHex(bg);
+    const k = Math.max(0, Math.min(1, value.opacity / 100));
+    return toHex(
+      Math.round(c.r * k + g0.r * (1 - k)),
+      Math.round(c.g * k + g0.g * (1 - k)),
+      Math.round(c.b * k + g0.b * (1 - k)),
+    );
+  })();
+  const ratio = contrastRatio(fg, bg);
+  const resolvedKind: "large" | "normal" | "graphics" =
+    a11yKind === "auto" ? (largeText ? "large" : "normal") : a11yKind;
+  const targetAA = contrastTarget(resolvedKind, "AA");
+  const targetAAA = contrastTarget(resolvedKind, "AAA");
+  const passAA = ratio + 1e-6 >= targetAA;
+  const passAAA = ratio + 1e-6 >= targetAAA;
+  const hasAAA = resolvedKind !== "graphics";
+  // Anchor to the row that opened us — Figma's picker appears beside the swatch,
+  // never 400px away — and flip above when the row sits near the bottom edge.
+  // The height is measured after paint because the popover grows with gradient
+  // and image controls.
+  const popRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState(() => ({
+    left: Math.max(8, Math.min(anchor.left - 248, window.innerWidth - 256)),
+    top: Math.max(8, Math.min(anchor.top, window.innerHeight - 520)),
+  }));
+  useLayoutEffect(() => {
+    const el = popRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    let top = anchor.bottom + 6;
+    if (top + r.height > window.innerHeight - 8) top = Math.max(8, anchor.top - r.height - 6);
+    const left = Math.max(8, Math.min(anchor.left - r.width - 10, window.innerWidth - r.width - 8));
+    setPos({ left, top });
+  }, [anchor]);
   const rgb = hsvToRgb(hsv.h, hsv.s, hsv.v);
   const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
   const image = value.type === "image";
@@ -335,11 +393,11 @@ export function FillPicker({
   };
 
   return createPortal(
-    <div className="fill-pop" style={{ left, top }} role="dialog" aria-label={title}>
+    <div ref={popRef} className="fill-pop" style={{ left: pos.left, top: pos.top }} role="dialog" aria-label={title}>
       <div className="fill-head">
         <button className="type-btn" onClick={() => setTypeOpen((v) => !v)}>
           {FILL_TYPES.find((t) => t.id === value.type)?.label ?? "Solid"}
-          <Icon name="chevron" size={12} />
+          <Icon name="chevron" size={caretSize()} />
         </button>
         {typeOpen && (
           <div className="type-menu">
@@ -449,6 +507,83 @@ export function FillPicker({
         </div>
       )}
 
+      {!image && (
+        <div className="a11y-row">
+          <button
+            className={`blend-row${a11y ? " on" : ""}`}
+            aria-expanded={a11y}
+            onClick={() => setA11y((v) => !v)}
+          >
+            <Icon name="info" size={12} /> Check color contrast
+          </button>
+          {a11y && (
+            <div className="a11y-body">
+              <div className="a11y-bg">
+                <span className="swatch" style={{ background: bg }} />
+                <input
+                  aria-label="Background color"
+                  title="The color behind this fill · type a hex to compare against something else"
+                  value={bg.replace("#", "").toUpperCase()}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    if (/^[0-9a-fA-F]{6}$/.test(raw)) setBgOverride(`#${raw.toLowerCase()}`);
+                  }}
+                />
+                {bgOverride && (
+                  <button
+                    className="mini"
+                    title="Back to the background this layer actually sits on"
+                    onClick={() => setBgOverride(null)}
+                  >
+                    <Icon name="reset" size={11} />
+                  </button>
+                )}
+                <select
+                  aria-label="Contrast category"
+                  value={a11yKind}
+                  onChange={(e) => setA11yKind(e.target.value as typeof a11yKind)}
+                >
+                  {CONTRAST_KINDS.map((k) => (
+                    <option key={k.id} value={k.id}>
+                      {k.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="a11y-result">
+                <strong>{ratio.toFixed(2)}:1</strong>
+                <span className={`a11y-badge${passAA ? " ok" : " bad"}`} title={`AA · ${targetAA}:1`}>
+                  AA <Icon name={passAA ? "check" : "x-mark"} size={11} />
+                </span>
+                {hasAAA && (
+                  <span className={`a11y-badge${passAAA ? " ok" : " bad"}`} title={`AAA · ${targetAAA}:1`}>
+                    AAA <Icon name={passAAA ? "check" : "x-mark"} size={11} />
+                  </span>
+                )}
+                {!passAA && (
+                  <button
+                    className="mini a11y-fix"
+                    title={`Move to the nearest color that clears ${targetAA}:1, hue and saturation intact`}
+                    onClick={() => onChange({ ...value, color: nearestAccessible(fg, bg, targetAA) })}
+                  >
+                    Fix
+                  </button>
+                )}
+              </div>
+              <p className="a11y-note">
+                {resolvedKind === "large"
+                  ? "Large text · 24px, or 19px and bold — needs 3:1."
+                  : resolvedKind === "graphics"
+                    ? "Graphics and UI components need 3:1."
+                    : "Normal text needs 4.5:1."}{" "}
+                Measured against the {bgOverride ? "typed" : "layer's own"} background, with this fill's
+                opacity applied.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {image && (
         <div className="img-fill">
           {value.image ? (
@@ -468,7 +603,11 @@ export function FillPicker({
               const f = e.target.files?.[0];
               if (!f) return;
               const reader = new FileReader();
-              reader.onload = () => onChange({ ...value, type: "image", image: String(reader.result) });
+              reader.onload = () => {
+                const src = String(reader.result);
+                rememberImage(src);
+                onChange({ ...value, type: "image", image: src });
+              };
               reader.readAsDataURL(f);
             }}
           />
@@ -542,7 +681,7 @@ export function FillPicker({
         Apply blend mode
         <span>
           {value.blend}
-          <Icon name="chevron" size={12} />
+          <Icon name="chevron" size={caretSize()} />
         </span>
       </button>
       {blendOpen && (

@@ -54,7 +54,7 @@ export function Rulers({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    const dark = theme === "dark" || theme === "graphite";
+    const dark = theme === "dark";
     const bg = dark ? "#181922" : "#ffffff";
     const line = dark ? "#333647" : "#e5e5e5";
     const text = dark ? "#94a3b8" : "#8c8c8c";

@@ -31,13 +31,43 @@ async function page(fresh = true) {
     // Wipe the document before the app script ever runs: loading it first would
     // let autosave immediately rewrite whatever a previous check left behind.
     await p.goto(`${URL}/favicon.ico`, { waitUntil: "domcontentloaded" }).catch(() => {});
-    await p.evaluate(() => { try { localStorage.removeItem("x-native-document"); } catch {} });
+    await p.evaluate(async () => {
+      try {
+        // The dashboard keeps an index plus one document slot per file; both
+        // are cleared so every check starts from the bundled sample document.
+        // The interface theme is deliberately left alone.
+        for (const k of Object.keys(localStorage)) {
+          if (k.startsWith("x-native") && k !== "x-native-theme") localStorage.removeItem(k);
+        }
+        // A document that outgrows localStorage overflows into IndexedDB, and a
+        // page that has just been closed can still be writing there: clear both,
+        // and wait for the deletions, so no check inherits the last one's file.
+        const dbs = (await indexedDB.databases?.()) ?? [];
+        await Promise.all(dbs.map((d) => d.name ? new Promise((res) => {
+          const r = indexedDB.deleteDatabase(d.name);
+          r.onsuccess = r.onerror = r.onblocked = () => res();
+        }) : null));
+      } catch {}
+    });
+    await sleep(300);
   }
-  await p.goto(URL, { waitUntil: "networkidle0" });
+  // The app opens on the dashboard; tests drive a file, so enter one directly.
+  // "demo" is the sample document, and it is created on the dashboard for a
+  // brand-new store by engine/files.ts.
+  await p.goto(`${URL}/#/file/demo`, { waitUntil: "networkidle0" });
   await sleep(450);
   return p;
 }
-const rows = (p) => p.evaluate(() => [...document.querySelectorAll(".panel.left .row")].map(r => r.textContent.trim()));
+// Waits for the layer list to render: a check that reads it the instant the
+// document mounts can catch an empty panel and index into nothing.
+const rows = async (p) => {
+  for (let i = 0; i < 24; i++) {
+    const out = await p.evaluate(() => [...document.querySelectorAll(".panel.left .row")].map(r => r.textContent.trim()));
+    if (out.length) return out;
+    await sleep(250);
+  }
+  return [];
+};
 const drawRect = async (p, x = 820, y = 640) => {
   await p.keyboard.press("r");
   await p.mouse.move(x, y); await p.mouse.down();
@@ -48,7 +78,7 @@ const drawRect = async (p, x = 820, y = 640) => {
 // 1. rename ---------------------------------------------------------------
 {
   const p = await page();
-  const i = (await rows(p)).indexOf("Chip");
+  const i = (await rows(p)).indexOf("View Details Button");
   const rs = await p.$$(".panel.left .row");
   await rs[i].click(); await sleep(400);
   await p.keyboard.down("Meta"); await p.keyboard.press("r"); await p.keyboard.up("Meta");
@@ -128,7 +158,9 @@ for (const [label, payload] of [
   await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
   const errs = []; p.on("pageerror", e => errs.push(e.message));
   await p.evaluateOnNewDocument(v => { try { localStorage.setItem("x-native-document", v); } catch {} }, payload);
-  await p.goto(URL, { waitUntil: "networkidle0" }); await sleep(700);
+  // A file id with no stored document falls back to the autosave slot, which is
+  // exactly the path these hostile payloads are aimed at.
+  await p.goto(`${URL}/#/file/demo`, { waitUntil: "networkidle0" }); await sleep(700);
   const n = await p.evaluate(() => document.querySelectorAll(".panel.left .row").length);
   t(`corrupt save (${label}) boots a clean document`, n > 0 && errs.length === 0);
   if (label === "garbage") {
@@ -210,7 +242,7 @@ for (const [label, payload] of [
 // 8. clipboard ------------------------------------------------------------
 {
   const p = await page();
-  const i = (await rows(p)).indexOf("Chip");
+  const i = (await rows(p)).indexOf("View Details Button");
   const rs = await p.$$(".panel.left .row");
   await rs[i].click(); await sleep(400);
   const errsBefore = allErrors.length;
@@ -748,7 +780,7 @@ for (const [label, payload] of [
   const p = await page();
   const names = await rows(p);
   const rs = await p.$$(".panel.left .row");
-  await rs[names.indexOf("Chip")].click();
+  await rs[names.indexOf("View Details Button")].click();
   await sleep(600);
   const height = () => p.evaluate(() => {
     const i = document.querySelector(".inspector");

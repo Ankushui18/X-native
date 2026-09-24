@@ -1,8 +1,16 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-/** Figma Preferences → Theme, plus Graphite/Daylight from crates/x-ui. */
-export type ThemePref = "light" | "dark" | "graphite" | "daylight" | "system";
-export type Theme = "light" | "dark" | "graphite" | "daylight";
+import {
+  DEFAULT_THEME_PREF,
+  normalizeThemePref,
+  resolveTheme,
+  type Theme,
+  type ThemePref,
+} from "./themeModel";
+
+/** Figma Preferences → Theme: Light, Dark or System. */
+export { THEME_OPTIONS, themeLabel } from "./themeModel";
+export type { Theme, ThemePref } from "./themeModel";
 
 const KEY = "x-native-theme";
 
@@ -14,25 +22,21 @@ const Ctx = createContext<{
 
 function readPref(): ThemePref {
   try {
-    const v = localStorage.getItem(KEY);
-    if (v === "light" || v === "dark" || v === "graphite" || v === "daylight" || v === "system") return v;
+    return normalizeThemePref(localStorage.getItem(KEY));
   } catch {
-    /* ignore */
+    /* private mode: the default is a fine answer */
+    return DEFAULT_THEME_PREF;
   }
-  return "light";
 }
 
 function resolve(pref: ThemePref): Theme {
-  if (pref === "system") {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  }
-  return pref;
+  return resolveTheme(pref, window.matchMedia("(prefers-color-scheme: dark)").matches);
 }
 
 function apply(theme: Theme) {
   const root = document.documentElement;
   root.dataset.theme = theme;
-  root.style.colorScheme = theme === "dark" || theme === "graphite" ? "dark" : "light";
+  root.style.colorScheme = theme === "dark" ? "dark" : "light";
 }
 
 apply(resolve(readPref()));
