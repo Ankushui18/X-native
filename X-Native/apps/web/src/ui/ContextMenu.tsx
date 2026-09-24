@@ -6,6 +6,7 @@ import { find } from "../engine/memory";
 import { Icon, caretSize, kindIcon } from "./icons";
 import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
+import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 
 export type MenuItem =
   | { kind: "action"; id: string; label: string; shortcut?: string; icon?: string; enabled?: boolean }
@@ -178,6 +179,7 @@ export function canvasMenu(
   isGroup: boolean,
   hasImage: boolean,
   under: XNode[] = [],
+  hasLayout = false,
 ): MenuItem[] {
   if (sel === 0) {
     return [
@@ -226,6 +228,7 @@ export function canvasMenu(
   items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" });
   items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" });
   items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" });
+  items.push(...layoutMenuItems(hasLayout));
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
   items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
   if (hasImage) {
@@ -268,7 +271,33 @@ export function canvasMenu(
   return items;
 }
 
-export function layerMenu(isGroup: boolean): MenuItem[] {
+/**
+ * The auto layout entries Figma puts on a layer's context menu, from "Toggle on
+ * auto layout in designs": Add auto layout (when there is none), Remove auto
+ * layout (when there is), and - either way - More layout options ▸ Suggest auto
+ * layout, Remove all auto layout.
+ *
+ * The article lists these under a frame's right-click menu, and the same items
+ * make sense on a plain layer because that is where "Figma will create an auto
+ * layout frame around them" happens.
+ */
+function layoutMenuItems(hasLayout: boolean): MenuItem[] {
+  return [
+    hasLayout
+      ? { kind: "action", id: "removeAutoLayout", label: "Remove auto layout", shortcut: "⌥⇧A", icon: "layout-none" }
+      : { kind: "action", id: "addAutoLayout", label: "Add auto layout", shortcut: "⇧A", icon: "layout" },
+    {
+      kind: "sub",
+      label: "More layout options",
+      items: [
+        { kind: "action", id: "suggestAutoLayout", label: "Suggest auto layout", shortcut: "⌃⇧A" },
+        { kind: "action", id: "removeAllAutoLayout", label: "Remove all auto layout" },
+      ],
+    },
+  ];
+}
+
+export function layerMenu(isGroup: boolean, hasLayout = false): MenuItem[] {
   return [
     { kind: "action", id: "rename", label: "Rename", shortcut: "⌘R", icon: "text" },
     { kind: "sep" },
@@ -284,6 +313,7 @@ export function layerMenu(isGroup: boolean): MenuItem[] {
     { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" },
     { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" },
     { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" },
+    ...layoutMenuItems(hasLayout),
     { kind: "sep" },
     ...(isGroup
       ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" }]
@@ -324,6 +354,18 @@ export function runMenu(
     return;
   }
   switch (id) {
+    case "addAutoLayout":
+      addAutoLayout(engine, engine.snapshot());
+      break;
+    case "removeAutoLayout":
+      removeAutoLayout(engine, engine.snapshot());
+      break;
+    case "suggestAutoLayout":
+      suggestAutoLayout(engine, engine.snapshot());
+      break;
+    case "removeAllAutoLayout":
+      removeAllAutoLayout(engine, engine.snapshot());
+      break;
     case "selectMatching":
       selectMatching(engine, engine.snapshot());
       break;

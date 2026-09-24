@@ -35,7 +35,7 @@ import type {
   GridPattern,
   XNode,
 } from "../engine/types";
-import { collectColors, defaultEffect, defaultLayout, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
+import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
 import { evalField, hasExpression } from "./fieldExpr";
 import {
@@ -70,7 +70,6 @@ import {
   alignKey,
   widthIsMain,
   alignmentCells,
-  defaultGrid,
   effectiveSizing,
   hasFillChild,
   hugsCross,
@@ -79,7 +78,6 @@ import {
   isAutoGap,
   layoutKeyPatch,
   parsePaddingShorthand,
-  suggestLayout,
   wraps,
   type AlignCell,
 } from "../engine/layout";
@@ -92,6 +90,7 @@ import { exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
 import { armPopover } from "./popoverGuard";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
+import { addAutoLayout, removeAutoLayout, setFlow, suggestAutoLayout } from "./layoutActions";
 import {
   FORMAT_CAPS,
   FORMATS,
@@ -2433,22 +2432,18 @@ function Design({
           {!n.layout && (
             <button
               className="plus"
-              title="Suggest auto layout"
-              onClick={() => engine.dispatch({ type: "autoLayout", id: n.id, layout: suggestLayout(n) })}
+              title="Suggest auto layout (⌃⇧A)"
+              onClick={() => suggestAutoLayout(engine, snap, n.id)}
             >
               <Icon name="magic-noodle" size={14} />
             </button>
           )}
           <button
             className="plus"
-            title={n.layout ? "Remove auto layout" : "Add auto layout"}
-            onClick={() =>
-              engine.dispatch({
-                type: "autoLayout",
-                id: n.id,
-                layout: n.layout ? null : defaultLayout(),
-              })
-            }
+            // Add auto layout (⇧A) wraps a layer that cannot hold a layout in a
+            // frame; remove refuses on an instance, saying so.
+            title={n.layout ? "Remove auto layout (⌥⇧A)" : "Add auto layout (⇧A)"}
+            onClick={() => (n.layout ? removeAutoLayout(engine, snap, n.id) : addAutoLayout(engine, snap, n.id))}
           >
             <Icon name={n.layout ? "minus" : "plus"} size={14} />
           </button>
@@ -2458,22 +2453,23 @@ function Design({
         <div className="seg icons">
           <button
             className={!n.layout ? "on" : ""}
-            title="None"
-            onClick={() => engine.dispatch({ type: "autoLayout", id: n.id, layout: null })}
+            // "In the right sidebar, click Freeform or Remove auto layout."
+            title="Freeform (remove auto layout, ⌥⇧A)"
+            onClick={() => removeAutoLayout(engine, snap, n.id)}
           >
             <Icon name="layout-none" />
           </button>
           <button
             className={n.layout?.direction === "vertical" ? "on" : ""}
             title="Vertical"
-            onClick={() => setDir(engine, n, "vertical")}
+            onClick={() => setDir(engine, snap, n, "vertical")}
           >
             <Icon name="layout-v" />
           </button>
           <button
             className={n.layout?.direction === "horizontal" ? "on" : ""}
             title="Horizontal"
-            onClick={() => setDir(engine, n, "horizontal")}
+            onClick={() => setDir(engine, snap, n, "horizontal")}
           >
             <Icon name="layout-h" />
           </button>
@@ -2484,16 +2480,7 @@ function Design({
           <button
             className={n.layout?.direction === "grid" ? "on" : ""}
             title="Grid"
-            onClick={() =>
-              engine.dispatch({
-                type: "autoLayout",
-                id: n.id,
-                layout:
-                  n.layout?.direction === "grid"
-                    ? { ...n.layout, direction: "horizontal", wrap: false }
-                    : { ...defaultGrid(), padding: n.layout?.padding ?? defaultGrid().padding },
-              })
-            }
+            onClick={() => setFlow(engine, snap, n.id, "grid")}
           >
             <Icon name="layout-grid" />
           </button>
@@ -6090,12 +6077,8 @@ function fmt(v: number) {
   return String(Math.round(v * 100) / 100);
 }
 
-function setDir(engine: Engine, n: XNode, direction: "horizontal" | "vertical") {
-  engine.dispatch({
-    type: "autoLayout",
-    id: n.id,
-    layout: { ...(n.layout ?? defaultLayout()), direction },
-  });
+function setDir(engine: Engine, snap: Snapshot, n: XNode, direction: "horizontal" | "vertical") {
+  setFlow(engine, snap, n.id, direction);
 }
 
 /** Human labels + Figma's shortcuts for the align row. */

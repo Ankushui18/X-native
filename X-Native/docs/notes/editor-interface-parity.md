@@ -45,7 +45,7 @@ we match.
 | Components | masters, instances, variants, properties, slots | masters and instances | (the app has both plus overrides) | **partial** |
 | Variables | collections, modes, remote | a `tokens` tab and a variable list | read | **partial** |
 | Text | styles, lists, OpenType, variable fonts, CJK, RTL, links, emoji | wrapping, alignment, decoration, auto-height, letter spacing | read | **partial** |
-| Auto layout | horizontal, vertical, grid, wrap, per-child settings | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas, the grid flow with tracks, spans, auto-positioning and per-cell alignment | read | **partial — adding auto layout and multi-dimensional nesting are the articles left; see the round sections** |
+| Auto layout | horizontal, vertical, grid, wrap, per-child settings, add/remove/suggest | a `layout` model, padding (V/H or per-side, CSS shorthand), gap (number or Auto with Between/Around/Evenly), the alignment box with its keys, hug/fill/fixed, ignore, suggest, edge double-clicks and padding handles on the canvas, the grid flow with tracks, spans, auto-positioning and per-cell alignment, and the three routes in and four routes out | read | **partial — multi-dimensional nesting is the article left; see the round sections** |
 | Prototypes | triggers, actions, animations, easing, overlays, flows | flows, overlays, transitions, present mode | read | **partial** |
 | Comments | threads, replies, resolve, mentions | threads, replies, resolve | read | **partial** |
 | Multiplayer | cursors, cursor chat, spotlight, branching, history | none of it; a local file | - | **n/a** - no server |
@@ -100,10 +100,10 @@ and the colour models are the remaining items.
 sub-options listed under *Open* are not.
 
 **Use auto layout** — six articles. The main guide (360040451373) is audited and
-closed in "Auto layout, held up against «Guide to auto layout»" above; the four
-sub-articles (horizontal/vertical flows, grid flow, adding auto layout,
-multi-dimensional nesting) and the text-resizing article it links to are still
-to come.
+closed in "Auto layout, held up against «Guide to auto layout»" above, and three
+of the four sub-articles are done in their own rounds: the horizontal/vertical
+flows, the grid flow, and turning auto layout on and off. Multi-dimensional
+nesting is left, along with the text-resizing article the guide links to.
 
 **Figma Draw, Build design systems, Create prototypes, Import and export, Work
 together in files** — chunks 2 and 3 of the category are not fetched yet, so
@@ -1162,6 +1162,53 @@ automatic positioning on, and dragging a child's edge to snap a span. Arithmetic
 in the count and track fields already works, since they are the same `Field` as
 everywhere else.
 
+## Turning auto layout on, and off
+
+"Toggle on auto layout in designs" (5731482952599) is the article that decides
+what `⇧A` does to a *layer* rather than to a frame, and it names five ways in and
+four ways out. All five are in `ui/layoutActions.ts` now, so the keyboard, the
+Layout section's buttons, both context menus and the Actions menu give the same
+answer. Every row below was driven through the real app in `/tmp/probe/add_layout.mjs`.
+
+### The ways in
+
+| Article | Ours, measured |
+| --- | --- |
+| "Select one or more layers and ... Use the keyboard shortcut `⇧ Shift A`" | On a plain rectangle: before, the tree was `["Rectangle 1"]`; after, `["Frame •", "Rectangle 1"]` — one frame around it, marked in the layers list, selected, and laid out. |
+| "Auto layout is only supported on frames. If you have one or more layers selected, Figma will create an auto layout frame around them." | The new frame is placed from the selection's own corner, less the layout's padding, so nothing moves: the rectangle at (312, 200) 100×60 came out inside a frame at (304, 192) 116×76, its own record reading X 8 / Y 8 — and the flow then lays the objects out, which is why the frame hugs at 116×76 while the rectangle keeps its size. |
+| "Groups or other selections of layers and/or objects" | Two rectangles selected on the canvas wrapped in **one** frame — 104×56 with both inside — and a group is converted to a frame rather than wrapped in another container. |
+| "If you have a frame or a main component selected, you can also choose from one of the auto layout flows in the Layout section" | Selecting the frame itself and pressing ⇧A creates nothing: the tree stayed `["Frame 1", "Rectangle 1"]` and the frame reads `Horizontal`. The section's three buttons switch the flow in place — Vertical → `["Vertical", "Left", "Space between"]`, Horizontal, Grid → `["Grid", "Space between"]` — so a frame, a plain layer or a group all reach the same place. |
+| "In the right panel, click ＋ next to Auto layout" / "Right-click on a frame or object and select Add auto layout" | The ＋ beside the section and the context menu's Add auto layout call the same action. |
+| "Suggest auto layout ... Figma will try to determine which objects in a frame or component should be placed in an auto layout frame" — `⌃⇧A`, More layout options ▸ Suggest auto layout, or the Actions menu | `⌃⇧A` on a frame with two stacked objects picked a **Vertical** stack with the objects' own order, and the wand beside the ＋ does the same. (Ours suggests one layout for the selection rather than nesting several frames inside it; that is in `## Open`.) |
+
+### The ways out
+
+| Article | Ours, measured |
+| --- | --- |
+| "In the right sidebar, click Freeform or Remove auto layout" | The panel's leftmost flow button is labelled Freeform and clears the layout; so does the `−`. With a *child* selected, both clear the parent's layout — the one that child is being positioned by. |
+| "Right-click on the frame and select Remove auto layout" / "`⌥ Option ⇧ Shift A`" | `⌥⇧A` and the context menu's Remove auto layout both took the frame back to Freeform, and the blue dot went out with it. On a layer inside an auto layout frame the menu offers Remove too, because that is the layout it would take away. |
+| "More layout options ▸ Remove all auto layout" | On a frame holding a nested laid-out frame, both rows read `•` to begin with; afterwards the tree still lists both frames with no dot on either. |
+| "Auto layout cannot be removed from component instances. You will need to detach the instance from the component to make these edits, or update the main component." | `⌥⇧A` on an instance (`Frame 1 copy`, whose main component is laid out) refuses and says why — "Auto layout can't be removed from an instance · detach it, or edit the main component" — and the instance keeps the layout. Removing it on the *main* component carries through to instances, which is the article's "or update the main component". |
+| "More layout options ▸ Suggest auto layout" from the same menu | Both context menus carry the submenu: canvas and layers panel, `Suggest auto layout ⌃⇧A` and `Remove all auto layout`. |
+| "Select Suggest auto layout from the Actions menu" | The Actions menu lists Add auto layout `⇧A`, Remove auto layout `⌥⇧A`, Suggest auto layout `⌃⇧A` and Remove all auto layout. `⌘/` opens that menu — the chord the shortcut sheet had been advertising without anything listening for it. |
+
+### The blue dot
+
+"After you use this action, any nested auto layout frames that were created are
+indicated with a blue dot in the layers section in the left panel." The dot is
+there, and it is driven by the layer's own layout rather than by how it got one:
+a frame that was laid out by hand has it too, which is what Figma shows as well
+and how a *suggested* frame is spotted among the rest.
+
+### Where this leaves the article
+
+In `## Open`: Suggest auto layout suggests a single layout for the selection
+rather than nesting auto layout frames inside one (ours reads the objects'
+alignment, gap and padding and hands back one set of values); the article's
+mention that you can add auto layout to a *component set* is not exercised,
+since component sets are not built; and the layers panel marks auto layout with
+a dot but does not yet show Figma's blue outline on hover.
+
 ## Auto layout, held up against "Guide to auto layout"
 
 The guide (article 360040451373, all three chunks) is the table stakes: what an
@@ -1567,7 +1614,15 @@ fields (exposure, contrast, saturation).
   because the node model has no flip.
 - Auto layout: the padding handles only appear on a selected frame rather than
   on hover, `tab` does not move between the padding fields, and multi-dimensional
-  nesting is a separate article not yet entered.
+  nesting is the last article of the "Use auto layout" set not yet entered.
+- Adding auto layout to a *component set* is not exercised, since component sets
+  are not built here; a main component takes a layout and passes it on.
+- Suggest auto layout works out one layout for the selection rather than
+  nesting auto layout frames inside a parent the way Figma's does — the article
+  says "adds as many auto layout frames as needed to make the full design
+  responsive". Ours reads the objects' arrangement (axis, gap, padding) and
+  returns one set of values, which is the piece of it that the earlier round
+  measured.
 - The grid flow, from its article: the canvas track pills and the drag on a
   track's edge that sets it Fixed (`⌘`/`Ctrl` multi-select and `⇧` range select
   of tracks go with them), moving a track by its grabber, and what the ✕ beside

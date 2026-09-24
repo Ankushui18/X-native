@@ -28,7 +28,7 @@ import {
   projectPointOnSegment,
   computeFigmaNoodle,
 } from "../geometry.ts";
-import { MemoryEngine, defaultEffect, find, insideInstance } from "../memory.ts";
+import { MemoryEngine, defaultEffect, find, findParent, insideInstance, worldPos } from "../memory.ts";
 import {
   SPACING_MODES,
   alignKey,
@@ -2947,5 +2947,102 @@ console.log("auto layout, through the engine:");
   t("a new max line count clears the max height", textNode().maxH === 0);
 }
 
+console.log("the three ways in to auto layout, from \"Toggle on auto layout in designs\":");
+{
+  const e = new MemoryEngine(false);
+  await e.ready;
+  const page = () => e.snapshot().pages[e.snapshot().page];
+  const rootId = () => page().root.id;
+  const add = (kind, x, y, w, h) => {
+    e.dispatch({ type: "add", kind, x, y, w, h, parent: rootId() });
+    return e.snapshot().selection[0];
+  };
+  const node = (id) => find(page().root, id);
+  const kids = () => page().root.children;
+
+  // "Auto layout is only supported on frames. If you have one or more layers
+  // selected, Figma will create an auto layout frame around them."
+  const rect = add("rect", 100, 60, 80, 40);
+  e.dispatch({ type: "select", ids: [rect] });
+  e.dispatch({ type: "wrapAutoLayout", ids: [rect], layout: defaultLayout() });
+  const wrapped = node(e.snapshot().selection[0]);
+  t("a layer that cannot hold a layout gets a frame around it", wrapped.kind === "frame" && wrapped.layout?.direction === "horizontal");
+  t("the new frame is what is selected", page().root.children.some((c) => c.id === wrapped.id));
+  t("the layer moved into it", wrapped.children.length === 1 && wrapped.children[0].id === rect);
+  // The default layout has 8 of padding on every side, and the frame is placed
+  // so the layer does not move when it appears.
+  t("the frame leaves the padding around the layer", wrapped.x === 92 && wrapped.y === 52 && wrapped.w === 96 && wrapped.h === 56);
+  const wp = worldPos(page().root, rect);
+  t("and the layer itself has not moved", Math.round(wp.x) === 100 && Math.round(wp.y) === 60);
+  t("a frame keeps its own layout instead of being wrapped",
+    (() => {
+      const f = add("frame", 400, 60, 120, 60);
+      e.dispatch({ type: "select", ids: [f] });
+      e.dispatch({ type: "autoLayout", id: f, layout: defaultLayout() });
+      return node(f).layout?.direction === "horizontal" && !node(f).children.some((c) => c.kind === "frame");
+    })());
+
+  // Two layers wrap together, and the frame covers both.
+  const a = add("rect", 600, 100, 40, 40);
+  const b = add("rect", 700, 160, 40, 40);
+  e.dispatch({ type: "select", ids: [a, b] });
+  e.dispatch({ type: "wrapAutoLayout", ids: [a, b], layout: defaultLayout() });
+  const pair = node(e.snapshot().selection[0]);
+  t("several layers wrap in one frame", pair.children.length === 2 && pair.children.every((c) => c.id === a || c.id === b));
+  // The new frame starts at the selection's top-left corner, less its padding -
+  // so the first object does not move - and then the flow lays the objects out,
+  // which is what Figma does with them too: a horizontal frame puts them in a
+  // row, hugging both dimensions once it has.
+  t("the frame starts at the selection's corner", pair.x === 592 && pair.y === 92);
+  t("the objects are laid out by the new flow", pair.children[0].x === 8 && pair.children[1].x === 56 && pair.children[1].y === 8);
+  t("and the frame hugs them", pair.w === 104 && pair.h === 56);
+  t("the first object has not moved", Math.round(worldPos(page().root, a).x) === 600 && Math.round(worldPos(page().root, a).y) === 100);
+
+  // "Groups or other selections of layers and/or objects" - a group becomes a
+  // frame rather than being wrapped in another container.
+  const g1 = add("rect", 900, 100, 40, 40);
+  const g2 = add("rect", 900, 160, 40, 40);
+  e.dispatch({ type: "select", ids: [g1, g2] });
+  e.dispatch({ type: "group" });
+  const groupId = e.snapshot().selection[0];
+  t("the group starts as a group", node(groupId).kind === "group");
+  e.dispatch({ type: "wrapAutoLayout", ids: [groupId], layout: defaultLayout() });
+  t("a group is converted to a frame, not wrapped in one", node(groupId).kind === "frame" && !!node(groupId).layout);
+  t("and it keeps the layers it held", node(groupId).children.length === 2);
+
+  // "Remove all auto layout": the frame and every nested frame.
+  const outer = add("frame", 1200, 80, 200, 120);
+  const inner = add("frame", 0, 0, 100, 60);
+  e.dispatch({ type: "reparent", ids: [inner], parent: outer, x: 10, y: 10 });
+  e.dispatch({ type: "autoLayout", id: outer, layout: defaultLayout() });
+  e.dispatch({ type: "autoLayout", id: inner, layout: defaultLayout() });
+  const leaf = add("rect", 0, 0, 20, 20);
+  e.dispatch({ type: "reparent", ids: [leaf], parent: inner, x: 0, y: 0 });
+  e.dispatch({ type: "autoLayout", id: leaf, layout: defaultLayout() });
+  t("the nested frames are laid out to begin with", !!node(outer).layout && !!node(inner).layout && !!node(leaf).layout);
+  e.dispatch({ type: "removeAllLayout", id: outer });
+  t("Remove all auto layout takes the frame's own layout", !node(outer).layout);
+  t("and the nested frame's", !node(inner).layout);
+  t("and the layer's inside that", !node(leaf).layout);
+
+  // "Auto layout cannot be removed from component instances."
+  const master = add("frame", 1500, 80, 100, 100);
+  e.dispatch({ type: "autoLayout", id: master, layout: defaultLayout() });
+  e.dispatch({ type: "select", ids: [master] });
+  e.dispatch({ type: "makeComponent" });
+  const masterId = e.snapshot().selection[0];
+  const before = !!node(masterId).layout;
+  e.dispatch({ type: "select", ids: [masterId] });
+  e.dispatch({ type: "duplicate" });
+  const instanceId = e.snapshot().selection[0];
+  t("a duplicate of a main component is an instance", insideInstance(page().root, instanceId));
+  e.dispatch({ type: "removeAllLayout", id: instanceId });
+  // "Auto layout cannot be removed from component instances." In the engine that
+  // is a refusal - the instance keeps the layout its main component gave it.
+  t("Remove all auto layout refuses on an instance", !!node(instanceId).layout);
+  t("and the main component is untouched", before && !!node(masterId).layout);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
+

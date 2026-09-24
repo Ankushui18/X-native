@@ -1,4 +1,5 @@
 import type {
+  AutoLayout,
   SharedStyle,
   Command,
   ComponentMaster,
@@ -204,6 +205,21 @@ function findInstanceRoot(root: XNode, id: string): XNode | null {
  * set of edits there - the geometry belongs to the component, so per-corner
  * radii in particular can only be set on the master.
  */
+/**
+ * Strip auto layout from a node and from everything nested inside it, which is
+ * what "Remove all auto layout" does on the frame's context menu.
+ *
+ * Instances are left alone: a nested instance's own layout belongs to its main
+ * component, and the article is explicit that instance auto layout is not
+ * removable from here.
+ */
+export function stripLayout(n: XNode): void {
+  if (n.kind === "instance") return;
+  // The model stores "no auto layout" as null, the same value the panel sends.
+  n.layout = null;
+  for (const c of n.children) stripLayout(c);
+}
+
 export function insideInstance(root: XNode, id: string): boolean {
   const node = find(root, id);
   if (!node) return false;
@@ -912,6 +928,59 @@ export class MemoryEngine implements Engine {
     return this.state.pages[this.state.page].root;
   }
 
+  /**
+   * Put an auto layout frame around what was selected.
+   *
+   * Figma's note: "Auto layout is only supported on frames. If you have one or
+   * more layers selected, Figma will create an auto layout frame around them."
+   * A group is not wrapped but converted - it is already a container, and
+   * pressing ⇧A on one has always turned it into a frame.
+   *
+   * The new frame is placed so the objects do not move: its origin is the
+   * selection's bounding box minus the padding the layout puts around them, so
+   * the first layout pass lands every object back where it was.
+   */
+  private wrapAutoLayout(ids: string[], layout: AutoLayout): void {
+    const root = this.root();
+    const nodes = ids
+      .map((id) => find(root, id))
+      .filter((n): n is XNode => !!n && !n.locked);
+    if (!nodes.length) return;
+    if (nodes.length === 1 && nodes[0].kind === "group") {
+      nodes[0].kind = "frame";
+      nodes[0].name = nodes[0].name === "Group" ? "Frame" : nodes[0].name;
+      nodes[0].layout = layout;
+      this.publishMaster(nodes[0]);
+      return;
+    }
+    // Only siblings can be wrapped: the frame is created in their parent, and
+    // the frame itself is the standard wrap.
+    this.state.selection = nodes.map((n) => n.id);
+    this.wrapSel("Frame", {
+      kind: "frame",
+      fill: "#00000000",
+      fillVisible: false,
+      overflow: "visible",
+      layout,
+    });
+    const frame = find(this.root(), this.state.selection[0]);
+    if (!frame || frame.kind !== "frame" || !frame.layout) return;
+    // The frame takes the selection's bounding box plus the padding the layout
+    // wants around it, so the objects do not move when it appears.
+    const [pl, pr, pt, pb] = Array.isArray(layout.padding) ? layout.padding : [0, 0, 0, 0];
+    if (pl || pr || pt || pb) {
+      frame.x -= pl;
+      frame.y -= pt;
+      frame.w += pl + pr;
+      frame.h += pt + pb;
+      for (const c of frame.children) {
+        c.x += pl;
+        c.y += pt;
+      }
+    }
+    this.publishMaster(frame);
+  }
+
   private relayout() {
     applyLayout(this.root(), this.gesture);
   }
@@ -1319,6 +1388,20 @@ export class MemoryEngine implements Engine {
         const n = find(this.root(), cmd.id);
         if (n) {
           n.layout = cmd.layout;
+          this.publishMaster(n);
+        }
+        break;
+      }
+      case "wrapAutoLayout": {
+        this.wrapAutoLayout(cmd.ids, cmd.layout);
+        break;
+      }
+      case "removeAllLayout": {
+        const n = find(this.root(), cmd.id);
+        // "Auto layout cannot be removed from component instances. You will
+        // need to detach the instance from the component to make these edits."
+        if (n && !insideInstance(this.root(), cmd.id)) {
+          stripLayout(n);
           this.publishMaster(n);
         }
         break;

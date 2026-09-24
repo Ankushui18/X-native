@@ -1,7 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableItem } from "../engine/types";
-import { collectColors, defaultLayout, find } from "../engine/memory";
-import { alignKey, suggestLayout } from "../engine/layout";
+import { collectColors, find } from "../engine/memory";
+import { alignKey } from "../engine/layout";
+import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
@@ -337,6 +338,11 @@ function LayerRow({
           }
           size={14}
         />
+        {/* "After you use this action, any nested auto layout frames that were
+            created are indicated with a blue dot in the layers section in the
+            left panel." The dot marks any auto layout frame, which is the same
+            thing Figma shows and is how a suggested frame is spotted. */}
+        {n.layout ? <span className="al-dot" title="Auto layout" /> : null}
         {renaming ? (
           <input
             className="name"
@@ -404,7 +410,7 @@ function LayerRow({
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={layerMenu(isGroupNode(n))}
+          items={layerMenu(isGroupNode(n), !!n.layout)}
           onRun={(id) => runMenu(engine, id, { onRename: () => setRenaming(true) })}
           onClose={() => setMenu(null)}
         />
@@ -947,10 +953,11 @@ export function Actions({
       run: () => window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } })),
     },
     { label: "Copy as PNG", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-copy-png")) },
-    { label: "Add auto layout", sc: "⇧⌥A", run: () => {
-      const id = engine.snapshot().selection[0];
-      if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
-    } },
+    { label: "Add auto layout", sc: "⇧A", run: () => addAutoLayout(engine, engine.snapshot()) },
+    { label: "Remove auto layout", sc: "⌥⇧A", run: () => removeAutoLayout(engine, engine.snapshot()) },
+    // "Select Suggest auto layout from the Actions menu."
+    { label: "Suggest auto layout", sc: "⌃⇧A", run: () => suggestAutoLayout(engine, engine.snapshot()) },
+    { label: "Remove all auto layout", sc: "", run: () => removeAllAutoLayout(engine, engine.snapshot()) },
     { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
     { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
     { label: "Zoom to 100%", sc: "⇧0", run: () => zoomAboutCentre(engine, 1) },
@@ -1056,6 +1063,14 @@ export function bindHotkeys(
       return;
     }
     if (meta && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      extra.onActions();
+      return;
+    }
+    // ⌘/ — the chord the shortcut sheet has always advertised for the Actions
+    // menu, and the one the article means by "select Suggest auto layout from
+    // the Actions menu". Forward slash is `Slash` on every layout.
+    if (meta && !e.shiftKey && !e.altKey && e.code === "Slash") {
       e.preventDefault();
       extra.onActions();
       return;
@@ -1196,17 +1211,11 @@ export function bindHotkeys(
     // app has always been ⇧⌘A, so the two do not have to collide.
     if (!e.metaKey && e.shiftKey && e.key.toLowerCase() === "a") {
       e.preventDefault();
-      const id = engine.snapshot().selection[0];
-      const root = engine.snapshot().pages[engine.snapshot().page].root;
-      const node = id ? find(root, id) : null;
-      if (!id || !node) return;
-      if (e.ctrlKey) {
-        engine.dispatch({ type: "autoLayout", id, layout: suggestLayout(node) });
-      } else if (e.altKey) {
-        if (node.layout) engine.dispatch({ type: "autoLayout", id, layout: null });
-      } else {
-        engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
-      }
+      const snap = engine.snapshot();
+      if (!snap.selection.length) return;
+      if (e.ctrlKey) suggestAutoLayout(engine, snap);
+      else if (e.altKey) removeAutoLayout(engine, snap);
+      else addAutoLayout(engine, snap);
       return;
     }
     // Figma's two selection helpers share the ⌘A chord with Select all: with ⌥ it

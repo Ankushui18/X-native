@@ -177,6 +177,17 @@ function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
   return out;
 }
 
+/** Whether the selected layer, or the frame it sits inside, carries an auto
+ *  layout - the question the context menu's Add/Remove entry turns on. */
+function hasLayout(snap: Snapshot): boolean {
+  const root = snap.pages[snap.page].root;
+  const id = snap.selection[0];
+  if (!id) return false;
+  const n = find(root, id);
+  if (!n) return false;
+  return !!n.layout || !!findParent(root, id)?.layout;
+}
+
 export function Canvas({
   engine,
   snap,
@@ -4342,6 +4353,10 @@ export function Canvas({
             !!snap.selection[0] &&
               !!worldPos(snap.pages[snap.page].root, snap.selection[0])?.node.imageSrc,
             layersAt(snap.pages[snap.page].root, menu.wx, menu.wy),
+            // Add auto layout / Remove auto layout are one entry or the other.
+            // A child of an auto layout frame has a layout to remove too: its
+            // parent's, which is what that entry takes away.
+            hasLayout(snap),
           )}
           onRun={(id) => runMenu(engine, id, { x: menu.wx, y: menu.wy })}
           onClose={() => setMenu(null)}

@@ -770,6 +770,13 @@ export type Command =
   | { type: "redo" }
   | { type: "patch"; id: string; patch: Partial<XNode> }
   | { type: "autoLayout"; id: string; layout: AutoLayout | null }
+  // "Auto layout is only supported on frames. If you have one or more layers
+  // selected, Figma will create an auto layout frame around them." Selecting a
+  // frame sets the layout on it; anything else - a plain layer, a group, a
+  // multi-selection - is wrapped in a new frame that gets the layout.
+  | { type: "wrapAutoLayout"; ids: string[]; layout: AutoLayout }
+  // "Remove all auto layout": the frame and everything nested inside it.
+  | { type: "removeAllLayout"; id: string }
   | { type: "nudge"; dx: number; dy: number }
   | { type: "begin" }
   | { type: "end" }

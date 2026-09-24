@@ -361,6 +361,17 @@ html[data-theme="dark"] .row.comp .name { color: #c4b5fd; }
   white-space: nowrap;
   font-size: 12px;
 }
+/* The blue dot Figma puts in the layers list on an auto layout frame, which is
+   also how the frames "Suggest auto layout" creates are spotted afterwards. */
+.row .al-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #0d99ff;
+}
+html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
+
 .row .mini {
   width: 20px;
   height: 20px;
