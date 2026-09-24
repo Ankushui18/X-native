@@ -118,13 +118,12 @@ audit6.V6 share       → "…#/file/demo" with `?f=` absent when nothing is sel
 ## Open list, in the order this audit would take it
 
 1. `copyText` honesty (#10) — one shared failure message, then every “Copied …” toast can be trusted.
-2. Share one code path between Dev Mode and the menu (#11) so the snippet matches the chosen language/units.
-3. Tooltip unification (#5): pick the `<Tooltip>` widget for anything with a chord, keep `title` for
+2. Tooltip unification (#5): pick the `<Tooltip>` widget for anything with a chord, keep `title` for
    one-word rows, and stop mixing them inside a single panel.
-4. Annotation depth (#13): author line, resolve/reopen, and “attach this measure to a note” for `⇧M`.
-5. Clipboard images: prove the happy path once in a real browser (headless can't); the fallback is
+3. Annotation depth (#13): author line, resolve/reopen, and “attach this measure to a note” for `⇧M`.
+4. Clipboard images: prove the happy path once in a real browser (headless can't); the fallback is
    already written and honest.
-6. Carried over from the previous round: Sketch-style Insert in the top bar, Figma's Assets tab and
+5. Carried over from the previous round: Sketch-style Insert in the top bar, Figma's Assets tab and
    “Additional labels”, panel-width `⋯` menu, split-handle behaviour at narrow widths, slice-tool
    export, comment-tool ellipse, presentation frame corner clipping.
 
@@ -134,3 +133,26 @@ Say what actually happened, in the words the user just used (“Copied CSS”, n
 name the keyboard on anything clickable that has a chord; one idea per empty state; when a
 failure is unavoidable, say what you did instead (“downloaded the PNG instead”); and never let a
 message promise something the clipboard, the file, or the reload will not keep.
+
+---
+
+## Follow-up round — Dev Mode against Sketch's handoff docs and Figma's properties-panel doc
+
+Sources read for this pass:
+[Sketch · Developer handoff](https://www.sketch.com/docs/developer-handoff/),
+[Sketch · Export](https://www.sketch.com/docs/developer-handoff/export/),
+[Sketch · Viewing documents](https://www.sketch.com/docs/sharing-and-collaborating/using-your-workspace/viewing-documents/),
+[Figma · Design, prototype, and explore layer properties in the right sidebar](https://help.figma.com/hc/en-us/articles/360039832014).
+
+What the two docs say, and what we did about it:
+
+| Doc behaviour | Ours before | Ours now |
+| --- | --- | --- |
+| Figma: right-click a layer → "Copy/paste as code (CSS, iOS, or Android), SVG, PNG, copy the link, or copy its properties" | three flat rows, one language (CSS), the rest of the languages only reachable in the panel | a **Copy/paste as ▸** submenu carrying every language the panel can render (CSS, Tailwind, SwiftUI, Compose, Flutter, SVG, JSON) plus PNG and the layer link; `⌥⇧⌘C` is labelled on the CSS row because it copies the *preferred* language |
+| Figma: the panel's Code section and its copy button are the same answer | the engine built its own px CSS, so the two disagreed (finding #11) | `ui/devPrefs.ts` holds language + units; `copyLayerCode()` renders through `renderDevCode`, the very function the panel paints. Verified: panel says "Copied SwiftUI", the submenu's "Copy as CSS" says "Copied CSS · Filter Sheet" for the same layer, and the snippet follows the choice |
+| Figma: with nothing selected the properties panel holds "styles and variables that are local to the file" | Dev Mode's empty state was three hints and nothing else | the empty inspect panel now ends in **Tokens in this file**: every colour and number variable plus the paint styles, grouped by collection, each row click-to-copy |
+| Sketch: "download colour tokens as either CSS or JSON" (Layer/Text styles JSON only), and "as you change export settings you see a preview of the code, which you can copy" | no token export at all; a developer read colours off the Assets tab one by one | **CSS** and **JSON** buttons + a `tokens.json` download. CSS is `:root { --brand-primary: #0d99ff; … }` grouped by collection; JSON is `{ "brand": { "primary": { "value": "#0d99ff", "type": "color" } } }`. A note says numbers carry no unit, so `8` is not silently read as `8px` |
+| Sketch: handoff is something you do in a browser without editing rights; Figma: view-only gets Comment + Properties | our `?f=` link landed the reader in edit mode | a handoff link now opens **already in Dev Mode**, on the linked layer |
+| Figma: a `⌄` menu next to the zoom % carries "Property labels" | no such toggle; labels are inline everywhere | **declined for now**: the labels are JSX in ~40 call sites across both panels, and half-hiding them reads as broken. If it is added it must be one CSS-driven class on `.app`, not per-section flags |
+
+Verification (headless pass, `audit8/audit9.mjs`): tokens block `rows: 5`, groups `Brand / Spacing / Radius`; token click copied `#0d99ff` with "Copied primary · #0d99ff"; CSS block began `:root {  /* Brand */  --brand-primary: #0d99ff;`; JSON parsed with groups `brand/spacing/radius`; `tokens.json` written to disk; language chosen in the panel was **still SwiftUI after a reload**; submenu listed all nine copy rows; the chord with no selection answered "Select one layer to copy its code"; `pageerror` count 0. `tsc -b` clean, 149/149 engine tests.

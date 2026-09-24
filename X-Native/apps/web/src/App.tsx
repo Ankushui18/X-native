@@ -15,7 +15,7 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { Icon } from "./ui/icons";
-import { RightPanel, copyPng } from "./ui/inspector";
+import { RightPanel, copyLayerCode, copyPng } from "./ui/inspector";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
@@ -247,6 +247,9 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         return false;
       }
       if (at !== s.page) engine.dispatch({ type: "setPage", index: at });
+      // Sketch's handoff is a view anyone can inspect without touching the file;
+      // the closest thing we have is opening such a link already in Dev Mode.
+      engine.dispatch({ type: "setRightTab", tab: "inspect" });
       engine.dispatch({ type: "select", ids: [id] });
       zoomTo(engine, "selection");
       return true;
@@ -272,6 +275,17 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         flash(s.selection.length === 1 ? "Link to that layer copied" : "Link copied · opens this file");
       }
     };
+    const onCopyCode = (e: Event) => {
+      const s = engine.snapshot();
+      const id = s.selection[0];
+      const node = id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
+      if (!node) {
+        flash("Select one layer to copy its code");
+        return;
+      }
+      const detail = (e as CustomEvent<{ format?: string | null }>).detail;
+      copyLayerCode(node, (detail?.format ?? undefined) as never);
+    };
     const onCopyPng = () => {
       const node = selected();
       if (!node) flash("Select a layer to copy it as a PNG");
@@ -279,9 +293,11 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
     window.addEventListener("x-native-copy-link", onCopyLink);
     window.addEventListener("x-native-copy-png", onCopyPng);
+    window.addEventListener("x-native-copy-code", onCopyCode);
     return () => {
       window.removeEventListener("x-native-copy-link", onCopyLink);
       window.removeEventListener("x-native-copy-png", onCopyPng);
+      window.removeEventListener("x-native-copy-code", onCopyCode);
     };
   }, [engine, fileId]);
 

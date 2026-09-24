@@ -3267,3 +3267,69 @@ html[data-theme="graphite"] .primary { background: var(--blue); color: #fff; }
   font-size: 12px;
   line-height: 1.5;
 }
+/* Tokens in the Dev Mode panel: the file's palette as one copyable block. */
+.dev-tokens {
+  margin-top: 12px;
+  text-align: left;
+}
+.dev-tokens-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+.dev-tokens-head b {
+  color: var(--text);
+  font-size: 11.5px;
+  /* "Tokens in this file" must not fold onto two lines in a 240px panel. */
+  white-space: nowrap;
+}
+.dev-tokens-note {
+  margin: 7px 0 0;
+  color: var(--dim);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.dev-tokens-head span { margin-right: auto; font-variant-numeric: tabular-nums; }
+.dev-tokens-head .mini {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--input);
+  color: var(--text);
+  font: 500 10px/1.5 var(--mono, ui-monospace, monospace);
+}
+.dev-tokens-head .mini:hover { border-color: var(--blue); color: var(--blue); }
+.dev-tokens-group { margin-top: 8px; }
+.dev-token {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.dev-token:hover { background: var(--hover); }
+.dev-token-sw {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+}
+.dev-token-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-token-val {
+  flex: none;
+  color: var(--muted);
+  font: 11px/1.4 var(--mono, ui-monospace, monospace);
+}

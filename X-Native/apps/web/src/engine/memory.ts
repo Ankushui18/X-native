@@ -1248,6 +1248,10 @@ export class MemoryEngine implements Engine {
         }
         break;
       case "copyCode": {
+        // Engine-level "copy the box as CSS". The Dev Mode UI no longer routes
+        // through here: it renders through inspector.renderDevCode so the panel,
+        // the Copy/paste as menu and ⌥⇧⌘C all honour the chosen language and units.
+        // This stays because it is the command the menu-command parity list names.
         const n = s.selection[0] ? find(this.root(), s.selection[0]) : null;
         if (!n || typeof navigator === "undefined") break;
         const css = [

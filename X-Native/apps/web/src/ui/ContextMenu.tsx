@@ -4,6 +4,7 @@ import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
 import { Icon } from "./icons";
+import { DEV_LANGS, type DevFormat } from "./devPrefs";
 
 export type MenuItem =
   | { kind: "action"; id: string; label: string; shortcut?: string; icon?: string; enabled?: boolean }
@@ -138,9 +139,24 @@ export function canvasMenu(sel: number, isGroup: boolean, hasImage: boolean): Me
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
     { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
-    { kind: "action", id: "copyCode", label: "Copy as code", shortcut: "⌥⇧⌘C", icon: "code" },
-    { kind: "action", id: "copyPng", label: "Copy as PNG", icon: "image" },
-    { kind: "action", id: "copyLink", label: "Copy link to selection", icon: "link" },
+    {
+      // Figma groups these under "Copy/paste as", and the language list is the
+      // inspect panel's own, so the menu and the panel answer in one voice.
+      kind: "sub",
+      label: "Copy/paste as",
+      icon: "code",
+      items: [
+        ...DEV_LANGS.map((l) => ({
+          kind: "action" as const,
+          id: `copyCode:${l.id}`,
+          label: `Copy as ${l.label}`,
+          shortcut: l.id === "css" ? "⌥⇧⌘C" : undefined,
+          icon: "code",
+        })),
+        { kind: "action" as const, id: "copyPng", label: "Copy as PNG", icon: "image" },
+        { kind: "action" as const, id: "copyLink", label: "Copy link to selection", icon: "link" },
+      ],
+    },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
   ];
@@ -232,6 +248,11 @@ export function runMenu(
   id: string,
   extra?: { x?: number; y?: number; onRename?: () => void },
 ) {
+  if (id.startsWith("copyCode:")) {
+    const format = id.slice("copyCode:".length) as DevFormat;
+    window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format } }));
+    return;
+  }
   switch (id) {
     case "cut":
       engine.dispatch({ type: "cut" });
@@ -246,10 +267,10 @@ export function runMenu(
       engine.dispatch({ type: "paste", x: extra?.x, y: extra?.y });
       break;
     case "copyCode":
-      engine.dispatch({ type: "copyCode" });
       // The result lands on the clipboard with no visible change on canvas, so
-      // without a toast the command looks like it did nothing.
-      toast("Copied as CSS");
+      // without a toast the command looks like it did nothing. The panel owns the
+      // renderer, hence the event: same language and units as the snippet shown.
+      window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } }));
       break;
     case "copyPng":
       // The rasteriser lives beside the export code in the right panel, so the

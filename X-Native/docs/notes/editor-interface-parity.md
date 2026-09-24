@@ -93,6 +93,29 @@ fs.writeFileSync("/tmp/chromium.tar",z.brotliDecompressSync(fs.readFileSync(b+"/
 does not). Fonts are cosmetic: without them, `⌥ ⇧ ⌘` glyphs render as boxes in
 screenshots, which is a sandbox artefact and not a bug in the UI.
 
+## Dev Mode handoff round (Sketch handoff docs + Figma's properties panel)
+
+Read against [Sketch · Developer handoff](https://www.sketch.com/docs/developer-handoff/),
+[Sketch · Export](https://www.sketch.com/docs/developer-handoff/export/) and
+[Figma · right sidebar](https://help.figma.com/hc/en-us/articles/360039832014).
+Three behaviours were missing and are now in, plus one deliberate decline:
+
+- **One language everywhere.** `ui/devPrefs.ts` owns Dev Mode's language + units, so
+  the panel's snippet, the right-click **Copy/paste as ▸** submenu and ⌥⇧⌘C answer in the
+  same voice. Previously the menu built its own px CSS inside the engine while the panel
+  was set to, say, SwiftUI + rem — two answers for one layer. The preference is stored,
+  so it outlives a reload (Figma's Inspect settings behave the same).
+- **Tokens in the empty inspect panel.** With nothing selected, the properties panel is
+  where Figma puts the file's styles and variables and where Sketch exports tokens as CSS
+  or JSON; we now list colour/number variables + paint styles grouped by collection, each
+  row click-to-copy, with **CSS** / **JSON** / `tokens.json` download. Numbers are labelled
+  as unitless rather than quietly gaining `px`.
+- **A handoff link opens in Dev Mode**, on the layer it names — the closest we can get to
+  Sketch's "preview with inspecting enabled" while a file lives only in this browser.
+- **Declined:** Figma's "Property labels" toggle from the ⌄ menu by the zoom %. Labels in
+  both panels are inline JSX in ~40 places; hiding a subset would read as broken rather
+  than as a preference. Revisit only with one CSS-driven class on `.app`.
+
 ## Open
 
 - Sketch's top-bar Insert menu and Figma's Assets panel tab, "Additional

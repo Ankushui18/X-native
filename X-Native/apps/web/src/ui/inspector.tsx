@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import type {
   AutoLayout,
@@ -47,6 +54,15 @@ function isFractional(n: XNode) {
 import { FillPicker, type FillValue } from "./FillPicker";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
+import {
+  DEV_LANGS,
+  devLangLabel,
+  getDevPrefs,
+  setDevPrefs,
+  subscribeDevPrefs,
+  type DevFormat,
+  type DevUnit,
+} from "./devPrefs";
 
 export function RightPanel({
   engine,
@@ -845,11 +861,6 @@ function Prototype({
   );
 }
 
-type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma";
-
-/** Figma's Code-section setting: CSS may be read in px or rem. */
-type DevUnit = "px" | "rem";
-
 /**
  * CSS for the layer. `unit` is Figma's Dev Mode setting — the numbers are
  * the same, only the unit they are written in changes.
@@ -1163,8 +1174,13 @@ function BoxModelDiagram({ n }: { n: XNode }) {
  */
 function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapshot }) {
   const [mode, setMode] = useState<"code" | "list">("code");
-  const [format, setFormat] = useState<DevFormat>("css");
-  const [unit, setUnit] = useState<DevUnit>("px");
+  // Language and units are app-wide Dev Mode preferences (see devPrefs.ts) rather
+  // than panel state: that is what lets the right-click menu and the ⌥⇧C chord
+  // copy exactly what this panel shows, and it is why the choice outlives a
+  // reload, as Figma's Inspect settings do.
+  const { format, unit } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
+  const setFormat = (f: DevFormat) => setDevPrefs({ format: f });
+  const setUnit = (u: DevUnit) => setDevPrefs({ unit: u });
 
   if (!n) {
     return (
@@ -1181,6 +1197,7 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
             <b>⇧D</b> leaves Dev Mode.
           </li>
         </ul>
+        <DevTokens snap={snap} />
       </div>
     );
   }
@@ -1228,7 +1245,7 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
                 aria-label="Copy code"
                 onClick={() => {
                   copyText(code);
-                  toast(`Copied ${DEV_LANGS.find((l) => l.id === format)?.label ?? "code"}`);
+                  toast(`Copied ${devLangLabel(format)}`);
                 }}
               >
                 <Icon name="copy" size={12} />
@@ -1255,15 +1272,115 @@ function devLen(v: number, unit: DevUnit): string {
   return `${r}px`;
 }
 
-const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
-  { id: "css", label: "CSS", lang: "css" },
-  { id: "tailwind", label: "Tailwind", lang: "html" },
-  { id: "swiftui", label: "SwiftUI", lang: "swift" },
-  { id: "compose", label: "Compose", lang: "kotlin" },
-  { id: "flutter", label: "Flutter", lang: "dart" },
-  { id: "svg", label: "SVG", lang: "xml" },
-  { id: "figma", label: "JSON", lang: "json" },
-];
+/* --------------------------------------------------------------------- tokens */
+
+/** Turn a token name into a CSS custom-property name. */
+function kebab(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+type TokenRow = { group: string; name: string; value: string; color?: string };
+
+/**
+ * The file's colour and number tokens, offered as CSS custom properties or as a
+ * JSON token file. Figma puts styles and variables in the properties panel when
+ * nothing is selected; Sketch's handoff exports the same values as CSS or JSON.
+ * A developer who has just inspected one layer usually wants the whole palette,
+ * and until now had to read it off the Assets tab one row at a time.
+ */
+function DevTokens({ snap }: { snap: Snapshot }) {
+  const rows: TokenRow[] = [];
+  for (const v of snap.variables ?? []) {
+    const value = typeof v.value === "string" ? v.value : String(v.value);
+    rows.push({
+      group: v.collection,
+      name: v.name,
+      value,
+      color: v.type === "color" ? value : undefined,
+    });
+  }
+  for (const s of snap.styles) {
+    if (s.kind === "paint") rows.push({ group: "Styles", name: s.name, value: s.color, color: s.color });
+  }
+  if (!rows.length) return null;
+
+  const byGroup = new Map<string, TokenRow[]>();
+  for (const r of rows) {
+    const list = byGroup.get(r.group) ?? [];
+    list.push(r);
+    byGroup.set(r.group, list);
+  }
+  const css = `:root {\n${[...byGroup.entries()]
+    .map(([g, list]) => `  /* ${g} */\n${list.map((r) => `  --${kebab(`${g}-${r.name}`)}: ${r.value};`).join("\n")}`)
+    .join("\n")}\n}`;
+  const json = JSON.stringify(
+    Object.fromEntries(
+      [...byGroup.entries()].map(([g, list]) => [
+        kebab(g) || "tokens",
+        Object.fromEntries(list.map((r) => [kebab(r.name), { value: r.value, type: r.color ? "color" : "number" }])),
+      ]),
+    ),
+    null,
+    2,
+  );
+
+  const copy = (text: string, what: string) => {
+    copyText(text);
+    toast(`Copied ${what} \u00b7 ${rows.length} tokens`);
+  };
+
+  return (
+    <div className="dev-tokens">
+      <div className="dev-tokens-head">
+        <b>Tokens in this file</b>
+        <span>{rows.length}</span>
+        <button className="mini" title="Copy as CSS custom properties" onClick={() => copy(css, "CSS variables")}>
+          CSS
+        </button>
+        <button className="mini" title="Copy as a JSON token file" onClick={() => copy(json, "JSON")}>
+          JSON
+        </button>
+        <button
+          className="mini"
+          title="Download tokens.json"
+          onClick={() => {
+            downloadBlob(new Blob([json], { type: "application/json" }), "tokens.json");
+            toast("Downloaded tokens.json");
+          }}
+        >
+          <Icon name="export" size={12} />
+        </button>
+      </div>
+      <p className="dev-tokens-note">
+        Colours are hex as stored; numbers carry no unit, so spacing and radius land as raw
+        values for your preprocessor to interpret.
+      </p>
+      {[...byGroup.entries()].map(([g, list]) => (
+        <div className="dev-tokens-group" key={g}>
+          <p className="menu-label">{g}</p>
+          {list.map((r) => (
+            <button
+              className="dev-token"
+              key={`${g}/${r.name}`}
+              title="Click to copy this value"
+              onClick={() => {
+                copyText(r.value);
+                toast(`Copied ${r.name} \u00b7 ${r.value}`);
+              }}
+            >
+              {r.color ? <span className="dev-token-sw" style={{ background: r.color }} aria-hidden /> : null}
+              <span className="dev-token-name">{r.name}</span>
+              <span className="dev-token-val">{r.value}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
   switch (format) {
@@ -1958,7 +2075,7 @@ function Design({
           items={[
             { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
             { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
-            { kind: "action", id: "copyCode", label: "Copy as CSS", icon: "code" },
+            { kind: "action", id: "copyCode", label: `Copy as ${devLangLabel(getDevPrefs().format)}`, icon: "code" },
             { kind: "sep" },
             { kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" },
             { kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye" },
@@ -4272,6 +4389,17 @@ function runExport(n: XNode, p: ExportPreset) {
   };
   image.onerror = () => toast(`Could not render ${n.name} for export`);
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** Copy the layer's snippet in the given language — the very renderer the panel
+ *  uses, so a copied answer and a shown answer cannot disagree. Omit `format`
+ *  to take the developer's current preference. */
+export function copyLayerCode(n: XNode, format?: DevFormat): void {
+  const prefs = getDevPrefs();
+  const fmt = format ?? prefs.format;
+  const code = renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
+  copyText(code);
+  toast(`Copied ${devLangLabel(fmt)} \u00b7 ${n.name}`);
 }
 
 /** Put a PNG of the layer on the clipboard. It reuses the export renderer, so

@@ -905,7 +905,12 @@ export function Actions({
     { label: "Use as mask", sc: "⌘⌥M", run: () => runMenu(engine, "useAsMask") },
     { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },
     { label: "Send to back", sc: "⇧⌘[", run: () => engine.dispatch({ type: "arrange", dir: "back" }) },
-    { label: "Copy as code", sc: "⌥⇧⌘C", run: () => engine.dispatch({ type: "copyCode" }) },
+    {
+      label: "Copy as code",
+      sc: "⌥⇧⌘C",
+      run: () => window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } })),
+    },
+    { label: "Copy as PNG", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-copy-png")) },
     { label: "Add auto layout", sc: "⇧⌥A", run: () => {
       const id = engine.snapshot().selection[0];
       if (id) engine.dispatch({ type: "autoLayout", id, layout: defaultLayout() });
@@ -993,8 +998,9 @@ export function bindHotkeys(
     // without hunting through a menu.
     if (meta && e.altKey && e.shiftKey && e.key.toLowerCase() === "c") {
       e.preventDefault();
-      engine.dispatch({ type: "copyCode" });
-      toast("Copied as CSS");
+      // Ask the panel's renderer rather than building a second answer here, so
+      // the chord follows the language and units in the Dev Mode menu.
+      window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } }));
       return;
     }
     if (meta && e.altKey && !e.shiftKey && e.key.toLowerCase() === "c") {
