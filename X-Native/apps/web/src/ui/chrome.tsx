@@ -24,7 +24,7 @@ import { roundToPixel } from "./round";
 
 import { clearDoc } from "../engine/persist";
 import { copyText } from "../engine/clipboard";
-import { isNone } from "./color";
+import { armEyedrop, isNone } from "./color";
 import { getEngineInfo } from "../engine/wasmBridge";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
@@ -207,6 +207,15 @@ function LayerRow({
   const holds = sel.includes(n.id) || n.children.some(function test(c: XNode): boolean {
     return sel.includes(c.id) || c.children.some(test);
   });
+  const isMaskedChild = (() => {
+    if (!siblings || !siblings.length) return false;
+    const idx = siblings.findIndex((s) => s.id === n.id);
+    if (idx <= 0) return false;
+    for (let i = 0; i < idx; i++) {
+      if (siblings[i].isMask) return true;
+    }
+    return false;
+  })();
   useEffect(() => {
     if (!collapseTick) return;
     // Figma keeps the selected layer visible when it folds everything, so a row
@@ -328,6 +337,15 @@ function LayerRow({
         ) : (
           <span style={{ width: 16 }} />
         )}
+        {isMaskedChild ? (
+          <span
+            className="mask-child-badge"
+            title="Masked by layer below"
+            style={{ fontSize: 11, color: "var(--muted)", marginRight: 2, userSelect: "none" }}
+          >
+            ↳
+          </span>
+        ) : null}
         <Icon
           name={
             n.isMask
@@ -1184,6 +1202,30 @@ export function bindHotkeys(
         return;
       }
     }
+    if (meta && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("x-native-find"));
+      return;
+    }
+    if ((!meta && e.shiftKey && e.key.toLowerCase() === "o") || (meta && e.key.toLowerCase() === "y")) {
+      e.preventDefault();
+      engine.dispatch({ type: "toggleOutlines" });
+      return;
+    }
+    if (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "i") {
+      e.preventDefault();
+      armEyedrop((c) => {
+        const id0 = engine.snapshot().selection[0];
+        if (id0) engine.dispatch({ type: "patch", id: id0, patch: { fill: c } });
+      });
+      return;
+    }
+    if (e.ctrlKey && e.altKey && e.shiftKey && e.key.toLowerCase() === "t") {
+      e.preventDefault();
+      engine.dispatch({ type: "tidyUp" });
+      toast("Tidied up selection");
+      return;
+    }
     if (meta && e.key.toLowerCase() === "d") {
       e.preventDefault();
       engine.dispatch({ type: "duplicate" });
@@ -1635,6 +1677,10 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [subTab, setSubTab] = useState<"vars" | "styles">("vars");
   const [col, setCol] = useState("All");
+  const [addingVar, setAddingVar] = useState(false);
+  const [varName, setVarName] = useState("token-1");
+  const [varType, setVarType] = useState<VariableItem["type"]>("color");
+  const [varVal, setVarVal] = useState("#0d99ff");
   const colors = Array.from(new Set(collectColors(snap.pages[snap.page].root)));
   const sel = snap.selection[0];
   const selNode = sel ? findNode(snap.pages[snap.page].root, sel)?.node : null;
@@ -1703,39 +1749,113 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             <button
               className="plus"
               title="Add Variable"
-              onClick={() => {
-                const name = window.prompt("Variable name", "token-1");
-                if (!name) return;
-                const typeStr = window
-                  .prompt("Type: color, number, string, or boolean", "color")
-                  ?.toLowerCase();
-                const type = (
-                  ["color", "number", "string", "boolean"].includes(typeStr || "")
-                    ? typeStr
-                    : "color"
-                ) as VariableItem["type"];
-                const valStr = window.prompt(
-                  `Value for ${type}`,
-                  type === "color" ? "#0d99ff" : type === "number" ? "16" : "text",
-                );
-                if (valStr === null) return;
-                const value =
-                  type === "number"
-                    ? Number(valStr) || 0
-                    : type === "boolean"
-                      ? valStr === "true"
-                      : valStr;
-                const collection = col === "All" ? "Brand" : col;
-                engine.dispatch({
-                  type: "addVariable",
-                  variable: { id: "var_" + Date.now(), name, type, value, collection },
-                });
-                toast(`Added variable ${name}`);
-              }}
+              onClick={() => setAddingVar((v) => !v)}
             >
-              <Icon name="plus" size={14} />
+              <Icon name={addingVar ? "x-mark" : "plus"} size={14} />
             </button>
           </div>
+
+          {addingVar && (
+            <div
+              style={{
+                margin: "4px 12px 8px",
+                padding: 8,
+                borderRadius: 6,
+                background: "var(--input)",
+                display: "grid",
+                gap: 6,
+                fontSize: 11,
+              }}
+            >
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  style={{
+                    flex: 1,
+                    padding: "4px 6px",
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg)",
+                    color: "var(--text)",
+                    fontSize: 11,
+                  }}
+                  placeholder="Variable name"
+                  value={varName}
+                  onChange={(e) => setVarName(e.target.value)}
+                />
+                <select
+                  style={{
+                    padding: "4px 6px",
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg)",
+                    color: "var(--text)",
+                    fontSize: 11,
+                  }}
+                  value={varType}
+                  onChange={(e) => {
+                    const t = e.target.value as VariableItem["type"];
+                    setVarType(t);
+                    if (t === "color") setVarVal("#0d99ff");
+                    else if (t === "number") setVarVal("16");
+                    else if (t === "boolean") setVarVal("true");
+                    else setVarVal("text");
+                  }}
+                >
+                  <option value="color">Color</option>
+                  <option value="number">Number</option>
+                  <option value="string">String</option>
+                  <option value="boolean">Boolean</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  style={{
+                    flex: 1,
+                    padding: "4px 6px",
+                    borderRadius: 4,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg)",
+                    color: "var(--text)",
+                    fontSize: 11,
+                  }}
+                  placeholder="Value"
+                  value={varVal}
+                  onChange={(e) => setVarVal(e.target.value)}
+                />
+                <button
+                  style={{
+                    padding: "4px 10px",
+                    borderRadius: 4,
+                    border: 0,
+                    background: "var(--blue)",
+                    color: "#ffffff",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                  onClick={() => {
+                    if (!varName.trim()) return;
+                    const value =
+                      varType === "number"
+                        ? Number(varVal) || 0
+                        : varType === "boolean"
+                          ? varVal === "true"
+                          : varVal;
+                    const collection = col === "All" ? "Brand" : col;
+                    engine.dispatch({
+                      type: "addVariable",
+                      variable: { id: "var_" + Date.now(), name: varName.trim(), type: varType, value, collection },
+                    });
+                    toast(`Added variable ${varName}`);
+                    setAddingVar(false);
+                    setVarName("token-" + (vars.length + 1));
+                  }}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
 
           <div
             className="insp-pad"
@@ -2468,5 +2588,189 @@ export function HelpBtn() {
         </div>
       )}
     </>
+  );
+}
+
+export function FindReplaceBar({
+  engine,
+  snap,
+  onClose,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const [replaceStr, setReplaceStr] = useState("");
+  const [matchIdx, setMatchIdx] = useState(0);
+  const root = snap.pages[snap.page].root;
+
+  const matches = useMemo(() => {
+    if (!q.trim()) return [];
+    const term = q.toLowerCase();
+    const list: { node: XNode; textMatch: boolean }[] = [];
+    const walk = (n: XNode) => {
+      const nameMatch = n.name.toLowerCase().includes(term);
+      const textMatch = n.kind === "text" && (n.text || "").toLowerCase().includes(term);
+      if (nameMatch || textMatch) {
+        list.push({ node: n, textMatch });
+      }
+      for (const ch of n.children) walk(ch);
+    };
+    walk(root);
+    return list;
+  }, [root, q]);
+
+  const selectMatch = (idx: number) => {
+    if (!matches.length) return;
+    const clamped = (idx + matches.length) % matches.length;
+    setMatchIdx(clamped);
+    const m = matches[clamped];
+    engine.dispatch({ type: "select", ids: [m.node.id] });
+  };
+
+  const handleNext = () => selectMatch(matchIdx + 1);
+  const handlePrev = () => selectMatch(matchIdx - 1);
+
+  const handleReplace = () => {
+    if (!matches.length || matchIdx >= matches.length) return;
+    const m = matches[matchIdx];
+    if (m.node.kind === "text" && m.textMatch) {
+      const reg = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const nextText = (m.node.text || "").replace(reg, replaceStr);
+      engine.dispatch({ type: "patch", id: m.node.id, patch: { text: nextText } });
+    } else {
+      const reg = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const nextName = m.node.name.replace(reg, replaceStr);
+      engine.dispatch({ type: "patch", id: m.node.id, patch: { name: nextName } });
+    }
+    toast("Replaced match");
+    handleNext();
+  };
+
+  const handleReplaceAll = () => {
+    if (!matches.length) return;
+    let count = 0;
+    const reg = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    for (const m of matches) {
+      if (m.node.kind === "text" && m.textMatch) {
+        const nextText = (m.node.text || "").replace(reg, replaceStr);
+        engine.dispatch({ type: "patch", id: m.node.id, patch: { text: nextText } });
+        count++;
+      } else {
+        const nextName = m.node.name.replace(reg, replaceStr);
+        engine.dispatch({ type: "patch", id: m.node.id, patch: { name: nextName } });
+        count++;
+      }
+    }
+    toast(`Replaced ${count} occurrences`);
+  };
+
+  return (
+    <div
+      className="find-replace-bar"
+      style={{
+        position: "fixed",
+        top: 56,
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: "var(--panel)",
+        border: "1px solid var(--border)",
+        boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+        borderRadius: 8,
+        padding: "8px 12px",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        zIndex: 1000,
+        fontSize: 12,
+      }}
+    >
+      <input
+        autoFocus
+        placeholder="Find in page…"
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setMatchIdx(0);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+          if (e.key === "Enter") {
+            if (e.shiftKey) handlePrev();
+            else handleNext();
+          }
+        }}
+        style={{
+          width: 140,
+          padding: "4px 8px",
+          borderRadius: 4,
+          border: "1px solid var(--border)",
+          background: "var(--input)",
+          color: "var(--text)",
+          fontSize: 12,
+        }}
+      />
+      <input
+        placeholder="Replace…"
+        value={replaceStr}
+        onChange={(e) => setReplaceStr(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onClose();
+          if (e.key === "Enter") handleReplace();
+        }}
+        style={{
+          width: 130,
+          padding: "4px 8px",
+          borderRadius: 4,
+          border: "1px solid var(--border)",
+          background: "var(--input)",
+          color: "var(--text)",
+          fontSize: 12,
+        }}
+      />
+      <span style={{ minWidth: 60, color: "var(--dim)", fontSize: 11, textAlign: "center" }}>
+        {q ? (matches.length ? `${matchIdx + 1} of ${matches.length}` : "0 matches") : ""}
+      </span>
+      <button className="icon-btn" title="Previous match (⇧Enter)" onClick={handlePrev} disabled={!matches.length}>
+        <Icon name="chevron-up" size={14} />
+      </button>
+      <button className="icon-btn" title="Next match (Enter)" onClick={handleNext} disabled={!matches.length}>
+        <Icon name="chevron" size={14} />
+      </button>
+      <button
+        style={{
+          padding: "3px 8px",
+          borderRadius: 4,
+          border: "1px solid var(--border)",
+          background: "var(--hover)",
+          color: "var(--text)",
+          fontSize: 11,
+          cursor: "pointer",
+        }}
+        onClick={handleReplace}
+        disabled={!matches.length}
+      >
+        Replace
+      </button>
+      <button
+        style={{
+          padding: "3px 8px",
+          borderRadius: 4,
+          border: "1px solid var(--border)",
+          background: "var(--hover)",
+          color: "var(--text)",
+          fontSize: 11,
+          cursor: "pointer",
+        }}
+        onClick={handleReplaceAll}
+        disabled={!matches.length}
+      >
+        All
+      </button>
+      <button className="icon-btn" title="Close (Esc)" onClick={onClose}>
+        <Icon name="x-mark" size={14} />
+      </button>
+    </div>
   );
 }

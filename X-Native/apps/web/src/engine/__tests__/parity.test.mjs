@@ -3239,6 +3239,61 @@ console.log("nesting flows, from \"Combine vertical, horizontal, and grid auto l
     N(tracker).layout.sizing === "hug" && Math.abs(N(tracker).h - hugged) < 0.01);
 }
 
+{
+  console.log("Figma Design parity extensions (outlines, tidy up, stroke caps, star/poly handles):");
+  const e = new MemoryEngine();
+  const root = () => e.snapshot().pages[e.snapshot().page].root;
+  const N = (id) => {
+    function walk(n) {
+      if (n.id === id) return n;
+      for (const ch of n.children) {
+        const found = walk(ch);
+        if (found) return found;
+      }
+      return null;
+    }
+    return walk(root());
+  };
+
+  // 1. Outline mode toggle
+  t("initial outlineMode is false", e.snapshot().outlineMode === false);
+  e.dispatch({ type: "toggleOutlines" });
+  t("toggleOutlines sets outlineMode true", e.snapshot().outlineMode === true);
+  e.dispatch({ type: "toggleOutlines" });
+  t("toggleOutlines sets outlineMode false again", e.snapshot().outlineMode === false);
+
+  // 2. Tidy up (⌃⌥⇧T) distributes items equally
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 0, w: 40, h: 40 });
+  const b1 = root().children[root().children.length - 1].id;
+  e.dispatch({ type: "add", kind: "rect", x: 70, y: 0, w: 40, h: 40 });
+  const b2 = root().children[root().children.length - 1].id;
+  e.dispatch({ type: "add", kind: "rect", x: 190, y: 0, w: 40, h: 40 });
+  const b3 = root().children[root().children.length - 1].id;
+
+  e.dispatch({ type: "select", ids: [b1, b2, b3] });
+  e.dispatch({ type: "tidyUp" });
+  // total span: 10 to 190+40 = 230. total width = 120. slack = 100. 2 gaps of 50.
+  // b1: 10, b2: 10 + 40 + 50 = 100, b3: 100 + 40 + 50 = 190.
+  t("tidyUp distributes items with equal gaps", N(b1).x === 10 && N(b2).x === 100 && N(b3).x === 190);
+
+  // 3. Arrow creation has end cap arrow and start cap none
+  e.dispatch({ type: "add", kind: "arrow", x: 0, y: 0, w: 100, h: 2 });
+  const arrowNode = root().children[root().children.length - 1];
+  t("arrow node default strokeCapEnd is arrow", arrowNode.strokeCapEnd === "arrow");
+  t("arrow node default strokeCapStart is none", arrowNode.strokeCapStart === "none");
+
+  // 4. Star and Polygon corner radius and count
+  e.dispatch({ type: "add", kind: "star", x: 0, y: 0, w: 80, h: 80 });
+  const starNode = root().children[root().children.length - 1];
+  e.dispatch({ type: "patch", id: starNode.id, patch: { cornerRadii: [12, 12, 12, 12], count: 7 } });
+  t("star node stores cornerRadii and count", N(starNode.id).cornerRadii[0] === 12 && N(starNode.id).count === 7);
+
+  e.dispatch({ type: "add", kind: "poly", x: 0, y: 0, w: 80, h: 80 });
+  const polyNode = root().children[root().children.length - 1];
+  e.dispatch({ type: "patch", id: polyNode.id, patch: { cornerRadii: [8, 8, 8, 8], count: 6 } });
+  t("polygon node stores cornerRadii and count", N(polyNode.id).cornerRadii[0] === 8 && N(polyNode.id).count === 6);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
 

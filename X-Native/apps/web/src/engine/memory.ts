@@ -94,6 +94,8 @@ export function node(
     strokeDash: 0,
     strokeGap: 0,
     strokeCap: kind === "arrow" ? "arrow" : "none",
+    strokeCapStart: "none",
+    strokeCapEnd: kind === "arrow" ? "arrow" : "none",
     strokeJoin: "miter",
     opacity: 1,
     visible: true,
@@ -687,6 +689,7 @@ interface Internal {
   showRulers: boolean;
   showMinimap: boolean;
   showComments: boolean;
+  outlineMode: boolean;
   pixelPreview: PixelPreview;
   viewLayoutGuides: boolean;
   propertyLabels: boolean;
@@ -814,6 +817,7 @@ export class MemoryEngine implements Engine {
       showRulers: doc?.showRulers ?? false,
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
+      outlineMode: false,
       pixelPreview: "off",
       viewLayoutGuides: true,
       propertyLabels: false,
@@ -1072,6 +1076,7 @@ export class MemoryEngine implements Engine {
       showRulers: this.state.showRulers,
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
+      outlineMode: this.state.outlineMode ?? false,
       pixelPreview: this.state.pixelPreview,
       viewLayoutGuides: this.state.viewLayoutGuides,
       propertyLabels: this.state.propertyLabels,
@@ -1153,6 +1158,44 @@ export class MemoryEngine implements Engine {
         s.showComments = !s.showComments;
         if (!s.showComments) s.openComment = "";
         break;
+      case "toggleOutlines":
+        s.outlineMode = !s.outlineMode;
+        break;
+      case "tidyUp": {
+        const items = s.selection
+          .map((id) => find(this.root(), id))
+          .filter((n): n is XNode => !!n && !n.locked);
+        if (items.length < 2) break;
+        const xs = items.map((i) => i.x);
+        const ys = items.map((i) => i.y);
+        const spanX = Math.max(...xs) - Math.min(...xs);
+        const spanY = Math.max(...ys) - Math.min(...ys);
+        const isHoriz = cmd.axis === "h" || (cmd.axis !== "v" && spanX >= spanY);
+        if (isHoriz) {
+          items.sort((a, b) => a.x - b.x);
+          const minX = items[0].x;
+          const maxX = items[items.length - 1].x + items[items.length - 1].w;
+          const totalW = items.reduce((sum, n) => sum + n.w, 0);
+          const gap = Math.max(0, (maxX - minX - totalW) / (items.length - 1));
+          let cur = minX;
+          for (const item of items) {
+            item.x = Math.round(cur);
+            cur += item.w + gap;
+          }
+        } else {
+          items.sort((a, b) => a.y - b.y);
+          const minY = items[0].y;
+          const maxY = items[items.length - 1].y + items[items.length - 1].h;
+          const totalH = items.reduce((sum, n) => sum + n.h, 0);
+          const gap = Math.max(0, (maxY - minY - totalH) / (items.length - 1));
+          let cur = minY;
+          for (const item of items) {
+            item.y = Math.round(cur);
+            cur += item.h + gap;
+          }
+        }
+        break;
+      }
       case "openComment":
         s.openComment = cmd.id;
         break;
@@ -1658,6 +1701,8 @@ export class MemoryEngine implements Engine {
           strokeDash: n.strokeDash,
           strokeGap: n.strokeGap,
           strokeCap: n.strokeCap,
+          strokeCapStart: n.strokeCapStart,
+          strokeCapEnd: n.strokeCapEnd,
           strokeJoin: n.strokeJoin,
           strokeAlign: n.strokeAlign,
           strokes: n.strokes ? clone(n.strokes) : undefined,
@@ -1699,6 +1744,8 @@ export class MemoryEngine implements Engine {
           if (p.strokeDash !== undefined) n.strokeDash = p.strokeDash;
           if (p.strokeGap !== undefined) n.strokeGap = p.strokeGap;
           if (p.strokeCap !== undefined) n.strokeCap = p.strokeCap;
+          if (p.strokeCapStart !== undefined) n.strokeCapStart = p.strokeCapStart;
+          if (p.strokeCapEnd !== undefined) n.strokeCapEnd = p.strokeCapEnd;
           if (p.strokeJoin !== undefined) n.strokeJoin = p.strokeJoin;
           if (p.strokeAlign !== undefined) n.strokeAlign = p.strokeAlign;
           if (p.strokes) n.strokes = clone(p.strokes);

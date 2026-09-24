@@ -254,7 +254,40 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): s
       strokeEl = strokePath(`stroke-width="${n.strokeWidth * 2}" mask="url(#${mask})" ${attrs}`);
     }
   }
-  const base = fillPath + strokeEl;
+  let arrowEl = "";
+  const tipCap =
+    n.strokeCap === "arrow" ||
+    n.strokeCap === "triangle" ||
+    n.strokeCap === "reverse-triangle" ||
+    n.strokeCap === "diamond";
+  if (n.kind === "arrow" || ((n.kind === "line" || n.kind === "vector") && !n.closed && tipCap)) {
+    const pts = n.path.length ? n.path : shapePoly(n);
+    if (pts.length >= 2) {
+      const a = pts[pts.length - 1];
+      const b = pts[pts.length - 2];
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len;
+      const uy = dy / len;
+      const ah = Math.max(6, n.strokeWidth * 3);
+      const strokeColor = svgColor(n.strokePaint);
+      if (n.strokeCap === "arrow" || n.kind === "arrow") {
+        const p1x = round(a.x - ux * ah + uy * ah * 0.72);
+        const p1y = round(a.y - uy * ah - ux * ah * 0.72);
+        const p2x = round(a.x - ux * ah - uy * ah * 0.72);
+        const p2y = round(a.y - uy * ah + ux * ah * 0.72);
+        arrowEl = `<path d="M ${p1x} ${p1y} L ${round(a.x)} ${round(a.y)} L ${p2x} ${p2y}" fill="none" stroke="${strokeColor}" stroke-width="${Math.max(0.5, n.strokeWidth)}" stroke-linecap="butt" stroke-linejoin="miter"/>`;
+      } else {
+        const p1x = round(a.x - ux * ah + uy * ah * 0.75);
+        const p1y = round(a.y - uy * ah - ux * ah * 0.75);
+        const p2x = round(a.x - ux * ah - uy * ah * 0.75);
+        const p2y = round(a.y - uy * ah + ux * ah * 0.75);
+        arrowEl = `<path d="M ${round(a.x)} ${round(a.y)} L ${p1x} ${p1y} L ${p2x} ${p2y} Z" fill="${strokeColor}"/>`;
+      }
+    }
+  }
+  const base = fillPath + strokeEl + arrowEl;
 
   // Extra fills stack on top of the base one, bottom to top, as they do on the
   // canvas; extra strokes stack on top of the base stroke.

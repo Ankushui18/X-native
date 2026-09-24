@@ -491,6 +491,8 @@ export interface XNode {
   strokeDash: number;
   strokeGap: number;
   strokeCap: StrokeCap;
+  strokeCapStart?: StrokeCap;
+  strokeCapEnd?: StrokeCap;
   strokeJoin: StrokeJoin;
   opacity: number;
   effects: Effect[];
@@ -714,6 +716,8 @@ export interface Snapshot {
   /** Comment pins are hidden unless the comment tool is active or the user
    *  has explicitly turned them on, as in Figma. */
   showComments: boolean;
+  /** Figma's View > Outlines (⇧O / ⌘Y): wireframe mode showing object outlines without fills. */
+  outlineMode?: boolean;
   /** Thread whose popover is open, if any. */
   openComment: string;
   /** Figma Variables / Tokens store */
@@ -810,6 +814,8 @@ export type Command =
   | { type: "renamePage"; name: string }
   | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
+  | { type: "tidyUp"; axis?: "auto" | "h" | "v" }
+  | { type: "toggleOutlines" }
   | { type: "boolean"; op: BooleanOp }
   /** Create a named style from the selection's current fill or stroke and
    *  bind the selection to it. */

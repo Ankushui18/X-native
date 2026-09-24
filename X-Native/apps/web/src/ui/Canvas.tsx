@@ -39,7 +39,7 @@ import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { hugSize, listGutter, listMarker, measureCached, textMetrics, wrapLines } from "./textLayout";
-import { canvasBlend, cssRgba, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
+import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
 import { importSketch } from "../engine/sketchImport";
@@ -116,6 +116,10 @@ type Drag =
         | "autoGap"
         | "protoConnect"
         | "starRatio"
+        | "starRadius"
+        | "starCount"
+        | "polyRadius"
+        | "polyCount"
         | "radius"
         | "arc"
         | "rotOrigin";
@@ -798,12 +802,39 @@ export function Canvas({
             n.cornerRadii[0] || 0,
           );
         } else if (n.kind === "poly") {
-          polyPath(ctx, sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), n.count || 3);
+          polyPath(
+            ctx,
+            sx + sw / 2,
+            sy + sh / 2,
+            Math.abs(sw / 2),
+            Math.abs(sh / 2),
+            n.count || 3,
+            n.cornerRadii[0] || 0,
+          );
         } else {
           round();
         }
       };
       traceShape();
+      if (snap.outlineMode) {
+        ctx.save();
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([]);
+        traceShape();
+        ctx.stroke();
+        ctx.restore();
+        if (n.kind === "text" && edit?.id !== n.id) {
+          paintText(ctx, n, sx, sy, sw, sh, z);
+        }
+        if (n.kind === "frame" && n.overflow !== "visible") {
+          round();
+          ctx.clip();
+        }
+        for (const ch of n.children) paint(ch, x, y);
+        ctx.restore();
+        return;
+      }
       const bgBlur = (n.effects ?? []).find(
         (e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible,
       );
@@ -947,17 +978,31 @@ export function Canvas({
           // Figma puts the tips on both ends of an open path, so each end is
           // drawn with the unit vector pointing back along its own segment.
           const ends: { ex: number; ey: number; ux: number; uy: number }[] = [];
-          const pts = n.kind === "vector" || n.kind === "line" ? (n.path.length ? n.path : shapePoly(n)) : [];
+          const pts = n.kind === "vector" || n.kind === "line" || n.kind === "arrow" ? (n.path.length ? n.path : shapePoly(n)) : [];
           if (pts.length > 1) {
-            for (const [a, b, sign] of [[pts[pts.length - 1], pts[pts.length - 2], 1], [pts[0], pts[1], -1]] as const) {
-              const dx = (a.x - b.x) * z * sign;
-              const dy = (a.y - b.y) * z * sign;
-              const len = Math.hypot(dx, dy) || 1;
-              ends.push({ ex: sx + a.x * z, ey: sy + a.y * z, ux: dx / len, uy: dy / len });
+            // End point (pts[pts.length - 1]): points in the direction the path was traveling
+            const lastA = pts[pts.length - 1];
+            const lastB = pts[pts.length - 2];
+            const dxEnd = (lastA.x - lastB.x) * z;
+            const dyEnd = (lastA.y - lastB.y) * z;
+            const lenEnd = Math.hypot(dxEnd, dyEnd) || 1;
+            ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd });
+
+            // Start point (pts[0]): only if start cap is explicitly configured
+            const hasStartCap = n.strokeCapStart && n.strokeCapStart !== "none";
+            if (hasStartCap) {
+              const startA = pts[0];
+              const startB = pts[1];
+              const dxStart = (startA.x - startB.x) * z;
+              const dyStart = (startA.y - startB.y) * z;
+              const lenStart = Math.hypot(dxStart, dyStart) || 1;
+              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart });
             }
           } else {
             ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0 });
-            ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0 });
+            if (n.strokeCapStart && n.strokeCapStart !== "none") {
+              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0 });
+            }
           }
           const back = (e: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
             x: e.ex - e.ux * ah + e.uy * k * s,
@@ -1582,20 +1627,64 @@ export function Canvas({
     if (snap.presentFrame) return;
 
     if (snap.rightTab === "inspect" && snap.annotations?.length) {
-      for (const ann of snap.annotations) {
+      snap.annotations.forEach((ann, idx) => {
         const wp = worldPos(root, ann.nodeId);
         if (wp) {
           const ax = snap.panX + (wp.x + wp.node.w) * z;
           const ay = snap.panY + wp.y * z;
+          const isSelected = snap.selection.includes(ann.nodeId);
+
+          ctx.save();
           ctx.beginPath();
-          ctx.arc(ax, ay, 6, 0, Math.PI * 2);
+          ctx.arc(ax, ay, 9, 0, Math.PI * 2);
           ctx.fillStyle = "#10b981";
           ctx.fill();
           ctx.lineWidth = 1.5;
           ctx.strokeStyle = "#ffffff";
           ctx.stroke();
+
+          ctx.fillStyle = "#ffffff";
+          ctx.font = "bold 10px Inter, system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(idx + 1), ax, ay);
+          ctx.restore();
+
+          if (isSelected) {
+            ctx.save();
+            const cardX = ax + 14;
+            const cardY = ay - 14;
+            const text = ann.note || "Spec note";
+            ctx.font = "11px Inter, system-ui, sans-serif";
+            const textWidth = Math.min(240, Math.max(130, ctx.measureText(text).width + 24));
+            const cardH = 36;
+
+            ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+            ctx.lineWidth = 1;
+            if (typeof ctx.roundRect === "function") {
+              ctx.beginPath();
+              ctx.roundRect(cardX, cardY, textWidth, cardH, 6);
+              ctx.fill();
+              ctx.stroke();
+            } else {
+              ctx.fillRect(cardX, cardY, textWidth, cardH);
+            }
+
+            ctx.fillStyle = "#10b981";
+            ctx.font = "bold 9px Inter, system-ui, sans-serif";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "top";
+            ctx.fillText(`SPEC #${idx + 1} · ${ann.author || "Dev"}`, cardX + 8, cardY + 6);
+
+            ctx.fillStyle = "#f8fafc";
+            ctx.font = "11px Inter, system-ui, sans-serif";
+            const displayStr = text.length > 30 ? text.slice(0, 28) + "…" : text;
+            ctx.fillText(displayStr, cardX + 8, cardY + 18);
+            ctx.restore();
+          }
         }
-      }
+      });
     }
 
     if (hoverId && !snap.selection.includes(hoverId)) {
@@ -1716,11 +1805,56 @@ export function Canvas({
         const hx = cx + Math.cos(a) * rx * k;
         const hy = cy + Math.sin(a) * ry * k;
 
+        // Ratio handle (valley)
         ctx.fillStyle = "#ffffff";
         ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Count handle (second outer point)
+        const aCount = (2 * Math.PI) / pts - Math.PI / 2;
+        const cxCount = cx + Math.cos(aCount) * rx;
+        const cyCount = cy + Math.sin(aCount) * ry;
+        ctx.beginPath();
+        ctx.arc(cxCount, cyCount, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Corner radius handle (near top tip)
+        const cr = wp.node.cornerRadii[0] || 0;
+        const radY = cy - ry + Math.min(ry * 0.4, Math.max(10, cr * z));
+        ctx.beginPath();
+        ctx.arc(cx, radY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      if (wp.node.kind === "poly") {
+        const cx = sx + sw / 2;
+        const cy = sy + sh / 2;
+        const rx = sw / 2;
+        const ry = sh / 2;
+        const pts = Math.max(3, Math.min(60, Math.round(wp.node.count || 3)));
+
+        // Count handle (second vertex)
+        const aCount = (2 * Math.PI) / pts - Math.PI / 2;
+        const cxCount = cx + Math.cos(aCount) * rx;
+        const cyCount = cy + Math.sin(aCount) * ry;
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(cxCount, cyCount, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Corner radius handle (near top vertex)
+        const cr = wp.node.cornerRadii[0] || 0;
+        const radY = cy - ry + Math.min(ry * 0.4, Math.max(10, cr * z));
+        ctx.beginPath();
+        ctx.arc(cx, radY, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
       }
@@ -2186,6 +2320,36 @@ export function Canvas({
   const onDown = (e: React.MouseEvent) => {
     if (edit && (e.target as HTMLElement).closest(".text-edit")) return;
     if (e.button === 2) return;
+    if (eyedropArmed()) {
+      const c = ref.current;
+      if (c) {
+        const box = c.getBoundingClientRect();
+        const px = (e.clientX - box.left) * (window.devicePixelRatio || 1);
+        const py = (e.clientY - box.top) * (window.devicePixelRatio || 1);
+        const ctx = c.getContext("2d");
+        if (ctx) {
+          try {
+            const p = ctx.getImageData(px, py, 1, 1).data;
+            const hex = toHex(p[0], p[1], p[2]);
+            const dropFn = takeEyedrop();
+            if (dropFn) dropFn(hex);
+            toast(`Sampled ${hex}`);
+            e.preventDefault();
+            return;
+          } catch {
+            // fallback to layer hit
+          }
+        }
+      }
+      const wpt = toWorld(e.clientX, e.clientY);
+      const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
+      const hex = hit?.fill || "#000000";
+      const dropFn = takeEyedrop();
+      if (dropFn) dropFn(hex);
+      toast(`Sampled ${hex}`);
+      e.preventDefault();
+      return;
+    }
     // Freeze the snap targets for this gesture: everything except the layers
     // being dragged (and their subtrees), so a node never snaps to itself.
     snapTargets.current = snapCandidates(
@@ -2526,6 +2690,73 @@ export function Canvas({
             engine.dispatch({ type: "begin" });
             drag.current = {
               mode: "starRatio",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+          const aCount = (2 * Math.PI) / pts - Math.PI / 2;
+          const cxCount = cx + Math.cos(aCount) * rx;
+          const cyCount = cy + Math.sin(aCount) * ry;
+          if (Math.hypot(px - cxCount, py - cyCount) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "starCount",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+          const cr = wp.node.cornerRadii[0] || 0;
+          const radY = cy - ry + Math.min(ry * 0.4, Math.max(10, cr * z));
+          if (Math.hypot(px - cx, py - radY) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "starRadius",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+        }
+        if (wp.node.kind === "poly") {
+          const sw = wp.node.w * z;
+          const sh = wp.node.h * z;
+          const cx = sx + sw / 2;
+          const cy = sy + sh / 2;
+          const rx = sw / 2;
+          const ry = sh / 2;
+          const pts = Math.max(3, Math.min(60, Math.round(wp.node.count || 3)));
+          const aCount = (2 * Math.PI) / pts - Math.PI / 2;
+          const cxCount = cx + Math.cos(aCount) * rx;
+          const cyCount = cy + Math.sin(aCount) * ry;
+          if (Math.hypot(px - cxCount, py - cyCount) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "polyCount",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: wp.node.id,
+            };
+            return;
+          }
+          const cr = wp.node.cornerRadii[0] || 0;
+          const radY = cy - ry + Math.min(ry * 0.4, Math.max(10, cr * z));
+          if (Math.hypot(px - cx, py - radY) <= 9) {
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "polyRadius",
               sx: e.clientX,
               sy: e.clientY,
               wx: wpt.x,
@@ -3366,6 +3597,28 @@ export function Canvas({
         const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
         const ratio = Math.max(0.05, Math.min(0.95, curR / (maxR || 1)));
         engine.dispatch({ type: "patch", id: d.id, patch: { starRatio: ratio } });
+      }
+    } else if ((d.mode === "starRadius" || d.mode === "polyRadius") && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const cy = wp.y + wp.node.h / 2;
+        const topY = cy - wp.node.h / 2;
+        const dist = Math.max(0, wpt.y - topY);
+        const maxR = Math.min(wp.node.w, wp.node.h) * 0.4;
+        const newR = Math.max(0, Math.min(maxR, Math.round(dist)));
+        engine.dispatch({ type: "patch", id: d.id, patch: { cornerRadii: [newR, newR, newR, newR] } });
+      }
+    } else if ((d.mode === "starCount" || d.mode === "polyCount") && d.id) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      if (wp) {
+        const cx = wp.x + wp.node.w / 2;
+        const cy = wp.y + wp.node.h / 2;
+        const angle = Math.atan2(wpt.y - cy, wpt.x - cx) + Math.PI / 2;
+        const normAngle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        const count = Math.max(3, Math.min(60, Math.round((normAngle / (Math.PI * 2)) * 16) + 3));
+        engine.dispatch({ type: "patch", id: d.id, patch: { count } });
       }
     } else if (d.mode === "radius" && d.id) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -4617,15 +4870,35 @@ function polyPath(
   rx: number,
   ry: number,
   n: number,
+  cornerRadius = 0,
 ) {
   ctx.beginPath();
   const pts = Math.max(3, Math.min(60, Math.round(n)));
+  const vertices: { x: number; y: number }[] = [];
   for (let i = 0; i < pts; i++) {
     const a = (i * 2 * Math.PI) / pts - Math.PI / 2;
-    const x = cx + Math.cos(a) * rx;
-    const y = cy + Math.sin(a) * ry;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    vertices.push({
+      x: cx + Math.cos(a) * rx,
+      y: cy + Math.sin(a) * ry,
+    });
+  }
+  const len = vertices.length;
+  if (cornerRadius <= 0) {
+    for (let i = 0; i < len; i++) {
+      if (i === 0) ctx.moveTo(vertices[i].x, vertices[i].y);
+      else ctx.lineTo(vertices[i].x, vertices[i].y);
+    }
+  } else {
+    const cr = Math.min(cornerRadius, Math.min(rx, ry) * 0.4);
+    for (let i = 0; i < len; i++) {
+      const pPrev = vertices[(i - 1 + len) % len];
+      const pCurr = vertices[i];
+      const pNext = vertices[(i + 1) % len];
+      if (i === 0) {
+        ctx.moveTo((pPrev.x + pCurr.x) / 2, (pPrev.y + pCurr.y) / 2);
+      }
+      ctx.arcTo(pCurr.x, pCurr.y, pNext.x, pNext.y, cr);
+    }
   }
   ctx.closePath();
 }

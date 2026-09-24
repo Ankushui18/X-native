@@ -6,6 +6,7 @@ import { worldPos } from "./engine/memory";
 import { zoomTo } from "./ui/zoom";
 import {
   Actions,
+  FindReplaceBar,
   HelpBtn,
   LeftPanel,
   NavRail,
@@ -271,7 +272,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   // attaches itself are starved by the app's own capture-phase handler.
   const [exportOpen, setExportOpen] = useState(false);
   const [nudgeOpen, setNudgeOpen] = useState(false);
-  const overlayRef = useRef({ exportOpen, nudgeOpen, actions, figInspector });
+  const [findOpen, setFindOpen] = useState(false);
+  const overlayRef = useRef({ exportOpen, nudgeOpen, actions, figInspector, findOpen });
   // Handoff plumbing that needs the live document: land on the layer a shared
   //  link points at, then answer the two copy commands the menu asks for.
   useEffect(() => {
@@ -352,10 +354,11 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, [engine, fileId]);
 
-  overlayRef.current = { exportOpen, nudgeOpen, actions, figInspector };
+  overlayRef.current = { exportOpen, nudgeOpen, actions, figInspector, findOpen };
   const closeOverlay = () => {
     const o = overlayRef.current;
-    if (o.nudgeOpen) setNudgeOpen(false);
+    if (o.findOpen) setFindOpen(false);
+    else if (o.nudgeOpen) setNudgeOpen(false);
     else if (o.exportOpen) setExportOpen(false);
     else if (o.actions) setActions(false);
     else if (o.figInspector) setFigInspector(false);
@@ -367,15 +370,18 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     const onMin = () => setMinUi((v) => !v);
     const onExport = () => setExportOpen(true);
     const onNudge = () => setNudgeOpen(true);
+    const onFind = () => setFindOpen((v) => !v);
     window.addEventListener("x-native-hide-ui", on);
     window.addEventListener("x-native-minimize-ui", onMin);
     window.addEventListener("x-native-export-dialog", onExport);
     window.addEventListener("x-native-nudge-dialog", onNudge);
+    window.addEventListener("x-native-find", onFind);
     return () => {
       window.removeEventListener("x-native-hide-ui", on);
       window.removeEventListener("x-native-minimize-ui", onMin);
       window.removeEventListener("x-native-export-dialog", onExport);
       window.removeEventListener("x-native-nudge-dialog", onNudge);
+      window.removeEventListener("x-native-find", onFind);
     };
   }, []);
 
@@ -515,6 +521,9 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
               setActions(false);
             }}
           />
+        )}
+        {findOpen && (
+          <FindReplaceBar engine={engine} snap={snap} onClose={() => setFindOpen(false)} />
         )}
       </div>
       <RightPanel

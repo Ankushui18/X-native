@@ -2416,6 +2416,11 @@ function Design({
               <Icon name="distribute-v" />
             </button>
             </Tooltip>
+            <Tooltip label="Tidy up" shortcut="⌃⌥⇧T">
+            <button aria-label="Tidy up" onClick={() => { engine.dispatch({ type: "tidyUp" }); toast("Tidied up selection"); }}>
+              <Icon name="grid" size={14} />
+            </button>
+            </Tooltip>
           </div>
         </div>
         <div className="grid3">
@@ -2950,6 +2955,25 @@ function Design({
                     >
                       <Icon name="reset" size={14} />
                     </button>
+                    <select
+                      style={{ width: 14, opacity: 0.6, border: 0, background: "transparent", cursor: "pointer", marginLeft: -4 }}
+                      title="Reset specific override"
+                      value=""
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        if (val === "all") engine.dispatch({ type: "resetOverrides", id: n.id });
+                        else engine.dispatch({ type: "resetOverrides", id: n.id, property: val });
+                        toast(`Reset ${val} override`);
+                      }}
+                    >
+                      <option value="" disabled>▾</option>
+                      <option value="fill">Reset fill</option>
+                      <option value="stroke">Reset stroke</option>
+                      <option value="text">Reset text</option>
+                      <option value="w">Reset size</option>
+                      <option value="all">Reset all</option>
+                    </select>
                     <button
                       className="icon-btn"
                       title="Detach instance (⌥⌘B)"
@@ -6276,6 +6300,10 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           <button role="menuitemcheckbox" aria-checked={snap.showComments} onClick={go(() => engine.dispatch({ type: "toggleComments" }))}>
             Comments
             {snap.showComments && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={!!snap.outlineMode} onClick={go(() => engine.dispatch({ type: "toggleOutlines" }))}>
+            Layer outlines<span className="sc">⇧O</span>
+            {snap.outlineMode && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.showFlows !== false} onClick={go(() => engine.dispatch({ type: "toggleFlows" }))}>
             Prototype flows<span className="sc">⇧F</span>
