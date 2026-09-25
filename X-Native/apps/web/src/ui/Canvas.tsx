@@ -2379,7 +2379,37 @@ export function Canvas({
       }
     }
 
-    if (altMeasure && snap.selection.length === 1 && !drag.current) {
+    const isDevMode = snap.rightTab === "inspect";
+    const shouldMeasure =
+      (altMeasure || (isDevMode && hoverId && hoverId !== snap.selection[0])) &&
+      snap.selection.length === 1 &&
+      !drag.current;
+
+    if (isDevMode && snap.selection.length === 1) {
+      const selWp = worldPos(root, snap.selection[0]);
+      if (selWp && selWp.node.layout?.padding) {
+        const [pl, pr, pt, pb] = selWp.node.layout.padding;
+        if (pl || pr || pt || pb) {
+          const sx = snap.panX + selWp.x * z;
+          const sy = snap.panY + selWp.y * z;
+          const sw = selWp.node.w * z;
+          const sh = selWp.node.h * z;
+          ctx.save();
+          ctx.fillStyle = "rgba(16, 185, 129, 0.08)";
+          ctx.strokeStyle = "rgba(16, 185, 129, 0.4)";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]);
+          if (pt > 0) ctx.fillRect(sx, sy, sw, pt * z);
+          if (pb > 0) ctx.fillRect(sx, sy + sh - pb * z, sw, pb * z);
+          if (pl > 0) ctx.fillRect(sx, sy + pt * z, pl * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          if (pr > 0) ctx.fillRect(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          ctx.strokeRect(sx + pl * z, sy + pt * z, Math.max(0, selWp.node.w - pl - pr) * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          ctx.restore();
+        }
+      }
+    }
+
+    if (shouldMeasure) {
       const A = worldPos(root, snap.selection[0]);
       if (A) {
         ctx.save();

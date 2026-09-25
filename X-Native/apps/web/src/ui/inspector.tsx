@@ -1107,6 +1107,88 @@ function generateCompose(n: XNode): string {
 }`;
 }
 
+function generateReact(n: XNode, unit: DevUnit = "px"): string {
+  const componentName = (n.name.replace(/[^a-zA-Z0-9]/g, "") || "Component")
+    .replace(/^[a-z]/, (c) => c.toUpperCase());
+
+  if (n.kind === "text") {
+    const textStyle: Record<string, string | number> = {
+      fontFamily: `"${n.fontFamily}", sans-serif`,
+      fontSize: unit === "rem" ? `${Math.round((n.fontSize / 16) * 100) / 100}rem` : `${n.fontSize}px`,
+      fontWeight: n.fontWeight,
+      color: n.fillVisible !== false && n.fill ? n.fill : "#000000",
+    };
+    if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
+    if (n.letterSpacing) textStyle.letterSpacing = `${n.letterSpacing}px`;
+    if (n.textAlign && n.textAlign !== "left") textStyle.textAlign = n.textAlign;
+
+    const styleEntries = Object.entries(textStyle)
+      .map(([k, v]) => `    ${k}: ${typeof v === "number" ? v : `"${v}"`},`)
+      .join("\n");
+
+    return `import React from "react";\n\nexport const ${componentName}: React.FC = () => {\n  return (\n    <span\n      style={{\n${styleEntries}\n      }}\n    >\n      {${JSON.stringify(n.text || n.name)}}\n    </span>\n  );\n};`;
+  }
+
+  const styles: Record<string, string | number> = {};
+  if (n.sizingW === "fill") styles.width = '"100%"';
+  else styles.width = unit === "rem" ? `"${Math.round((n.w / 16) * 100) / 100}rem"` : Math.round(n.w);
+
+  if (n.sizingH === "fill") styles.height = '"100%"';
+  else styles.height = unit === "rem" ? `"${Math.round((n.h / 16) * 100) / 100}rem"` : Math.round(n.h);
+
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      styles.borderRadius = `"${n.cornerRadii[0]}px ${n.cornerRadii[1]}px ${n.cornerRadii[3]}px ${n.cornerRadii[2]}px"`;
+    } else {
+      styles.borderRadius = unit === "rem" ? `"${Math.round((n.cornerRadii[0] / 16) * 100) / 100}rem"` : n.cornerRadii[0];
+    }
+  }
+
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    styles.backgroundColor = `"${n.fill}"`;
+  }
+
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    styles.border = `"${n.strokeWidth}px solid ${n.strokePaint}"`;
+  }
+
+  if (n.opacity < 1) {
+    styles.opacity = Math.round(n.opacity * 100) / 100;
+  }
+
+  if (n.layout) {
+    styles.display = '"flex"';
+    styles.flexDirection = n.layout.direction === "horizontal" ? '"row"' : '"column"';
+    if (n.layout.gap) styles.gap = unit === "rem" ? `"${Math.round((n.layout.gap / 16) * 100) / 100}rem"` : n.layout.gap;
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl || pr || pt || pb) {
+      styles.padding = `"${pt}px ${pr}px ${pb}px ${pl}px"`;
+    }
+    if (n.layout.align === "center") styles.alignItems = '"center"';
+    else if (n.layout.align === "max") styles.alignItems = '"flex-end"';
+    else if (n.layout.align === "baseline") styles.alignItems = '"baseline"';
+
+    if (n.layout.justify === "center") styles.justifyContent = '"center"';
+    else if (n.layout.justify === "between") styles.justifyContent = '"space-between"';
+    else if (n.layout.justify === "max") styles.justifyContent = '"flex-end"';
+
+    if (n.layout.wrap) styles.flexWrap = '"wrap"';
+  }
+
+  if (n.effects?.length) {
+    const shadows = n.effects
+      .filter((e) => e.visible && (e.kind === "drop-shadow" || e.kind === "inner-shadow"))
+      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${e.x}px ${e.y}px ${e.blur}px ${e.spread}px ${e.color}`);
+    if (shadows.length) styles.boxShadow = `"${shadows.join(", ")}"`;
+  }
+
+  const formattedStyles = Object.entries(styles)
+    .map(([k, v]) => `    ${k}: ${v},`)
+    .join("\n");
+
+  return `import React from "react";\n\nexport const ${componentName}: React.FC = () => {\n  return (\n    <div\n      style={{\n${formattedStyles}\n      }}\n    >\n      {/* Child elements */}\n    </div>\n  );\n};`;
+}
+
 function generateFlutter(n: XNode): string {
   const hex = (n.fill || "#000000").replace("#", "").padEnd(6, "0");
   return `Container(
@@ -1230,18 +1312,81 @@ function generateLayerJson(n: XNode): string {
 
 function BoxModelDiagram({ n }: { n: XNode }) {
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  const borderW = n.strokeVisible && n.strokeWidth > 0 ? n.strokeWidth : 0;
+  const contentW = Math.max(0, Math.round(n.w - pl - pr));
+  const contentH = Math.max(0, Math.round(n.h - pt - pb));
+
+  const copyVal = (text: string, label: string) => {
+    copyText(text);
+    toast(`Copied ${label}: ${text}`);
+  };
+
   return (
-    <div className="box-model-diagram">
-      {/* Only auto-layout frames have padding; showing 0 0 0 0 elsewhere reads
-          as a fact when it is an absence. */}
-      {n.layout && <div className="bm-padding-label">padding: {pt} {pr} {pb} {pl}</div>}
-      <div className="bm-outer">
-        <div className="bm-pad-box">
-          <div className="bm-inner">
-            <span className="bm-dims">{Math.round(n.w)} × {Math.round(n.h)}</span>
-            {n.cornerRadii[0] > 0 && <span className="bm-radius">r:{n.cornerRadii[0]}</span>}
+    <div className="box-model-diagram-v2" aria-label="Box Model Inspector">
+      <div
+        className="bm-layer bm-margin"
+        title="Position / Offset (Click to copy)"
+        onClick={() => copyVal(`/* x: ${Math.round(n.x)}px, y: ${Math.round(n.y)}px */`, "position")}
+      >
+        <span className="bm-tag">OFFSET / MARGIN</span>
+        <div className="bm-pos-top">{Math.round(n.y)}</div>
+        <div className="bm-mid-row">
+          <div className="bm-pos-left">{Math.round(n.x)}</div>
+
+          <div
+            className="bm-layer bm-border"
+            title="Border (Click to copy)"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (borderW > 0) copyVal(`border: ${borderW}px solid ${n.strokePaint};`, "border");
+              else copyVal("border: none;", "border");
+            }}
+          >
+            <span className="bm-tag">BORDER {borderW > 0 ? `${borderW}px` : "0"}</span>
+            <div className="bm-pos-top">{borderW}</div>
+            <div className="bm-mid-row">
+              <div className="bm-pos-left">{borderW}</div>
+
+              <div
+                className="bm-layer bm-padding"
+                title="Padding (Click to copy)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyVal(`padding: ${pt}px ${pr}px ${pb}px ${pl}px;`, "padding");
+                }}
+              >
+                <span className="bm-tag">PADDING</span>
+                <div className="bm-pos-top">{pt}</div>
+                <div className="bm-mid-row">
+                  <div className="bm-pos-left">{pl}</div>
+
+                  <div
+                    className="bm-content-box"
+                    title="Content dimensions (Click to copy)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyVal(`width: ${contentW}px; height: ${contentH}px;`, "content size");
+                    }}
+                  >
+                    <span className="bm-content-dims">
+                      {contentW} × {contentH}
+                    </span>
+                    {n.cornerRadii[0] > 0 && <span className="bm-radius-badge">r:{n.cornerRadii[0]}</span>}
+                  </div>
+
+                  <div className="bm-pos-right">{pr}</div>
+                </div>
+                <div className="bm-pos-bottom">{pb}</div>
+              </div>
+
+              <div className="bm-pos-right">{borderW}</div>
+            </div>
+            <div className="bm-pos-bottom">{borderW}</div>
           </div>
+
+          <div className="bm-pos-right">{n.layout?.gap ? `gap: ${n.layout.gap}` : "—"}</div>
         </div>
+        <div className="bm-pos-bottom">—</div>
       </div>
     </div>
   );
@@ -1420,6 +1565,25 @@ function DevTokens({ snap }: { snap: Snapshot }) {
     null,
     2,
   );
+  const styleDict = JSON.stringify(
+    Object.fromEntries(
+      [...byGroup.entries()].map(([g, list]) => [
+        kebab(g) || "tokens",
+        Object.fromEntries(
+          list.map((r) => [
+            kebab(r.name),
+            {
+              $value: r.value,
+              $type: r.color ? "color" : "dimension",
+              $description: `${g} · ${r.name}`,
+            },
+          ]),
+        ),
+      ]),
+    ),
+    null,
+    2,
+  );
 
   const copy = (text: string, what: string) => {
     copyText(text);
@@ -1437,6 +1601,9 @@ function DevTokens({ snap }: { snap: Snapshot }) {
         <button className="mini" title="Copy as a JSON token file" onClick={() => copy(json, "JSON")}>
           JSON
         </button>
+        <button className="mini" title="Copy as Style Dictionary (W3C DTCG)" onClick={() => copy(styleDict, "Style Dictionary")}>
+          DTCG
+        </button>
         <button
           className="mini"
           title="Download tokens.json"
@@ -1446,6 +1613,16 @@ function DevTokens({ snap }: { snap: Snapshot }) {
           }}
         >
           <Icon name="export" size={12} />
+        </button>
+        <button
+          className="mini"
+          title="Download style-dictionary.json"
+          onClick={() => {
+            downloadBlob(new Blob([styleDict], { type: "application/json" }), "style-dictionary.json");
+            toast("Downloaded style-dictionary.json (W3C DTCG)");
+          }}
+        >
+          DTCG ↓
         </button>
       </div>
       <p className="dev-tokens-note">
@@ -1511,6 +1688,8 @@ function generateDesignTokens(n: XNode): string {
 
 function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
   switch (format) {
+    case "react":
+      return generateReact(n, unit);
     case "tailwind":
       return generateTailwind(n);
     case "swiftui":
@@ -1521,10 +1700,11 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
       return generateFlutter(n);
     case "svg":
       return generateSvg(n);
-    case "figma":
-      return generateLayerJson(n);
     case "tokens":
       return generateDesignTokens(n);
+    case "layerJson":
+    case "figma":
+      return generateLayerJson(n);
     default:
       return generateCss(n, unit);
   }

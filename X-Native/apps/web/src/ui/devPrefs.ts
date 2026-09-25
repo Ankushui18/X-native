@@ -8,19 +8,30 @@
  * different answer for the same layer — so the answer lives here instead, and
  * outlives a reload.
  */
-export type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma" | "tokens";
+export type DevFormat =
+  | "css"
+  | "react"
+  | "tailwind"
+  | "swiftui"
+  | "compose"
+  | "flutter"
+  | "svg"
+  | "tokens"
+  | "layerJson"
+  | "figma";
 export type DevUnit = "px" | "rem";
 
 /** Supported languages. */
 export const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
   { id: "css", label: "CSS", lang: "css" },
+  { id: "react", label: "React (TSX)", lang: "typescript" },
   { id: "tailwind", label: "Tailwind", lang: "html" },
   { id: "swiftui", label: "SwiftUI", lang: "swift" },
   { id: "compose", label: "Compose", lang: "kotlin" },
   { id: "flutter", label: "Flutter", lang: "dart" },
   { id: "svg", label: "SVG", lang: "xml" },
-  { id: "figma", label: "Layer JSON", lang: "json" },
   { id: "tokens", label: "Design Tokens", lang: "json" },
+  { id: "layerJson", label: "Layer Spec", lang: "json" },
 ];
 
 export const devLangLabel = (id: DevFormat): string => DEV_LANGS.find((l) => l.id === id)?.label ?? "CSS";

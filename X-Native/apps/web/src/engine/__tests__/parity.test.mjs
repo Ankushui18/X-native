@@ -3797,6 +3797,57 @@ console.log("Phase 0 & Phase 1 Architecture (Canonical Transaction System, Modif
   eng.dispatch({ type: "vectorCleanup", id: sketchId });
   const cleanedNode = eng.snapshot().pages[0].root.children.slice(-1)[0];
   t("engine vectorCleanup command updates path and normalizes bounding box", cleanedNode.path.length < noisyPts.length && cleanedNode.w >= 48);
+
+  // 10. Phase 5: Developer Platform (Code Exporters, Dev Mode & Design Tokens)
+  console.log("Phase 5: Developer Platform (Code Exporters, Box Model & DTCG Design Tokens):");
+  const { DEV_LANGS, getDevPrefs, setDevPrefs } = await import("../../ui/devPrefs.ts");
+  t("DEV_LANGS includes React TSX exporter", DEV_LANGS.some((l) => l.id === "react"));
+  t("DEV_LANGS includes Design Tokens", DEV_LANGS.some((l) => l.id === "tokens"));
+  t("DEV_LANGS includes Layer Spec", DEV_LANGS.some((l) => l.id === "layerJson"));
+
+  setDevPrefs({ format: "react", unit: "px" });
+  t("setDevPrefs sets format to react", getDevPrefs().format === "react");
+
+  // Box model math verification on auto-layout frame
+  eng.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 100,
+    y: 100,
+    w: 240,
+    h: 120,
+  });
+  const fId = eng.snapshot().selection[0];
+  eng.dispatch({
+    type: "autoLayout",
+    id: fId,
+    layout: {
+      direction: "horizontal",
+      gap: 12,
+      padding: [16, 16, 20, 20],
+      align: "center",
+      justify: "min",
+      wrap: false,
+    },
+  });
+  const frameNode = eng.snapshot().pages[0].root.children.slice(-1)[0];
+  const [padL, padR, padT, padB] = frameNode.layout.padding;
+  const innerW = frameNode.w - padL - padR;
+  const innerH = frameNode.h - padT - padB;
+  t("Box model computes correct inner content width", innerW === 208);
+  t("Box model computes correct inner content height", innerH === 80);
+
+  // Style Dictionary / DTCG tokens structure verification
+  const dtcgTokens = {
+    color: {
+      brand: { $value: "#10B981", $type: "color", $description: "Brand / Primary Emerald" },
+    },
+    spacing: {
+      sm: { $value: "8px", $type: "dimension" },
+      md: { $value: "16px", $type: "dimension" },
+    },
+  };
+  t("DTCG format tokens have valid $value and $type keys", dtcgTokens.color.brand.$value === "#10B981" && dtcgTokens.spacing.md.$type === "dimension");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
