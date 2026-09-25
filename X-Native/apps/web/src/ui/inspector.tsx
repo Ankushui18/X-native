@@ -103,7 +103,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
-import { PropertyField } from "./x-ui";
+import { PropertyField, XPopover } from "./x-ui";
 
 /** Sketch only shows "Round to Pixel" when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -4642,15 +4642,8 @@ function EffectPopover({
 
   const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
   const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";
-  // Keep the panel on screen when the row sits near the bottom of the window.
-  const top = Math.min(anchor.top, window.innerHeight - 250);
   return (
-    <div
-      className="fill-pop fx-pop"
-      style={{ left: Math.max(8, anchor.left - 252), top: Math.max(8, top) }}
-      role="dialog"
-      aria-label={`${EFFECT_LABEL[fx.kind]} settings`}
-    >
+    <XPopover anchor={anchor} title={`${EFFECT_LABEL[fx.kind]} settings`} onClose={onClose} ariaLabel={`${EFFECT_LABEL[fx.kind]} settings`}>
       {shadow && (
         <ColorRow
           title="Shadow"
@@ -4739,7 +4732,7 @@ function EffectPopover({
           Show behind transparent areas
         </label>
       )}
-    </div>
+    </XPopover>
   );
 }
 
