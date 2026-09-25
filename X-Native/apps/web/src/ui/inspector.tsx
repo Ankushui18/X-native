@@ -2557,6 +2557,7 @@ function Design({
           </button>
         </div>
       }>
+      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", marginBottom:6}}>Flow</div>
       <div className="dir-row">
         <div className="seg icons">
           <button
@@ -3188,6 +3189,7 @@ function Design({
                 positioned by their cells - so the packing box is the grid's
                 one exception. Per-cell alignment is on the object itself, in
                 the Position section, as the grid article describes. */}
+            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Alignment</div>
             {!isGrid && (
               <Nine
                 layout={n.layout}
@@ -3238,6 +3240,7 @@ function Design({
               onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
             />
           )}
+          <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Spacing & Padding</div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             {isGrid ? (
               // A grid has a gap per axis rather than one gap and a packing
