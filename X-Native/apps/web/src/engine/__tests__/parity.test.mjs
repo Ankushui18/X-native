@@ -6,7 +6,7 @@
  * These cover the pure geometry/snapping helpers, which is where the logic
  * that is easy to get subtly wrong lives. Canvas wiring is verified in-browser.
  */
-import { snapMove, snapCandidates } from "../snapping.ts";
+import { roundBox, snapMove, snapCandidates, wantsPixelSnap } from "../snapping.ts";
 import {
   cornerPinPoints,
   cornerRadiiOf,
@@ -30,9 +30,13 @@ import {
   splitVectorNetworkIntersections,
   detectPlanarRegions,
   fillNetworkRegionAtPoint,
+  outlineVariableStroke,
+  widthProfileStations,
 } from "../geometry.ts";
-import { MemoryEngine, defaultEffect, find, findParent, insideInstance, node, worldPos } from "../memory.ts";
+import { MemoryEngine, defaultEffect, find, findParent, hitTest, insideInstance, node, previewBoolean, worldPos } from "../memory.ts";
+import { paintDropShadows, paintExtraStrokes } from "../paint.ts";
 import { evalField } from "../../ui/fieldExpr.ts";
+import { sameIds } from "../../ui/selectSame.ts";
 import {
   SPACING_MODES,
   alignKey,
@@ -73,6 +77,11 @@ import {
   sideCones,
   sideWidths,
   sidesSupported,
+  hasVariableWidth,
+  maxWidthMultiplier,
+  normalizeWidthProfile,
+  sampleVariableWidth,
+  usesVariableWidth,
 } from "../../engine/strokeModel.ts";
 import {
   EFFECT_LIMITS,
@@ -124,7 +133,7 @@ import {
   stepZoom,
   wheelZoomFactor,
 } from "../view.ts";
-import { exportSvg, svgPath, exportClipSvg } from "../svgExport.ts";
+import { exportSvg, svgPath, exportClipSvg, svgShape } from "../svgExport.ts";
 import {
   FORMAT_CAPS,
   FORMATS,
@@ -3211,8 +3220,12 @@ console.log("nesting flows, from \"Combine vertical, horizontal, and grid auto l
     Math.round(N(img).w) === 400 && Math.round(N(img).h) === 200);
   e.dispatch({ type: "resize", id: img, x: 0, y: 0, w: 200, h: 80 });
   e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
-  t("resizing a locked box by hand takes the new ratio with it",
-    Math.abs(N(img).aspectRatio - 0.4) < 1e-6 && Math.round(N(img).h) === 160);
+  // Figma auto-layout: "any manual adjustments you make will set the layer to
+  // Fixed on the relevant axis" - so the hand-resized fill child keeps its
+  // dragged 200x80 box (and the 80/200 ratio the lock takes with it) instead
+  // of snapping back to the fill size.
+  t("resizing a locked box by hand fixes its size and takes the new ratio with it",
+    Math.abs(N(img).aspectRatio - 0.4) < 1e-6 && Math.round(N(img).w) === 200 && Math.round(N(img).h) === 80 && N(img).sizingW === "fixed");
   e.dispatch({ type: "resize", id: card, x: 500, y: 0, w: 300, h: 300 });
   e.dispatch({ type: "autoLayout", id: card, layout: { ...N(card).layout } });
   const unlocked = add("rect", 0, 0, 100, 50, card);
@@ -3848,6 +3861,384 @@ console.log("Phase 0 & Phase 1 Architecture (Canonical Transaction System, Modif
     },
   };
   t("DTCG format tokens have valid $value and $type keys", dtcgTokens.color.brand.$value === "#10B981" && dtcgTokens.spacing.md.$type === "dimension");
+}
+
+
+console.log("variable-width:");
+{
+  // Profile math: normalize sorts + clamps.
+  const norm = normalizeWidthProfile([
+    { position: 2, widthMultiplier: -1 },
+    { position: -1, widthMultiplier: 99 },
+  ]);
+  t("normalize sorts by position", norm[0].position === 0 && norm[1].position === 1);
+  t("normalize clamps multipliers to 0..8", norm[0].widthMultiplier === 8 && norm[1].widthMultiplier === 0);
+  t("normalize of empty is empty", normalizeWidthProfile(undefined).length === 0);
+  // Sampling: ends clamp, middles interpolate.
+  t("sample of empty profile is 1", sampleVariableWidth(undefined, 0.3) === 1);
+  const prof = [
+    { position: 0, widthMultiplier: 0 },
+    { position: 1, widthMultiplier: 2 },
+  ];
+  t("sample clamps before the first point", sampleVariableWidth(prof, -0.5) === 0);
+  t("sample clamps after the last point", sampleVariableWidth(prof, 1.5) === 2);
+  t("sample interpolates linearly", Math.abs(sampleVariableWidth(prof, 0.25) - 0.5) < 1e-9);
+  t("sample accepts the modifier-stack { points } shape", Math.abs(sampleVariableWidth({ points: prof }, 0.5) - 1) < 1e-9);
+  // Activation + max.
+  t("missing profile is not variable", hasVariableWidth(undefined) === false);
+  t("single-point profile is not variable", hasVariableWidth([{ position: 0.5, widthMultiplier: 3 }]) === false);
+  t("all-equal profile is not variable", hasVariableWidth([{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 1 }]) === false);
+  t("varied profile is variable", hasVariableWidth(prof) === true);
+  t("max multiplier of empty is 1", maxWidthMultiplier(undefined) === 1);
+  t("max multiplier reads the peak", maxWidthMultiplier([{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 3 }]) === 3);
+  const vv = node("vector", "V", 0, 0, 100, 10);
+  vv.strokeWidth = 10; vv.strokeVisible = true; vv.strokePaint = "#000";
+  t("plain vector is not variable-width", usesVariableWidth(vv) === false);
+  vv.strokeWidthProfile = [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 1 }];
+  t("uniform profile takes the fast path", usesVariableWidth(vv) === false);
+  vv.strokeWidthProfile = prof;
+  t("varied profile activates on vectors", usesVariableWidth(vv) === true);
+  const vr = node("rect", "R", 0, 0, 100, 10);
+  vr.strokeWidth = 10; vr.strokeVisible = true; vr.strokePaint = "#000"; vr.strokeWidthProfile = prof;
+  t("profiles are ignored on rects", usesVariableWidth(vr) === false);
+  vv.strokeWidth = 0;
+  t("zero weight deactivates the profile", usesVariableWidth(vv) === false);
+}
+
+console.log("outlineVariableStroke:");
+{
+  const line = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
+  const { outlineStroke } = await import("../geometry.ts");
+  const uni = outlineVariableStroke(line, 10, [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 1 }], false);
+  t("uniform profile delegates to outlineStroke", JSON.stringify(uni) === JSON.stringify(outlineStroke(line, 10, false)));
+  t("missing profile delegates to outlineStroke", JSON.stringify(outlineVariableStroke(line, 10, undefined, false)) === JSON.stringify(outlineStroke(line, 10, false)));
+  // Taper 1 -> 0 with butt caps.
+  const taper = outlineVariableStroke(line, 10, [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 0 }], false, "none", "miter");
+  const ys = taper.map((p) => Math.abs(p.y));
+  t("taper keeps full width at the start", Math.abs(Math.max(...ys) - 5) < 0.01);
+  const tipYs = taper.filter((p) => p.x > 95).map((p) => Math.abs(p.y));
+  t("taper pinches to a point at the end", tipYs.length > 0 && Math.max(...tipYs) < 1.5);
+  t("taper stays on the centerline (no cap overshoot)", taper.every((p) => p.x >= -0.01 && p.x <= 100.01));
+  // Mid bulge.
+  const bulge = outlineVariableStroke(line, 10, [{ position: 0, widthMultiplier: 0.5 }, { position: 0.5, widthMultiplier: 2 }, { position: 1, widthMultiplier: 0.5 }], false, "none", "miter");
+  t("bulge peaks at 2x mid-path", Math.abs(Math.max(...bulge.map((p) => Math.abs(p.y))) - 10) < 0.01);
+  const endYs = bulge.filter((p) => p.x < 1 || p.x > 99).map((p) => Math.abs(p.y));
+  t("bulge ends stay at 0.5x", endYs.length > 0 && Math.abs(Math.max(...endYs) - 2.5) < 0.01);
+  // Round caps scale with endpoint widths.
+  const roundTaper = outlineVariableStroke(line, 10, [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 0 }], false, "round", "miter");
+  t("round cap extends past a wide start", roundTaper.some((p) => p.x < -4));
+  t("round cap vanishes at a zero-width end", roundTaper.every((p) => p.x <= 100.01));
+  // Closed path: two flanks, no caps.
+  const tri = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 50, y: 80 }];
+  const ring = outlineVariableStroke(tri, 10, [{ position: 0, widthMultiplier: 1 }, { position: 0.5, widthMultiplier: 2 }, { position: 1, widthMultiplier: 1 }], true, "none", "miter");
+  t("closed outline has even point count (two flanks)", ring.length >= 6 && ring.length % 2 === 0);
+  const ringXs = ring.map((p) => p.x);
+  t("closed outline expands past the centerline", Math.min(...ringXs) < 0 && Math.max(...ringXs) > 100);
+  // Joins: miter spikes, bevel does not.
+  const ell = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
+  const ellProf = [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 2 }];
+  const mitered = outlineVariableStroke(ell, 20, ellProf, false, "none", "miter", 4);
+  t("miter join spikes past the corner", mitered.some((p) => p.x > 110 && p.y < -10));
+  const bevelled = outlineVariableStroke(ell, 20, ellProf, false, "none", "miter", 1);
+  t("miter limit 1 bevels the spike away", bevelled.every((p) => p.x <= 100 + 15 + 1 || p.y >= -15 - 1));
+  // Degenerate inputs.
+  t("single-point path returns itself", outlineVariableStroke([{ x: 1, y: 2 }], 10, ellProf, false).length === 1);
+  t("zero width returns the path", outlineVariableStroke(line, 0, ellProf, false) === line);
+}
+
+console.log("width-profile engine:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "addPath", points: [{ x: 0, y: 0 }, { x: 100, y: 0 }], closed: false });
+  const id = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id, patch: { strokeWidth: 10, strokeVisible: true, strokePaint: "#111111", strokeCap: "none" } });
+  e.dispatch({
+    type: "patch", id,
+    patch: { strokeWidthProfile: [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 0 }] },
+  });
+  const root = () => e.snapshot().pages[0].root;
+  t("profile patch lands on the node", (find(root(), id)?.strokeWidthProfile ?? []).length === 2);
+  e.dispatch({ type: "undo" });
+  t("undo reverts the profile patch", find(root(), id)?.strokeWidthProfile === undefined);
+  e.dispatch({ type: "redo" });
+  t("redo restores the profile patch", (find(root(), id)?.strokeWidthProfile ?? []).length === 2);
+  e.dispatch({ type: "outlineStroke", id });
+  const baked = find(root(), id);
+  t("outline-stroke bakes the profile into a filled vector", baked?.kind === "vector" && baked.closed === true);
+  t("outline-stroke clears stroke + profile", baked?.strokeWidth === 0 && baked?.strokeWidthProfile === undefined);
+  const bakedTip = (baked?.path ?? []).filter((p) => p.x > 95).map((p) => Math.abs(p.y));
+  t("baked outline keeps the taper", bakedTip.length > 0 && Math.max(...bakedTip) < 2);
+  // Uniform control: same path without a profile bakes a full-width ribbon.
+  e.dispatch({ type: "addPath", points: [{ x: 0, y: 50 }, { x: 100, y: 50 }], closed: false });
+  const id2 = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: id2, patch: { strokeWidth: 10, strokeVisible: true, strokePaint: "#111111", strokeCap: "none" } });
+  e.dispatch({ type: "outlineStroke", id: id2 });
+  const baked2 = find(root(), id2);
+  const uniTip = (baked2?.path ?? []).filter((p) => p.x > 95).map((p) => Math.abs(p.y));
+  t("uniform bake keeps full width at the tip", uniTip.length > 0 && Math.abs(Math.max(...uniTip) - 5) < 0.01);
+}
+
+console.log("boolean-preview:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100 });
+  const a = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 50, y: 50, w: 100, h: 100 });
+  const b = e.snapshot().selection[0];
+  e.dispatch({ type: "select", ids: [a, b] });
+  const root = e.snapshot().pages[0].root;
+  const uni = previewBoolean("union", root, [a, b]);
+  t("union preview covers both rects", !!uni && uni.x <= 3 && uni.y <= 3 && uni.x + uni.w >= 147 && uni.y + uni.h >= 147);
+  const sub = previewBoolean("subtract", root, [a, b]);
+  t("subtract preview is smaller than the union", !!sub && !!uni && sub.w * sub.h < uni.w * uni.h);
+  const inter = previewBoolean("intersect", root, [a, b]);
+  t("intersect preview is the overlap", !!inter && inter.w <= 60 && inter.h <= 60 && inter.w >= 40 && inter.h >= 40);
+  t("single selection has no preview", previewBoolean("union", root, [a]) === null);
+  e.dispatch({ type: "add", kind: "frame", x: 300, y: 0, w: 200, h: 200 });
+  const f = e.snapshot().selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 40, h: 40, parent: f });
+  const c = e.snapshot().selection[0];
+  t("cross-parent selection has no preview", previewBoolean("union", e.snapshot().pages[0].root, [a, c]) === null);
+  // View-state transitions (never in history).
+  e.dispatch({ type: "select", ids: [a, b] });
+  const canUndoBefore = e.snapshot().canUndo;
+  e.dispatch({ type: "setBooleanPreview", op: "union" });
+  t("arming preview sets view state", e.snapshot().booleanPreview === "union");
+  t("arming preview pushes no history", e.snapshot().canUndo === canUndoBefore);
+  e.dispatch({ type: "select", ids: [a] });
+  t("selection change clears preview", e.snapshot().booleanPreview == null);
+  e.dispatch({ type: "select", ids: [a, b] });
+  e.dispatch({ type: "setBooleanPreview", op: "subtract" });
+  e.dispatch({ type: "setTool", tool: "pen" });
+  t("tool change clears preview", e.snapshot().booleanPreview == null);
+  e.dispatch({ type: "select", ids: [a, b] });
+  e.dispatch({ type: "setBooleanPreview", op: "subtract" });
+  e.dispatch({ type: "setTool", tool: "select" });
+  e.dispatch({ type: "setBooleanPreview", op: "subtract" });
+  e.dispatch({ type: "boolean", op: "subtract" });
+  t("commit clears preview", e.snapshot().booleanPreview == null);
+  t("commit still bakes a boolean group", e.snapshot().pages[0].root.children.some((n) => n.kind === "boolean"));
+}
+
+
+console.log("variable-width export + modifiers:");
+{
+  // SVG export: a profiled stroke becomes a filled outline, not a stroke.
+  const v = node("vector", "V", 0, 0, 100, 10);
+  v.path = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
+  v.closed = false;
+  v.strokeWidth = 10; v.strokeVisible = true; v.strokePaint = "#111111"; v.strokeCap = "none";
+  v.strokeWidthProfile = [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 0 }];
+  const svgVar = svgShape(v, "none", "#111111");
+  t("profiled stroke exports as fill", svgVar.includes('fill="#111111"') && svgVar.includes('stroke="none"'));
+  t("profiled export carries no stroke-width", !svgVar.includes("stroke-width"));
+  const u = node("vector", "U", 0, 0, 100, 10);
+  u.path = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
+  u.closed = false;
+  u.strokeWidth = 10; u.strokeVisible = true; u.strokePaint = "#111111"; u.strokeCap = "none";
+  const svgUni = svgShape(u, "none", "#111111");
+  t("uniform stroke still exports as stroke", svgUni.includes("stroke-width"));
+  // Modifier-stack Stroke honours variableWidth.
+  const { evaluateModifierStack } = await import("../modifierStack.ts");
+  const base = { path: [{ x: 0, y: 0 }, { x: 100, y: 0 }], closed: false };
+  const tapered = evaluateModifierStack(base, [
+    { type: "stroke", width: 10, cap: "none", join: "miter", variableWidth: { points: [{ position: 0, widthMultiplier: 1 }, { position: 1, widthMultiplier: 0 }] } },
+  ]);
+  t("stroke modifier bakes a closed outline", tapered.closed === true && tapered.path.length >= 4);
+  const modTip = tapered.path.filter((p) => p.x > 95).map((p) => Math.abs(p.y));
+  t("stroke modifier honours the taper", modTip.length > 0 && Math.max(...modTip) < 1.5);
+  const plain = evaluateModifierStack(base, [{ type: "stroke", width: 10, cap: "none", join: "miter" }]);
+  const modUniTip = plain.path.filter((p) => p.x > 95).map((p) => Math.abs(p.y));
+  t("stroke modifier without profile stays uniform", modUniTip.length > 0 && Math.abs(Math.max(...modUniTip) - 5) < 0.01);
+  // Width-dot stations resolve by arc length.
+  const stations = widthProfileStations(
+    [{ x: 0, y: 0 }, { x: 100, y: 0 }],
+    false,
+    [{ position: 0, widthMultiplier: 1 }, { position: 0.5, widthMultiplier: 2 }, { position: 1, widthMultiplier: 0 }],
+  );
+  t("stations land on control positions", stations.length === 3 && Math.abs(stations[1].x - 50) < 1e-6 && stations[1].widthMultiplier === 2);
+  t("no stations without a centerline", widthProfileStations([{ x: 0, y: 0 }], false, [{ position: 0, widthMultiplier: 1 }]).length === 0);
+}
+
+// Micro-parity gaps 2026-09-25: Figma-documented defaults and gestures.
+{
+  const e = new MemoryEngine(false);
+  const rootOf = () => e.snapshot().pages[e.snapshot().page].root;
+  const N = (id) => find(rootOf(), id);
+  const add = (kind, x, y, w, h, parent) => {
+    e.dispatch({ type: "add", kind, x, y, w, h, parent });
+    const box = parent ? N(parent) : rootOf();
+    return box.children[box.children.length - 1].id;
+  };
+  // Gaps 2+3: lines/arrows default to centre strokes; lines get round caps.
+  const ln = add("line", 0, 0, 100, 2);
+  t("line defaults to centre strokeAlign", N(ln).strokeAlign === "center");
+  t("line defaults to round caps", N(ln).strokeCap === "round" && N(ln).strokeCapStart === "round" && N(ln).strokeCapEnd === "round");
+  const an = add("arrow", 0, 0, 100, 2);
+  t("arrow defaults to centre strokeAlign", N(an).strokeAlign === "center");
+  const rc = add("rect", 0, 0, 50, 50);
+  t("rect keeps inside align + butt caps", N(rc).strokeAlign === "inside" && N(rc).strokeCap === "none");
+  // Gap 4: hand-resizing a fill child fixes it at the dragged size.
+  const fr = add("frame", 0, 0, 300, 200);
+  e.dispatch({ type: "autoLayout", id: fr, layout: { direction: "vertical", gap: 0, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min" } });
+  const ch = add("rect", 0, 0, 100, 50, fr);
+  e.dispatch({ type: "patch", id: ch, patch: { sizingW: "fill" } });
+  e.dispatch({ type: "resize", id: ch, x: 0, y: 0, w: 150, h: 50 });
+  t("manual resize flips a fill child to fixed and keeps the size",
+    N(ch).sizingW === "fixed" && Math.round(N(ch).w) === 150);
+  // Gap 6: ignoreConstraints resizes past the children's constraints.
+  const pf = add("frame", 0, 0, 200, 200);
+  const kc = add("rect", 150, 10, 40, 40, pf);
+  e.dispatch({ type: "patch", id: kc, patch: { constraintH: "max" } });
+  e.dispatch({ type: "resize", id: pf, x: 0, y: 0, w: 300, h: 200, ignoreConstraints: true });
+  t("ignoreConstraints leaves a right-pinned child unmoved", N(kc).x === 150);
+  e.dispatch({ type: "resize", id: pf, x: 0, y: 0, w: 200, h: 200 });
+  t("plain resize still applies constraints", N(kc).x === 50);
+  // Gap 10: circle tip exports as a ring element.
+  const circ = node("line", "c", 0, 0, 100, 2, { strokeVisible: true, strokeWidth: 2, strokePaint: "#111111", strokeCap: "circle" });
+  t("circle cap exports a <circle> tip", svgShape(circ, "none", "#111111").includes("<circle"));
+  // Gap 2 at the export level: a default line strokes with no clipPath (the
+  // degenerate-clip bug made the shaft vanish); an inside rect keeps its clip.
+  const lnSvg = svgShape(N(ln), "none", "#1e1e1e");
+  t("default line exports an unclipped stroke", lnSvg.includes("stroke-width") && !lnSvg.includes("clipPath"));
+  const inSvg = svgShape(node("rect", "r", 0, 0, 40, 40, { strokeVisible: true, strokeWidth: 2, strokePaint: "#111111", strokeAlign: "inside" }), "#d9d9d9", "#111111");
+  t("inside rect keeps its export clip", inSvg.includes("clipPath"));
+  // Gap 2 at the render level: extra-stroke rows on a line never clip (even
+  // a stored "inside" row centres), while a rect row still clips inside.
+  const calls = [];
+  const mockCtx = new Proxy({}, {
+    get: (tgt, p) => (p in tgt ? tgt[p] : (...a) => { calls.push(p); }),
+    set: (tgt, p, v) => { tgt[p] = v; return true; },
+  });
+  const lineRow = node("line", "lr", 0, 0, 100, 2, { strokes: [{ color: "#111111", width: 2, align: "inside", visible: true }] });
+  paintExtraStrokes(mockCtx, lineRow, 1, () => {});
+  t("line extra-stroke row paints without clipping", calls.includes("stroke") && !calls.includes("clip"));
+  calls.length = 0;
+  const rectRow = node("rect", "rr", 0, 0, 40, 40, { strokes: [{ color: "#111111", width: 2, align: "inside", visible: true }] });
+  paintExtraStrokes(mockCtx, rectRow, 1, () => {});
+  t("rect extra-stroke row still clips inside", calls.includes("clip"));
+  // §5 frame audit: frameSelection wraps in a plain frame, resizeToFit hugs
+  // visible children, top-level sizes are remembered for click-creation, and
+  // duplicate takes an explicit placement that leaves the cascade alone.
+  {
+    const f = new MemoryEngine();
+    const R = () => f.snapshot().pages[f.snapshot().page].root;
+    const addR = (x, y, w, h, parent) => {
+      f.dispatch({ type: "add", kind: "rect", x, y, w, h, parent });
+      return f.snapshot().selection[0];
+    };
+    const r1 = addR(10, 20, 100, 60);
+    const r2 = addR(200, 150, 50, 50);
+    f.dispatch({ type: "select", ids: [r1, r2] });
+    f.dispatch({ type: "frameSelection" });
+    const g = find(R(), f.snapshot().selection[0]);
+    t("frameSelection wraps in a plain frame", g.kind === "frame" && !g.layout);
+    t("frameSelection frame is white + clip", g.fill === "#ffffff" && g.fillVisible === true && g.overflow === "clip");
+    t("frameSelection bounds fit the children", g.x === 10 && g.y === 20 && g.w === 240 && g.h === 180);
+    t("frameSelection remembers the top-level size", JSON.stringify(f.snapshot().lastFrameSize) === JSON.stringify({ w: 240, h: 180 }));
+    const F = (() => { f.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 500, h: 500 }); return f.snapshot().selection[0]; })();
+    const c1 = addR(60, 40, 30, 30, F);
+    const c2 = addR(400, 400, 50, 50, F);
+    f.dispatch({ type: "patch", id: c2, patch: { visible: false } });
+    f.dispatch({ type: "select", ids: [F] });
+    f.dispatch({ type: "resizeToFit" });
+    const F2 = find(R(), F);
+    const C1 = find(R(), c1);
+    t("resizeToFit hugs visible children", F2.x === 60 && F2.y === 40 && F2.w === 30 && F2.h === 30);
+    t("resizeToFit re-bases children to the new origin", C1.x === 0 && C1.y === 0);
+    t("resizeToFit skips hidden children", F2.w === 30 && F2.h === 30);
+    t("top-level add records lastFrameSize", JSON.stringify(f.snapshot().lastFrameSize) === JSON.stringify({ w: 500, h: 500 }));
+    f.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 100 });
+    t("new top-level frame updates lastFrameSize", JSON.stringify(f.snapshot().lastFrameSize) === JSON.stringify({ w: 200, h: 100 }));
+    f.dispatch({ type: "select", ids: [c1] });
+    f.dispatch({ type: "duplicate", dx: 100, dy: 0 });
+    const d1 = find(R(), f.snapshot().selection[0]);
+    t("duplicate override places exactly", d1.x === 100 && d1.y === 0);
+    f.dispatch({ type: "select", ids: [c1] });
+    f.dispatch({ type: "duplicate" });
+    const d2 = find(R(), f.snapshot().selection[0]);
+    t("override leaves the duplicate cascade alone", d2.x === 10 && d2.y === 10);
+  }
+  // §6 selection audit: a plain click lands on the group/boolean even when it
+  // is already selected (drilling is double-click's/Enter's job), frames stay
+  // transparent, ⌘-click drills deep, and locked layers are skipped.
+  {
+    const root = node("frame", "root", 0, 0, 1000, 1000);
+    const g = node("group", "g", 0, 0, 200, 200);
+    const gr = node("rect", "gr", 10, 10, 50, 50);
+    g.children.push(gr);
+    const fr = node("frame", "fr", 300, 0, 200, 200);
+    const frc = node("rect", "frc", 10, 10, 50, 50);
+    fr.children.push(frc);
+    root.children.push(g, fr);
+    t("click in a group selects the group", hitTest(root, 20, 20)?.id === g.id);
+    t("click in a selected group still selects the group", hitTest(root, 20, 20, { selection: [g.id] })?.id === g.id);
+    t("deep click drills to the nested child", hitTest(root, 20, 20, { deep: true })?.id === gr.id);
+    t("click in a frame selects the child (frames are transparent)", hitTest(root, 320, 20)?.id === frc.id);
+    frc.locked = true;
+    const lockedHit = hitTest(root, 320, 20);
+    t("locked layers are skipped by click", !!lockedHit && lockedHit.id !== frc.id);
+    // "Select all with same Instance": instances of the same component only.
+    const page = node("frame", "page", 0, 0, 1000, 1000);
+    const master = node("frame", "master", 0, 0, 100, 100, { isComponent: true, componentId: "compA" });
+    const ia = node("frame", "ia", 0, 0, 100, 100, { componentId: "compA" });
+    const ib = node("frame", "ib", 0, 0, 100, 100, { componentId: "compA" });
+    const ic = node("frame", "ic", 0, 0, 100, 100, { componentId: "compB" });
+    page.children.push(master, ia, ib, ic);
+    const got = sameIds(page, ia, "instance").sort();
+    t("same Instance finds sibling instances", JSON.stringify(got) === JSON.stringify([ib.id]));
+    t("same Instance on a plain layer finds nothing", sameIds(page, node("rect", "r", 0, 0, 10, 10), "instance").length === 0);
+  }
+  // §7 transform audit: equation current-value tokens, and effect offsets
+  // staying on world axes when the layer rotates (canvas + export agree).
+  {
+    t("Mixed stands for the current value", evalField("Mixed+100", 20) === 120);
+    t("𝑥 stands for the current value", evalField("(𝑥/2)+6", 20) === 16);
+    t("a standalone x stands for the current value", evalField("x*2", 21) === 42);
+    t("hex-looking input still fails closed", evalField("0x10+1", 5) === null);
+    const shadowOf = (rotation) =>
+      node("rect", "sh", 0, 0, 40, 40, {
+        rotation,
+        effects: [{ kind: "drop-shadow", color: "#00000066", x: 10, y: 0, blur: 0, spread: 0, visible: true }],
+      });
+    const translates = [];
+    const shadowCtx = new Proxy(
+      {},
+      {
+        get: (tgt, p) => (p in tgt ? tgt[p] : (...a) => {
+          if (p === "translate") translates.push(a);
+        }),
+        set: (tgt, p, v) => {
+          tgt[p] = v;
+          return true;
+        },
+      },
+    );
+    paintDropShadows(shadowCtx, shadowOf(0), 1);
+    t("unrotated shadow keeps its offset", JSON.stringify(translates[0]) === JSON.stringify([10, 0]));
+    translates.length = 0;
+    paintDropShadows(shadowCtx, shadowOf(90), 1);
+    t(
+      "rotated shadow offset is counter-rotated",
+      translates.length === 1 && Math.abs(translates[0][0]) < 1e-9 && translates[0][1] === -10,
+    );
+    const svgOf = (rotation) => exportSvg(shadowOf(rotation), { format: "SVG", scale: 1, suffix: "" });
+    t("unrotated shadow exports its offset", svgOf(0).includes('dx="10" dy="0"'));
+    t("rotated shadow exports a counter-rotated offset", svgOf(90).includes('dx="0" dy="-10"'));
+  }
+  // §8 navigation audit: pixel-grid settling covers every layer while the
+  // setting is on, and frames/components always settle with it off.
+  {
+    const frame = node("frame", "f", 0, 0, 100, 100);
+    const rect = node("rect", "r", 0, 0, 10, 10);
+    const main = node("frame", "c", 0, 0, 100, 100, { isComponent: true, componentId: "c1" });
+    t("snap-on settles ordinary layers", wantsPixelSnap(rect, true) === true);
+    t("snap-off skips ordinary layers", wantsPixelSnap(rect, false) === false);
+    t("frames settle with snap off", wantsPixelSnap(frame, false) === true);
+    t("component mains settle with snap off", wantsPixelSnap(main, false) === true);
+    t("rounding wholes the box", JSON.stringify(roundBox({ x: 1.4, y: 2.6, w: 10.2, h: 9.5 })) === JSON.stringify({ x: 1, y: 3, w: 10, h: 10 }));
+    t("rounding never inverts a size", roundBox({ x: 0, y: 0, w: 0.4, h: 0.4 }).w === 1);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

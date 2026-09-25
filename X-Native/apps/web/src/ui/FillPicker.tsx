@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GradientStop } from "../engine/types";
 import { Icon, caretSize } from "./icons";
+import { useRestoreFocus } from "./a11y";
 import {
   armEyedrop,
   BLENDS,
@@ -89,6 +90,7 @@ export function FillPicker({
   onChange: (v: FillValue) => void;
   onClose: () => void;
 }) {
+  useRestoreFocus();
   const { r, g, b } = parseHex(value.color);
   const init = rgbToHsv(r, g, b);
   const [hsv, setHsv] = useState(init);
@@ -535,7 +537,7 @@ export function FillPicker({
                     title="Back to the background this layer actually sits on"
                     onClick={() => setBgOverride(null)}
                   >
-                    <Icon name="reset" size={11} />
+                    <Icon name="reset" size={12} />
                   </button>
                 )}
                 <select
@@ -553,11 +555,11 @@ export function FillPicker({
               <div className="a11y-result">
                 <strong>{ratio.toFixed(2)}:1</strong>
                 <span className={`a11y-badge${passAA ? " ok" : " bad"}`} title={`AA · ${targetAA}:1`}>
-                  AA <Icon name={passAA ? "check" : "x-mark"} size={11} />
+                  AA <Icon name={passAA ? "check" : "x-mark"} size={12} />
                 </span>
                 {hasAAA && (
                   <span className={`a11y-badge${passAAA ? " ok" : " bad"}`} title={`AAA · ${targetAAA}:1`}>
-                    AAA <Icon name={passAAA ? "check" : "x-mark"} size={11} />
+                    AAA <Icon name={passAAA ? "check" : "x-mark"} size={12} />
                   </span>
                 )}
                 {!passAA && (

@@ -248,3 +248,26 @@ export function snapResize(
   }
   return { dx, dy, guides };
 }
+
+/** Pixel-grid snapping: placement, moves, and resizes land on whole pixels
+ *  while Snap-to-pixel-grid is on — and frames (sections are frames), main
+ *  components always snap, even with the setting off. */
+export function wantsPixelSnap(n: Pick<XNode, "kind" | "isComponent">, pixelSnapOn: boolean): boolean {
+  if (pixelSnapOn) return true;
+  return n.kind === "frame" || n.kind === "component" || n.isComponent === true;
+}
+
+/** Whole-pixel box; sizes floor at 1 so a snapped edge never inverts. */
+export function roundBox(box: { x: number; y: number; w: number; h: number }): {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+} {
+  return {
+    x: Math.round(box.x),
+    y: Math.round(box.y),
+    w: Math.max(1, Math.round(box.w)),
+    h: Math.max(1, Math.round(box.h)),
+  };
+}

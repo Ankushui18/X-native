@@ -3,15 +3,15 @@ import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
-import { Icon, caretSize, kindIcon } from "./icons";
+import { Icon, caretSize, kindIcon, type IconName } from "./icons";
 import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 
 export type MenuItem =
-  | { kind: "action"; id: string; label: string; shortcut?: string; icon?: string; enabled?: boolean }
+  | { kind: "action"; id: string; label: string; shortcut?: string; icon?: IconName; enabled?: boolean }
   | { kind: "sep" }
-  | { kind: "sub"; label: string; icon?: string; items: MenuItem[] };
+  | { kind: "sub"; label: string; icon?: IconName; items: MenuItem[] };
 
 export function ContextMenu({
   x,
@@ -212,7 +212,7 @@ export function canvasMenu(
           id: `copyCode:${l.id}`,
           label: `Copy as ${l.label}`,
           shortcut: l.id === "css" ? "⌥⇧⌘C" : undefined,
-          icon: "code",
+          icon: "code" as IconName,
         })),
         { kind: "action" as const, id: "copyPng", label: "Copy as PNG", icon: "image" },
         { kind: "action" as const, id: "copyLink", label: "Copy link to selection", icon: "link" },
@@ -319,8 +319,8 @@ export function layerMenu(isGroup: boolean, hasLayout = false): MenuItem[] {
     ...layoutMenuItems(hasLayout),
     { kind: "sep" },
     ...(isGroup
-      ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" }]
-      : []),
+      ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" as IconName }]
+      : [] as MenuItem[]),
     { kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" },
     { kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye-off" },
     { kind: "sep" },

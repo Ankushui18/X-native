@@ -65,10 +65,27 @@ export type StrokeCap =
   | "arrow"
   | "triangle"
   | "reverse-triangle"
-  | "diamond";
+  | "diamond"
+  | "circle";
 /** Individual strokes picker; `custom` keeps a weight per side. */
 export type StrokeSides = "all" | "top" | "right" | "bottom" | "left" | "custom";
 export type StrokeJoin = "miter" | "bevel" | "round";
+/**
+ * One control point of a variable-width stroke profile.
+ *
+ * `position` runs 0 (path start) to 1 (path end) along the centerline's
+ * arc length; `widthMultiplier` scales the node's `strokeWidth` at that
+ * point (1 = the weight in the panel, 0 = tapered to a point). Widths
+ * between points interpolate linearly. Stored sorted by position.
+ */
+export interface VariableWidthPoint {
+  position: number;
+  widthMultiplier: number;
+}
+/** The full profile; the modifier-stack `Stroke` modifier carries this shape. */
+export interface VariableWidthProfile {
+  points: VariableWidthPoint[];
+}
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
@@ -102,7 +119,8 @@ export type ProtoAction =
   | "closeOverlay"
   | "swapOverlay"
   | "openUrl"
-  | "setVariable";
+  | "setVariable"
+  | "setVariant";
 export type ProtoAnim =
   | "instant"
   | "dissolve"
@@ -126,11 +144,34 @@ export type ProtoDevice =
 
 export type VariableType = "color" | "number" | "string" | "boolean";
 
+/**
+ * A variable's value in one mode: a literal, or an alias pointing at
+ * another variable by id (same-type enforced at bind time).
+ */
+export type VariableValue = string | number | boolean | { alias: string };
+
+export interface VariableMode {
+  id: string;
+  name: string;
+}
+
+export interface VariableCollection {
+  id: string;
+  name: string;
+  modes: VariableMode[];
+}
+
 export interface VariableItem {
   id: string;
   name: string;
   type: VariableType;
-  value: string | number | boolean;
+  /** Default value (mode 0 of the collection). */
+  value: VariableValue;
+  /**
+   * Per-mode overrides, keyed by mode id. Absent entries fall back to
+   * `value`. Always resolved under the collection's active mode.
+   */
+  values?: Record<string, VariableValue>;
   collection: string;
 }
 
@@ -207,6 +248,20 @@ export interface Interaction {
   variableId?: string;
   variableOp?: "set" | "increment" | "decrement" | "toggle";
   variableValue?: string | number | boolean;
+  /**
+   * Gate: the interaction only runs when the condition holds, evaluated
+   * against variables resolved under the active modes. Absent = always run.
+   */
+  condition?: InteractionCondition;
+  /** Variant name for the `setVariant` action (interactive components). */
+  variantName?: string;
+}
+
+/** A variable comparison gating one prototype interaction. */
+export interface InteractionCondition {
+  variableId: string;
+  op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "truthy" | "falsy";
+  value?: string | number | boolean;
 }
 
 export interface ComponentVariant {
@@ -236,7 +291,7 @@ export interface SharedStyle {
 export interface ComponentPropertyDef {
   id: string;
   name: string;
-  type: "variant" | "boolean" | "text";
+  type: "variant" | "boolean" | "text" | "instance-swap";
   defaultValue: string | boolean;
   targetNodeName?: string;
 }
@@ -248,6 +303,46 @@ export interface ComponentMaster {
   variants: ComponentVariant[];
   property: string;
   properties?: ComponentPropertyDef[];
+  /**
+   * Component → code mappings (Dev Mode codegen + design API, P1.10).
+   * Each entry links this master to a code component in one framework;
+   * the tree code generator renders mapped instances as component tags
+   * instead of expanding their layers.
+   */
+  codeMappings?: CodeMapping[];
+}
+
+/**
+ * How one component property reaches generated code: a named prop, the
+ * component's children/text, or dropped from the output entirely.
+ */
+export type CodePropKind = "prop" | "children" | "omit";
+
+export interface CodePropMapping {
+  /** Component property name (or the variant property name). */
+  prop: string;
+  /** Prop name in code; defaults to the slugified component property. */
+  codeProp?: string;
+  kind: CodePropKind;
+}
+
+/**
+ * A component → code mapping for one framework (P1.10): which code
+ * component an instance becomes, where it imports from, and how its
+ * properties map to props. `syncHash` snapshots the master the mapping
+ * was last verified against, so Dev Mode can flag drift.
+ */
+export interface CodeMapping {
+  id: string;
+  framework: "react" | "html" | "vue" | "svelte" | "tailwind" | "swiftui" | "compose" | "flutter" | "uikit";
+  componentName: string;
+  importPath?: string;
+  /** Source file the mapping points at, for the sync indicator. */
+  file?: string;
+  version?: string;
+  props: CodePropMapping[];
+  syncedAt?: number;
+  syncHash?: string;
 }
 
 export interface ExportPreset {
@@ -484,6 +579,14 @@ export interface XNode {
   fillStyle?: string;
   /** Id of the SharedStyle driving `strokePaint`. */
   strokeStyle?: string;
+  /**
+   * Variable bindings: layer prop name -> variable id. Bound props are
+   * re-applied from the resolved variable (under the active mode) on every
+   * relayout; editing a bound prop directly clears that entry (detach).
+   * Supported props: fill, strokePaint, strokeWidth, opacity, fontSize,
+   * cornerRadii, visible, text. Type-checked at bind time.
+   */
+  variableBindings?: Record<string, string>;
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;
@@ -523,6 +626,14 @@ export interface XNode {
   strokeDashCap?: "butt" | "round" | "square";
   /** "Miter angle": joins sharper than this bevel instead of pointing. */
   strokeMiterAngle?: number;
+  /**
+   * Variable-width profile for the base stroke, as width multipliers along
+   * the path centerline (see VariableWidthPoint). Only honoured on `vector`,
+   * `line` and `arrow` nodes; absent/empty/uniform means a plain stroke.
+   * A profiled stroke paints centre-aligned and ignores dashes — canvas
+   * cannot dash a filled outline — and the extra `strokes` rows stay uniform.
+   */
+  strokeWidthProfile?: VariableWidthPoint[];
   aspectLocked: boolean;
   /** The ratio the lock was taken at (height ÷ width), remembered so a size
    *  that clamps to a pixel on the way to a new one cannot leave a locked box
@@ -679,6 +790,12 @@ export interface Snapshot {
   pages: Page[];
   page: number;
   selection: string[];
+  /** Bumped on every dispatch except pure viewport moves (pan/zoom), so panels
+   *  showing document state can skip re-rendering viewport-only snapshots even
+   *  though tree edits mutate nodes in place (which defeats reference
+   *  equality). Session-only: never persisted, restored by undo like the rest
+   *  of state. */
+  treeRev: number;
   tool: Tool;
   zoom: number;
   panX: number;
@@ -731,6 +848,10 @@ export interface Snapshot {
   openComment: string;
   /** Variables / Tokens store */
   variables?: VariableItem[];
+  /** Variable collections (each with its own modes). */
+  variableCollections?: VariableCollection[];
+  /** Active mode id per collection id. */
+  activeModes?: Record<string, string>;
   /** Dev Mode Annotations store */
   annotations?: AnnotationItem[];
   /** Node ID currently in vector edit mode, if any. */
@@ -739,6 +860,14 @@ export interface Snapshot {
   vecPoint?: number | null;
   /** Selected vector point indices for multi-selection. */
   vecPoints?: number[];
+  /**
+   * Armed boolean live preview: the op whose result the canvas overlays on
+   * the current selection without committing. View state, never persisted
+   * and never in undo history; cleared by selection/tool change or commit.
+   */
+  booleanPreview?: BooleanOp | null;
+  /** Last top-level frame size this session: click-creation reuses it. */
+  lastFrameSize?: { w: number; h: number } | null;
 }
 
 /** Off, or the density a rasterised preview is drawn at. */
@@ -779,7 +908,7 @@ export type Command =
       extra?: Partial<XNode>;
     }
   | { type: "move"; ids: string[]; dx: number; dy: number }
-  | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean }
+  | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean; ignoreConstraints?: boolean }
   | { type: "reparent"; ids: string[]; parent: string; x: number; y: number }
   /**
    * Move layers to an explicit slot in a parent's child list, preserving their
@@ -788,7 +917,7 @@ export type Command =
    */
   | { type: "reorder"; ids: string[]; parent: string; index: number }
   | { type: "delete" }
-  | { type: "duplicate" }
+  | { type: "duplicate"; dx?: number; dy?: number }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "patch"; id: string; patch: Partial<XNode> }
@@ -813,6 +942,8 @@ export type Command =
   | { type: "loadClip"; nodes: XNode[] }
   | { type: "group" }
   | { type: "ungroup" }
+  | { type: "frameSelection" }
+  | { type: "resizeToFit" }
   | { type: "wrapSection" }
   | { type: "arrange"; dir: "front" | "forward" | "backward" | "back" }
   | { type: "selectAll" }
@@ -833,6 +964,8 @@ export type Command =
   | { type: "toggleStroke" }
   | { type: "toggleOutlines" }
   | { type: "boolean"; op: BooleanOp }
+  /** Arm (`op`) or clear (`null`) the boolean live preview overlay. View-only. */
+  | { type: "setBooleanPreview"; op: BooleanOp | null }
   /** Create a named style from the selection's current fill or stroke and
    *  bind the selection to it. */
   | { type: "createStyle"; kind: "fill" | "stroke"; name: string }
@@ -870,12 +1003,25 @@ export type Command =
   | { type: "setVecEdit"; id: string | null; pointIndex?: number | null; pointIndices?: number[] }
   | { type: "addComponentProperty"; componentId: string; property: ComponentPropertyDef }
   | { type: "deleteComponentProperty"; componentId: string; propId: string }
+  | { type: "setCodeMapping"; componentId: string; mapping: CodeMapping }
+  | { type: "deleteCodeMapping"; componentId: string; mappingId: string }
+  | { type: "syncCodeMapping"; componentId: string; mappingId: string }
   | { type: "setComponentProperty"; id: string; propName: string; value: string | boolean }
   | { type: "resetOverrides"; id?: string; property?: string }
   | { type: "setInteractions"; id: string; interactions: Interaction[] }
   | { type: "addVariable"; variable: VariableItem }
   | { type: "patchVariable"; id: string; patch: Partial<VariableItem> }
   | { type: "deleteVariable"; id: string }
+  | { type: "addCollection"; name: string }
+  | { type: "renameCollection"; id: string; name: string }
+  | { type: "deleteCollection"; id: string }
+  | { type: "addMode"; collectionId: string; name: string }
+  | { type: "renameMode"; collectionId: string; modeId: string; name: string }
+  | { type: "deleteMode"; collectionId: string; modeId: string }
+  | { type: "setActiveMode"; collectionId: string; modeId: string }
+  | { type: "bindVariable"; id: string; prop: string; variableId: string }
+  | { type: "unbindVariable"; id: string; prop: string }
+  | { type: "swapInstance"; id: string; componentId: string }
   | { type: "addAnnotation"; annotation: AnnotationItem }
   | { type: "deleteAnnotation"; id: string }
   | { type: "presentStart"; id?: string }

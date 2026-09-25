@@ -1,4 +1,4 @@
-import type { StrokeSides, XNode } from "./types";
+import type { StrokeSides, VariableWidthPoint, VariableWidthProfile, XNode } from "./types";
 
 /**
  * The stroke and effect rules that need no canvas, kept apart from the painter
@@ -111,4 +111,88 @@ export function miterLimitFromAngle(degrees: number | undefined): number {
   if (a <= 0) return 1_000_000;
   if (a >= 180) return 1;
   return 1 / Math.sin((a * Math.PI) / 360);
+}
+
+/* ── Variable-width profiles ──────────────────────────────────────────────
+ * A profile is only honoured on vector/line/arrow centerlines; every other
+ * consumer (paint, export, hit test, outline-stroke) funnels through these
+ * helpers so "does this node have an active profile?" can never drift. */
+
+const PROFILE_EPS = 1e-6;
+/** Clamp a multiplier into the sane range: negative widths are meaningless, and
+ *  anything past 8× the panel weight is a runaway drag, not a design choice. */
+export const MAX_WIDTH_MULTIPLIER = 8;
+
+/** Sort by position, clamp position to 0..1 and multipliers to 0..8. */
+export function normalizeWidthProfile(points: readonly VariableWidthPoint[] | undefined): VariableWidthPoint[] {
+  if (!points || !points.length) return [];
+  return [...points]
+    .map((p) => ({
+      position: Math.min(1, Math.max(0, Number.isFinite(p.position) ? p.position : 0)),
+      widthMultiplier: Math.min(
+        MAX_WIDTH_MULTIPLIER,
+        Math.max(0, Number.isFinite(p.widthMultiplier) ? p.widthMultiplier : 1),
+      ),
+    }))
+    .sort((a, b) => a.position - b.position);
+}
+
+/**
+ * Width multiplier at arc-length `t` (0..1), linearly interpolated between
+ * the neighbouring control points and clamped to the end points outside the
+ * profile's span. Accepts the bare points array the node stores or the
+ * `{ points }` profile the modifier stack carries.
+ */
+export function sampleVariableWidth(
+  profile: readonly VariableWidthPoint[] | VariableWidthProfile | undefined,
+  t: number,
+): number {
+  const list: readonly VariableWidthPoint[] | undefined =
+    profile == null ? undefined : "points" in profile ? profile.points : profile;
+  const pts = normalizeWidthProfile(list);
+  if (!pts.length) return 1.0;
+  if (t <= pts[0].position) return pts[0].widthMultiplier;
+  if (t >= pts[pts.length - 1].position) return pts[pts.length - 1].widthMultiplier;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i];
+    const p1 = pts[i + 1];
+    if (t >= p0.position && t <= p1.position) {
+      const span = p1.position - p0.position;
+      const f = span <= PROFILE_EPS ? 0 : (t - p0.position) / span;
+      return p0.widthMultiplier + (p1.widthMultiplier - p0.widthMultiplier) * f;
+    }
+  }
+  return 1.0;
+}
+
+/** True when the profile actually varies the width — anything else (missing,
+ *  empty, all-equal) takes the uniform fast path everywhere. */
+export function hasVariableWidth(points: readonly VariableWidthPoint[] | undefined): boolean {
+  const pts = normalizeWidthProfile(points);
+  if (pts.length < 2) return false;
+  const first = pts[0].widthMultiplier;
+  return pts.some((p) => Math.abs(p.widthMultiplier - first) > PROFILE_EPS);
+}
+
+/** Largest multiplier in the profile; the hit test and arrowheads size from this. */
+export function maxWidthMultiplier(points: readonly VariableWidthPoint[] | undefined): number {
+  const pts = normalizeWidthProfile(points);
+  if (!pts.length) return 1;
+  return Math.max(...pts.map((p) => p.widthMultiplier));
+}
+
+/** Effective stroke width at arc-length `t` for a profiled node. */
+export function widthAt(n: XNode, t: number): number {
+  return Math.max(0, n.strokeWidth) * sampleVariableWidth(n.strokeWidthProfile, t);
+}
+
+/** Whether `n` paints its base stroke through the variable-width outline. */
+export function usesVariableWidth(n: XNode): boolean {
+  if (n.kind !== "vector" && n.kind !== "line" && n.kind !== "arrow") return false;
+  if (!(n.strokeWidth > 0) || !n.strokeVisible || !n.strokePaint || isNonePaint(n.strokePaint)) return false;
+  return hasVariableWidth(n.strokeWidthProfile);
+}
+
+function isNonePaint(paint: string): boolean {
+  return !paint || paint === "none" || paint === "#00000000";
 }

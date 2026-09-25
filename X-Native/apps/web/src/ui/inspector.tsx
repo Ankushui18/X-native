@@ -24,26 +24,37 @@ import type {
   StrokeAlign,
   StrokeCap,
   StrokeJoin,
+  VariableWidthPoint,
   TextAlign,
   TextAlignVertical,
   Interaction,
+  InteractionCondition,
   ProtoDevice,
   ProtoAnim,
   ProtoEasing,
   ProtoTrigger,
   LayoutGrid,
   GridPattern,
+  VariableItem,
   XNode,
+  CodeMapping,
+  CodePropMapping,
+  ComponentMaster,
 } from "../engine/types";
 import type { Modifier } from "../engine/modifierStack";
 import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
+import { isAlias, resolveVariable } from "../engine/variables";
+import { lintDocument, type LintFix, type LintIssue } from "../engine/lint";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
 import { evalField, hasExpression } from "./fieldExpr";
 import {
   SIDES,
+  normalizeWidthProfile,
   parseDashPattern,
+  sampleVariableWidth,
   sideWidths,
   sidesSupported,
+  usesVariableWidth,
 } from "../engine/strokeModel";
 import {
   canAddEffect,
@@ -83,7 +94,7 @@ import {
   type AlignCell,
 } from "../engine/layout";
 import { hugSize } from "./textLayout";
-import { Icon, caretSize, rowIconSize } from "./icons";
+import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { buildPdf } from "../engine/pdf";
@@ -120,8 +131,17 @@ import {
   setDevPrefs,
   subscribeDevPrefs,
   type DevFormat,
+  type DevScope,
   type DevUnit,
 } from "./devPrefs";
+import {
+  generateAndroidXml,
+  generateSubtreeCode,
+  generateTailwindTheme,
+  generateUIKitCode,
+  mappingSyncStatus,
+  type TreeFormat,
+} from "../engine/codegen";
 
 export function RightPanel({
   engine,
@@ -149,7 +169,7 @@ export function RightPanel({
   const n = wp?.node;
   const inspect = snap.rightTab === "inspect";
   return (
-    <aside className="panel right">
+    <aside className="panel right" aria-label="Inspector">
       <div className="right-head">
         <div className="avatar" title="You">
           X
@@ -210,7 +230,10 @@ export function RightPanel({
         )}
         {inspect && <Inspect n={n} engine={engine} snap={snap} />}
         {snap.rightTab === "design" && !inspect && !n && (
-          <PageDesign engine={engine} tool={snap.tool} />
+          <>
+            <PageDesign engine={engine} tool={snap.tool} />
+            <DesignHealth engine={engine} snap={snap} />
+          </>
         )}
         {snap.rightTab === "design" && !inspect && n && wp && (
           <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} />
@@ -350,14 +373,14 @@ function ExportAssetsDialog({
                 <span className="xrow-size">
                   {Math.round(n.w)} × {Math.round(n.h)}
                 </span>
-                <select value={p.format} onChange={(e) => set({ format: e.target.value as ExportFormat })}>
+                <select aria-label="Export format" value={p.format} onChange={(e) => set({ format: e.target.value as ExportFormat })}>
                   {FORMATS.map((f) => (
                     <option key={f} value={f}>
                       {f}
                     </option>
                   ))}
                 </select>
-                <select value={String(p.scale)} onChange={(e) => set({ scale: Number(e.target.value) })}>
+                <select aria-label="Export scale" value={String(p.scale)} onChange={(e) => set({ scale: Number(e.target.value) })}>
                   {SCALES.map((x) => (
                     <option key={x} value={String(x)}>
                       {x}×
@@ -392,7 +415,7 @@ function ExportAssetsDialog({
 
 interface PresetCategory {
   category: string;
-  icon: string;
+  icon: IconName;
   items: { name: string; w: number; h: number }[];
 }
 
@@ -444,6 +467,123 @@ const PRESET_GROUPS: PresetCategory[] = [
   },
 ];
 
+/**
+ * Design health, live from the snapshot: score, issue list, click-to-select,
+ * and one-click fixes. Recomputes every render, so feedback is real-time.
+ */
+function DesignHealth({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const report = useMemo(() => lintDocument(snap), [snap]);
+  const [open, setOpen] = useState(true);
+  const scoreColor = report.score >= 90 ? "var(--accent)" : report.score >= 70 ? "var(--amber)" : "var(--red)";
+
+  const selectIssue = (issue: LintIssue) => {
+    if (issue.nodeIds.length) {
+      engine.dispatch({ type: "setPage", index: issue.page });
+      engine.dispatch({ type: "select", ids: [issue.nodeIds[0]] });
+      zoomTo(engine, "selection");
+    } else if (issue.variableIds.length) {
+      engine.dispatch({ type: "setLeftTab", tab: "tokens" });
+    }
+  };
+
+  const runFix = (issue: LintIssue, fix: LintFix) => {
+    if (fix.kind === "delete-variable") {
+      engine.dispatch({ type: "deleteVariable", id: fix.variableId });
+      toast("Variable deleted");
+    } else if (fix.kind === "delete-style") {
+      engine.dispatch({ type: "deleteStyle", id: fix.styleId });
+      toast("Style deleted");
+    } else if (fix.kind === "reset-overrides") {
+      engine.dispatch({ type: "resetOverrides", id: fix.nodeId });
+      toast("Overrides reset");
+    } else if (fix.kind === "create-variable-bind") {
+      const collection = snap.variableCollections?.[0]?.name ?? "Brand";
+      const id = `var_${Date.now()}`;
+      const name = `token-${fix.color.replace("#", "").toLowerCase()}`;
+      engine.dispatch({ type: "addVariable", variable: { id, name, type: "color", value: fix.color, collection } });
+      engine.dispatch({ type: "bindVariable", id: fix.nodeId, prop: fix.prop, variableId: id });
+      toast(`Created ${name} and bound it`);
+    } else {
+      selectIssue(issue);
+    }
+  };
+
+  const fixLabel = (fix: LintFix): string =>
+    fix.kind === "delete-variable" || fix.kind === "delete-style"
+      ? "Delete"
+      : fix.kind === "reset-overrides"
+        ? "Reset"
+        : fix.kind === "create-variable-bind"
+          ? "Make token"
+          : "Show";
+
+  const dot = (sev: LintIssue["severity"]): string => (sev === "error" ? "var(--red)" : sev === "warning" ? "var(--amber)" : "var(--dim)");
+  const shown = report.issues.slice(0, 40);
+  return (
+    <>
+      <div className="h-row" style={{ marginTop: 4 }}>
+        <h3>Design health</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{ fontSize: 11, fontWeight: 700, color: scoreColor }}
+            title={`${report.counts.error} errors · ${report.counts.warning} warnings · ${report.counts.info} notes`}
+          >
+            {report.score} / 100
+          </span>
+          <button className="icon-btn" title={open ? "Collapse issues" : "Expand issues"} onClick={() => setOpen((v) => !v)}>
+            <Icon name={open ? "chevron-down" : "chevron-right"} size={12} />
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="insp-pad" style={{ display: "grid", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+          {report.issues.length === 0 && <p className="muted">No issues — every color, variable, and component checks out.</p>}
+          {shown.map((issue, i) => (
+            <div
+              key={`${issue.rule}-${i}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 6px",
+                borderRadius: 6,
+                background: "var(--hover)",
+                fontSize: 11,
+                cursor: issue.nodeIds.length || issue.variableIds.length ? "pointer" : "default",
+              }}
+              title={issue.nodeIds.length || issue.variableIds.length ? "Click to show" : undefined}
+              onClick={() => selectIssue(issue)}
+            >
+              <span
+                style={{ width: 7, height: 7, borderRadius: 999, background: dot(issue.severity), flexShrink: 0 }}
+                aria-hidden
+              />
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={issue.message}>
+                {issue.message}
+              </span>
+              {issue.fix && (
+                <button
+                  className="mini"
+                  title="Apply fix"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (issue.fix) runFix(issue, issue.fix);
+                  }}
+                >
+                  {issue.fix && fixLabel(issue.fix)}
+                </button>
+              )}
+            </div>
+          ))}
+          {report.issues.length > shown.length && (
+            <p className="muted">+{report.issues.length - shown.length} more</p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   const snap = engine.snapshot();
   const root = snap.pages[snap.page].root;
@@ -481,17 +621,22 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
                 {grp.items.map((p) => (
                   <button
                     key={p.name}
-                    onClick={() =>
+                    onClick={() => {
+                      // Preset frames land at the viewport's top-left, not at a
+                      // fixed point the user may have panned away from.
+                      // Rounded: frames always snap to the pixel grid.
+                      const vx = Math.round(-snap.panX / snap.zoom + 24);
+                      const vy = Math.round(-snap.panY / snap.zoom + 48);
                       engine.dispatch({
                         type: "add",
                         kind: "frame",
-                        x: 80,
-                        y: 80,
+                        x: vx,
+                        y: vy,
                         w: p.w,
                         h: p.h,
                         extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
-                      })
-                    }
+                      });
+                    }}
                   >
                     {p.name}
                     <span className="sz">
@@ -563,6 +708,12 @@ function Prototype({
     if (!n) return;
     engine.dispatch({ type: "setInteractions", id: n.id, interactions: next });
   };
+  const coerceVal = (raw: string): string | number | boolean => {
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    const num = Number(raw);
+    return raw !== "" && !isNaN(num) ? num : raw;
+  };
   return (
     <>
       <div className="h-row">
@@ -571,6 +722,7 @@ function Prototype({
       <div className="proto-row">
         <span>Start</span>
         <select
+          aria-label="Flow start frame"
           value={start || frames[0]?.id || ""}
           onChange={(e) => engine.dispatch({ type: "patchPage", patch: { flowStart: e.target.value } })}
           style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
@@ -589,6 +741,7 @@ function Prototype({
       <div className="proto-row">
         <span>Device</span>
         <select
+          aria-label="Prototype device"
           value={snap.prototypeDevice || "none"}
           onChange={(e) =>
             engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })
@@ -610,6 +763,7 @@ function Prototype({
       <div className="proto-row">
         <span>Size</span>
         <select
+          aria-label="Prototype scale"
           value={snap.prototypeScale || "fit"}
           onChange={(e) =>
             engine.dispatch({ type: "setPrototypeScale", scale: e.target.value as "fit" | "100%" | "fill" })
@@ -680,6 +834,7 @@ function Prototype({
             <div style={{ display: "flex", gap: 4 }}>
               <select
                 style={{ flex: 1 }}
+                aria-label="Interaction trigger"
                 value={ix.trigger}
                 onChange={(e) => {
                   const next = interactions.map((x, j) =>
@@ -705,7 +860,21 @@ function Prototype({
               </button>
             </div>
 
+            {ix.trigger === "keyPress" && (
+              <input
+                readOnly
+                placeholder="Click here, then press a key…"
+                title="The key that fires this interaction while presenting"
+                value={ix.keyKey || ""}
+                onKeyDown={(e) => {
+                  e.preventDefault();
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, keyKey: e.key } : x)));
+                }}
+              />
+            )}
+
             <select
+              aria-label="Interaction action"
               value={ix.action}
               onChange={(e) => {
                 const action = e.target.value as Interaction["action"];
@@ -720,13 +889,35 @@ function Prototype({
               <option value="scrollTo">Scroll to</option>
               <option value="openUrl">Open link</option>
               <option value="setVariable">Set variable</option>
+              <option value="setVariant">Swap variant</option>
             </select>
+
+            {ix.action === "setVariant" && (
+              <select
+                value={ix.variantName || ""}
+                title="Variant to swap this instance to"
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, variantName: e.target.value } : x)))
+                }
+              >
+                <option value="">Choose variant…</option>
+                {(snap.components.find((c) => c.id === n.componentId)?.variants ?? []).map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {ix.action === "setVariant" && !n.componentId && (
+              <p className="muted">Put this interaction on an instance to swap its variant.</p>
+            )}
 
             {(ix.action === "navigate" ||
               ix.action === "scrollTo" ||
               ix.action === "openOverlay" ||
               ix.action === "swapOverlay") && (
               <select
+                aria-label="Navigate to"
                 value={ix.destination}
                 onChange={(e) =>
                   setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
@@ -746,6 +937,7 @@ function Prototype({
             {(ix.action === "openOverlay" || ix.action === "swapOverlay") && (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
                 <select
+                  aria-label="Overlay position"
                   value={ix.overlayPosition || "center"}
                   onChange={(e) =>
                     setIx(
@@ -789,6 +981,7 @@ function Prototype({
             {ix.action === "setVariable" && (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
                 <select
+                  aria-label="Variable"
                   value={ix.variableId || ""}
                   onChange={(e) =>
                     setIx(interactions.map((x, j) => (j === i ? { ...x, variableId: e.target.value } : x)))
@@ -802,6 +995,7 @@ function Prototype({
                   ))}
                 </select>
                 <select
+                  aria-label="Variable operation"
                   value={ix.variableOp || "toggle"}
                   onChange={(e) =>
                     setIx(
@@ -811,16 +1005,28 @@ function Prototype({
                     )
                   }
                 >
-                  <option value="toggle">Toggle boolean</option>
+                  <option value="set">Set value</option>
+                <option value="toggle">Toggle boolean</option>
                   <option value="increment">Increment +1</option>
                   <option value="decrement">Decrement -1</option>
                 </select>
               </div>
             )}
+            {ix.action === "setVariable" && ix.variableOp === "set" && (
+              <input
+                placeholder="Value"
+                title="Literal value to write (numbers and true/false are typed)"
+                value={ix.variableValue === undefined ? "" : String(ix.variableValue)}
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, variableValue: coerceVal(e.target.value) } : x)))
+                }
+              />
+            )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 4 }}>
               <select
-                value={ix.animation}
+                aria-label="Animation"
+              value={ix.animation}
                 onChange={(e) =>
                   setIx(
                     interactions.map((x, j) =>
@@ -852,7 +1058,8 @@ function Prototype({
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
               <select
-                value={ix.easing || "easeOut"}
+                aria-label="Easing"
+              value={ix.easing || "easeOut"}
                 onChange={(e) =>
                   setIx(
                     interactions.map((x, j) =>
@@ -909,6 +1116,102 @@ function Prototype({
                 {ix.duration || 250}ms • {ix.easing || "easeOut"}
               </span>
             </div>
+            {!ix.condition ? (
+              <button
+                className="mini"
+                title="Only run when a variable comparison holds"
+                onClick={() =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, condition: { variableId: "", op: "truthy" as const } } : x,
+                    ),
+                  )
+                }
+              >
+                + Condition
+              </button>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 78px 1fr auto", gap: 4, alignItems: "center" }}>
+                <select
+                  value={ix.condition.variableId}
+                  title="Variable to test"
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i
+                          ? { ...x, condition: { ...(x.condition ?? { variableId: "", op: "truthy" as const }), variableId: e.target.value } }
+                          : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="">Variable…</option>
+                  {(snap.variables || []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={ix.condition.op}
+                  title="Comparison"
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i
+                          ? {
+                              ...x,
+                              condition: {
+                                ...(x.condition ?? { variableId: "", op: "truthy" as const }),
+                                op: e.target.value as InteractionCondition["op"],
+                              },
+                            }
+                          : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="truthy">is true</option>
+                  <option value="falsy">is false</option>
+                  <option value="eq">=</option>
+                  <option value="neq">≠</option>
+                  <option value="gt">&gt;</option>
+                  <option value="gte">≥</option>
+                  <option value="lt">&lt;</option>
+                  <option value="lte">≤</option>
+                </select>
+                {ix.condition.op !== "truthy" && ix.condition.op !== "falsy" ? (
+                  <input
+                    placeholder="Value"
+                    value={ix.condition.value === undefined ? "" : String(ix.condition.value)}
+                    onChange={(e) =>
+                      setIx(
+                        interactions.map((x, j) =>
+                          j === i
+                            ? {
+                                ...x,
+                                condition: {
+                                  ...(x.condition ?? { variableId: "", op: "truthy" as const }),
+                                  value: coerceVal(e.target.value),
+                                },
+                              }
+                            : x,
+                        ),
+                      )
+                    }
+                  />
+                ) : (
+                  <span />
+                )}
+                <button
+                  className="mini minus"
+                  title="Remove condition"
+                  onClick={() => setIx(interactions.map((x, j) => (j === i ? { ...x, condition: undefined } : x)))}
+                >
+                  <Icon name="minus" size={12} />
+                </button>
+              </div>
+            )}
           </div>
         ))}
       <div className="insp-pad">
@@ -957,6 +1260,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     }
     if (n.strokeDashPattern?.length)
       rules.push(`/* dashes: ${n.strokeDashPattern.join(", ")} - no CSS equivalent */`);
+    if (usesVariableWidth(n)) rules.push(`/* variable-width stroke: no CSS equivalent */`);
   }
   if (n.opacity < 1) {
     rules.push(`opacity: ${Math.round(n.opacity * 100) / 100};`);
@@ -1404,9 +1708,10 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   // than panel state: that is what lets the right-click menu and the ⌥⇧C chord
   // copy exactly what this panel shows, and it is why the choice outlives a
   // reload.
-  const { format, unit } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
+  const { format, unit, scope } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
   const setFormat = (f: DevFormat) => setDevPrefs({ format: f });
   const setUnit = (u: DevUnit) => setDevPrefs({ unit: u });
+  const setScope = (s: DevScope) => setDevPrefs({ scope: s });
 
   if (!n) {
     return (
@@ -1433,11 +1738,12 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
     );
   }
 
-  const code = renderDevCode(n, format, unit);
+  const treeCapable = TREE_FORMATS[format] !== undefined && (n.children?.length ?? 0) > 0;
+  const code = renderDevCodeScoped(n, format, unit, scope, snap);
   return (
     <>
       <div style={{ margin: "0 12px 10px", padding: "10px 12px", borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#10b981", boxShadow: "0 0 0 4px rgba(16,185,129,0.20)", flexShrink: 0 }} />
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent)", boxShadow: "0 0 0 4px var(--accent-wash)", flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>Ready for development</div>
           <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
@@ -1476,8 +1782,28 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
               setFormat={setFormat}
               unit={unit}
               setUnit={setUnit}
-              showUnits={format === "css"}
+              showUnits={format === "css" || scope === "subtree"}
             />
+            {treeCapable && (
+              <div className="seg dev-seg" role="tablist" aria-label="Code scope">
+                <button
+                  role="tab"
+                  aria-selected={scope === "layer"}
+                  className={scope === "layer" ? "on" : ""}
+                  onClick={() => setScope("layer")}
+                >
+                  Layer
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={scope === "subtree"}
+                  className={scope === "subtree" ? "on" : ""}
+                  onClick={() => setScope("subtree")}
+                >
+                  Subtree
+                </button>
+              </div>
+            )}
             <Tooltip label="Copy the snippet">
               <button
                 className="mini"
@@ -1521,7 +1847,7 @@ function kebab(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-type TokenRow = { group: string; name: string; value: string; color?: string };
+type TokenRow = { group: string; name: string; value: string; color?: string; alias?: string };
 
 /**
  * The file's colour and number tokens, offered as CSS custom properties or as a
@@ -1532,13 +1858,36 @@ type TokenRow = { group: string; name: string; value: string; color?: string };
  */
 function DevTokens({ snap }: { snap: Snapshot }) {
   const rows: TokenRow[] = [];
-  for (const v of snap.variables ?? []) {
-    const value = typeof v.value === "string" ? v.value : String(v.value);
+  const vars = snap.variables ?? [];
+  const varCollections = snap.variableCollections ?? [];
+  const activeModes = snap.activeModes ?? {};
+  // Active mode per collection, for groups that actually have alternatives.
+  const modeOf = new Map<string, string>();
+  for (const c of varCollections) {
+    if (c.modes.length < 2) continue;
+    const m = c.modes.find((x) => x.id === (activeModes[c.id] ?? c.modes[0]?.id));
+    if (m) modeOf.set(c.name, m.name);
+  }
+  const groupLabel = (collection: string) =>
+    modeOf.has(collection) ? `${collection} · ${modeOf.get(collection)}` : collection;
+  for (const v of vars) {
+    const r = resolveVariable(vars, varCollections, activeModes, v.id);
+    const value = r ? String(r.value) : "?";
+    // Aliases export as DTCG references; flat formats get the resolved value.
+    const col = varCollections.find((c) => c.name === v.collection);
+    const modeId = col ? (activeModes[col.id] ?? col.modes[0]?.id) : undefined;
+    const slot = modeId && v.values?.[modeId] !== undefined ? v.values[modeId] : v.value;
+    let alias: string | undefined;
+    if (isAlias(slot)) {
+      const t = vars.find((x) => x.id === slot.alias);
+      if (t) alias = `{${kebab(groupLabel(t.collection)) || "tokens"}.${kebab(t.name)}}`;
+    }
     rows.push({
-      group: v.collection,
+      group: groupLabel(v.collection),
       name: v.name,
       value,
       color: v.type === "color" ? value : undefined,
+      alias,
     });
   }
   for (const s of snap.styles) {
@@ -1573,7 +1922,7 @@ function DevTokens({ snap }: { snap: Snapshot }) {
           list.map((r) => [
             kebab(r.name),
             {
-              $value: r.value,
+              $value: r.alias ?? r.value,
               $type: r.color ? "color" : "dimension",
               $description: `${g} · ${r.name}`,
             },
@@ -1603,6 +1952,13 @@ function DevTokens({ snap }: { snap: Snapshot }) {
         </button>
         <button className="mini" title="Copy as Style Dictionary (W3C DTCG)" onClick={() => copy(styleDict, "Style Dictionary")}>
           DTCG
+        </button>
+        <button
+          className="mini"
+          title="Copy a tailwind.config theme.extend built from these tokens"
+          onClick={() => copy(generateTailwindTheme(snap), "Tailwind theme")}
+        >
+          TW
         </button>
         <button
           className="mini"
@@ -1694,6 +2050,10 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
       return generateTailwind(n);
     case "swiftui":
       return generateSwiftUI(n);
+    case "uikit":
+      return generateUIKitCode(n);
+    case "xml":
+      return generateAndroidXml(n);
     case "compose":
       return generateCompose(n);
     case "flutter":
@@ -1708,6 +2068,38 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
     default:
       return generateCss(n, unit);
   }
+}
+
+/**
+ * Dev formats that can render a whole subtree, and the tree emitter each
+ * one maps to. The native formats (SwiftUI, Compose, Flutter, SVG, tokens…)
+ * stay single-layer: their generators have no tree walker.
+ */
+const TREE_FORMATS: Partial<Record<DevFormat, TreeFormat>> = {
+  css: "css",
+  react: "tsx",
+  tailwind: "tailwind",
+  html: "html",
+  vue: "vue",
+  svelte: "svelte",
+};
+
+/**
+ * The panel's code renderer: single-layer snippets by default, the subtree
+ * generator when the scope says so. HTML/Vue/Svelte have no single-node
+ * generator, so even "layer" scope renders through the tree emitter with
+ * depth 0 — one element, same code path, no second implementation.
+ */
+function renderDevCodeScoped(n: XNode, format: DevFormat, unit: DevUnit, scope: DevScope, snap: Snapshot): string {
+  const tree = TREE_FORMATS[format];
+  if (!tree) return renderDevCode(n, format, unit);
+  if (scope === "subtree" && n.children?.length) {
+    return generateSubtreeCode(n, { format: tree, unit, snap });
+  }
+  if (format === "html" || format === "vue" || format === "svelte") {
+    return generateSubtreeCode(n, { format: tree, unit, snap, maxDepth: 0 });
+  }
+  return renderDevCode(n, format, unit);
 }
 
 /** Language dropdown with the units setting underneath. */
@@ -1838,7 +2230,7 @@ function DevRow({ p }: { p: DevProp }) {
       <span className="dev-k">{p.label}</span>
       {p.swatch && <span className="dev-sw" style={{ background: p.swatch }} />}
       <span className="dev-v">{p.value}</span>
-      <Icon name="copy" size={11} />
+      <Icon name="copy" size={12} />
     </button>
   );
 }
@@ -1891,6 +2283,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
       n.strokePaint,
     );
   }
+  if (usesVariableWidth(n)) L("Stroke width", "variable", "Style");
   if (n.strokeDash && n.strokeDash > 0) L("Dashed", `${n.strokeDash}`, "Style");
   for (const e of n.effects ?? []) {
     if (e.visible === false) continue;
@@ -2019,7 +2412,7 @@ function DevComponent({ n, engine, snap }: { n: XNode; engine: Engine; snap: Sna
             >
               <span className="dev-k">Instance of</span>
               <span className="dev-v">{master?.name ?? "Component"}</span>
-              <Icon name="chevron-right" size={11} />
+              <Icon name="chevron-right" size={12} />
             </button>
           )}
           {n.isComponent && (
@@ -2125,7 +2518,7 @@ function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: 
                       zoomTo(engine, "selection");
                     }}
                   >
-                    <Icon name="chevron-right" size={11} />
+                    <Icon name="chevron-right" size={12} />
                   </button>
                 )}
               </div>
@@ -2269,6 +2662,267 @@ function collectExportables(n: XNode): XNode[] {
   walk(n);
   return out;
 }
+const CODE_FRAMEWORKS: CodeMapping["framework"][] = [
+  "react",
+  "html",
+  "vue",
+  "svelte",
+  "tailwind",
+  "swiftui",
+  "compose",
+  "flutter",
+  "uikit",
+];
+
+/**
+ * One mapping's editor card. Text fields edit a local draft and save on
+ * blur — every keystroke as its own undo step would make ⌘Z unusable —
+ * while discrete controls (selects, add/remove) save immediately.
+ */
+function MappingCard({
+  engine,
+  master,
+  mapping,
+  propNames,
+}: {
+  engine: Engine;
+  master: ComponentMaster;
+  mapping: CodeMapping;
+  propNames: string[];
+}) {
+  const [draft, setDraft] = useState(mapping);
+  const save = (m: CodeMapping) => {
+    setDraft(m);
+    engine.dispatch({ type: "setCodeMapping", componentId: master.id, mapping: m });
+  };
+  const set = (patch: Partial<CodeMapping>) => setDraft({ ...draft, ...patch });
+  const commit = () => {
+    if (JSON.stringify(draft) !== JSON.stringify(mapping)) save(draft);
+  };
+  const status = mappingSyncStatus(master, mapping);
+  const unmapped = propNames.filter((p) => !draft.props.some((x) => x.prop === p));
+  return (
+    <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, display: "grid", gap: 6, background: "var(--panel)" }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <select
+          aria-label="Framework"
+          title="Framework"
+          value={draft.framework}
+          onChange={(e) => save({ ...draft, framework: e.target.value as CodeMapping["framework"] })}
+          style={{ width: 92 }}
+        >
+          {CODE_FRAMEWORKS.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Component name in code"
+          title="Component name in code"
+          value={draft.componentName}
+          placeholder="Button"
+          onChange={(e) => set({ componentName: e.target.value })}
+          onBlur={commit}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <button
+          className="icon-btn"
+          title={`Delete this ${draft.framework} mapping`}
+          aria-label={`Delete this ${draft.framework} mapping`}
+          onClick={() => {
+            engine.dispatch({ type: "deleteCodeMapping", componentId: master.id, mappingId: mapping.id });
+            toast("Code mapping deleted");
+          }}
+        >
+          <Icon name="trash" size={12} />
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          aria-label="Import path"
+          title="Import path"
+          value={draft.importPath ?? ""}
+          placeholder='Import path, e.g. @/components/Button'
+          onChange={(e) => set({ importPath: e.target.value })}
+          onBlur={commit}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <input
+          aria-label="Version"
+          title="Version"
+          value={draft.version ?? ""}
+          placeholder="v1"
+          onChange={(e) => set({ version: e.target.value })}
+          onBlur={commit}
+          style={{ width: 52 }}
+        />
+      </div>
+      <input
+        aria-label="Source file (optional)"
+        title="Source file (optional)"
+        value={draft.file ?? ""}
+        placeholder="Source file, e.g. src/components/Button.tsx"
+        onChange={(e) => set({ file: e.target.value })}
+        onBlur={commit}
+        style={{ width: "100%" }}
+      />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span className="insp-label">Props</span>
+        {unmapped.length > 0 && (
+          <button
+            className="mini"
+            onClick={() => {
+              save({
+                ...draft,
+                props: [...draft.props, ...unmapped.map((p) => ({ prop: p, kind: "prop" as const }))],
+              });
+              toast(`Mapped ${unmapped.length} ${unmapped.length === 1 ? "property" : "properties"}`);
+            }}
+          >
+            Auto-map all
+          </button>
+        )}
+      </div>
+      {draft.props.map((pm, ix) => (
+        <div key={`${pm.prop}-${ix}`} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <select
+            aria-label="Component property"
+            value={pm.prop}
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, prop: e.target.value };
+              save({ ...draft, props });
+            }}
+            style={{ flex: 1, minWidth: 0 }}
+          >
+            {propNames.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+          <span style={{ color: "var(--fg-muted)" }} aria-hidden>→</span>
+          <input
+            aria-label={`Code prop for ${pm.prop}`}
+            value={pm.codeProp ?? ""}
+            placeholder="prop"
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, codeProp: e.target.value };
+              setDraft({ ...draft, props });
+            }}
+            onBlur={commit}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <select
+            aria-label={`Mapping kind for ${pm.prop}`}
+            value={pm.kind}
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, kind: e.target.value as CodePropMapping["kind"] };
+              save({ ...draft, props });
+            }}
+            style={{ width: 86 }}
+          >
+            <option value="prop">prop</option>
+            <option value="children">children</option>
+            <option value="omit">omit</option>
+          </select>
+          <button
+            className="icon-btn"
+            title={`Remove the ${pm.prop} mapping`}
+            aria-label={`Remove the ${pm.prop} mapping`}
+            onClick={() => save({ ...draft, props: draft.props.filter((_, j) => j !== ix) })}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 999,
+            background: status === "synced" ? "var(--accent)" : status === "stale" ? "var(--amber)" : "var(--fg-muted)",
+          }}
+        />
+        <span className="insp-label grow" style={{ flex: 1 }}>
+          {status === "synced"
+            ? `Verified${mapping.syncedAt ? ` · ${new Date(mapping.syncedAt).toLocaleString()}` : ""}`
+            : status === "stale"
+              ? "Master changed since verification"
+              : "Never verified against the master"}
+        </span>
+        <button
+          className="mini"
+          onClick={() => {
+            engine.dispatch({ type: "syncCodeMapping", componentId: master.id, mappingId: mapping.id });
+            toast("Mapping verified against the master");
+          }}
+        >
+          Verify now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Component → code mappings (P1.10): which code component each instance
+ * becomes in generated output. Collapsed until used — most sessions never
+ * touch it, and the section is already long.
+ */
+function CodeMappingEditor({ engine, master }: { engine: Engine; master: ComponentMaster }) {
+  const mappings = master.codeMappings ?? [];
+  const [open, setOpen] = useState(mappings.length > 0);
+  const propNames = [...new Set([master.property || "Variant", ...(master.properties ?? []).map((p) => p.name)])].filter(
+    Boolean,
+  );
+  return (
+    <div style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--text)" }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700 }}>Code mappings</span>
+        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 999, background: "var(--input)", border: "1px solid var(--line)", color: "var(--muted)" }}>
+          {mappings.length}
+        </span>
+        <span style={{ flex: 1 }} />
+        <Icon name="chevron-down" size={12} />
+      </button>
+      {open && (
+        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+          {mappings.map((m) => (
+            <MappingCard key={m.id} engine={engine} master={master} mapping={m} propNames={propNames} />
+          ))}
+          <button
+            style={{ fontSize: 11, padding: "4px 8px" }}
+            onClick={() => {
+              engine.dispatch({
+                type: "setCodeMapping",
+                componentId: master.id,
+                mapping: {
+                  id: `map-${Date.now()}`,
+                  framework: "react",
+                  componentName: master.name.replace(/[^a-zA-Z0-9]/g, "") || "Component",
+                  props: [],
+                },
+              });
+              toast("Code mapping added");
+            }}
+          >
+            + Add mapping
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Design({
   n,
   x,
@@ -2519,7 +3173,24 @@ function Design({
     if (fit.w === undefined && fit.h === undefined) return;
     patch(fit);
   };
+  // An aspect lock links the min/max limits too: typing one sets the
+  // proportional opposite alongside it, as Figma does. Clearing a limit only
+  // clears the one typed.
+  const setMinMax = (key: "minW" | "maxW" | "minH" | "maxH", v: number, extra: Partial<XNode> = {}) => {
+    const p: Partial<XNode> = { [key]: v > 0 ? v : undefined, ...extra };
+    if (n.aspectLocked && v > 0) {
+      const ratio = n.aspectRatio && n.aspectRatio > 0 ? n.aspectRatio : n.w > 0 && n.h > 0 ? n.h / n.w : 1;
+      const sib = key === "minW" ? "minH" : key === "maxW" ? "maxH" : key === "minH" ? "minW" : "maxW";
+      const wide = key === "minW" || key === "maxW";
+      p[sib] = Math.max(1, Math.round((wide ? v * ratio : v / ratio) * 100) / 100);
+    }
+    patch(p);
+    refitHug({ [key]: v });
+  };
   const parent = findParent(snap.pages[snap.page].root, n.id);
+  // A member of a boolean group cannot own fill, stroke, effects or opacity -
+  // the group's own properties render instead, so the panel locks all four.
+  const boolChild = parent?.kind === "boolean";
   const hasAutoLayoutParent = !!parent?.layout;
   const gridParent = parent?.layout?.direction === "grid";
   /* First press turns the base stroke on; after that each press stacks another
@@ -2557,6 +3228,7 @@ function Design({
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <div className="field">
               <select
+                aria-label="Font family"
                 value={n.fontFamily}
                 onChange={(e) =>
                   patchType({ fontFamily: e.target.value })
@@ -2630,6 +3302,7 @@ function Design({
             <div className="grid2">
               <div className="field">
                 <select
+                  aria-label="Font weight"
                   value={n.fontWeight}
                   onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
                 >
@@ -2770,7 +3443,9 @@ function Design({
                     label="L"
                     value={n.maxLines}
                     onChange={(v) =>
-                      patchType({ maxLines: v })
+                      // Maximum lines and maximum height are exclusive: setting
+                      // either clears the other, in both directions.
+                      patchType({ maxLines: v, maxH: undefined })
                     }
                   />
                 </div>
@@ -2901,20 +3576,67 @@ function Design({
               {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
                 <button
                   key={op}
-                  title={`Boolean ${op[0].toUpperCase() + op.slice(1)}`}
-                  onClick={() => engine.dispatch({ type: "boolean", op })}
+                  className={snap.booleanPreview === op ? "on" : ""}
+                  title={
+                    snap.booleanPreview
+                      ? `Preview ${op}`
+                      : `Boolean ${op[0].toUpperCase() + op.slice(1)}`
+                  }
+                  onClick={() => {
+                    // With a preview armed, the op buttons switch the previewed
+                    // operation; otherwise they apply immediately, as before.
+                    if (snap.booleanPreview) engine.dispatch({ type: "setBooleanPreview", op });
+                    else engine.dispatch({ type: "boolean", op });
+                  }}
                 >
                   <Icon name={`boolean-${op}`} size={16} />
                 </button>
               ))}
             </div>
-            <button
-              style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-              onClick={() => engine.dispatch({ type: "flatten" })}
-            >
-              <Icon name="flatten" size={14} />
-              <span>Flatten</span>
-            </button>
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <button
+                className={snap.booleanPreview ? "on" : ""}
+                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                title="Preview the result on the canvas before applying (Enter applies, Esc cancels)"
+                aria-pressed={!!snap.booleanPreview}
+                onClick={() =>
+                  engine.dispatch({ type: "setBooleanPreview", op: snap.booleanPreview ? null : "union" })
+                }
+              >
+                <Icon name="eye" size={14} />
+                <span>Preview</span>
+              </button>
+              <button
+                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                onClick={() => engine.dispatch({ type: "flatten" })}
+              >
+                <Icon name="flatten" size={14} />
+                <span>Flatten</span>
+              </button>
+            </div>
+            {snap.booleanPreview && (
+              <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "var(--dim)", textTransform: "capitalize" }}>
+                  {snap.booleanPreview}
+                </span>
+                <span style={{ flex: 1 }} />
+                <button
+                  title="Apply the previewed boolean (Enter)"
+                  onClick={() => {
+                    const op = snap.booleanPreview;
+                    if (op) engine.dispatch({ type: "boolean", op });
+                  }}
+                >
+                  Apply
+                </button>
+                <button
+                  title="Discard the preview (Esc)"
+                  onClick={() => engine.dispatch({ type: "setBooleanPreview", op: null })}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -3031,9 +3753,18 @@ function Design({
           >
             <Icon name={n.layout ? "minus" : "plus"} size={14} />
           </button>
+          {(n.kind === "frame" || n.kind === "group") && (
+            <button
+              className="plus"
+              title="Resize to fit (⌥⇧⌘R)"
+              onClick={() => engine.dispatch({ type: "resizeToFit" })}
+            >
+              <Icon name="minimize" size={14} />
+            </button>
+          )}
         </div>
       }>
-      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", marginBottom:6}}>Flow</div>
+      <div className="insp-group-title flush" style={{ marginBottom: 6 }}>Flow</div>
       <div className="dir-row">
         <div className="seg icons">
           <button
@@ -3095,9 +3826,9 @@ function Design({
           </button>
         </div>
       </div>
-      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Sizing</div>
+      <div className="insp-group-title">Sizing</div>
       <div className="insp-pad">
-        <div className="grid3">
+        <div className="grid4">
           <Field
             label="W"
             hint={showSizing("width")}
@@ -3215,16 +3946,13 @@ function Design({
         )}
         {showMinMax && (
           <div className="grid2" style={{ marginTop: 4 }}>
-            <Field label="Min W" value={n.minW || 0} onChange={(v) => { patch({ minW: v > 0 ? v : undefined }); refitHug({ minW: v }); }} />
-            <Field label="Max W" value={n.maxW || 0} onChange={(v) => { patch({ maxW: v > 0 ? v : undefined }); refitHug({ maxW: v }); }} />
-            <Field label="Min H" value={n.minH || 0} onChange={(v) => { patch({ minH: v > 0 ? v : undefined }); refitHug({ minH: v }); }} />
+            <Field label="Min W" value={n.minW || 0} onChange={(v) => setMinMax("minW", v)} />
+            <Field label="Max W" value={n.maxW || 0} onChange={(v) => setMinMax("maxW", v)} />
+            <Field label="Min H" value={n.minH || 0} onChange={(v) => setMinMax("minH", v)} />
             <Field
               label="Max H"
               value={n.maxH || 0}
-              onChange={(v) => {
-                patch(n.kind === "text" ? { maxH: v > 0 ? v : undefined, maxLines: 0 } : { maxH: v > 0 ? v : undefined });
-                refitHug({ maxH: v });
-              }}
+              onChange={(v) => setMinMax("maxH", v, n.kind === "text" ? { maxLines: 0 } : {})}
             />
           </div>
         )}
@@ -3281,6 +4009,7 @@ function Design({
         <div className="insp-pad">
           <div className="field">
             <select
+              aria-label="Mask type"
               value={n.maskType || "alpha"}
               onChange={(e) => patch({ maskType: e.target.value as XNode["maskType"] })}
             >
@@ -3343,14 +4072,16 @@ function Design({
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <div style={{ fontSize: 10, color: "var(--dim)" }}>Alignment</div>
               <div style={{ display: "flex", gap: 2, background: "var(--bg-subtle)", padding: 2, borderRadius: 6, border: "1px solid var(--border)" }}>
-                {[
-                  { id: "left", label: "Align left", icon: "align-left" },
-                  { id: "center", label: "Align horizontal centers", icon: "align-center" },
-                  { id: "right", label: "Align right", icon: "align-right" },
-                  { id: "top", label: "Align top", icon: "align-top" },
-                  { id: "middle", label: "Align vertical centers", icon: "align-middle" },
-                  { id: "bottom", label: "Align bottom", icon: "align-bottom" },
-                ].map((a) => (
+{(
+                  [
+                    { id: "left", label: "Align left", icon: "align-left" },
+                    { id: "center", label: "Align horizontal centers", icon: "align-center" },
+                    { id: "right", label: "Align right", icon: "align-right" },
+                    { id: "top", label: "Align top", icon: "align-top" },
+                    { id: "middle", label: "Align vertical centers", icon: "align-middle" },
+                    { id: "bottom", label: "Align bottom", icon: "align-bottom" },
+                  ] as { id: string; label: string; icon: IconName }[]
+                ).map((a) => (
                   <button
                     key={a.id}
                     style={{
@@ -3368,7 +4099,7 @@ function Design({
                     onClick={() => engine.dispatch({ type: "vectorAlign", alignment: a.id as any })}
                     title={a.label}
                   >
-                    <Icon name={a.icon} size={13} />
+                    <Icon name={a.icon} size={14} />
                   </button>
                 ))}
               </div>
@@ -3710,9 +4441,10 @@ function Design({
             </div>
             <div className="insp-pad">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>Variant</span>
+                <span className="insp-label">Variant</span>
                 <select
                   style={{ flex: 1, maxWidth: 140 }}
+                  aria-label="Variant"
                   value={n.variant || "Default"}
                   onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
                 >
@@ -3724,11 +4456,32 @@ function Design({
                 </select>
               </div>
 
+              {!n.isComponent && n.componentId && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span className="insp-label">Swap instance</span>
+                  <select
+                    style={{ flex: 1, maxWidth: 140 }}
+                    value={n.componentId}
+                    title="Replace this instance with another component"
+                    onChange={(e) => {
+                      engine.dispatch({ type: "swapInstance", id: n.id, componentId: e.target.value });
+                      toast("Instance swapped");
+                    }}
+                  >
+                    {snap.components.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {propDefs.filter((p) => p.type !== "variant").map((prop) => {
                 const currentVal = n.componentProperties?.[prop.name] ?? prop.defaultValue;
                 return (
                   <div key={prop.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, color: "var(--fg-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prop.name}>
+                    <span className="insp-label grow" title={prop.name}>
                       {prop.name}
                     </span>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -3745,6 +4498,26 @@ function Design({
                             })
                           }
                         />
+                      ) : prop.type === "instance-swap" ? (
+                        <select
+                          style={{ width: 110, padding: "2px 4px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          value={String(currentVal)}
+                          title="Component to show in the nested instance"
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setComponentProperty",
+                              id: n.id,
+                              propName: prop.name,
+                              value: e.target.value,
+                            })
+                          }
+                        >
+                          {snap.components.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
                       ) : (
                         <input
                           type="text"
@@ -3796,11 +4569,16 @@ function Design({
                   <button
                     style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
                     onClick={() => {
-                      const propType = prompt("Property type: boolean or text?", "boolean")?.toLowerCase();
-                      if (propType === "boolean" || propType === "text") {
+                      const propType = prompt("Property type: boolean, text, or instance-swap?", "boolean")?.toLowerCase();
+                      if (propType === "boolean" || propType === "text" || propType === "instance-swap") {
                         const propName = prompt(`Enter ${propType} property name (e.g. Show icon, Title):`);
                         if (propName) {
-                          const targetLayer = prompt("Child layer name to bind to (optional):") || undefined;
+                          const targetLayer =
+                            prompt(
+                              propType === "instance-swap"
+                                ? "Nested instance name to swap (required):"
+                                : "Child layer name to bind to (optional):",
+                            ) || undefined;
                           engine.dispatch({
                             type: "addComponentProperty",
                             componentId: master.id,
@@ -3808,7 +4586,8 @@ function Design({
                               id: `prop-${Date.now()}`,
                               name: propName,
                               type: propType,
-                              defaultValue: propType === "boolean" ? true : "Text",
+                              defaultValue:
+                                propType === "boolean" ? true : propType === "instance-swap" ? (snap.components[0]?.id ?? "") : "Text",
                               targetNodeName: targetLayer,
                             },
                           });
@@ -3821,6 +4600,7 @@ function Design({
                   </button>
                 </div>
               )}
+              {master && <CodeMappingEditor engine={engine} master={master} />}
             </div>
           </>
         );
@@ -3832,7 +4612,7 @@ function Design({
                 positioned by their cells - so the packing box is the grid's
                 one exception. Per-cell alignment is on the object itself, in
                 the Position section, as the grid article describes. */}
-            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Alignment</div>
+            <div className="insp-group-title">Alignment</div>
             {!isGrid && (
               <Nine
                 layout={n.layout}
@@ -3883,7 +4663,7 @@ function Design({
               onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
             />
           )}
-          <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Spacing</div>
+          <div className="insp-group-title">Spacing</div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             {isGrid ? (
               // A grid has a gap per axis rather than one gap and a packing
@@ -3949,7 +4729,7 @@ function Design({
               </button>
             </div>
             )}
-            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Padding</div>
+            <div className="insp-group-title">Padding</div>
             {padOpen ? (
               <div className="grid2">
                 {(["L", "R", "T", "B"] as const).map((lab, i) => (
@@ -4016,7 +4796,7 @@ function Design({
               <Icon name="independent" size={14} />
             </button>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
-              <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px", gridColumn:"1 / -1"}}>Positioning</div>
+              <div className="insp-group-title" style={{ gridColumn: "1 / -1" }}>Positioning</div>
               <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
               <button
                 className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
@@ -4088,6 +4868,7 @@ function Design({
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <select
                         style={{ fontSize: 11, fontWeight: 500 }}
+                        aria-label="Fill pattern"
                         value={g.pattern}
                         onChange={(e) => {
                           const next = [...n.layoutGrids!];
@@ -4109,7 +4890,7 @@ function Design({
                             engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
                           }}
                         >
-                          <Icon name={g.visible !== false ? "eye" : "eye-closed"} size={rowIconSize()} />
+                          <Icon name={g.visible !== false ? "eye" : "eye-off"} size={rowIconSize()} />
                         </button>
                         <button
                           className="icon-btn"
@@ -4202,6 +4983,7 @@ function Design({
         <div className="grid2">
           <div className="field">
             <select
+              aria-label="Blend mode"
               value={n.blendMode}
               onChange={(e) =>
                 engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } })
@@ -4223,6 +5005,7 @@ function Design({
           <Field
             label="%"
             value={Math.round(n.opacity * 100)}
+            disabled={boolChild}
             onChange={(v) => num("opacity", v / 100)}
           />
         </div>
@@ -4322,13 +5105,39 @@ function Design({
           Show name
         </label>
       )}
+      {n.kind === "frame" && (
+        <div className="field" style={{ marginTop: 6 }}>
+          <label style={{ fontSize: 11, color: "var(--muted)" }}>Frame</label>
+          <select
+            aria-label="Frame preset"
+            title="Swap this frame to a preset size"
+            value={PRESET_GROUPS.flatMap((g) => g.items).find((p) => p.w === Math.round(n.w) && p.h === Math.round(n.h))?.name ?? ""}
+            onChange={(e) => {
+              const p = PRESET_GROUPS.flatMap((g) => g.items).find((q) => q.name === e.target.value);
+              if (p) patch({ w: p.w, h: p.h, name: p.name });
+            }}
+          >
+            <option value="">Custom size</option>
+            {PRESET_GROUPS.map((g) => (
+              <optgroup key={g.category} label={g.category}>
+                {g.items.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name} ({p.w} × {p.h})
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      )}
       </Section>
 
       <div className="hr" />
-      <Section id="fill" title="Fill" actions={
+      <Section id="fill" title="Fill" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
         <button
           className="plus"
           title="Add fill"
+          disabled={boolChild}
           onClick={() => {
             openSection("fill");
             // First press turns the base fill back on; after that each press
@@ -4454,6 +5263,15 @@ function Design({
       })}
       {(!isNone(n.fill) || n.fillVisible) && (
         <div className="insp-pad">
+          {n.variableBindings?.fill && (
+            <BindingChip
+              engine={engine}
+              nodeId={n.id}
+              prop="fill"
+              variableId={n.variableBindings.fill}
+              vars={snap.variables ?? []}
+            />
+          )}
           <ColorRow
             value={n.fill}
             opacity={Math.round((n.fillOpacity ?? 1) * 100)}
@@ -4498,10 +5316,11 @@ function Design({
       )}
       </Section>
 
-      <Section id="stroke" title="Stroke" actions={
+      <Section id="stroke" title="Stroke" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
         <button
           className="plus"
           title="Add stroke"
+          disabled={boolChild}
           onClick={() => addStroke()}
         >
           <Icon name="plus" size={14} />
@@ -4519,6 +5338,15 @@ function Design({
       )}
       {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
         <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+          {n.variableBindings?.strokePaint && (
+            <BindingChip
+              engine={engine}
+              nodeId={n.id}
+              prop="strokePaint"
+              variableId={n.variableBindings.strokePaint}
+              vars={snap.variables ?? []}
+            />
+          )}
           <ColorRow
             title="Stroke"
             value={n.strokePaint}
@@ -4554,7 +5382,8 @@ function Design({
                 else patch({ strokeWidth });
               }}
             />
-            <div className="seg icons">
+            {(n.kind !== "line" && n.kind !== "arrow") && (
+            <div className="seg icons" title="Stroke position">
               {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
                 <button
                   key={a}
@@ -4566,6 +5395,7 @@ function Design({
                 </button>
               ))}
             </div>
+            )}
           </div>
           {sidesSupported(n.kind) && (
             <div className="stroke-sides">
@@ -4616,7 +5446,7 @@ function Design({
           )}
           <div className="stroke-ends">
           <div className="seg icons caps">
-            {(["none", "round", "square", "arrow", "triangle", "reverse-triangle", "diamond"] as StrokeCap[]).map((c) => (
+            {(["none", "round", "square", "arrow", "circle", "triangle", "reverse-triangle", "diamond"] as StrokeCap[]).map((c) => (
               <button
                 key={c}
                 className={n.strokeCap === c ? "on" : ""}
@@ -4639,6 +5469,7 @@ function Design({
               </button>
             ))}
           </div>
+          {(n.kind !== "line" && n.kind !== "arrow") && (
           <div className="seg icons">
             {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
               <button
@@ -4651,6 +5482,7 @@ function Design({
               </button>
             ))}
           </div>
+          )}
           <button
             className={`icon-btn${strokeMore ? " on" : ""}`}
             title="Advanced stroke settings"
@@ -4666,6 +5498,7 @@ function Design({
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, color: "var(--dim)" }}>Start point</span>
                 <select
+                  aria-label="Start cap"
                   value={n.strokeCapStart ?? "none"}
                   style={{
                     background: "var(--bg)",
@@ -4690,6 +5523,7 @@ function Design({
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, color: "var(--dim)" }}>End point</span>
                 <select
+                  aria-label="End cap"
                   value={n.strokeCapEnd ?? n.strokeCap}
                   style={{
                     background: "var(--bg)",
@@ -4715,6 +5549,9 @@ function Design({
                 </select>
               </div>
             </div>
+          )}
+          {(n.kind === "vector" || n.kind === "line" || n.kind === "arrow") && n.strokeWidth > 0 && (
+            <WidthProfileEditor node={n} patch={patch} />
           )}
           {strokeMore && (
             <div className="adv-stroke">
@@ -4786,7 +5623,8 @@ function Design({
                 value={sk.width}
                 onChange={(width) => setStroke({ width: Math.max(0, width) })}
               />
-              <div className="seg icons">
+              {(n.kind !== "line" && n.kind !== "arrow") && (
+              <div className="seg icons" title="Stroke position">
                 {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
                   <button
                     key={a}
@@ -4798,6 +5636,7 @@ function Design({
                   </button>
                 ))}
               </div>
+              )}
             </div>
           </div>
         );
@@ -4871,7 +5710,7 @@ function Design({
       )}
 
       <div className="hr" />
-      <Effects n={n} engine={engine} />
+      <Effects n={n} engine={engine} locked={boolChild} />
       <ModifiersSection n={n} engine={engine} />
       <ExpressionsSection n={n} engine={engine} />
       <SelectionColors
@@ -5161,7 +6000,7 @@ const EFFECT_LABEL: Record<string, string> = {
   texture: "Texture",
 };
 
-function Effects({ n, engine }: { n: XNode; engine: Engine }) {
+function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boolean }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<{ i: number; rect: DOMRect } | null>(null);
   const kinds: { id: EffectKind; label: string }[] = [
@@ -5210,11 +6049,14 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
         id="effects"
         title="Effects"
         defaultOpen={effects.length > 0}
+        disabled={locked}
+        disabledTitle="Controlled by the boolean group"
         actions={
           <div style={{ position: "relative", display: "flex" }}>
             <button
               className="plus"
               title="Add effect"
+              disabled={locked}
               onClick={() => {
                 if (!effects.length) openSection("effects");
                 setOpen((v) => !v);
@@ -5447,7 +6289,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
                 onClick={() => updateModifier(i, { enabled: m.enabled === false ? true : false })}
                 style={{ opacity: m.enabled === false ? 0.35 : 1 }}
               >
-                <Icon name={m.enabled === false ? "eye-off" : "eye"} size={13} />
+                <Icon name={m.enabled === false ? "eye-off" : "eye"} size={14} />
               </button>
               <span style={{ flex: 1, fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {m.type === "roundedCorners"
@@ -5549,6 +6391,7 @@ function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
                 borderRadius: 3,
                 padding: "2px 4px",
               }}
+              aria-label="Property to bind"
               value={propSelect}
               onChange={(e) => setPropSelect(e.target.value)}
             >
@@ -5902,6 +6745,153 @@ function Nine({
  * Anything that is not a list of non-negative numbers is refused and the field
  * snaps back to what the layer actually has, rather than clearing the dashes.
  */
+/**
+ * Variable-width profile strip: the stroke's width envelope with draggable
+ * control points. Click the strip to add a point at the width sampled there,
+ * drag a point sideways to move it along the path or up/down to change its
+ * width, double-click (or Alt-click) a point to delete it. Every gesture is
+ * a `patch`, so a drag coalesces into one undo step.
+ */
+function WidthProfileEditor({
+  node: n,
+  patch,
+}: {
+  node: XNode;
+  patch: (p: Partial<XNode>) => void;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{ t: number } | null>(null);
+  const W = 208;
+  const H = 52;
+  const PAD = 8;
+  const prof = normalizeWidthProfile(n.strokeWidthProfile);
+  const active = prof.length >= 2 && prof.some((q) => Math.abs(q.widthMultiplier - prof[0].widthMultiplier) > 1e-6);
+  // Display scale: fixed at 4x so the envelope does not jump while dragging,
+  // widened only to fit an existing hotter profile.
+  const scale = Math.max(4, ...prof.map((q) => q.widthMultiplier));
+  const xOf = (t: number) => PAD + t * (W - 2 * PAD);
+  const yOf = (m: number) => H / 2 - Math.min(m, scale) / scale * (H / 2 - PAD);
+  const tOfX = (px: number) => Math.min(1, Math.max(0, (px - PAD) / (W - 2 * PAD)));
+  const mOfY = (py: number) => Math.min(8, Math.max(0, ((H / 2 - py) / (H / 2 - PAD)) * scale));
+  // Envelope from the sampler (65 stations), mirrored about the centerline.
+  const top: string[] = [];
+  const bot: string[] = [];
+  for (let i = 0; i <= 64; i++) {
+    const t = i / 64;
+    const m = sampleVariableWidth(prof, t);
+    const x = xOf(t).toFixed(1);
+    top.push(`${i ? "L" : "M"} ${x} ${yOf(m).toFixed(1)}`);
+    bot.push(`L ${x} ${(H - yOf(m)).toFixed(1)}`);
+  }
+  const envelope = `${top.join(" ")} ${bot.reverse().join(" ")} Z`;
+  const commit = (next: VariableWidthPoint[]) => {
+    patch({ strokeWidthProfile: normalizeWidthProfile(next) });
+  };
+  const local = (e: React.PointerEvent) => {
+    const box = svgRef.current?.getBoundingClientRect();
+    if (!box || box.width <= 0 || box.height <= 0) return { x: 0, y: 0 };
+    return { x: ((e.clientX - box.left) / box.width) * W, y: ((e.clientY - box.top) / box.height) * H };
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--dim)" }}>Variable width</span>
+        <span style={{ flex: 1 }} />
+        {active && (
+          <button
+            className="link"
+            title="Remove the width profile (uniform stroke)"
+            onClick={() => patch({ strokeWidthProfile: undefined })}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        style={{
+          width: "100%",
+          height: "auto",
+          display: "block",
+          background: "var(--bg-subtle)",
+          borderRadius: 4,
+          cursor: "crosshair",
+          touchAction: "none",
+        }}
+        role="img"
+        aria-label="Stroke width profile. Click to add a width point, drag to move it, double-click to delete."
+        onPointerDown={(e) => {
+          if (e.button !== 0 || e.altKey) return;
+          const { x } = local(e);
+          const t = tOfX(x);
+          const next = normalizeWidthProfile([...prof, { position: t, widthMultiplier: sampleVariableWidth(prof, t) }]);
+          commit(next);
+          dragRef.current = { t };
+          (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const d = dragRef.current;
+          if (!d) return;
+          const { x, y } = local(e);
+          // The dragged point is the one nearest the drag's last position.
+          let bi = 0;
+          let bd = Infinity;
+          prof.forEach((q, i) => {
+            const dd = Math.abs(q.position - d.t);
+            if (dd < bd) {
+              bd = dd;
+              bi = i;
+            }
+          });
+          const t = tOfX(x);
+          const m = mOfY(y);
+          dragRef.current = { t };
+          commit(prof.map((q, i) => (i === bi ? { position: t, widthMultiplier: m } : q)));
+        }}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+        onPointerCancel={() => {
+          dragRef.current = null;
+        }}
+      >
+        <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="var(--border)" strokeWidth={1} />
+        <path d={envelope} fill="var(--accent)" opacity={active ? 0.35 : 0.15} />
+        {prof.map((q, i) => (
+          <circle
+            key={i}
+            cx={xOf(q.position)}
+            cy={H / 2}
+            r={4}
+            fill={active ? "var(--accent)" : "var(--dim)"}
+            stroke="#ffffff"
+            strokeWidth={1}
+            style={{ cursor: "move" }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (e.button !== 0) return;
+              if (e.altKey) {
+                commit(prof.filter((_, j) => j !== i));
+                return;
+              }
+              dragRef.current = { t: q.position };
+              (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              dragRef.current = null;
+              commit(prof.filter((_, j) => j !== i));
+            }}
+          >
+            <title>{`pos ${q.position.toFixed(2)} · ×${q.widthMultiplier.toFixed(2)} · ${(q.widthMultiplier * n.strokeWidth).toFixed(1)}px`}</title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function DashPatternField({
   value,
   onCommit,
@@ -5969,7 +6959,7 @@ function PadField({
   onShorthand,
 }: {
   label?: string;
-  icon?: string;
+  icon?: IconName;
   aria?: string;
   value: number;
   mixed?: string;
@@ -6058,7 +7048,7 @@ function Field({
   disabled,
 }: {
   label?: string;
-  icon?: string;
+  icon?: IconName;
   value: number;
   onChange: (v: number) => void;
   hint?: string;
@@ -6104,6 +7094,30 @@ function Field({
       setDraft(mixed ?? fmt(value));
     }
   };
+  // Dragging a field's label or icon scrubs its value, 1 unit per pixel and
+  // 10 with ⇧ held. A press that never moves stays a click, so labels that
+  // cycle a mode on click keep working. The burst coalescer in the engine
+  // folds the drag's patches into one undo step.
+  const startScrub = (e: React.MouseEvent) => {
+    if (disabled || e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startV = value;
+    let dragging = false;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      if (!dragging && Math.abs(dx) < 3) return;
+      dragging = true;
+      onChange(Math.round((startV + dx * (ev.shiftKey ? 10 : 1)) * 100) / 100);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (!dragging && onLabelClick) onLabelClick();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   return (
     <div
       className="field"
@@ -6114,12 +7128,18 @@ function Field({
       data-pname={icon ? (aria ?? label ?? icon) : undefined}
     >
       {icon ? (
-        <Icon name={icon} size={14} />
+        <span
+          title={`${aria ?? label ?? icon} · drag to scrub (⇧ = ×10)`}
+          onMouseDown={startScrub}
+          style={disabled ? undefined : { cursor: "ew-resize", display: "inline-flex" }}
+        >
+          <Icon name={icon} size={14} />
+        </span>
       ) : (
         <label
-          title={hint ? `${label} · ${hintNote ?? hint}` : label}
-          onClick={onLabelClick}
-          style={onLabelClick ? { cursor: "pointer" } : undefined}
+          title={`${hint ? `${label} · ${hintNote ?? hint}` : (label ?? "")}${disabled ? "" : " · drag to scrub (⇧ = ×10)"}`}
+          onMouseDown={startScrub}
+          style={disabled ? undefined : { cursor: "ew-resize" }}
         >
           {label}
         </label>
@@ -6128,7 +7148,12 @@ function Field({
         value={draft}
         disabled={disabled}
         aria-label={aria ?? label}
-        title={(aria && !label ? aria : "") || "Number or equation · + - * / ^ ( )"}
+        title={(aria && !label ? aria : "") || "Number or equation · + - * / ^ ( ) · ⌥-drag to scrub"}
+        // Figma also scrubs from the input itself with ⌥ held; a plain press
+        // still focuses and selects as usual.
+        onMouseDown={(e) => {
+          if (e.altKey) startScrub(e);
+        }}
         onFocus={() => {
           focused.current = true;
         }}
@@ -6177,14 +7202,14 @@ function Constraints({
   return (
     <div className="cons-pop">
       <div className="cons-grid">
-        <select value={h} onChange={(e) => onChange("h", e.target.value as Constraint)}>
+        <select aria-label="Horizontal constraint" value={h} onChange={(e) => onChange("h", e.target.value as Constraint)}>
           {opts.map((o) => (
             <option key={o.id} value={o.id}>
               H: {o.label.split(" / ")[0]}
             </option>
           ))}
         </select>
-        <select value={v} onChange={(e) => onChange("v", e.target.value as Constraint)}>
+        <select aria-label="Vertical constraint" value={v} onChange={(e) => onChange("v", e.target.value as Constraint)}>
           {opts.map((o) => (
             <option key={o.id} value={o.id}>
               V: {o.label.split(" / ")[1] ?? o.label}
@@ -6555,10 +7580,13 @@ function runExport(n: XNode, p: ExportPreset) {
 /** Copy the layer's snippet in the given language — the very renderer the panel
  *  uses, so a copied answer and a shown answer cannot disagree. Omit `format`
  *  to take the developer's current preference. */
-export function copyLayerCode(n: XNode, format?: DevFormat): void {
+export function copyLayerCode(n: XNode, format?: DevFormat, snap?: Snapshot): void {
   const prefs = getDevPrefs();
   const fmt = format ?? prefs.format;
-  const code = renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
+  const scope = prefs.scope ?? "layer";
+  const code = snap
+    ? renderDevCodeScoped(n, fmt, fmt === "css" || scope === "subtree" ? prefs.unit : "px", scope, snap)
+    : renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
   copyText(code);
   toast(`Copied ${devLangLabel(fmt)} \u00b7 ${n.name}`);
 }
@@ -6665,12 +7693,17 @@ function Section({
   defaultOpen = true,
   actions,
   children,
+  disabled,
+  disabledTitle,
 }: {
   id: string;
   title: string;
   defaultOpen?: boolean;
   actions?: ReactNode;
   children: ReactNode;
+  /** Locks every control in the body, e.g. a boolean member's fill. */
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const [open, setOpen] = useState(() => readSections()[id] ?? defaultOpen);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -6704,12 +7737,59 @@ function Section({
       <div className="h-row" ref={rowRef}>
         <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
           <Icon name={open ? "chevron" : "chevron-right"} size={12} />
-          <h3>{title}</h3>
+          <h2>{title}</h2>
         </button>
         {actions}
       </div>
-      {open && children}
+      {open &&
+        (disabled ? (
+          <fieldset
+            disabled
+            title={disabledTitle}
+            style={{ border: 0, margin: 0, padding: 0, minWidth: 0, opacity: 0.55 }}
+          >
+            {children}
+          </fieldset>
+        ) : (
+          children
+        ))}
     </>
+  );
+}
+
+/** A bound layer prop shows its variable with an unbind button. Unbinding
+ *  keeps the current value — it only stops future variable updates. */
+function BindingChip({
+  engine,
+  nodeId,
+  prop,
+  variableId,
+  vars,
+}: {
+  engine: Engine;
+  nodeId: string;
+  prop: string;
+  variableId: string;
+  vars: VariableItem[];
+}) {
+  const v = vars.find((x) => x.id === variableId);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10 }}>
+      <Icon name="variable" size={12} />
+      <span
+        style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--dim)" }}
+        title={v ? `Bound to variable "${v.name}" — editing the value directly unbinds it` : "Bound variable is missing"}
+      >
+        {v ? v.name : "Missing variable"}
+      </span>
+      <button
+        className="icon-btn"
+        title="Remove binding (keeps the current value)"
+        onClick={() => engine.dispatch({ type: "unbindVariable", id: nodeId, prop })}
+      >
+        <Icon name="link-broken" size={12} />
+      </button>
+    </div>
   );
 }
 
@@ -7092,7 +8172,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               onClick={go(() => engine.dispatch({ type: "setPixelPreview", preview: pv }))}
             >
               {pv === "off" ? "Off" : `${pv[0]}× device pixels`}
-              <span className="sc">{pv === "off" ? "⌃P" : pv === "1x" ? "⌃⌥P" : ""}</span>
+              <span className="sc">{pv === "1x" ? "⌃P" : pv === "2x" ? "⌃⌥P" : ""}</span>
               {snap.pixelPreview === pv && <Icon name="check" size={12} className="tick" />}
             </button>
           ))}

@@ -1,0 +1,212 @@
+# X-Native ↔ Figma Behavior-Maturity Audit
+
+**Started:** 2026-09-26 · **Branch:** `arena/01a0d904-x-native` · **Rule:** only features X-Native
+already has; Figma is the behavior benchmark, not the UI template. Prior micro-parity work:
+`MICRO_PARITY_GAP_2026-09-25.md` (all 10 implemented, `b502f9f`).
+
+**Method limits (sandbox):** no browser can run here — every finding is code-traced in `apps/web/src`
+and, where the behavior lives below the DOM, exercised headlessly (engine dispatches, render fns with
+mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing handlers, not by clicking.
+
+## Section tracker
+
+| § | Area | Status | Findings fixed |
+|---|------|--------|----------------|
+| 5 | Frames (create/select/transform/chrome/labels/props) | ✅ done | F-001–F-009 + bool-branch cleanup (11 tests) |
+| 6 | Selection system (type-aware matrix) | ✅ done | S-001–S-005 (7 tests) |
+| 7 | Transform / resize / rotate | ✅ done | T-001–T-005 (8 tests) + 1 known deviation |
+| 8 | Canvas navigation (pan/zoom/guides/minimap) | ✅ done | N-001–N-002 (6 tests) |
+| 9 | Grid / guides / rulers | … | |
+| 10 | Fill / color / gradient | … | |
+| 11 | Strokes (+ variable) | … | |
+| 12 | Effects / shadows / blur | … | |
+| 13 | Images (place/crop/mask/export) | … | |
+| 14 | Typography (+ phantom controls) | … | |
+| 15 | Vector / pen (object vs edit mode) | … | |
+| 16 | Layers / structure | … | |
+| 17 | Components | … | |
+| 18 | Variables / tokens / styles | … | |
+| 19 | Auto Layout UX | … | |
+| 20 | Contextual inspector | … | |
+| 21 | Context toolbar | … | |
+| 22 | Popups / popovers / menus | … | |
+| 23 | Prototyping | … | |
+| 24 | Import / export | … | |
+| 25 | Undo / redo (per category) | … | |
+| 26 | Keyboard behavior | … | |
+
+## Findings log
+
+<!-- F-### | § | Figma behavior | X-Native behavior (file:line) | Fix (commit) | Tests -->
+
+## §5 Frames — evidence & fixes (2026-09-26)
+
+Figma refs: "Frames in Figma Design" + "Frames vs Groups" help articles (fetched 2026-09-26).
+Baseline `1216 passed, 0 failed`; after: `1227 passed, 0 failed`. `tsc -b` clean.
+
+### Fixed (all shipped in the §5 frame commit on this branch)
+
+- F-001 — Frame tool is `F` **or `A`** in Figma; X-Native mapped `f` only (`chrome.tsx` tool map).
+  Fix: added `a: "frame"` (⇧A still wins earlier for auto layout).
+- F-002 — ⌥⌘G / Ctrl+Alt+G wraps the selection in a **plain frame** (no layout); X-Native had no
+  binding (help text at `chrome.tsx:3109` advertised it; `frame-sel` menu entry was display-only).
+  Fix: new `frameSelection` engine command (white + clip, no layout, via `wrapSel`), chord with
+  shift-wins, Arrange-menu row.
+- F-003 — ⌘⌫ / Ctrl+Backspace **ungroups** groups and frames; X-Native deleted them.
+  Fix: chord ungroups each selected group/frame (mixed selections still delete).
+- F-004 — Canvas click: first top-level frame 100×100, later top-level frames reuse the **last
+  top-level size**, nested clicks 100×100; X-Native always 100×100. Fix: engine `lastFrameSize`
+  (set on top-level add/wrap, exposed on snapshot), read by Canvas click-create.
+- F-005 — Resize-to-fit (⌥⇧⌘R / Alt+Shift+Ctrl+R or Layout button) hug-wraps children; missing.
+  Fix: new `resizeToFit` command (visible non-absolute child bbox, children keep absolute
+  positions, frames + groups), chord, Arrange-menu row, Layout-section button.
+- F-006 — Frame-tool presets + selected-frame preset swap. Presets existed but always landed at
+  fixed (80,80); no swap dropdown. Fix: preset frames land at viewport top-left; new Frame
+  dropdown in Layout (Custom size + grouped presets; swaps w/h and renames).
+- F-007 — Esc walks **one nesting level up** before clearing; X-Native always deselected all.
+  Fix: single nested selection → select parent first (text-edit Esc still commits first).
+- F-008 — Frame-tool hover shows **+ quick-add** badges duplicating the frame (⌥ = blank
+  same-size, left/right badge = side). Missing. Fix: painted badges + hit branch; duplicate
+  takes a new explicit `dx/dy` override so adjacency placement never corrupts the ⌘D cascade.
+- F-009 — W/H field **label-drag scrub** (1px = 1 unit, ⇧ = ×10); X-Native had field math but no
+  scrub. Fix: `Field` label/icon mousedown scrub, 3px click-vs-drag threshold (label-click mode
+  cycling preserved), live change, one undo step via the patch coalescer.
+- Cleanup — Gap-1 boolean audit left **two** ⌥⇧U/S/I/E branches (pre-existing `e.key` one only
+  failed on macOS dead-keys). Merged: old branch e.code-ified (incl. ⌥⇧F flatten), duplicate
+  deleted. Corrects the earlier "dead on all platforms" claim: it worked on Win/Linux.
+
+### Verified parity (traced, no fix needed)
+
+F/drag/nested creation incl. host parenting; ⌘G/⇧⌘G; paste-into-container; drop reparent;
+locked-layer skips; clip toggle + render; unified/independent radius; top-level-only labels;
+hover outline; type-aware chrome (selection ring, 6–22px corner rotate zone, rotOrigin pivot,
+rotation-aware cursors); ⌘D cascade; field math; blend Pass through.
+
+### Deferred / out of scope
+
+- Group bounds always hug children (Figma) vs X-Native free-size groups: design decision, big
+  blast radius — recorded, not changed.
+- Preset swap applying child constraints: same as manual W/H typing today (no constraint pass
+  on resize); revisit under §7.
+- `*50%`-style percent-quirk in field math: kept safe-revert behavior.
+- Nested selected-frame labels: no Figma doc found; unchanged.
+
+## §6 Selection — evidence & fixes (2026-09-26)
+
+Figma refs: "Select layers and objects" help article (both chunks) + forum/Reddit ground truth
+on click barriers and deep-select direction. After: `1234 passed, 0 failed`. `tsc -b` clean.
+
+### Fixed (shipped in the §6 selection commit on this branch)
+
+- S-001 — A single click must never drill: Figma drills via double-click/Enter only. X-Native's
+  `hitTest` stopped climbing at an already-selected group, so clicking inside one selected the
+  child. Fix: removed the selection-aware climb-break (group/boolean always win plain clicks).
+- S-002 — Panel ⇧-click extends across **every visible row** between anchor and target; X-Native
+  ranged siblings-only. Fix: shared range anchor + DOM order (expansion/search honored, no
+  state lift); ⌘/plain clicks move the anchor.
+- S-003 — Hovering a Layers-panel row highlights the layer on canvas; X-Native had no link.
+  Fix: rows emit `x-panel-hover`, Canvas paints the standard hover outline + label emphasis.
+- S-004 — ⇧-marquee adds to the selection; X-Native always replaced. Fix: union with the
+  stashed pre-drag selection (shrinking the band lets go again).
+- S-005 — "Select all with same" was missing Figma's **Instance** kind. Fix: new `instance`
+  kind matching `componentId` (masters excluded); graceful empty-toast on plain layers.
+
+### Verified parity (traced, no fix needed)
+
+Parent-by-default for groups (frames transparent — confirmed against Figma forum behavior);
+⌘/Ctrl-click deep-drills (direction verified); ⌘-marquee reaches nested, plain marquee stays
+top-level; Enter/⇧Enter/Tab/⇧Tab tree walk; Select-layer submenu (hidden out, locked in with
+padlock); ⇧-click toggle; ⌘A / ⌥⌘A matching / ⇧⌘A inverse; collapse-all keeps selection path;
+click-empty/Esc deselect; locked unclickable on canvas.
+
+### Deferred / out of scope
+
+- ⇧-click reaching *matching* nested objects without drilling: real Figma carve-out, but
+  matching-aware hit-testing is disproportionate — recorded, not implemented.
+- Smart Selection (1D/2D arrange): no X-Native equivalent — OUT OF SCOPE.
+- View-only selection chrome: no X-Native equivalent — OUT OF SCOPE.
+- Enter into an all-hidden/all-locked container selects the first child anyway: judgment call,
+  left as is.
+
+## §7 Transform / resize / rotate — evidence & fixes (2026-09-26)
+
+Figma refs: "Adjust alignment, rotation, position, and dimensions" (3 chunks), "Scale layers
+while maintaining proportions", nudge/⌘-arrow Reddit threads. After: `1242 passed, 0 failed`.
+
+### Fixed (shipped in the §7 transform commit on this branch)
+
+- T-001 — ⌥W/A/S/D/H/V align, ⌃⌥H/V distribute, and Canvas ⌥R rotation-origin were `e.key`
+  chords: dead on macOS (⌥A → å, ⌥R → ®), working on Win/Linux. Fix: e.code-ified all three;
+  ⌥R additionally guarded against meta/shift, which also fixes a §5-introduced double-fire
+  (⌥⇧⌘R resize-to-fit toggled the rotation target too).
+- T-002 — Aspect lock did not link min/max limits; Figma sets the proportional opposite.
+  Fix: `setMinMax` writes the ratio counterpart (clearing still clears one only).
+- T-003 — Equations had no current-value token; Figma accepts `Mixed+100` and `(𝑥/2)+6`.
+  Fix: `Mixed`/`𝑥`/standalone-`x` substitute the current value (only previously unparseable
+  input reaches it; `0x10+1` still fails closed).
+- T-004 — Scrub worked from labels/icons only; Figma also scrubs ⌥-drag from the input.
+  Fix: Field inputs start a scrub on ⌥-mousedown (plain press still focuses/selects).
+- T-005 — Drop-shadow offsets rotated with the layer (canvas `translate` under the node
+  rotation; SVG `feOffset` in rotated user space); Figma never rotates effects. Fix:
+  counter-rotated offsets on canvas (drop) and export (drop + inner; canvas inner already
+  used device-space `shadowOffset`).
+
+### Verified parity (traced, no fix needed)
+
+Edge/corner handles; ⇧ temp-ratio, ⌃ releases lock, ⌥ from-center, ⌘/Ctrl ignores
+constraints, snap skipped when locked; aspect-lock W/H link + instance exclusion; Scale tool
+K (children/strokes/effects/text/corner/layout scale, constraints ignored, locked/instance
+refused, multiplier + anchor box); nudge 1/10 prefs + ⇧big; rotate zone/⇧15°/±180 normalize/
+origin drag/Esc; flip ⇧H/⇧V as persistent matrix; align single→parent + ⇧click-to-parent +
+multi-mutual (+ grid/AL retargets); distribute outer-pinned (3+); dim labels; rotation field
+with origin slide; X/Y field math.
+
+### Known deviation (recorded, NOT fixed)
+
+- Rotation sign is inverted vs Figma: clockwise drag stores **+** here, **−** in Figma
+  (Figma positive = CCW; X-Native positive = CW throughout drag math, `nodeMatrix`,
+  canvas `rotate`, and SVG `rotate`). Internally self-consistent, so nothing renders
+  wrong — but a Figma-trained user typing −45° gets the mirror. Fixing = flipping the
+  convention in `Canvas.tsx` rotate drag, `memory.ts` `nodeMatrix`, `svgExport.ts`, and
+  every rotation consumer, with visual verification this sandbox cannot do. Needs a
+  dedicated, visually-verified migration; tracked here, not attempted.
+
+### Deferred / out of scope
+
+- Multi-selection equations to all: inspector shows the first layer only — §20 topic.
+- ⌘-arrow keyboard resize (Reddit-claimed): not in Figma docs; implemented nowhere; skipped.
+- Scrub speed tiers (2x/1x/½x/¼x + toast): polish; 1px = 1u + ⇧×10 covers the need.
+- Flip mirroring shadow offsets: left as is (no Figma doc either way).
+- Tidy up / Smart selection: OUT OF SCOPE (no equivalent).
+- Layer-order mechanics: §16; order shortcuts: §26.
+
+## §8 Canvas navigation — evidence & fixes (2026-09-26)
+
+Figma ref: "Adjust your zoom and view options" (both chunks). After: `1248 passed, 0 failed`.
+
+### Fixed (shipped in the §8 navigation commit on this branch)
+
+- N-001 — Zoom-menu pixel-preview shortcut labels were swapped: "Off" claimed ⌃P and "1x"
+  claimed ⌃⌥P, while the binding toggles 1x on ⌃P and 2x on ⌃⌥P. Fix: labels corrected
+  (1x → ⌃P, 2x → ⌃⌥P, Off → none).
+- N-002 — Pixel-grid snapping only settled moves, and nothing always-snapped. Figma rounds
+  placement/moves/resizes while Snap-to-pixel-grid is on, and frames/sections/components
+  always snap with it off. Fix: pure `wantsPixelSnap` + `roundBox` in `snapping.ts`, wired
+  to creation, move-end, and resize/multi-resize-end; settling runs before `end` so the
+  pre-existing move-settle no longer costs its own undo step; preset frames land rounded.
+
+### Verified parity (traced, no fix needed)
+
+Default zoom-to-fit on open; % readout + typeable zoom + presets; ⇧+/⇧−/⇧1/⇧2/⇧0 (+ ⌘
+variants); ⌘/Ctrl-wheel + pinch zoom at cursor; wheel pan; ⇧wheel horizontal pan; space,
+middle-mouse, and hand pan; zoom tool click-in/⌥-click-out/drag-marquee with cursors;
+pixel grid ≥400% only; pixel preview 1x/2x raster; ⌘'/⌘⇧' grid+snap pair; layout-guides,
+property-labels, flows, outlines, comments, rulers menu toggles; ⇧2-with-empty-selection
+no-op (no ⇧1 fallback); zoom never disturbs selection or tool.
+
+### Deferred / out of scope
+
+- Minimap drag/click-to-pan: the minimap is display-only and Figma has no minimap to
+  benchmark against — new-feature territory, not a behavior fix. Recorded, not built.
+- Layout-guides chord is ⇧G (Figma: ^G): X-Native shortcut vocabulary, kept deliberately.
+- Rulers/guides mechanics: §9. Multiplayer cursors: no X-Native equivalent — OUT OF SCOPE.

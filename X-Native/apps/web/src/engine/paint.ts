@@ -438,7 +438,13 @@ export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: num
     if (op !== "source-over") ctx.globalCompositeOperation = op;
     const blur = Math.max(0, drop.blur) * z;
     if (blur) ctx.filter = `blur(${blur}px)`;
-    ctx.translate(drop.x * z, drop.y * z);
+    // Figma never rotates an effect with its layer. The painter runs under the
+    // node's rotation, so the offset is counter-rotated back to world axes;
+    // the silhouette itself still traces the rotated outline.
+    const th = ((n.rotation || 0) * Math.PI) / 180;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+    ctx.translate((drop.x * c + drop.y * s) * z, (-drop.x * s + drop.y * c) * z);
     ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
     // "Show behind transparent areas" is off by default, and off means the
     // shadow is masked by what the layer paints. A layer with a fill paints
@@ -566,13 +572,16 @@ export function paintExtraStrokes(
     const perSide = box && sidesSupported(n.kind) && (s.sides ?? "all") !== "all";
     const strokePass = (weight: number) => {
       const w = Math.max(0.5, weight * z);
-      if (s.align === "inside") {
+      // Lines are always centre-stroked (see Canvas): "inside" on an open
+      // path would clip to nothing.
+      const align = n.kind === "line" || n.kind === "arrow" ? "center" : s.align;
+      if (align === "inside") {
         ctx.save();
         ctx.clip();
         ctx.lineWidth = w * 2;
         ctx.stroke();
         ctx.restore();
-      } else if (s.align === "outside") {
+      } else if (align === "outside") {
         // Canvas only centres a stroke, so an outside stroke is drawn at double
         // width with the shape interior clipped out — "clip to everything except
         // the shape" — leaving just the outer half. Erasing the interior with

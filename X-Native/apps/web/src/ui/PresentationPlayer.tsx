@@ -2,6 +2,9 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import type { Engine, Interaction, ProtoDevice, Snapshot, XNode } from "../engine/types";
 import { find, worldPos } from "../engine/memory";
 import { evaluateExpression } from "../engine/expressions";
+import { checkCondition } from "../engine/protoEval";
+import { resolveAllForMode, resolveVariable } from "../engine/variables";
+import { useReducedMotion } from "./a11y";
 import { Icon, rowIconSize } from "./icons";
 import { DEVICE_GROUPS, DeviceShell, deviceBox, deviceFor } from "./devices";
 
@@ -40,7 +43,7 @@ interface HotspotBox {
   y: number;
   w: number;
   h: number;
-  interaction: Interaction;
+  interactions: Interaction[];
 }
 
 interface FormFieldItem {
@@ -64,7 +67,7 @@ export function PresentationPlayer({
   engine: Engine;
   snap: Snapshot;
   onExit: () => void;
-  onInteraction?: (ix: Interaction) => void;
+  onInteraction?: (ix: Interaction, sourceId?: string) => void;
 }) {
   const root = snap.pages[snap.page].root;
   const presentNode = snap.presentFrame ? find(root, snap.presentFrame) : null;
@@ -110,9 +113,9 @@ export function PresentationPlayer({
     const collect = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
-      const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
-      if (ix) {
-        list.push({ id: n.id, name: n.name, x, y, w: n.w, h: n.h, interaction: ix });
+      const ixList = (n.interactions ?? []).filter((i) => i.trigger === "onClick");
+      if (ixList.length) {
+        list.push({ id: n.id, name: n.name, x, y, w: n.w, h: n.h, interactions: ixList });
       }
       for (const ch of n.children) collect(ch, x, y);
     };
@@ -178,8 +181,10 @@ export function PresentationPlayer({
   const frameH = presentNode ? presentNode.h * z : 0;
 
   // Handle missed click -> pulse hotspots and trigger ripple
+  const reducedMotion = useReducedMotion();
   const handleMissedClick = useCallback((e: React.MouseEvent) => {
     if (soundActive) playTapSound(320, 0.03);
+    if (reducedMotion) return;
     const newRipple = { id: Date.now(), x: e.clientX, y: e.clientY };
     setRipples((prev) => [...prev, newRipple]);
     setTimeout(() => {
@@ -188,14 +193,17 @@ export function PresentationPlayer({
 
     setHotspotPulse(true);
     setTimeout(() => setHotspotPulse(false), 550);
-  }, [soundActive]);
+  }, [soundActive, reducedMotion]);
 
   // Execute hotspot interaction
-  const triggerHotspot = useCallback((ix: Interaction) => {
+  const triggerHotspot = useCallback((h: { id: string; interactions: Interaction[] }) => {
     if (soundActive) playTapSound(880, 0.05);
+    for (const ix of h.interactions) {
+    // Conditions gate hotspot runs the same as canvas runs.
+    if (ix.condition && !checkCondition(snap.variables ?? [], snap.variableCollections ?? [], snap.activeModes ?? {}, ix.condition)) continue;
     if (onInteraction) {
-      onInteraction(ix);
-      return;
+      onInteraction(ix, h.id);
+      continue;
     }
     if (ix.action === "back") {
       engine.dispatch({ type: "presentBack" });
@@ -216,27 +224,28 @@ export function PresentationPlayer({
       const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
       window.open(url, "_blank", "noopener,noreferrer");
     } else if (ix.action === "setVariable" && ix.variableId) {
-      const v = snap.variables?.find((varItem) => varItem.id === ix.variableId);
-      if (v) {
-        let nextVal = ix.variableValue !== undefined ? ix.variableValue : v.value;
+      const vars = snap.variables ?? [];
+      const cur = resolveVariable(vars, snap.variableCollections ?? [], snap.activeModes ?? {}, ix.variableId);
+      if (cur && !cur.broken) {
+        let nextVal: string | number | boolean = ix.variableValue !== undefined ? ix.variableValue : cur.value;
         if (typeof nextVal === "string" && nextVal.startsWith("=")) {
-          const varMap: Record<string, any> = {};
-          snap.variables?.forEach((item) => {
-            varMap[item.name] = item.value;
-            varMap[item.id] = item.value;
+          const res = evaluateExpression(nextVal.slice(1), {
+            vars: resolveAllForMode(vars, snap.variableCollections ?? [], snap.activeModes ?? {}),
           });
-          const res = evaluateExpression(nextVal.slice(1), { vars: varMap });
           if (!res.error && res.value !== undefined) {
             nextVal = res.value;
           }
         }
-        if (ix.variableOp === "increment" && typeof v.value === "number") nextVal = v.value + 1;
-        else if (ix.variableOp === "decrement" && typeof v.value === "number") nextVal = v.value - 1;
-        else if (ix.variableOp === "toggle") nextVal = !v.value;
+        if (ix.variableOp === "increment" && typeof cur.value === "number") nextVal = cur.value + 1;
+        else if (ix.variableOp === "decrement" && typeof cur.value === "number") nextVal = cur.value - 1;
+        else if (ix.variableOp === "toggle" && typeof cur.value === "boolean") nextVal = !cur.value;
         engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
       }
+    } else if (ix.action === "setVariant" && ix.variantName) {
+      engine.dispatch({ type: "setVariant", id: h.id, name: ix.variantName });
     }
-  }, [engine, snap.variables, soundActive]);
+    }
+  }, [engine, snap.variables, snap.variableCollections, snap.activeModes, soundActive]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -328,8 +337,8 @@ export function PresentationPlayer({
             width: 48,
             height: 48,
             borderRadius: "50%",
-            border: "2px solid #6366f1",
-            background: "rgba(99, 102, 241, 0.2)",
+            border: "2px solid var(--accent)",
+            background: "var(--accent-wash)",
             pointerEvents: "none",
             animation: "proto-ripple 0.5s ease-out forwards",
           }}
@@ -378,7 +387,7 @@ export function PresentationPlayer({
                     width: Math.min(sw / 2, sh - 4),
                     height: Math.min(sw / 2, sh - 4),
                     borderRadius: "50%",
-                    background: isChecked ? "#6366f1" : "#94a3b8",
+                    background: isChecked ? "var(--accent)" : "var(--dim)",
                     boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
                     transition: "all 0.15s ease",
                   }}
@@ -431,9 +440,9 @@ export function PresentationPlayer({
             key={h.id}
             onClick={(e) => {
               e.stopPropagation();
-              triggerHotspot(h.interaction);
+              triggerHotspot(h);
             }}
-            title={`${h.name} (${h.interaction.action})`}
+            title={`${h.name} (${h.interactions[0]?.action ?? "tap"})`}
             style={{
               position: "absolute",
               left: sx,
@@ -443,8 +452,8 @@ export function PresentationPlayer({
               cursor: "pointer",
               zIndex: 43,
               borderRadius: 6 * z,
-              border: isGlowing ? "2px solid #6366f1" : "1px solid transparent",
-              background: isGlowing ? "rgba(99, 102, 241, 0.16)" : "transparent",
+              border: isGlowing ? "2px solid var(--accent)" : "1px solid transparent",
+              background: isGlowing ? "var(--accent-wash)" : "transparent",
               boxShadow: isGlowing ? "0 0 12px rgba(13, 153, 255, 0.45)" : "none",
               transition: "border 0.2s, background 0.2s, box-shadow 0.2s",
             }}
@@ -480,6 +489,7 @@ export function PresentationPlayer({
       >
         {/* Flow & Frame Selector */}
         <select
+          aria-label="Preview frame"
           value={snap.presentFrame}
           onChange={(e) => {
             const dest = e.target.value;

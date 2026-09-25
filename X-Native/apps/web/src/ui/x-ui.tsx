@@ -20,7 +20,7 @@
  */
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { armPopover } from "./popoverGuard";
 import { evalField } from "./fieldExpr";
 import type { XNode } from "../engine/types";
@@ -46,7 +46,7 @@ export const type = {
 export interface XButtonProps {
   variant?: "primary" | "secondary" | "ghost" | "danger" | "icon";
   size?: "sm" | "md" | "lg";
-  icon?: string;
+  icon?: IconName;
   iconSize?: number;
   disabled?: boolean;
   active?: boolean;
@@ -99,7 +99,7 @@ export interface XInputProps {
   onChange: (val: string) => void;
   onCommit?: (val: string) => void;
   placeholder?: string;
-  icon?: string;
+  icon?: IconName;
   suffix?: string;
   disabled?: boolean;
   ariaLabel?: string;
@@ -153,7 +153,7 @@ export interface XNumericInputProps {
   value: number;
   onChange: (val: number) => void;
   label?: string;
-  icon?: string;
+  icon?: IconName;
   min?: number;
   max?: number;
   step?: number;
@@ -283,7 +283,7 @@ export function XNumericInput({
 export interface XSelectOption {
   value: string;
   label: string;
-  icon?: string;
+  icon?: IconName;
 }
 
 export function XSelect({
@@ -326,7 +326,7 @@ export function XSegmentedControl({
   onChange,
 }: {
   value: string;
-  options: { value: string; label?: string; icon?: string; title?: string }[];
+  options: { value: string; label?: string; icon?: IconName; title?: string }[];
   onChange: (val: string) => void;
 }) {
   return (
@@ -436,7 +436,7 @@ export function PropertyField({
   disabled,
 }: {
   label?: string;
-  icon?: string;
+  icon?: IconName;
   children: ReactNode;
   hint?: string;
   disabled?: boolean;
@@ -491,7 +491,7 @@ export function XSection({
       <div className="h-row">
         <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
           <Icon name={open ? "chevron" : "chevron-right"} size={12} />
-          <h3>{title}</h3>
+          <h2>{title}</h2>
         </button>
         {actions}
       </div>

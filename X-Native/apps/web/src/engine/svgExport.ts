@@ -18,8 +18,8 @@
  */
 
 import type { XNode } from "./types";
-import { shapePoly } from "./geometry";
-import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
+import { outlineVariableStroke, shapePoly } from "./geometry";
+import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
 
 export function escXml(value: string) {
   return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[ch] || ch);
@@ -170,6 +170,16 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
   const defs: string[] = [];
   const filters: string[] = [];
   const fx = (n.effects ?? []).filter((e) => e.visible);
+  // Figma never rotates an effect with its layer, but the filter runs in the
+  // element's rotated user space — so offsets are counter-rotated to world
+  // axes, mirroring the canvas painter.
+  const th = ((n.rotation || 0) * Math.PI) / 180;
+  const c = Math.cos(th);
+  const s = Math.sin(th);
+  const counter = (x: number, y: number): [number, number] => [
+    Math.round((x * c + y * s) * 100) / 100,
+    Math.round((-x * s + y * c) * 100) / 100,
+  ];
   let i = 0;
   for (const e of fx) {
     const fid = `${id}_fx${i++}`;
@@ -180,9 +190,10 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
     if (e.kind === "drop-shadow") {
       const spread = e.spread > 0 ? `<feMorphology operator="dilate" radius="${e.spread}" in="SourceAlpha" result="sp"/>` : "";
       const src = e.spread > 0 ? "sp" : "SourceAlpha";
+      const [ox, oy] = counter(e.x, e.y);
       defs.push(
         `<filter id="${fid}" x="-50%" y="-50%" width="200%" height="200%">${spread}` +
-          `<feOffset dx="${e.x}" dy="${e.y}" in="${src}" result="off"/>` +
+          `<feOffset dx="${ox}" dy="${oy}" in="${src}" result="off"/>` +
           `<feGaussianBlur stdDeviation="${round(sigma)}" in="off" result="blur"/>` +
           `<feFlood flood-color="${color}" flood-opacity="${alpha}" result="col"/>` +
           `<feComposite operator="in" in="col" in2="blur" result="shadow"/>` +
@@ -190,9 +201,10 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
       );
       filters.push(`url(#${fid})`);
     } else if (e.kind === "inner-shadow") {
+      const [ox, oy] = counter(e.x, e.y);
       defs.push(
         `<filter id="${fid}" x="-50%" y="-50%" width="200%" height="200%">` +
-          `<feOffset dx="${e.x}" dy="${e.y}" in="SourceAlpha" result="off"/>` +
+          `<feOffset dx="${ox}" dy="${oy}" in="SourceAlpha" result="off"/>` +
           `<feGaussianBlur stdDeviation="${round(sigma)}" in="off" result="blur"/>` +
           `<feComposite operator="out" in="blur" in2="SourceAlpha" result="inv"/>` +
           `<feFlood flood-color="${color}" flood-opacity="${alpha}" result="col"/>` +
@@ -218,6 +230,31 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
  * but the shape, and in both cases the width is doubled so the visible half is
  * the width the layer asks for.
  */
+/**
+ * Variable-width stroke as a filled outline element. SVG has no variable
+ * stroke, so the expanded outline — the same geometry the canvas paints —
+ * exports as fill. Returns "" when the node has no active profile.
+ */
+function variableStrokeSvg(n: XNode, stroke: string): string {
+  if (!usesVariableWidth(n)) return "";
+  const center =
+    n.path.length >= 2 ? n.path : n.kind === "line" || n.kind === "arrow" ? shapePoly(n) : null;
+  if (!center || center.length < 2) return "";
+  const outline = outlineVariableStroke(
+    center,
+    n.strokeWidth,
+    n.strokeWidthProfile,
+    n.closed,
+    n.strokeCap,
+    n.strokeJoin,
+    miterLimitFromAngle(n.strokeMiterAngle),
+  );
+  if (outline.length < 3) return "";
+  const d = outline.map((p, i) => `${i ? "L" : "M"} ${round(p.x)} ${round(p.y)}`).join(" ") + " Z";
+  const opacity = Math.max(0, Math.min(1, n.strokeOpacity * alphaOf(n.strokePaint)));
+  return `<path d="${d}" fill="${stroke}" fill-opacity="${opacity}" stroke="none"/>`;
+}
+
 export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): string {
   const path = svgPath(n);
   if (!path) return "";
@@ -225,15 +262,16 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): s
   const dashCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? (n.strokeDashCap ?? caps) : caps;
   const common = `stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-linecap="${dashCap}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
   const fillAttrs = `fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity * alphaOf(n.fill)))}" fill-rule="${fillRule(n)}"`;
-  const align = n.strokeVisible && n.strokeWidth > 0 ? (n.strokeAlign ?? "inside") : "inside";
+  const align =
+    n.kind === "line" || n.kind === "arrow" ? "center" : n.strokeVisible && n.strokeWidth > 0 ? (n.strokeAlign ?? "inside") : "inside";
   const defs: string[] = [];
   // The fill and the stroke are separate elements: an outside stroke needs a
   // mask that hides everything inside the shape, and a mask on one element
   // would hide the fill with it.
   const fillPath = fill === "none" ? "" : `<path d="${path}" ${fillAttrs}${extra}/>`;
   const strokePath = (attrs: string) => `<path d="${path}" fill="none" ${attrs}/>`;
-  let strokeEl = "";
-  if (stroke !== "none") {
+  let strokeEl = stroke === "none" ? "" : variableStrokeSvg(n, stroke);
+  if (stroke !== "none" && !strokeEl) {
     const opacity = Math.max(0, Math.min(1, n.strokeOpacity * alphaOf(n.strokePaint)));
     const attrs = `stroke="${stroke}" stroke-opacity="${opacity}" stroke-linecap="${caps}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
     if (align === "center") {
@@ -259,6 +297,7 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): s
     n.strokeCap === "arrow" ||
     n.strokeCap === "triangle" ||
     n.strokeCap === "reverse-triangle" ||
+    n.strokeCap === "circle" ||
     n.strokeCap === "diamond";
   if (n.kind === "arrow" || ((n.kind === "line" || n.kind === "vector") && !n.closed && tipCap)) {
     const pts = n.path.length ? n.path : shapePoly(n);
@@ -278,6 +317,8 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): s
         const p2x = round(a.x - ux * ah - uy * ah * 0.72);
         const p2y = round(a.y - uy * ah + ux * ah * 0.72);
         arrowEl = `<path d="M ${p1x} ${p1y} L ${round(a.x)} ${round(a.y)} L ${p2x} ${p2y}" fill="none" stroke="${strokeColor}" stroke-width="${Math.max(0.5, n.strokeWidth)}" stroke-linecap="butt" stroke-linejoin="miter"/>`;
+      } else if (n.strokeCap === "circle") {
+        arrowEl = `<circle cx="${round(a.x)}" cy="${round(a.y)}" r="${round(ah * 0.55)}" fill="none" stroke="${strokeColor}" stroke-width="${Math.max(0.5, n.strokeWidth)}"/>`;
       } else {
         const p1x = round(a.x - ux * ah + uy * ah * 0.75);
         const p1y = round(a.y - uy * ah - ux * ah * 0.75);

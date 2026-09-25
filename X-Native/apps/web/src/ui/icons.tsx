@@ -2,28 +2,33 @@ import type { CSSProperties, ReactElement, SVGProps } from "react";
 import type { Tool } from "../engine/types";
 
 /**
- * 16×16 X-Native icon specification:
- * Sourced from X-Native design language — adapted from 16×16 grid systems.
- * Standard: 16×16 grid, 1.25px stroke, round caps/joins, currentColor for crisp rendering at 14–16px.
+ * 16×16 X-Native icon specification (Phase 6 redesign):
+ * One set, one grid, one stroke: 16×16 grid, 1.5-unit stroke, round
+ * caps/joins, currentColor. The stroke went from 1.25 to 1.5 because at the
+ * 12px panel size a 1.25-unit stroke renders under a pixel and washes out on
+ * low-density screens - visibility first, delicacy second.
  *
  * Four sizes are used on purpose, and nothing else:
  *   ICON_XS (12)  - a disclosure caret, or a glyph inside a line of small text.
  *   ICON_SM (14)  - an icon in a panel row: layers, sections, property rows.
  *   ICON_MD (16)  - a control in the toolbar, the rail, or its own button.
  *   ICON_LG (20)  - a brand mark, or an empty state's illustration.
- * Reach for the constant rather than a number. Before this the call sites
- * picked their own: 9, 10, 11, 12, 13, 14, 16, 20, 22 and 28 all appeared, so
- * the same chevron was drawn at four different weights - and at 9px the
- * chevron's 1.4-unit stroke rendered at 0.79px, which reads as a different
- * icon rather than a smaller one.
+ * Reach for the constant rather than a number.
  *
  * `caretSize()` is the one a menu opener should call.
+ *
+ * Rules for contributors: (1) `Icon` takes `IconName`, so a new glyph must
+ * also join the union below or nothing compiles. (2) One metaphor per action:
+ * no near-duplicate families - the 126 dead aliases deleted in Phase 6 are
+ * how "random icon in random places" starts. (3) Unknown names render the
+ * default circle, which is a bug alarm, not a fallback - if you see a bare
+ * circle in the UI, the name is wrong.
  */
 const S: SVGProps<SVGSVGElement> = {
   viewBox: "0 0 16 16",
   fill: "none",
   stroke: "currentColor",
-  strokeWidth: 1.25,
+  strokeWidth: 1.5,
   strokeLinecap: "round",
   strokeLinejoin: "round",
   "aria-hidden": true,
@@ -43,12 +48,180 @@ export const caretSize = (): number => ICON_XS;
 /** The one size a panel row's icon is ever drawn at. */
 export const rowIconSize = (): number => ICON_SM;
 
+export type IconName =
+  | "absolute"
+  | "agent"
+  | "align-bottom"
+  | "align-center"
+  | "align-hcenter"
+  | "align-left"
+  | "align-middle"
+  | "align-right"
+  | "align-text-center"
+  | "align-text-justified"
+  | "align-text-left"
+  | "align-text-right"
+  | "align-top"
+  | "align-vcenter"
+  | "arrow"
+  | "arrow-downward"
+  | "arrow-left"
+  | "arrow-right"
+  | "aspect"
+  | "back"
+  | "bend"
+  | "boolean-exclude"
+  | "boolean-intersect"
+  | "boolean-subtract"
+  | "boolean-union"
+  | "brush"
+  | "cap-circle"
+  | "cap-diamond"
+  | "cap-none"
+  | "cap-reverse-triangle"
+  | "cap-round"
+  | "cap-square"
+  | "check"
+  | "chevron"
+  | "chevron-down"
+  | "chevron-right"
+  | "chevron-up"
+  | "chevrons-down"
+  | "chevrons-up"
+  | "clipboard"
+  | "close"
+  | "code"
+  | "collapse-layers"
+  | "comment"
+  | "community"
+  | "component"
+  | "constraints"
+  | "copy"
+  | "dash"
+  | "desktop"
+  | "detach"
+  | "dev"
+  | "distribute-h"
+  | "distribute-v"
+  | "duplicate"
+  | "edit-text"
+  | "ellipse"
+  | "eraser"
+  | "export"
+  | "eye"
+  | "eye-off"
+  | "eyedropper"
+  | "flatten"
+  | "flip-h"
+  | "flip-v"
+  | "folder"
+  | "frame"
+  | "fullscreen"
+  | "gap"
+  | "grid"
+  | "grid-view"
+  | "group"
+  | "hand"
+  | "help"
+  | "history"
+  | "image"
+  | "import"
+  | "independent"
+  | "info"
+  | "instance"
+  | "join-bevel"
+  | "join-miter"
+  | "join-round"
+  | "layers"
+  | "layout"
+  | "layout-grid"
+  | "layout-h"
+  | "layout-none"
+  | "layout-v"
+  | "line"
+  | "link"
+  | "link-broken"
+  | "list-view"
+  | "lock"
+  | "logo"
+  | "magic-noodle"
+  | "mask"
+  | "minimize"
+  | "minus"
+  | "more"
+  | "move"
+  | "navigate-back"
+  | "open"
+  | "padding-horizontal"
+  | "padding-vertical"
+  | "page"
+  | "paint"
+  | "pen"
+  | "pencil"
+  | "phone"
+  | "play"
+  | "plus"
+  | "pointer"
+  | "poly"
+  | "proto"
+  | "radius"
+  | "rect"
+  | "refresh"
+  | "reset"
+  | "resources"
+  | "rotate"
+  | "scale"
+  | "scissors"
+  | "search"
+  | "section"
+  | "select"
+  | "shape-builder"
+  | "shapes"
+  | "slice"
+  | "slide"
+  | "star"
+  | "strike"
+  | "stroke-center"
+  | "stroke-inside"
+  | "stroke-outside"
+  | "tablet"
+  | "text"
+  | "text-auto-height"
+  | "text-auto-width"
+  | "text-fixed"
+  | "tools"
+  | "trash"
+  | "type"
+  | "type-settings"
+  | "underline"
+  | "unlock"
+  | "upload"
+  | "valign-bottom"
+  | "valign-middle"
+  | "valign-top"
+  | "variable"
+  | "vars"
+  | "vector"
+  | "visual-search"
+  | "volume"
+  | "volume-x"
+  | "width-min"
+  | "wrap"
+  | "x-mark"
+  | "zoom-in"
+  | "zoom-out";
+
+/**
+ * Every icon the app may render. `Icon` takes this instead of `string`, so a
+ * misspelled or deleted icon is a compile error — never another empty circle
+ * in the UI. Regenerate from the switch below when adding icons.
+ */
 export function Icon({
   name,
   size = 16,
   className,
 }: {
-  name: string;
+  name: IconName;
   size?: number;
   className?: string;
 }): ReactElement {
@@ -67,8 +240,6 @@ export function Icon({
         </svg>
       );
     case "scale":
-    case "resize":
-    case "resize-alt":
       return (
         <svg {...p}>
           <path d="M5.5 2.5H2.5v3M10.5 13.5h3v-3M3 3l4.5 4.5M13 13l-4.5-4.5" />
@@ -102,30 +273,11 @@ export function Icon({
           <path d="M13 13l-3.2-3.2M5 7h4" strokeWidth={1.25} />
         </svg>
       );
-    case "actual-size":
-    case "zoom-no":
-      return (
-        <svg {...p}>
-          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
-          <path d="M6 5.5v5M9.5 5.5v5M5.5 6L6 5.5M9 6l.5-.5" />
-        </svg>
-      );
-    case "fit-screen":
-    case "fit-width":
-    case "fit-height":
-    case "fill-screen":
-      return (
-        <svg {...p}>
-          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
-          <path d="M5.5 2.5v11M10.5 2.5v11" />
-        </svg>
-      );
 
     // -------------------------------------------------------------------------
     // Creation & Canvas Containers
     // -------------------------------------------------------------------------
     case "frame":
-    case "hash":
       return (
         <svg {...p}>
           <path d="M5.5 1.5v13M10.5 1.5v13M1.5 5.5h13M1.5 10.5h13" strokeWidth={1.25} />
@@ -145,7 +297,6 @@ export function Icon({
         </svg>
       );
     case "rect":
-    case "square":
     case "shapes":
       return (
         <svg {...p}>
@@ -178,22 +329,18 @@ export function Icon({
         </svg>
       );
     case "poly":
-    case "polygon":
       return (
         <svg {...p}>
           <path d="M8 2.5l5.5 10.5H2.5L8 2.5z" strokeWidth={1.25} />
         </svg>
       );
     case "star":
-    case "count-star":
       return (
         <svg {...p}>
           <path d="M8 2.2l1.7 3.8 4.1.3-3.1 2.8.9 4.1L8 11.2l-3.6 2 1-4.1-3.2-2.8 4.2-.3z" strokeWidth={1.25} />
         </svg>
       );
     case "image":
-    case "images":
-    case "fill-image":
       return (
         <svg {...p}>
           <rect x="2.5" y="3" width="11" height="10" rx="1.5" strokeWidth={1.25} />
@@ -203,7 +350,6 @@ export function Icon({
       );
     case "pen":
     case "vector":
-    case "vector-bend":
       return (
         <svg {...p}>
           <path d="M10 2.5l3.5 3.5-7.5 7.5H2.5v-3.5zM8.5 4l3.5 3.5M2.5 13.5l3-3" strokeWidth={1.25} />
@@ -218,13 +364,6 @@ export function Icon({
           <path d="M3.5 11 C 3.5 5, 8 3.5, 11 3.5" strokeWidth={1.25} fill="none" />
           <circle cx="8" cy="4" r="1.2" fill="currentColor" stroke="none" />
           <line x1="11" y1="3.5" x2="8" y2="4" strokeWidth={1} strokeDasharray="1,1" />
-        </svg>
-      );
-    case "lasso":
-      return (
-        <svg {...p}>
-          <path d="M7 2 C11 2, 14 5, 14 9 C14 12, 11 14, 7 14 C4 14, 2 12, 2 9 C2 6, 4 4, 7 4" strokeWidth={1.25} strokeDasharray="2,1.5" fill="none" />
-          <path d="M7 4 L9 1 L11 3" strokeWidth={1.25} fill="none" />
         </svg>
       );
     case "pencil":
@@ -247,14 +386,12 @@ export function Icon({
       );
     case "text":
     case "edit-text":
-    case "shape-text":
       return (
         <svg {...p}>
           <path d="M3 3.5h10M8 3.5v9.5M5.5 13h5" strokeWidth={1.3} />
         </svg>
       );
     case "comment":
-    case "notes":
       return (
         <svg {...p}>
           <path d="M3 3.5h10a1.5 1.5 0 011.5 1.5v5a1.5 1.5 0 01-1.5 1.5H7.5L3.5 14v-2.5H3A1.5 1.5 0 011.5 10V5A1.5 1.5 0 013 3.5z" strokeWidth={1.25} />
@@ -278,29 +415,6 @@ export function Icon({
           <polygon points="8,2.2 13.8,8 8,13.8 2.2,8" strokeWidth={1.25} />
         </svg>
       );
-    case "component-set":
-      return (
-        <svg {...p}>
-          <rect x="2.5" y="2.5" width="11" height="11" rx="2" strokeDasharray="2 1.5" />
-          <polygon points="8,4.5 11.5,8 8,11.5 4.5,8" fill="currentColor" stroke="none" />
-        </svg>
-      );
-    case "variant":
-    case "create-variant":
-      return (
-        <svg {...p}>
-          <polygon points="7,2.2 12.5,7.7 7,13.2 1.5,7.7" strokeWidth={1.2} />
-          <path d="M12.5 10.5v4M10.5 12.5h4" strokeWidth={1.25} />
-        </svg>
-      );
-    case "instance-swap":
-    case "swap":
-      return (
-        <svg {...p}>
-          <polygon points="8,4.5 11.5,8 8,11.5 4.5,8" strokeWidth={1.1} />
-          <path d="M3 3h4M3 3l2-2M13 13h-4M13 13l-2 2" strokeWidth={1.2} />
-        </svg>
-      );
     case "detach":
       return (
         <svg {...p}>
@@ -309,7 +423,6 @@ export function Icon({
       );
     case "reset":
     case "refresh":
-    case "restart":
       return (
         <svg {...p}>
           <path d="M3.5 8a4.5 4.5 0 101.3-3.2L3 6.5M3 3v3.5h3.5" strokeWidth={1.25} />
@@ -320,15 +433,21 @@ export function Icon({
     // Auto Layout & Sizing
     // -------------------------------------------------------------------------
     case "layout-h":
-    case "add-horizontal":
       return (
         <svg {...p}>
           <rect x="3" y="3" width="4" height="10" rx="1.2" strokeWidth={1.25} />
           <rect x="9" y="3" width="4" height="10" rx="1.2" strokeWidth={1.25} />
         </svg>
       );
+    case "layout":
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.2} strokeDasharray="2.4 1.6" />
+          <rect x="5" y="5" width="6" height="2.4" rx="0.8" strokeWidth={1.1} />
+          <rect x="5" y="8.6" width="6" height="2.4" rx="0.8" strokeWidth={1.1} />
+        </svg>
+      );
     case "layout-v":
-    case "add-vertical":
       return (
         <svg {...p}>
           <rect x="3" y="3" width="10" height="4" rx="1.2" strokeWidth={1.25} />
@@ -336,7 +455,6 @@ export function Icon({
         </svg>
       );
     case "wrap":
-    case "add-wrap":
       return (
         <svg {...p}>
           <rect x="2.5" y="3" width="4.5" height="4" rx="1" strokeWidth={1.2} />
@@ -372,15 +490,6 @@ export function Icon({
           <rect x="6" y="6" width="4" height="4" rx="0.75" strokeWidth={1.2} />
         </svg>
       );
-    case "padding":
-    case "padding-all":
-    case "padding-sides":
-      return (
-        <svg {...p}>
-          <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.25} />
-          <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" strokeDasharray="1.5 1" strokeWidth={1.1} />
-        </svg>
-      );
     case "padding-horizontal":
       return (
         <svg {...p}>
@@ -401,47 +510,12 @@ export function Icon({
           <path d="M2.5 3v10M13.5 3v10M5.5 8h5M7 6.5L5.5 8 7 9.5M9 6.5l1.5 1.5-1.5 1.5" strokeWidth={1.2} />
         </svg>
       );
-    case "hug":
-    case "width-hug":
-      return (
-        <svg {...p}>
-          <path d="M2.5 8h3M13.5 8h-3M5.5 5.5L8 8l-2.5 2.5M10.5 5.5L8 8l2.5 2.5" strokeWidth={1.25} />
-        </svg>
-      );
-    case "height-hug":
-      return (
-        <svg {...p}>
-          <path d="M8 2.5v3M8 13.5v-3M5.5 5.5L8 8l2.5-2.5M5.5 10.5L8 8l2.5 2.5" strokeWidth={1.25} />
-        </svg>
-      );
-    case "fill-container":
-    case "width-fill":
-      return (
-        <svg {...p}>
-          <path d="M2.5 8h11M5 5.5L2.5 8 5 10.5M11 5.5l2.5 2.5-2.5 2.5" strokeWidth={1.25} />
-        </svg>
-      );
-    case "height-fill":
-      return (
-        <svg {...p}>
-          <path d="M8 2.5v11M5.5 5L8 2.5 10.5 5M5.5 11L8 13.5l2.5-2.5" strokeWidth={1.25} />
-        </svg>
-      );
     case "width-min":
-    case "width-max":
       return (
         <svg {...p}>
           <path d="M3 2v12M13 2v12M3 8h10" strokeWidth={1.25} />
         </svg>
       );
-    case "height-min":
-    case "height-max":
-      return (
-        <svg {...p}>
-          <path d="M2 3h12M2 13h12M8 3v10" strokeWidth={1.25} />
-        </svg>
-      );
-    case "corners":
     case "radius":
       return (
         <svg {...p}>
@@ -455,27 +529,16 @@ export function Icon({
         </svg>
       );
     case "constraints":
-    case "constr-horiz":
-    case "constr-vert":
       return (
         <svg {...p}>
           <rect x="3" y="3" width="10" height="10" rx="1.5" strokeWidth={1.2} />
           <path d="M8 3v10M3 8h10" strokeWidth={1.2} />
         </svg>
       );
-    case "clip":
-    case "overflow-clip":
-      return (
-        <svg {...p}>
-          <rect x="3" y="3" width="10" height="10" rx="1.5" strokeWidth={1.25} />
-          <path d="M3 3l10 10" strokeWidth={1} />
-        </svg>
-      );
 
     // -------------------------------------------------------------------------
     // Boolean Operations
     // -------------------------------------------------------------------------
-    case "boolean":
     case "shape-builder":
       return (
         <svg {...p}>
@@ -484,14 +547,12 @@ export function Icon({
         </svg>
       );
     case "boolean-union":
-    case "union":
       return (
         <svg {...p}>
           <path d="M2.5 5.5A1.5 1.5 0 014 4h4.5a1.5 1.5 0 011.5 1.5V6H12a1.5 1.5 0 011.5 1.5v4.5A1.5 1.5 0 0112 13.5H7.5A1.5 1.5 0 016 12v-.5H4A1.5 1.5 0 012.5 10V5.5z" strokeWidth={1.25} />
         </svg>
       );
     case "boolean-subtract":
-    case "subtract":
       return (
         <svg {...p}>
           <path d="M2.5 4.5A1.5 1.5 0 014 3h5v3.5H5.5V10H2.5V4.5z" strokeWidth={1.25} />
@@ -499,7 +560,6 @@ export function Icon({
         </svg>
       );
     case "boolean-intersect":
-    case "intersect":
       return (
         <svg {...p}>
           <rect x="2.5" y="2.5" width="7" height="7" rx="1" strokeWidth={1.1} />
@@ -508,7 +568,6 @@ export function Icon({
         </svg>
       );
     case "boolean-exclude":
-    case "exclude":
       return (
         <svg {...p} fill="currentColor" stroke="none">
           <path d="M2.5 4A1.5 1.5 0 014 2.5h5.5A1.5 1.5 0 0111 4v2H9.5V4H4v5.5H6V11H4A1.5 1.5 0 012.5 9.5V4zM5 12a1.5 1.5 0 001.5 1.5H12a1.5 1.5 0 001.5-1.5V6.5A1.5 1.5 0 0012 5H10v1.5h2V12H6.5v-2H5v2z" />
@@ -544,14 +603,12 @@ export function Icon({
         </svg>
       );
     case "align-left":
-    case "align-left-alt":
       return (
         <svg {...p}>
           <path d="M2.5 2v12M5.5 4.5h8M5.5 9.5h5" strokeWidth={1.25} />
         </svg>
       );
     case "align-hcenter":
-    case "align-horizontal-center":
     case "align-center":
       return (
         <svg {...p}>
@@ -559,21 +616,18 @@ export function Icon({
         </svg>
       );
     case "align-right":
-    case "align-right-alt":
       return (
         <svg {...p}>
           <path d="M13.5 2v12M2.5 4.5h8M5.5 9.5h5" strokeWidth={1.25} />
         </svg>
       );
     case "align-top":
-    case "align-top-alt":
       return (
         <svg {...p}>
           <path d="M2 2.5h12M4.5 5.5v8M9.5 5.5v5" strokeWidth={1.25} />
         </svg>
       );
     case "align-vcenter":
-    case "align-vertical-center":
     case "align-middle":
       return (
         <svg {...p}>
@@ -581,21 +635,18 @@ export function Icon({
         </svg>
       );
     case "align-bottom":
-    case "align-bottom-alt":
       return (
         <svg {...p}>
           <path d="M2 13.5h12M4.5 2.5v8M9.5 5.5v5" strokeWidth={1.25} />
         </svg>
       );
     case "distribute-h":
-    case "distribute-horizontal":
       return (
         <svg {...p}>
           <path d="M2.5 2.5v11M13.5 2.5v11M6 5.5h4v5H6z" strokeWidth={1.25} />
         </svg>
       );
     case "distribute-v":
-    case "distribute-vertical":
       return (
         <svg {...p}>
           <path d="M2.5 2.5h11M2.5 13.5h11M5.5 6h5v4h-5z" strokeWidth={1.25} />
@@ -620,7 +671,6 @@ export function Icon({
         </svg>
       );
     case "align-text-justified":
-    case "align-justified":
       return (
         <svg {...p}>
           <path d="M2.5 4h11M2.5 8h11M2.5 12h11" strokeWidth={1.25} />
@@ -644,37 +694,6 @@ export function Icon({
           <path d="M2.5 13h11M5 4.5h6v6H5z" strokeWidth={1.25} />
         </svg>
       );
-    case "line-height":
-      return (
-        <svg {...p}>
-          <path d="M3 2.5v11M1.5 5L3 2.5 4.5 5M1.5 11L3 13.5 4.5 11M7.5 4h6M7.5 8h6M7.5 12h6" strokeWidth={1.25} />
-        </svg>
-      );
-    case "letter-spacing":
-      return (
-        <svg {...p}>
-          <path d="M2.5 13.5h11M5 12l-2.5 1.5L5 15M11 12l2.5 1.5-2.5 1.5M5.5 3h5M8 3v7" strokeWidth={1.2} />
-        </svg>
-      );
-    case "paragraph-spacing":
-      return (
-        <svg {...p}>
-          <path d="M3 2h10M3 6h7M3 11h10M3 15h7M12 7v3M10.5 8.5L12 10l1.5-1.5" strokeWidth={1.2} />
-        </svg>
-      );
-    case "leading-trim":
-    case "no-trim":
-      return (
-        <svg {...p}>
-          <path d="M2 3h12M2 13h12M4.5 5.5h7M8 5.5v5M6 10.5h4" strokeWidth={1.2} />
-        </svg>
-      );
-    case "font-size":
-      return (
-        <svg {...p}>
-          <path d="M2.5 4h6M5.5 4v9M4 13h3M9.5 7h4M11.5 7v6M10.5 13h2" strokeWidth={1.2} />
-        </svg>
-      );
     case "type-settings":
       return (
         <svg {...p}>
@@ -682,32 +701,19 @@ export function Icon({
           <circle cx="12.5" cy="11.5" r="1.5" strokeWidth={1.2} />
         </svg>
       );
-    case "bold":
-      return (
-        <svg {...p}>
-          <path d="M4.5 3.5h4.5a2.2 2.2 0 012.2 2.2 2.2 2.2 0 01-2.2 2.2H4.5v-4.4zM4.5 7.9h5a2.4 2.4 0 012.4 2.4 2.4 2.4 0 01-2.4 2.4H4.5V7.9z" strokeWidth={1.3} />
-        </svg>
-      );
     case "underline":
-    case "underline-dashed":
-    case "underline-dotted":
-    case "underline-wave":
       return (
         <svg {...p}>
           <path d="M4.5 3.5v5a3.5 3.5 0 007 0v-5M3.5 13h9" strokeWidth={1.25} />
         </svg>
       );
     case "strike":
-    case "strike-through":
       return (
         <svg {...p}>
           <path d="M2.5 8h11M5.5 5.2c.4-1.3 1.4-1.7 2.5-1.7s2.2.6 2.5 1.7M5.5 10.8c.4 1.3 1.4 1.7 2.5 1.7s2.2-.6 2.5-1.7" strokeWidth={1.25} />
         </svg>
       );
-    case "list":
     case "list-view":
-    case "list-horizontal":
-    case "number-list":
       return (
         <svg {...p}>
           <path d="M6.5 4.5h7M6.5 8h7M6.5 11.5h7" strokeWidth={1.25} />
@@ -721,26 +727,16 @@ export function Icon({
     // Dev Mode & Code Generation
     // -------------------------------------------------------------------------
     case "dev":
-    case "dev-brackets":
       return (
         <svg {...p}>
           <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" strokeWidth={1.4} />
         </svg>
       );
     case "code":
-    case "code-block":
-    case "code-snippet":
-    case "embed-code":
       return (
         <svg {...p}>
           <rect x="2" y="3" width="12" height="10" rx="2" strokeWidth={1.2} />
           <path d="M5.5 6.5L4 8l1.5 1.5M10.5 6.5L12 8l-1.5 1.5" strokeWidth={1.2} />
-        </svg>
-      );
-    case "inspect":
-      return (
-        <svg {...p}>
-          <path d="M3 2l5 12 2-4.5L14.5 7z" strokeWidth={1.25} />
         </svg>
       );
     case "copy":
@@ -759,7 +755,6 @@ export function Icon({
         </svg>
       );
     case "scissors":
-    case "cut":
       return (
         <svg {...p}>
           <circle cx="4.5" cy="4.5" r="1.8" strokeWidth={1.2} />
@@ -772,16 +767,27 @@ export function Icon({
     // Prototype & Presentation
     // -------------------------------------------------------------------------
     case "play":
-    case "preview-prototype":
       return (
         <svg {...p} fill="currentColor" stroke="none">
           <path d="M4.5 3.2a.8.8 0 00-1.2.7v8.2a.8.8 0 001.2.7l7.5-4.1a.8.8 0 000-1.4L4.5 3.2z" />
         </svg>
       );
+    case "volume":
+      return (
+        <svg {...p}>
+          <path d="M2.5 6.2v3.6h2.6L9 13V3L5.1 6.2H2.5z" strokeWidth={1.2} strokeLinejoin="round" />
+          <path d="M11 6.2a3.2 3.2 0 010 3.6M12.9 4.4a5.8 5.8 0 010 7.2" strokeWidth={1.2} />
+        </svg>
+      );
+    case "volume-x":
+      return (
+        <svg {...p}>
+          <path d="M2.5 6.2v3.6h2.6L9 13V3L5.1 6.2H2.5z" strokeWidth={1.2} strokeLinejoin="round" />
+          <path d="M11.2 6.6l2.8 2.8M14 6.6l-2.8 2.8" strokeWidth={1.25} />
+        </svg>
+      );
     case "proto":
-    case "prototyping":
     case "magic-noodle":
-    case "noodle":
       return (
         <svg {...p}>
           <circle cx="3.5" cy="8" r="1.5" strokeWidth={1.2} />
@@ -796,13 +802,6 @@ export function Icon({
           <path d="M12.5 8H3.5M7 4.5L3.5 8 7 11.5" strokeWidth={1.25} />
         </svg>
       );
-    case "forward":
-    case "navigate-forward":
-      return (
-        <svg {...p}>
-          <path d="M3.5 8h9M9 4.5l3.5 3.5L9 11.5" strokeWidth={1.25} />
-        </svg>
-      );
 
     // -------------------------------------------------------------------------
     // Fills, Strokes & Effects
@@ -814,66 +813,10 @@ export function Icon({
           <path d="M3.5 13.5h3.5" strokeWidth={1.2} />
         </svg>
       );
-    case "fill":
     case "paint":
-    case "swatch":
-    case "color":
       return (
         <svg {...p} fill="currentColor" stroke="none">
           <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
-        </svg>
-      );
-    case "fill-solid":
-      return (
-        <svg {...p}>
-          <rect x="2.5" y="2.5" width="11" height="11" rx="2" strokeWidth={1.25} />
-          <rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="currentColor" stroke="none" />
-        </svg>
-      );
-    case "gradient-linear":
-    case "fill-gradient-linear":
-      return (
-        <svg {...p}>
-          <rect x="2.5" y="2.5" width="11" height="11" rx="2" strokeWidth={1.25} />
-          <path d="M2.5 13.5L13.5 2.5" strokeWidth={1.2} />
-        </svg>
-      );
-    case "gradient-radial":
-      return (
-        <svg {...p}>
-          <circle cx="8" cy="8" r="5.5" strokeWidth={1.25} />
-          <circle cx="8" cy="8" r="2.5" strokeWidth={1.2} />
-        </svg>
-      );
-    case "gradient-angular":
-      return (
-        <svg {...p}>
-          <circle cx="8" cy="8" r="5.5" strokeWidth={1.25} />
-          <path d="M8 8V2.5M8 8l4 4" strokeWidth={1.2} />
-        </svg>
-      );
-    case "gradient-diamond":
-      return (
-        <svg {...p}>
-          <polygon points="8,2.5 13.5,8 8,13.5 2.5,8" strokeWidth={1.25} />
-          <polygon points="8,5.5 10.5,8 8,10.5 5.5,8" strokeWidth={1.1} />
-        </svg>
-      );
-    case "effects":
-    case "shadows":
-      return (
-        <svg {...p}>
-          <circle cx="8" cy="8" r="3.5" strokeWidth={1.2} />
-          <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" strokeWidth={1.2} />
-        </svg>
-      );
-    case "layer-blur":
-    case "layer-blur-medium":
-    case "background-blur":
-      return (
-        <svg {...p}>
-          <circle cx="8" cy="8" r="5.5" strokeWidth={1.2} strokeDasharray="2 1.5" />
-          <circle cx="8" cy="8" r="2.5" strokeWidth={1} />
         </svg>
       );
     case "mask":
@@ -923,6 +866,27 @@ export function Icon({
           <rect x="10" y="6.5" width="3" height="3" fill="currentColor" stroke="none" />
         </svg>
       );
+    case "cap-reverse-triangle":
+      return (
+        <svg {...p}>
+          <path d="M3 8h7" strokeWidth={1.3} />
+          <path d="M13 5.5L10 8l3 2.5z" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "cap-circle":
+      return (
+        <svg {...p}>
+          <path d="M3 8h6.5" strokeWidth={1.3} />
+          <circle cx="11.5" cy="8" r="2.2" fill="none" strokeWidth={1.3} />
+        </svg>
+      );
+    case "cap-diamond":
+      return (
+        <svg {...p}>
+          <path d="M3 8h6" strokeWidth={1.3} />
+          <path d="M9 8l2-2.2L13 8l-2 2.2z" fill="currentColor" stroke="none" />
+        </svg>
+      );
     case "join-miter":
       return (
         <svg {...p}>
@@ -959,14 +923,12 @@ export function Icon({
         </svg>
       );
     case "eye-off":
-    case "hidden":
       return (
         <svg {...p}>
           <path d="M2 2l12 12M6.6 6.7A2 2 0 008 10a2 2 0 001.4-.6M4.2 4.4C2.5 5.6 1.5 8 1.5 8s2.5 4.5 6.5 4.5c1.3 0 2.5-.4 3.5-.9M7.2 3.6A7 7 0 018 3.5c4 0 6.5 4.5 6.5 4.5a11 11 0 01-1.8 2.3" strokeWidth={1.25} />
         </svg>
       );
     case "lock":
-    case "lock-locked":
       return (
         <svg {...p}>
           <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" strokeWidth={1.25} />
@@ -974,7 +936,6 @@ export function Icon({
         </svg>
       );
     case "unlock":
-    case "lock-open":
       return (
         <svg {...p}>
           <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" strokeWidth={1.25} />
@@ -1002,14 +963,12 @@ export function Icon({
       );
     case "chevron":
     case "chevron-down":
-    case "chevron-down-large":
       return (
         <svg {...p}>
           <path d="M4 6l4 4 4-4" />
         </svg>
       );
     case "chevron-right":
-    case "chevron-right-large":
       return (
         <svg {...p}>
           <path d="M6 4l4 4-4 4" />
@@ -1048,28 +1007,24 @@ export function Icon({
         </svg>
       );
     case "rotate":
-    case "rotate-ccw":
       return (
         <svg {...p}>
           <path d="M3.5 8a4.5 4.5 0 108.4-2.6M12.5 2.5v3.5H9" strokeWidth={1.25} />
         </svg>
       );
     case "flip-h":
-    case "flip-horizontal":
       return (
         <svg {...p}>
           <path d="M8 2v12M3 11.5L6.5 8 3 4.5zM13 11.5L9.5 8 13 4.5z" strokeWidth={1.2} />
         </svg>
       );
     case "flip-v":
-    case "flip-vertical":
       return (
         <svg {...p}>
           <path d="M2 8h12M11.5 3L8 6.5 4.5 3zM11.5 13L8 9.5 4.5 13z" strokeWidth={1.2} />
         </svg>
       );
     case "aspect":
-    case "linked":
       return (
         <svg {...p}>
           <rect x="3" y="5.5" width="4.5" height="5" rx="1.5" strokeWidth={1.2} />
@@ -1078,7 +1033,6 @@ export function Icon({
         </svg>
       );
     case "link":
-    case "link-connected":
       return (
         <svg {...p}>
           <path d="M6.5 9.5l3-3M9 4.5l1.5-1.5a2.5 2.5 0 013.5 3.5L12.5 8M7 11.5L5.5 13a2.5 2.5 0 01-3.5-3.5L3.5 8" strokeWidth={1.25} />
@@ -1112,17 +1066,8 @@ export function Icon({
           <circle cx="8" cy="11.5" r="0.75" fill="currentColor" stroke="none" />
         </svg>
       );
-    case "settings":
-    case "adjust":
-      return (
-        <svg {...p}>
-          <circle cx="8" cy="8" r="2.5" strokeWidth={1.2} />
-          <path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3" strokeWidth={1.2} />
-        </svg>
-      );
     case "resources":
     case "community":
-    case "ui-kit":
       return (
         <svg {...p}>
           <path d="M8 2.2l3.2 3.2L8 8.6 4.8 5.4z" strokeWidth={1.2} />
@@ -1139,9 +1084,6 @@ export function Icon({
         </svg>
       );
     case "agent":
-    case "ai":
-    case "qwand":
-    case "wand":
       return (
         <svg {...p}>
           <path d="M8 2l1.3 3.5L12.8 7 9.3 8.5 8 12 6.7 8.5 3.2 7l3.5-1.5z" strokeWidth={1.2} />
@@ -1156,19 +1098,7 @@ export function Icon({
           <circle cx="6" cy="8" r="1.5" fill="currentColor" stroke="none" />
         </svg>
       );
-    case "styles":
-    case "text-library":
-    case "library":
-      return (
-        <svg {...p} fill="currentColor" stroke="none">
-          <circle cx="5" cy="5" r="1.5" />
-          <circle cx="11" cy="5" r="1.5" />
-          <circle cx="5" cy="11" r="1.5" />
-          <circle cx="11" cy="11" r="1.5" />
-        </svg>
-      );
     case "layers":
-    case "stack":
       return (
         <svg {...p}>
           <path d="M2.5 6L8 3.2l5.5 2.8L8 8.8z" strokeWidth={1.25} />
@@ -1176,7 +1106,6 @@ export function Icon({
         </svg>
       );
     case "page":
-    case "pages":
       return (
         <svg {...p}>
           <path d="M4 2.5h5.5L12.5 5.5v8H4z" strokeWidth={1.25} />
@@ -1190,16 +1119,7 @@ export function Icon({
           <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" strokeWidth={1.2} />
         </svg>
       );
-    case "target":
-      return (
-        <svg {...p}>
-          <circle cx="8" cy="8" r="5.5" strokeWidth={1.2} />
-          <circle cx="8" cy="8" r="2.5" strokeWidth={1.2} />
-          <path d="M8 1v2M8 13v2M1 8h2M13 8h2" strokeWidth={1.2} />
-        </svg>
-      );
     case "phone":
-    case "mobile":
       return (
         <svg {...p}>
           <rect x="4.5" y="2" width="7" height="12" rx="1.5" strokeWidth={1.25} />
@@ -1221,8 +1141,6 @@ export function Icon({
         </svg>
       );
     case "slide":
-    case "slides":
-    case "play-rectangle":
       return (
         <svg {...p}>
           <rect x="2.5" y="3" width="11" height="8" rx="1.5" strokeWidth={1.25} />
@@ -1230,8 +1148,6 @@ export function Icon({
         </svg>
       );
     case "check":
-    case "checkmark":
-    case "check-large":
       return (
         <svg {...p}>
           <path d="M3.5 8.5l3 3 6-6" strokeWidth={1.4} />
@@ -1270,7 +1186,6 @@ export function Icon({
         </svg>
       );
     case "upload":
-    case "upload-alt":
       return (
         <svg {...p}>
           <path d="M8 2.5v7.5M5.5 7.5L8 10l2.5-2.5M2.5 11v2a.5.5 0 00.5.5h10a.5.5 0 00.5-.5v-2" strokeWidth={1.25} />
@@ -1295,7 +1210,6 @@ export function Icon({
         </svg>
       );
     case "fullscreen":
-    case "maximize":
       return (
         <svg {...p}>
           <path d="M2.5 3.5V3a.5.5 0 01.5-.5h2.5M10.5 2.5H13a.5.5 0 01.5.5v2.5M13.5 10.5V13a.5.5 0 01-.5.5h-2.5M5.5 13.5H3a.5.5 0 01-.5-.5v-2.5" strokeWidth={1.3} />
@@ -1316,7 +1230,7 @@ export function Icon({
   }
 }
 
-export const TOOL_ICON: Record<Tool, string> = {
+export const TOOL_ICON: Record<Tool, IconName> = {
   select: "move",
   scale: "scale",
   frame: "frame",
@@ -1339,7 +1253,7 @@ export const TOOL_ICON: Record<Tool, string> = {
   zoom: "zoom-in",
 };
 
-export function kindIcon(k: string, imageSrc?: string): string {
+export function kindIcon(k: string, imageSrc?: string): IconName {
   if (imageSrc) return "image";
   switch (k) {
     case "frame":

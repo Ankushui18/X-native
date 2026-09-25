@@ -1,4 +1,11 @@
-import type { AnnotationItem, ComponentMaster, Page, SharedStyle } from "./types";
+import type {
+  AnnotationItem,
+  ComponentMaster,
+  Page,
+  SharedStyle,
+  VariableCollection,
+  VariableItem,
+} from "./types";
 
 /** Bump when the persisted shape changes incompatibly. A mismatch is discarded
  *  rather than migrated blindly, so a stale document can never half-load. */
@@ -27,6 +34,12 @@ export interface PersistedDoc {
   /** Dev Mode annotations and comment pins, anchored in page space. Absent in
    *  documents written before handoff notes existed. */
   annotations?: AnnotationItem[];
+  /** Variables, their collections/modes, and the active mode per collection.
+   *  Absent in documents written before variables persisted; the engine
+   *  seeds defaults and derives collections from them. */
+  variables?: VariableItem[];
+  variableCollections?: VariableCollection[];
+  activeModes?: Record<string, string>;
 }
 
 export interface LoadResult {
@@ -84,9 +97,35 @@ function validate(v: unknown): PersistedDoc | null {
     // reload. Carry them through, keeping only entries that are shaped right.
     annotations: Array.isArray(v.annotations)
       ? (v.annotations as AnnotationItem[]).filter(
-          (a) => isObj(a) && typeof a.id === "string" && typeof a.text === "string",
+          (a) => isObj(a) && typeof a.id === "string" && typeof a.note === "string",
         )
       : [],
+    variables: Array.isArray(v.variables)
+      ? (v.variables as VariableItem[]).filter(
+          (x) =>
+            isObj(x) &&
+            typeof x.id === "string" &&
+            typeof x.name === "string" &&
+            (x.type === "color" || x.type === "number" || x.type === "string" || x.type === "boolean") &&
+            typeof x.collection === "string",
+        )
+      : undefined,
+    variableCollections: Array.isArray(v.variableCollections)
+      ? (v.variableCollections as VariableCollection[]).filter(
+          (c) =>
+            isObj(c) &&
+            typeof c.id === "string" &&
+            typeof c.name === "string" &&
+            Array.isArray(c.modes) &&
+            c.modes.length > 0 &&
+            c.modes.every((m) => isObj(m) && typeof m.id === "string" && typeof m.name === "string"),
+        )
+      : undefined,
+    activeModes:
+      isObj(v.activeModes) &&
+      Object.values(v.activeModes).every((m) => typeof m === "string")
+        ? (v.activeModes as Record<string, string>)
+        : undefined,
   };
 }
 

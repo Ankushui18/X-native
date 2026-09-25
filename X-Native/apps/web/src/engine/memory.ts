@@ -12,11 +12,22 @@ import type {
   Snapshot,
   Tool,
   XNode,
+  BooleanOp,
   VariableItem,
+  VariableCollection,
   AnnotationItem,
 } from "./types";
+import {
+  BINDABLE_PROPS,
+  applyBinding,
+  fallbackForType,
+  migrateCollections,
+  resolveAllForMode,
+  resolveVariable,
+} from "./variables";
 import { clipPlainText, copyText, nativeClipHtml, writeClipboard } from "./clipboard";
 import { dehydrateNode } from "./assets";
+import { computeMasterHash } from "./codegen";
 import { exportClipSvg } from "./svgExport";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
@@ -53,7 +64,9 @@ import {
   pathBounds,
   normalizeVectorNode,
   samplePathPoints,
+  outlineVariableStroke,
 } from "./geometry";
+import { maxWidthMultiplier, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
 import {
   type Transaction,
@@ -112,12 +125,12 @@ export function node(
     strokeVisible: kind === "line" || kind === "arrow",
     strokeWidth: kind === "line" || kind === "arrow" ? 1 : 0,
     effects: [] as Effect[],
-    strokeAlign: "inside",
+    strokeAlign: kind === "line" || kind === "arrow" ? "center" : "inside",
     strokeDash: 0,
     strokeGap: 0,
-    strokeCap: kind === "arrow" ? "arrow" : "none",
-    strokeCapStart: "none",
-    strokeCapEnd: kind === "arrow" ? "arrow" : "none",
+    strokeCap: kind === "arrow" ? "arrow" : kind === "line" ? "round" : "none",
+    strokeCapStart: kind === "line" ? "round" : "none",
+    strokeCapEnd: kind === "arrow" ? "arrow" : kind === "line" ? "round" : "none",
     strokeJoin: "miter",
     opacity: 1,
     visible: true,
@@ -505,11 +518,11 @@ export function demoPage(): Page {
     fontSize: 13,
     fill: "#5a5f6b",
   });
-  const pill = node("rect", "View Details Button", 0, 0, 110, 32, {
+  const pill = node("rect", "View Details Button", 0, 0, 136, 32, {
     fill: "#0d99ff",
     cornerRadii: [16, 16, 16, 16],
   });
-  const pillLabel = node("text", "Label", 18, 8, 80, 16, {
+  const pillLabel = node("text", "Label", 17, 8, 102, 16, {
     text: "View Details →",
     fontSize: 12,
     fontWeight: 600,
@@ -517,7 +530,7 @@ export function demoPage(): Page {
   });
   pill.children = [pillLabel];
 
-  const card = node("frame", "Card", 24, 172, 342, 170, {
+  const card = node("frame", "Card", 24, 192, 342, 170, {
     fill: "#f8fafc",
     cornerRadii: [16, 16, 16, 16],
     overflow: "clip",
@@ -545,7 +558,7 @@ export function demoPage(): Page {
   });
   card.children = [cardTitle, cardBody, pill];
 
-  const filterBtn = node("rect", "Filter Options Button", 24, 360, 342, 44, {
+  const filterBtn = node("rect", "Filter Options Button", 24, 380, 342, 44, {
     fill: "#f1f5f9",
     cornerRadii: [12, 12, 12, 12],
     strokePaint: "#cbd5e1",
@@ -690,6 +703,8 @@ interface Internal {
   pages: Page[];
   page: number;
   selection: string[];
+  /** See Snapshot.treeRev. */
+  treeRev: number;
   tool: Tool;
   zoom: number;
   panX: number;
@@ -717,10 +732,13 @@ interface Internal {
   propertyLabels: boolean;
   openComment: string;
   variables: VariableItem[];
+  variableCollections: VariableCollection[];
+  activeModes: Record<string, string>;
   annotations: AnnotationItem[];
   vecEdit: string | null;
   vecPoint: number | null;
   vecPoints: number[];
+  booleanPreview: BooleanOp | null;
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -842,6 +860,7 @@ export class MemoryEngine implements Engine {
   private clip: XNode[] = [];
   private copiedProps: Partial<XNode> | null = null;
   private lastDupDelta: { dx: number; dy: number } | null = null;
+  private lastFrameSize: { w: number; h: number } | null = null;
   private justDuplicated = false;
 
   /** Set when a stored document existed but could not be read, so the UI can
@@ -870,11 +889,22 @@ export class MemoryEngine implements Engine {
       }
     }
     this.restoreFailed = corrupt;
+    // Variables predate persistence: documents written before them carry
+    // neither variables nor collections, so seed both and derive collections
+    // from whatever variables exist.
+    const seedVariables: VariableItem[] = doc?.variables ?? [
+      { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
+      { id: "var-2", name: "secondary", type: "color", value: "#6366f1", collection: "Brand" },
+      { id: "var-3", name: "spacing-sm", type: "number", value: 8, collection: "Spacing" },
+      { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
+      { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
+    ];
     this.state = {
       fileName: doc?.fileName ?? "Untitled",
       pages: doc?.pages ?? [demoPage()],
       page: doc?.page ?? 0,
       selection: [],
+      treeRev: 0,
       tool: "select",
       zoom: doc?.zoom ?? 0.75,
       panX: doc?.panX ?? 40,
@@ -901,18 +931,15 @@ export class MemoryEngine implements Engine {
       viewLayoutGuides: true,
       propertyLabels: false,
       openComment: "",
-      variables: [
-        { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
-        { id: "var-2", name: "secondary", type: "color", value: "#6366f1", collection: "Brand" },
-        { id: "var-3", name: "spacing-sm", type: "number", value: 8, collection: "Spacing" },
-        { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
-        { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
-      ],
+      variables: seedVariables,
+      variableCollections: doc?.variableCollections ?? migrateCollections(seedVariables),
+      activeModes: doc?.activeModes ?? {},
       // Handoff notes belong to the file, not to the session (see F1).
       annotations: doc?.annotations ?? [],
       vecEdit: null,
       vecPoint: null,
       vecPoints: [],
+      booleanPreview: null,
     };
     this.relayout();
     this.snapCache = this.build();
@@ -935,6 +962,9 @@ export class MemoryEngine implements Engine {
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
       annotations: this.state.annotations,
+      variables: this.state.variables,
+      variableCollections: this.state.variableCollections,
+      activeModes: this.state.activeModes,
     };
   }
 
@@ -971,6 +1001,7 @@ export class MemoryEngine implements Engine {
       }
       throw err;
     }
+    this.state.treeRev++;
     this.relayout();
     this.snapCache = this.build();
     this.listeners.forEach((f) => f());
@@ -1014,6 +1045,8 @@ export class MemoryEngine implements Engine {
       case "setVariable": {
         const idx = s.variables.findIndex((v) => v.id === op.variableId);
         if (idx >= 0) {
+          // A prototype write replaces the default slot; per-mode
+          // overrides keep working on top of it.
           s.variables[idx].value = op.newValue;
         } else {
           s.variables.push({
@@ -1023,6 +1056,7 @@ export class MemoryEngine implements Engine {
             type: typeof op.newValue === "number" ? "number" : typeof op.newValue === "boolean" ? "boolean" : "string",
             value: op.newValue,
           });
+          this.ensureCollection("Brand");
         }
         break;
       }
@@ -1081,14 +1115,30 @@ export class MemoryEngine implements Engine {
   }
 
   private evaluateExpressionsInTree(root: XNode) {
-    const varMap: Record<string, any> = {};
-    for (const v of this.state.variables) {
-      varMap[v.name] = v.value;
-      varMap[v.id] = v.value;
-    }
+    // Expressions see literals resolved under the active modes, never raw
+    // alias objects.
+    const varMap: Record<string, any> = resolveAllForMode(
+      this.state.variables,
+      this.state.variableCollections,
+      this.state.activeModes,
+    );
     const graph = new DependencyGraph();
 
     const evaluateNode = (node: XNode, parent: XNode | null) => {
+      // Variable bindings apply first; an explicit expression on the same
+      // prop wins, since it is the more specific instruction.
+      if (node.variableBindings) {
+        for (const [prop, varId] of Object.entries(node.variableBindings)) {
+          if (node.expressions?.[prop]) continue;
+          const r = resolveVariable(
+            this.state.variables,
+            this.state.variableCollections,
+            this.state.activeModes,
+            varId,
+          );
+          if (r && !r.broken) applyBinding(node, prop, r.value);
+        }
+      }
       if (node.expressions) {
         for (const [prop, expr] of Object.entries(node.expressions)) {
           if (!expr) continue;
@@ -1186,6 +1236,7 @@ export class MemoryEngine implements Engine {
       "presentStart",
       "presentStop",
       "setVecEdit",
+      "setBooleanPreview",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
@@ -1210,6 +1261,11 @@ export class MemoryEngine implements Engine {
       this.lastHist = null;
     }
     this.apply(cmd);
+    // Tree edits mutate nodes in place, so document panels cannot use reference
+    // equality to detect them; the revision does that job instead. Pure
+    // viewport moves leave it alone, letting those panels skip the frame.
+    // Conservative by design: anything not provably viewport-only bumps.
+    if (cmd.type !== "pan" && cmd.type !== "setPan" && cmd.type !== "setZoom") this.state.treeRev++;
     this.relayout();
     this.snapCache = this.build();
     this.listeners.forEach((f) => f());
@@ -1318,6 +1374,7 @@ export class MemoryEngine implements Engine {
       pages: this.state.pages,
       page: this.state.page,
       selection: this.state.selection,
+      treeRev: this.state.treeRev,
       tool: this.state.tool,
       zoom: this.state.zoom,
       panX: this.state.panX,
@@ -1350,10 +1407,14 @@ export class MemoryEngine implements Engine {
       prototypeSound: this.state.prototypeSound,
       activeOverlay: this.state.activeOverlay,
       variables: this.state.variables,
+      variableCollections: this.state.variableCollections,
+      activeModes: this.state.activeModes,
       annotations: this.state.annotations,
       vecEdit: this.state.vecEdit,
       vecPoint: this.state.vecPoint,
       vecPoints: this.state.vecPoints ?? [],
+      booleanPreview: this.state.booleanPreview,
+      lastFrameSize: this.lastFrameSize,
     };
   }
 
@@ -1362,6 +1423,7 @@ export class MemoryEngine implements Engine {
     switch (cmd.type) {
       case "select":
         s.selection = cmd.ids;
+        s.booleanPreview = null;
         this.justDuplicated = false;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
@@ -1371,6 +1433,7 @@ export class MemoryEngine implements Engine {
         break;
       case "setTool":
         s.tool = cmd.tool;
+        s.booleanPreview = null;
         break;
       case "setZoom": {
         const next = clampZoom(cmd.zoom);
@@ -1578,6 +1641,7 @@ export class MemoryEngine implements Engine {
         }
         s.selection = [n.id];
         if (cmd.kind === "text" || cmd.extra?.imageSrc) s.tool = "select";
+        if (cmd.kind === "frame" && into === this.root()) this.lastFrameSize = { w: n.w, h: n.h };
         break;
       }
       case "move":
@@ -1664,13 +1728,22 @@ export class MemoryEngine implements Engine {
               if (n.sizingH !== "fixed") n.sizingH = "fixed";
             }
           }
+          // A child of an auto layout frame that is resized by hand stops
+          // filling on the adjusted axis - "any manual adjustments you make
+          // will set the layer to Fixed" - or the next layout pass would snap
+          // it back to the fill size and the drag would do nothing.
+          const par = findParent(this.root(), n.id);
+          if (par?.layout && !cmd.scaleProps) {
+            if (askedW !== oldW) n.sizingW = "fixed";
+            if (askedH !== oldH) n.sizingH = "fixed";
+          }
           // A locked box that was resized by hand takes its new ratio with it.
           if (n.aspectLocked && askedW !== oldW && askedH !== oldH && n.w > 0 && n.h > 0) {
             n.aspectRatio = n.h / n.w;
           }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
-          } else {
+          } else if (!cmd.ignoreConstraints) {
             applyConstraints(n, oldW, oldH, n.w, n.h);
           }
           this.publishMaster(n);
@@ -1744,7 +1817,12 @@ export class MemoryEngine implements Engine {
       }
       case "duplicate": {
         const created: string[] = [];
-        const delta = this.lastDupDelta ?? { dx: 10, dy: 10 };
+        // An explicit dx/dy (frame quick-add) places the copy exactly and
+        // leaves the ⌘D cascade delta alone.
+        const delta =
+          cmd.dx !== undefined || cmd.dy !== undefined
+            ? { dx: cmd.dx ?? 0, dy: cmd.dy ?? 0 }
+            : (this.lastDupDelta ?? { dx: 10, dy: 10 });
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
@@ -1793,6 +1871,15 @@ export class MemoryEngine implements Engine {
           }
           if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
+          }
+          // Same detach rule for variables: editing a bound prop by hand
+          // clears that binding, otherwise the next relayout would revert
+          // the edit.
+          if (n.variableBindings) {
+            for (const k of Object.keys(cmd.patch)) {
+              if (k in n.variableBindings) delete n.variableBindings[k];
+            }
+            if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
           }
           // Text rule: a text layer cannot hold a max height and a max
           // line count at once - setting either clears the other - so the pair
@@ -2099,6 +2186,39 @@ export class MemoryEngine implements Engine {
         });
         break;
       }
+      case "frameSelection": {
+        // Plain frame around the selection: no auto layout, unlike ⇧A.
+        this.wrapSel("Frame", {
+          kind: "frame",
+          fill: "#ffffff",
+          fillVisible: true,
+          overflow: "clip",
+        });
+        break;
+      }
+      case "resizeToFit": {
+        // One-shot redraw of each selected frame around the outermost bounds
+        // of its visible children; children keep their absolute positions.
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n || (n.kind !== "frame" && n.kind !== "group") || n.locked) continue;
+          const kids = n.children.filter((c) => c.visible && !c.absolutePosition);
+          if (!kids.length) continue;
+          const x0 = Math.min(...kids.map((c) => c.x));
+          const y0 = Math.min(...kids.map((c) => c.y));
+          const x1 = Math.max(...kids.map((c) => c.x + c.w));
+          const y1 = Math.max(...kids.map((c) => c.y + c.h));
+          for (const c of kids) {
+            c.x -= x0;
+            c.y -= y0;
+          }
+          n.x += x0;
+          n.y += y0;
+          n.w = Math.max(1, x1 - x0);
+          n.h = Math.max(1, y1 - y0);
+        }
+        break;
+      }
       case "ungroup": {
         const id = s.selection[0];
         if (!id) break;
@@ -2187,6 +2307,7 @@ export class MemoryEngine implements Engine {
         Object.assign(s.pages[s.page], cmd.patch);
         break;
       case "boolean": {
+        s.booleanPreview = null;
         const ids = s.selection.filter((id) => {
           const n = find(this.root(), id);
           return !!n && n.kind !== "frame";
@@ -2225,6 +2346,10 @@ export class MemoryEngine implements Engine {
             else g.vectorNetwork = pathToVectorNetwork(baked.path, true);
           }
         }
+        break;
+      }
+      case "setBooleanPreview": {
+        s.booleanPreview = cmd.op;
         break;
       }
       case "createStyle": {
@@ -2367,6 +2492,32 @@ export class MemoryEngine implements Engine {
         lib.properties = lib.properties.filter((p) => p.id !== cmd.propId && p.name !== cmd.propId);
         break;
       }
+      case "setCodeMapping": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib) break;
+        if (!lib.codeMappings) lib.codeMappings = [];
+        const ix = lib.codeMappings.findIndex((m) => m.id === cmd.mapping.id);
+        // A mapping edit invalidates the last sync check: the pointer is
+        // new, so "verified against the master" no longer holds.
+        const mapping = { ...cmd.mapping, syncedAt: undefined, syncHash: undefined };
+        if (ix >= 0) lib.codeMappings[ix] = mapping;
+        else lib.codeMappings.push(mapping);
+        break;
+      }
+      case "deleteCodeMapping": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib?.codeMappings) break;
+        lib.codeMappings = lib.codeMappings.filter((m) => m.id !== cmd.mappingId);
+        break;
+      }
+      case "syncCodeMapping": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        const mapping = lib?.codeMappings?.find((m) => m.id === cmd.mappingId);
+        if (!lib || !mapping) break;
+        mapping.syncedAt = Date.now();
+        mapping.syncHash = computeMasterHash(lib);
+        break;
+      }
       case "setComponentProperty": {
         const n = find(this.root(), cmd.id);
         if (!n) break;
@@ -2382,6 +2533,12 @@ export class MemoryEngine implements Engine {
           if (propDef.type === "text" && propDef.targetNodeName) {
             const child = n.children.find((c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase() && c.kind === "text");
             if (child) child.text = String(cmd.value);
+          }
+          if (propDef.type === "instance-swap" && propDef.targetNodeName) {
+            const child = n.children.find(
+              (c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase() && !!c.componentId && !c.isComponent,
+            );
+            if (child) this.swapNodeToComponent(child, String(cmd.value));
           }
           if (propDef.type === "variant") {
             const v = lib?.variants?.find((x) => x.name === String(cmd.value));
@@ -2768,10 +2925,26 @@ export class MemoryEngine implements Engine {
           if (n.strokeWidth <= 0 && n.kind !== "line" && n.kind !== "arrow") continue;
           const sw = n.strokeWidth > 0 ? n.strokeWidth : 1;
           const src = n.path.length ? n.path : shapePoly(n);
-          const isClosed = n.closed || (n.kind !== "line" && n.kind !== "arrow");
-          const out = outlineStrokeNetwork(src, sw, isClosed, n.strokeCap || "round", n.strokeJoin || "round");
-          n.path = out.path;
-          n.vectorNetwork = out.network;
+          // An open vector outlines to a ribbon, not a ring: forcing closed
+          // here used to bake a degenerate loop (the closing chord has no
+          // width). Shape outlines from shapePoly are closed loops already.
+          const isClosed = n.path.length ? n.closed : n.kind !== "line" && n.kind !== "arrow";
+          if (usesVariableWidth(n)) {
+            const baked = outlineVariableStroke(
+              src,
+              sw,
+              n.strokeWidthProfile,
+              isClosed,
+              n.strokeCap || "round",
+              n.strokeJoin || "round",
+            );
+            n.path = baked;
+            n.vectorNetwork = pathToVectorNetwork(baked, true);
+          } else {
+            const out = outlineStrokeNetwork(src, sw, isClosed, n.strokeCap || "round", n.strokeJoin || "round");
+            n.path = out.path;
+            n.vectorNetwork = out.network;
+          }
           n.kind = "vector";
           n.closed = true;
           n.fill = n.strokePaint || "#000000";
@@ -2779,6 +2952,7 @@ export class MemoryEngine implements Engine {
           n.fillOpacity = n.strokeOpacity ?? 1;
           n.strokeWidth = 0;
           n.strokeVisible = false;
+          n.strokeWidthProfile = undefined;
         }
         break;
       }
@@ -2965,15 +3139,116 @@ export class MemoryEngine implements Engine {
       }
       case "addVariable": {
         s.variables.push(cmd.variable);
+        this.ensureCollection(cmd.variable.collection);
         break;
       }
       case "patchVariable": {
         const v = s.variables.find((x) => x.id === cmd.id);
-        if (v) Object.assign(v, cmd.patch);
+        if (v) {
+          const { values, ...rest } = cmd.patch;
+          // A type change invalidates every stored slot: keep the raw
+          // values and bindings would silently mis-resolve, so reset to
+          // the new type's fallback instead.
+          if (rest.type && rest.type !== v.type) {
+            v.value = fallbackForType(rest.type);
+            v.values = {};
+          }
+          Object.assign(v, rest);
+          // Per-mode values merge slot by slot; a wholesale replace would
+          // wipe every other mode's overrides.
+          if (values) v.values = { ...(v.values ?? {}), ...values };
+          if (rest.collection) this.ensureCollection(rest.collection);
+        }
         break;
       }
       case "deleteVariable": {
         s.variables = s.variables.filter((x) => x.id !== cmd.id);
+        // Bindings and aliases pointing at the id stay in place and report
+        // broken, so undo heals them instead of leaving silent gaps.
+        break;
+      }
+      case "addCollection": {
+        const name = cmd.name.trim();
+        if (!name || s.variableCollections.some((c) => c.name === name)) break;
+        const id = uid("col");
+        s.variableCollections.push({ id, name, modes: [{ id: `${id}-mode-1`, name: "Default" }] });
+        break;
+      }
+      case "renameCollection": {
+        const c = s.variableCollections.find((x) => x.id === cmd.id);
+        const name = cmd.name.trim();
+        if (!c || !name) break;
+        if (s.variableCollections.some((x) => x.id !== c.id && x.name === name)) break;
+        for (const v of s.variables) if (v.collection === c.name) v.collection = name;
+        c.name = name;
+        break;
+      }
+      case "deleteCollection": {
+        const c = s.variableCollections.find((x) => x.id === cmd.id);
+        if (!c) break;
+        s.variableCollections = s.variableCollections.filter((x) => x.id !== cmd.id);
+        s.variables = s.variables.filter((v) => v.collection !== c.name);
+        delete s.activeModes[cmd.id];
+        break;
+      }
+      case "addMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        const name = cmd.name.trim();
+        if (!c || !name || c.modes.some((m) => m.name === name)) break;
+        c.modes.push({ id: uid("mode"), name });
+        break;
+      }
+      case "renameMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        const m = c?.modes.find((x) => x.id === cmd.modeId);
+        const name = cmd.name.trim();
+        if (!c || !m || !name) break;
+        if (c.modes.some((x) => x.id !== m.id && x.name === name)) break;
+        m.name = name;
+        break;
+      }
+      case "deleteMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        if (!c || c.modes.length <= 1) break;
+        c.modes = c.modes.filter((m) => m.id !== cmd.modeId);
+        for (const v of s.variables) {
+          if (v.collection === c.name && v.values) delete v.values[cmd.modeId];
+        }
+        if (s.activeModes[c.id] === cmd.modeId) s.activeModes[c.id] = c.modes[0].id;
+        break;
+      }
+      case "setActiveMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        if (!c || !c.modes.some((m) => m.id === cmd.modeId)) break;
+        s.activeModes[c.id] = cmd.modeId;
+        this.evaluateExpressionsInTree(this.root());
+        break;
+      }
+      case "bindVariable": {
+        const n = find(this.root(), cmd.id);
+        const v = s.variables.find((x) => x.id === cmd.variableId);
+        const need = BINDABLE_PROPS[cmd.prop];
+        if (!n || !v || !need || v.type !== need) break;
+        if ((cmd.prop === "text" || cmd.prop === "fontSize") && n.kind !== "text") break;
+        if (cmd.prop === "cornerRadii" && !n.cornerRadii) break;
+        if (!n.variableBindings) n.variableBindings = {};
+        n.variableBindings[cmd.prop] = cmd.variableId;
+        // Apply immediately so the canvas updates before the next relayout.
+        const r = resolveVariable(s.variables, s.variableCollections, s.activeModes, cmd.variableId);
+        if (r && !r.broken) applyBinding(n, cmd.prop, r.value);
+        break;
+      }
+      case "unbindVariable": {
+        const n = find(this.root(), cmd.id);
+        if (n?.variableBindings) {
+          delete n.variableBindings[cmd.prop];
+          if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+        }
+        break;
+      }
+      case "swapInstance": {
+        const n = find(this.root(), cmd.id);
+        if (n) this.swapNodeToComponent(n, cmd.componentId);
         break;
       }
       case "addAnnotation": {
@@ -3127,6 +3402,39 @@ export class MemoryEngine implements Engine {
     }
   }
 
+  /** Collections are named buckets; a variable whose collection name has no
+   *  entry (prototype-created, legacy, renamed file) gets one on demand so
+   *  resolution and the panel never see an orphan. */
+  private ensureCollection(name: string) {
+    const s = this.state;
+    if (!name.trim() || s.variableCollections.some((c) => c.name === name)) return;
+    const id = uid("col");
+    s.variableCollections.push({ id, name, modes: [{ id: `${id}-mode-1`, name: "Default" }] });
+  }
+
+  /** Replace an instance's content with another component's master, keeping
+   *  its identity (id, position, name) and same-named property values. */
+  private swapNodeToComponent(n: XNode, componentId: string) {
+    const s = this.state;
+    const lib = s.components.find((c) => c.id === componentId || c.node.id === componentId);
+    if (!lib || n.isComponent || !n.componentId) return;
+    const keepProps = clone(n.componentProperties ?? {});
+    const fresh = clone(lib.node);
+    reid(fresh);
+    const props: Record<string, string | boolean> = {};
+    for (const p of lib.properties ?? []) props[p.name] = keepProps[p.name] ?? p.defaultValue;
+    Object.assign(n, fresh, {
+      x: n.x,
+      y: n.y,
+      id: n.id,
+      name: n.name,
+      isComponent: false,
+      componentId: lib.id,
+      variant: undefined,
+      componentProperties: props,
+    });
+  }
+
   private publishMaster(n: XNode) {
     if (!n.isComponent || !n.componentId) return;
     const lib = this.state.components.find((c) => c.id === n.componentId);
@@ -3159,6 +3467,7 @@ export class MemoryEngine implements Engine {
     const firstIndex = parent.children.findIndex((c) => ids.includes(c.id));
     parent.children = parent.children.filter((c) => !ids.includes(c.id));
     parent.children.splice(Math.max(0, Math.min(firstIndex, parent.children.length)), 0, g);
+    if (g.kind === "frame" && parent === this.root()) this.lastFrameSize = { w: g.w, h: g.h };
     s.selection = [g.id];
   }
 }
@@ -3416,6 +3725,38 @@ function worldMatrix(root: XNode, id: string): Matrix | null {
   return result;
 }
 
+/**
+ * Boolean live preview, in page coordinates.
+ *
+ * Runs the same `booleanPath` the `boolean` command bakes, over the same
+ * inputs (`transformedPoly` + node offsets), without touching the document.
+ * Returns null unless the selection is exactly what the command would act
+ * on: 2+ same-parent, non-frame nodes. Operand order is selection order, so
+ * the overlay is the result the Apply button would commit.
+ */
+export function previewBoolean(
+  op: BooleanOp,
+  root: XNode,
+  ids: string[],
+): { path: PathPoint[]; x: number; y: number; w: number; h: number } | null {
+  if (ids.length < 2) return null;
+  const nodes = ids.map((id) => find(root, id)).filter((n): n is XNode => !!n && n.kind !== "frame");
+  if (nodes.length < 2) return null;
+  const parent = findParent(root, nodes[0].id);
+  if (!parent || !nodes.every((n) => findParent(root, n.id) === parent)) return null;
+  const baked = booleanPath(
+    op,
+    nodes.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
+  );
+  if (!baked) return null;
+  // `boolean` wraps the selection in a group first, so its baked path is
+  // group-relative; the preview adds the parent chain offset instead.
+  const pw = worldPos(root, parent.id);
+  const ox = pw ? pw.x : 0;
+  const oy = pw ? pw.y : 0;
+  return { path: baked.path, x: baked.x + ox, y: baked.y + oy, w: baked.w, h: baked.h };
+}
+
 /** Convert a point in page coordinates into a node's local coordinate system. */
 export function worldToLocal(root: XNode, id: string, x: number, y: number) {
   const m = worldMatrix(root, id);
@@ -3453,7 +3794,10 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
     return n.fillVisible !== false && !n.fill.startsWith("#00000000") ? d <= 1 : Math.abs(Math.sqrt(d) - 1) <= Math.max(4, n.strokeWidth / 2);
   }
   if (n.kind === "line" || n.kind === "arrow") {
-    return segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <= Math.max(12, n.strokeWidth / 2 + 4);
+    return (
+      segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <=
+      Math.max(12, ((n.strokeWidth || 1) * maxWidthMultiplier(n.strokeWidthProfile)) / 2 + 4)
+    );
   }
   if (n.kind === "vector" || n.kind === "boolean") {
     const rawPoly = n.path.length ? n.path : shapePoly(n);
@@ -3464,7 +3808,7 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
         if (polygonHit(poly as any, px, py)) return true;
       }
       // Also allow selecting by clicking near stroke even when closed
-      const strokeTol = Math.max(6, (n.strokeWidth || 1) / 2 + 3);
+      const strokeTol = Math.max(6, ((n.strokeWidth || 1) * maxWidthMultiplier(n.strokeWidthProfile)) / 2 + 3);
       for (let i = 0; i < poly.length; i++) {
         const a = poly[i] as any;
         const b = poly[(i + 1) % poly.length] as any;
@@ -3473,7 +3817,7 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
       }
       if (isClosed) return false;
     } else if (poly.length >= 2) {
-      const strokeTol = Math.max(6, (n.strokeWidth || 1) / 2 + 4);
+      const strokeTol = Math.max(6, ((n.strokeWidth || 1) * maxWidthMultiplier(n.strokeWidthProfile)) / 2 + 4);
       for (let i = 0; i < poly.length - 1; i++) {
         const a = poly[i] as any;
         const b = poly[i + 1] as any;
@@ -3520,12 +3864,14 @@ export function hitTest(
   };
   visit(root, IDENTITY);
   if (!hit || opts?.deep) return hit;
+  // A plain click always lands on the group/boolean, even when that parent is
+  // already selected: drilling in is double-click's and Enter's job, never a
+  // single click's. Frames stay transparent, as in Figma.
   let n: XNode | null = hit;
   while (n) {
     const p = findParent(root, n.id);
     if (!p || p === root) break;
     if (p.kind === "group" || p.kind === "boolean") {
-      if (opts?.selection?.includes(p.id)) break;
       n = p;
       continue;
     }
@@ -3541,6 +3887,8 @@ function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: numbe
   for (const c of parent.children) {
     const h = c.constraintH;
     const v = c.constraintV;
+    const cw = c.w;
+    const ch = c.h;
     if (h === "max") c.x += dw;
     else if (h === "center") c.x += dw / 2;
     else if (h === "stretch") c.w = Math.max(1, c.w + dw);
@@ -3554,6 +3902,11 @@ function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: numbe
     else if (v === "scale" && oldH > 0) {
       c.y *= newH / oldH;
       c.h = Math.max(1, c.h * (newH / oldH));
+    }
+    // A resized child is a resized parent for its own subtree: stretch /
+    // scale must cascade, not stop at the first level.
+    if ((c.w !== cw || c.h !== ch) && c.children.length) {
+      applyConstraints(c, cw, ch, c.w, c.h);
     }
   }
 }

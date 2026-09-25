@@ -67,7 +67,7 @@ export function ZenHUD({
             cursor: "pointer",
           }}
         >
-          <Icon name="select" size={15} />
+          <Icon name="select" size={16} />
         </button>
         <button
           className={`icon-btn ${snap.tool === "frame" ? "on" : ""}`}
@@ -82,7 +82,7 @@ export function ZenHUD({
             cursor: "pointer",
           }}
         >
-          <Icon name="frame" size={15} />
+          <Icon name="frame" size={16} />
         </button>
         <button
           className={`icon-btn ${snap.tool === "rect" ? "on" : ""}`}
@@ -97,7 +97,7 @@ export function ZenHUD({
             cursor: "pointer",
           }}
         >
-          <Icon name="rect" size={15} />
+          <Icon name="rect" size={16} />
         </button>
         <button
           className={`icon-btn ${snap.tool === "pen" ? "on" : ""}`}
@@ -112,7 +112,7 @@ export function ZenHUD({
             cursor: "pointer",
           }}
         >
-          <Icon name="pen" size={15} />
+          <Icon name="pen" size={16} />
         </button>
         <button
           className={`icon-btn ${snap.tool === "text" ? "on" : ""}`}
@@ -127,7 +127,7 @@ export function ZenHUD({
             cursor: "pointer",
           }}
         >
-          <Icon name="text" size={15} />
+          <Icon name="text" size={16} />
         </button>
       </div>
 

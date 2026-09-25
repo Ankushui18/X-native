@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
 import { copyText } from "./engine/clipboard";
@@ -18,6 +18,7 @@ import {
 } from "./ui/chrome";
 import { Icon } from "./ui/icons";
 import { RightPanel, copyLayerCode, copyPng } from "./ui/inspector";
+import { installDesignApi } from "./engine/designApi";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { ZenHUD } from "./ui/ZenHUD";
@@ -25,8 +26,9 @@ import { RadialMenu } from "./ui/RadialMenu";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
-import { ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import { DEMO_ID, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
+import { preloadGeo } from "./engine/geoBridge";
 
 /** The dashboard is the app's front door; a file opens at `#/file/<id>`. The
  *  hash is the source of truth so reload, back and a shared link all behave. */
@@ -64,6 +66,9 @@ export default function App() {
       setSeed(null);
       return;
     }
+    // A fresh browser opening a shared demo link should meet the sample file,
+    // not scratch "Untitled". A no-op once any files exist.
+    if (route.id === DEMO_ID) ensureDemoFile();
     let alive = true;
     const present = (doc: DocSeed | null) => {
       // Images are references in storage; the editor needs the bytes. Resolve
@@ -156,16 +161,30 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   const [nav, setNav] = useState<NavId>("file");
   const [leftW, setLeftW] = useState(240);
   const [rightW, setRightW] = useState(240);
-  const [minUi, setMinUi] = useState(false);
+  // A phone cannot dock two sidebars: start minimized at <=860px so the
+  // canvas owns the screen, with the chip restoring the panels as overlays.
+  const [minUi, setMinUi] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 860px)").matches,
+  );
   const [hideUi, setHideUi] = useState(false);
   const [zenMode, setZenMode] = useState(false);
   const [radialMenu, setRadialMenu] = useState<{ x: number; y: number } | null>(null);
   const [actions, setActions] = useState(false);
+  // Stable identities for the layers panel's memo: inline arrows here would
+  // defeat its comparator and re-render every row on every dispatch.
+  const toggleMinUi = useCallback(() => setMinUi((v) => !v), []);
+  const openActions = useCallback(() => setActions(true), []);
   const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
-  const runnerRef = useRef<((ix: any) => void) | null>(null);
+  const runnerRef = useRef<((ix: any, sourceId?: string) => void) | null>(null);
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
+
+  // Geometry accelerator: fetch + handshake the wasm module while idle, so the
+  // first boolean bake finds it ready. Silent no-op when absent or disabled.
+  useEffect(() => {
+    preloadGeo();
+  }, [engine]);
 
   // Autosave. The document is serialised on a trailing debounce so a burst of
   // edits (dragging, typing) writes once when it settles rather than on every
@@ -225,6 +244,11 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   // silently presenting an empty file as if nothing was lost. This sets the
   // toast state directly: the bus subscription below mounts after this effect,
   // so a message raised through the bus here would be dropped.
+  // The design API for browser automation: window.__xNativeDesignApi.call().
+  useEffect(() => {
+    installDesignApi(() => engine.snapshot());
+  }, [engine]);
+
   useEffect(() => {
     if (!engine.restoreFailed) return;
     setToast("Saved document could not be read · started a new one");
@@ -341,7 +365,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         return;
       }
       const detail = (e as CustomEvent<{ format?: string | null }>).detail;
-      copyLayerCode(node, (detail?.format ?? undefined) as never);
+      copyLayerCode(node, (detail?.format ?? undefined) as never, s);
     };
     const onCopyPng = () => {
       const node = selected();
@@ -499,8 +523,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         engine={engine}
         snap={snap}
         nav={nav}
-        onMinimize={() => setMinUi((v) => !v)}
-        onActions={() => setActions(true)}
+        onMinimize={toggleMinUi}
+        onActions={openActions}
         onHome={onHome}
       />
       <div
@@ -508,19 +532,20 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         style={{ display: minUi || hideUi ? "none" : undefined }}
         {...leftDrag}
       />
-      <div className="canvas-col">
+      <main className="canvas-col">
+        <h1 className="sr-only">{snap.fileName}</h1>
         {minUi && !hideUi && !snap.presentFrame && (
           // Keeps the file name and a way out of the minimized state on
           // screen; ours lives at the top of the left panel, which is hidden
           // here, so the same two controls float in its place.
           <div className="min-chip">
-            <button className="icon-btn" title="Back to files" onClick={onHome}>
+            <button className="icon-btn" title="Back to files" aria-label="Back to files" onClick={onHome}>
               <Icon name="back" size={14} />
             </button>
             <span className="min-chip-name" title="UI minimized · ⇧⌘\ restores the panels">
               {snap.fileName}
             </span>
-            <button className="icon-btn" title="Restore UI (⇧⌘\)" onClick={() => setMinUi(false)}>
+            <button className="icon-btn" title="Restore UI (⇧⌘\)" aria-label="Restore panels" onClick={() => setMinUi(false)}>
               <Icon name="minimize" size={14} />
             </button>
           </div>
@@ -554,8 +579,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
           <PresentationPlayer
             engine={engine}
             snap={snap}
-            onInteraction={(ix) => {
-              if (runnerRef.current) runnerRef.current(ix);
+            onInteraction={(ix, sourceId) => {
+              if (runnerRef.current) runnerRef.current(ix, sourceId);
             }}
             onExit={() => {
               engine.dispatch({ type: "presentStop" });
@@ -590,7 +615,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         {findOpen && (
           <FindReplaceBar engine={engine} snap={snap} onClose={() => setFindOpen(false)} />
         )}
-      </div>
+      </main>
       <RightPanel
         engine={engine}
         snap={snap}

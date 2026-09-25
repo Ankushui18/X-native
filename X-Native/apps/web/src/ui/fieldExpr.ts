@@ -44,6 +44,13 @@ export function evalField(raw: string, current: number): number | null {
     const v = parseFloat(t);
     return Number.isFinite(v) ? v : null;
   }
+  // `Mixed`, `𝑥`, and a standalone `x` all stand for the field's current value
+  // (`Mixed+100`, `(𝑥/2)+6`), so mixed selections can be adjusted by equation.
+  // Only previously unparseable input reaches the substitution, so no working
+  // expression changes meaning.
+  t = t
+    .replace(/mixed|𝑥/gi, num(current))
+    .replace(/(^|[^a-zA-Z0-9_.])x([^a-zA-Z0-9_.]|$)/g, `$1${num(current)}$2`);
   // "starts/end with an operator" combines with what is already in the field.
   if (/^[+\-*/^]/.test(t)) t = `${num(current)}${t}`;
   else if (/[+\-*/^]$/.test(t)) t = `${t}${num(current)}`;

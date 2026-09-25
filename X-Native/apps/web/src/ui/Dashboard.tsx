@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ICON_LG, Icon, caretSize } from "./icons";
+import { ICON_LG, Icon, caretSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { THEME_OPTIONS, useTheme } from "./theme";
 import { toast } from "./toast";
@@ -40,7 +40,7 @@ type View = "recents" | "files" | "trash";
 type Sort = "recent" | "name" | "created";
 type Filter = "all" | "design" | "prototype";
 
-const VIEWS: { id: View; label: string; icon: string }[] = [
+const VIEWS: { id: View; label: string; icon: IconName }[] = [
   { id: "recents", label: "Recents", icon: "refresh" },
   { id: "files", label: "All files", icon: "layers" },
   { id: "trash", label: "Trash", icon: "trash" },
@@ -358,6 +358,8 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           <Tooltip label="Help" shortcut="?">
             <button
               className="icon-btn"
+              title="Help (?)"
+              aria-label="Help"
               onClick={() => window.dispatchEvent(new CustomEvent("x-native-shortcuts"))}
             >
               <Icon name="help" size={16} />
@@ -367,7 +369,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
             <div className="new-split">
               <button className="primary" onClick={() => startNew("blank")}>
                 <Icon name="plus" size={14} />
-                New design file
+                <span className="new-label">New design file</span>
               </button>
               <button
                 className="primary caret-btn"
@@ -427,6 +429,8 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
             <Tooltip label="New project" placement="left">
               <button
                 className="mini"
+                title="New project"
+                aria-label="New project"
                 onClick={() => {
                   const name = window.prompt("Project name");
                   if (name?.trim()) toast(`Project "${name.trim()}" — move files into it from their ⋯ menu`);
@@ -559,6 +563,8 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
                           <Tooltip label="Play prototype">
                             <button
                               className="play-chip"
+                              title="Play prototype"
+                              aria-label="Play prototype"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 open(f.id);
@@ -750,7 +756,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
   );
 }
 
-const TEMPLATE_ICON: Record<string, string> = {
+const TEMPLATE_ICON: Record<string, IconName> = {
   blank: "frame",
   mobile: "phone",
   desktop: "desktop",

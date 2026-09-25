@@ -16,26 +16,28 @@
  * on demand, retaining the original geometry non-destructively.
  */
 
-import type { PathPoint, VectorNetwork, StrokeCap, StrokeJoin } from "./types";
+import type {
+  PathPoint,
+  VectorNetwork,
+  StrokeCap,
+  StrokeJoin,
+  VariableWidthPoint,
+  VariableWidthProfile,
+} from "./types";
+// Variable-width profile types live in types.ts (the node stores them too);
+// the sampler lives in strokeModel.ts. Re-exported so existing imports keep working.
+export type { VariableWidthPoint, VariableWidthProfile };
+export { sampleVariableWidth } from "./strokeModel";
 import {
   offsetPath,
   simplifyPath,
   booleanPath,
   outlineStroke,
+  outlineVariableStroke,
   pathToVectorNetwork,
   pathBounds,
 } from "./geometry";
-
-export interface VariableWidthPoint {
-  /** Normalized position along curve: 0.0 (start) to 1.0 (end). */
-  position: number;
-  /** Width multiplier relative to base strokeWidth (e.g. 1.0 = normal, 2.0 = double, 0.0 = taper to point). */
-  widthMultiplier: number;
-}
-
-export interface VariableWidthProfile {
-  points: VariableWidthPoint[];
-}
+import { hasVariableWidth } from "./strokeModel";
 
 export interface RoundedCornersModifier {
   type: "roundedCorners";
@@ -129,27 +131,6 @@ function applyAffine(pt: PathPoint, m: [number, number, number, number, number, 
 }
 
 /**
- * Applies variable width profile interpolation to stroke expansion.
- */
-export function sampleVariableWidth(profile: VariableWidthProfile | undefined, t: number): number {
-  if (!profile || !profile.points || profile.points.length === 0) return 1.0;
-  const pts = [...profile.points].sort((a, b) => a.position - b.position);
-  if (t <= pts[0].position) return pts[0].widthMultiplier;
-  if (t >= pts[pts.length - 1].position) return pts[pts.length - 1].widthMultiplier;
-
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i];
-    const p1 = pts[i + 1];
-    if (t >= p0.position && t <= p1.position) {
-      const span = p1.position - p0.position;
-      const factor = span === 0 ? 0 : (t - p0.position) / span;
-      return p0.widthMultiplier + (p1.widthMultiplier - p0.widthMultiplier) * factor;
-    }
-  }
-  return 1.0;
-}
-
-/**
  * Evaluates a sequence of procedural modifiers over a base geometry.
  * Returns the final computed path and vector network.
  */
@@ -211,13 +192,10 @@ export function evaluateModifierStack(
 
       case "stroke": {
         const w = Math.max(0.5, mod.width);
-        const outlined = outlineStroke(
-          currentPath,
-          w,
-          isClosed,
-          mod.cap ?? "none",
-          mod.join ?? "miter",
-        );
+        const prof = mod.variableWidth?.points;
+        const outlined = hasVariableWidth(prof)
+          ? outlineVariableStroke(currentPath, w, prof, isClosed, mod.cap ?? "none", mod.join ?? "miter")
+          : outlineStroke(currentPath, w, isClosed, mod.cap ?? "none", mod.join ?? "miter");
         if (outlined.length > 0) {
           currentPath = outlined;
           isClosed = true;

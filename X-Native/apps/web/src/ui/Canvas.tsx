@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
-import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
+import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
+import { checkCondition, triggerInteractions } from "../engine/protoEval";
+import { resolveVariable } from "../engine/variables";
+import { prefersReducedMotion } from "./a11y";
+import { deepestFrame, find, findParent, hitTest, insideInstance, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
@@ -21,13 +24,17 @@ import {
   roundRectRadii,
   pathBounds,
   fillNetworkRegionAtPoint,
+  outlineVariableStroke,
+  widthProfileStations,
 } from "../engine/geometry";
-import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "../engine/strokeModel";
+import { dashArray, miterLimitFromAngle, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
+  roundBox,
   snapCandidates,
   snapMove,
   snapResize,
+  wantsPixelSnap,
   type Box,
   type GapBadge,
   type Guide,
@@ -71,6 +78,10 @@ const PENCIL_TOLERANCE_PX = 2;
 
 /** X-Native signature brand accents (Graphite & Signal Emerald). */
 const BRAND_ACCENT = "#10b981";
+/** Component/prototype identity on canvas. Paired with `--comp` in styles.css
+ *  (layer rows); canvas literals can't read CSS vars per-frame, so the two
+ *  are kept in step by hand — change both. */
+const COMP_PURPLE = "#a855f7";
 const BRAND_ACCENT_WASH = "rgba(16, 185, 129, 0.14)";
 const BRAND_ACCENT_GLOW = "rgba(16, 185, 129, 0.35)";
 
@@ -166,6 +177,9 @@ type Drag =
       corner?: number;
       id?: string;
       duped?: boolean;
+      /** Selection when a ⇧-marquee started: the band unions with this, so
+       *  shrinking the band lets go of layers instead of accumulating them. */
+      sel0?: string[];
       axis?: "x" | "y" | null;
       /** Combined selection bounds at drag start (group transforms). */
       bounds?: { x: number; y: number; w: number; h: number };
@@ -234,7 +248,7 @@ export function Canvas({
 }: {
   engine: Engine;
   snap: Snapshot;
-  onRunInteraction?: (runner: (ix: Interaction) => void) => void;
+  onRunInteraction?: (runner: (ix: Interaction, sourceId?: string) => void) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const editRef = useRef<HTMLTextAreaElement | null>(null);
@@ -242,6 +256,14 @@ export function Canvas({
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
   const imgs = useRef(new Map<string, HTMLImageElement>());
+  // Layer-blur raster cache: a filtered node repaints identically every pan
+  // frame while the blur dominates paint cost (profiled: 99.7% native in
+  // d-pan), so each eligible leaf's filtered raster is kept offscreen and
+  // blitted until its inputs change. The signature fully determines the
+  // raster, so entries are safe to share across documents; bounded by bytes
+  // with LRU eviction.
+  const blurCache = useRef(new Map<string, { c: HTMLCanvasElement; pad: number; bytes: number }>());
+  const blurCacheBytes = useRef(0);
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
@@ -261,6 +283,7 @@ export function Canvas({
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
+  const [panelHover, setPanelHover] = useState("");
   const [transition, setTransition] = useState<ProtoAnim | null>(null);
   const [animFrame, setAnimFrame] = useState<{
     frame: XNode;
@@ -287,6 +310,8 @@ export function Canvas({
     }
   }, [snap.vecPoint]);
   const hoverIx = useRef("");
+  /** Present-mode drag origin for the onDrag trigger; cleared on pointer-up. */
+  const dragIx = useRef<{ x: number; y: number; id: string; fired: boolean } | null>(null);
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
   /* Keeps the rotation origin out of the way until `⌥R` asks for it. */
@@ -330,7 +355,13 @@ export function Canvas({
   const snapTargets = useRef<Box[]>([]);
   const { theme } = useTheme();
   const runInteraction = useCallback(
-    (ix: Interaction) => {
+    (ix: Interaction, sourceId?: string) => {
+      // Conditions gate the whole interaction, animated or not.
+      if (ix.condition) {
+        const s = engine.snapshot();
+        if (!checkCondition(s.variables ?? [], s.variableCollections ?? [], s.activeModes ?? {}, ix.condition)) return;
+      }
+      const reduced = prefersReducedMotion();
       const run = () => {
         if (ix.action === "back") engine.dispatch({ type: "presentBack" });
         else if (ix.action === "navigate" && ix.destination) engine.dispatch({ type: "presentGo", id: ix.destination });
@@ -369,17 +400,21 @@ export function Canvas({
           engine.dispatch({ type: "closeOverlay" });
         } else if (ix.action === "setVariable" && ix.variableId) {
           const s = engine.snapshot();
-          const v = s.variables?.find((varItem) => varItem.id === ix.variableId);
-          if (v) {
-            let nextVal = ix.variableValue !== undefined ? ix.variableValue : v.value;
-            if (ix.variableOp === "increment" && typeof v.value === "number") nextVal = v.value + 1;
-            else if (ix.variableOp === "decrement" && typeof v.value === "number") nextVal = v.value - 1;
-            else if (ix.variableOp === "toggle") nextVal = !v.value;
+          const vars = s.variables ?? [];
+          const cur = resolveVariable(vars, s.variableCollections ?? [], s.activeModes ?? {}, ix.variableId);
+          if (cur && !cur.broken) {
+            let nextVal: string | number | boolean = ix.variableValue !== undefined ? ix.variableValue : cur.value;
+            if (ix.variableOp === "increment" && typeof cur.value === "number") nextVal = cur.value + 1;
+            else if (ix.variableOp === "decrement" && typeof cur.value === "number") nextVal = cur.value - 1;
+            else if (ix.variableOp === "toggle" && typeof cur.value === "boolean") nextVal = !cur.value;
             engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
           }
+        } else if (ix.action === "setVariant" && ix.variantName && sourceId) {
+          // Interactive components: swap the interaction's own instance.
+          engine.dispatch({ type: "setVariant", id: sourceId, name: ix.variantName });
         }
       };
-      if (ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable") {
+      if (reduced || ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable" || ix.action === "setVariant") {
         run();
         return;
       }
@@ -434,6 +469,17 @@ export function Canvas({
     [engine],
   );
 
+  /** Run every match for a trigger (innermost node wins); true when any ran. */
+  const runTrigger = useCallback(
+    (root: XNode, startId: string, trigger: ProtoTrigger) => {
+      const hit = triggerInteractions(root, startId, trigger);
+      if (!hit) return false;
+      for (const ix of hit.list) runInteraction(ix, hit.nodeId);
+      return true;
+    },
+    [runInteraction],
+  );
+
   useEffect(() => {
     if (onRunInteraction) onRunInteraction(runInteraction);
   }, [onRunInteraction, runInteraction]);
@@ -448,6 +494,27 @@ export function Canvas({
         targetEl?.isContentEditable ||
         !!targetEl?.closest?.("input, textarea, select, [contenteditable='true'], .x-field, .x-popover, .inspector");
       if (isTyping && e.key !== "Escape") return;
+
+      // Present-mode key triggers: every matching interaction in the frame runs.
+      if (e.type === "keydown" && snap.presentFrame && e.key !== "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const root = snap.pages[snap.page].root;
+        const frame = find(root, snap.presentFrame);
+        if (frame) {
+          const matches: { nodeId: string; ix: Interaction }[] = [];
+          const collect = (n: XNode) => {
+            for (const ix of n.interactions ?? []) {
+              if (ix.trigger === "keyPress" && ix.keyKey === e.key) matches.push({ nodeId: n.id, ix });
+            }
+            for (const ch of n.children) collect(ch);
+          };
+          collect(frame);
+          if (matches.length) {
+            e.preventDefault();
+            for (const m of matches) runInteraction(m.ix, m.nodeId);
+            return;
+          }
+        }
+      }
 
       // The alignment box in the right panel owns arrows and W/A/S/D while it
       // is focused, so the canvas does not nudge under it. Other letters still
@@ -476,6 +543,17 @@ export function Canvas({
         penBranch.current = null;
         return;
       }
+      if (e.type === "keydown" && e.key === "Escape" && snap.booleanPreview && draft.length < 2 && !penBranch.current) {
+        engine.dispatch({ type: "setBooleanPreview", op: null });
+        e.stopImmediatePropagation();
+        return;
+      }
+      if (e.type === "keydown" && e.key === "Enter" && snap.booleanPreview && !draft.length && !penBranch.current && !edit && !vecEdit) {
+        engine.dispatch({ type: "boolean", op: snap.booleanPreview });
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
       if (e.type === "keydown" && e.key === "Escape" && draft.length < 2) {
         setDraft([]);
         setCloseHint(null);
@@ -488,10 +566,13 @@ export function Canvas({
         setDraft((d) => d.slice(0, -1));
         return;
       }
-      if (e.type === "keydown" && e.altKey && (e.key === "r" || e.key === "R") && !edit) {
-        // Option/Alt R reveals the target; it rotates about itself until
-        // it is moved, and Escape puts it away again. A multi-selection turns
-        // about the middle of its bounds and has nothing to drag.
+      // ⌥R reveals the rotation-origin target (e.code: macOS types ® for ⌥R).
+      // Meta and shift stay out: ⌥⇧⌘R is resize-to-fit and must not also
+      // toggle this, since both key handlers hear every keystroke.
+      if (e.type === "keydown" && e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyR" && !edit) {
+        // It rotates about itself until it is moved, and Escape puts it away
+        // again. A multi-selection turns about the middle of its bounds and
+        // has nothing to drag.
         setRotTarget((v) => !v);
         if (!rotTarget && snap.selection.length > 1) {
           toast("Rotation origin · pick one layer to move it");
@@ -661,7 +742,7 @@ export function Canvas({
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKey, true);
     };
-  }, [snap, edit, draft, engine, vecEdit]);
+  }, [snap, edit, draft, engine, vecEdit, runInteraction]);
 
   // Escape finishes the path and leaves it open. The finisher is published
   // to ui/penDraft.ts because that is the layer which actually decides Escape.
@@ -700,11 +781,15 @@ export function Canvas({
       hoverIx.current = "";
       return;
     }
-    const n = find(snap.pages[snap.page].root, snap.presentFrame);
-    const ix = (n?.interactions ?? []).find((i) => i.trigger === "afterDelay");
-    if (!ix) return;
-    const t = window.setTimeout(() => runInteraction(ix), Math.max(0, ix.delay ?? 800));
-    return () => window.clearTimeout(t);
+    const root = snap.pages[snap.page].root;
+    const n = snap.presentFrame ? find(root, snap.presentFrame) : null;
+    const hit = n ? triggerInteractions(root, n.id, "afterDelay") : null;
+    if (!hit) return;
+    // Each action keeps its own delay.
+    const timers = hit.list.map((ix) =>
+      window.setTimeout(() => runInteraction(ix, hit.nodeId), Math.max(0, ix.delay ?? 800)),
+    );
+    return () => timers.forEach((t) => window.clearTimeout(t));
   }, [snap.presentFrame, snap.page, snap.pages, runInteraction]);
 
   useEffect(() => {
@@ -716,8 +801,12 @@ export function Canvas({
     const h = box.clientHeight;
     c.width = Math.max(1, Math.floor(w * dpr));
     c.height = Math.max(1, Math.floor(h * dpr));
-    const ctx = c.getContext("2d");
-    if (!ctx) return;
+    const mainCtx = c.getContext("2d");
+    if (!mainCtx) return;
+    // Swap slot for the blur cache: a cache miss re-enters paint() with ctx
+    // pointed at an offscreen canvas, guarded by cachingBlur.
+    let ctx: CanvasRenderingContext2D = mainCtx;
+    let cachingBlur = false;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const css = getComputedStyle(document.documentElement);
     const canvasBg = css.getPropertyValue("--canvas").trim() || "#e5e5e5";
@@ -793,6 +882,9 @@ export function Canvas({
         if (n.flipH || n.flipV) ctx.scale(n.flipH ? -1 : 1, n.flipV ? -1 : 1);
         ctx.translate(-cx, -cy);
       }
+      // Ancestor alpha, captured before this node's own applies: a cache blit
+      // re-applies exactly this, since the raster already holds the node's.
+      const parentAlpha = ctx.globalAlpha;
       ctx.globalAlpha *= n.opacity;
       ctx.globalCompositeOperation = canvasBlend(n.blendMode);
       const layerBlur = (n.effects ?? []).find((e) => e.kind === "layer-blur" && e.visible);
@@ -801,6 +893,71 @@ export function Canvas({
       const sy = snap.panY + y * z;
       const sw = n.w * z;
       const sh = n.h * z;
+      // Layer-blur raster cache. Eligible only when the node paints purely
+      // from its own fields: leaves (no child recursion to sign), unrotated
+      // (axis-aligned blit), source-over (associative compositing), no
+      // background-blur/glass (reads the live canvas), no image fill and no
+      // text (async loads would bake a half-painted raster). Blitting at
+      // fractional offsets resamples vs direct rasterization (measured max
+      // 7/255, mean 0.6/255 on the blur corpus at 32% zoom — visually
+      // identical); only smooth filtered content is cached, never crisp.
+      const cacheable =
+        !!layerBlur &&
+        !cachingBlur &&
+        !n.children.length &&
+        !n.rotation &&
+        !n.flipH &&
+        !n.flipV &&
+        n.kind !== "text" &&
+        ctx.globalCompositeOperation === "source-over" &&
+        !(n.effects ?? []).some((e) => e.visible && (e.kind === "background-blur" || e.kind === "glass")) &&
+        !(n.fillType === "image" || (n.imageSrc && isNone(n.fill)));
+      if (cacheable && layerBlur) {
+        const pad = Math.ceil(Math.max(0, layerBlur.blur) * z * 3) + 2;
+        const sig = `${z.toFixed(4)}|${JSON.stringify(n)}`;
+        let hit = blurCache.current.get(sig);
+        if (hit) {
+          blurCache.current.delete(sig);
+          blurCache.current.set(sig, hit);
+        } else if (sw > 0 && sh > 0 && sw + pad * 2 <= 2048 && sh + pad * 2 <= 2048) {
+          // Miss: rasterize through the exact same paint path into an
+          // offscreen, shifted so screen coords land inside the bitmap.
+          const oc = document.createElement("canvas");
+          oc.width = Math.max(1, Math.floor((sw + pad * 2) * dpr));
+          oc.height = Math.max(1, Math.floor((sh + pad * 2) * dpr));
+          const octx = oc.getContext("2d");
+          if (octx) {
+            octx.setTransform(dpr, 0, 0, dpr, (pad - sx) * dpr, (pad - sy) * dpr);
+            const prev = ctx;
+            ctx = octx;
+            cachingBlur = true;
+            try {
+              paint(n, px, py);
+            } finally {
+              cachingBlur = false;
+              ctx = prev;
+            }
+            hit = { c: oc, pad, bytes: oc.width * oc.height * 4 };
+            blurCache.current.set(sig, hit);
+            blurCacheBytes.current += hit.bytes;
+            while (blurCacheBytes.current > 67108864 && blurCache.current.size > 1) {
+              const oldest = blurCache.current.keys().next();
+              if (oldest.done) break;
+              const ev = blurCache.current.get(oldest.value);
+              blurCache.current.delete(oldest.value);
+              if (ev) blurCacheBytes.current -= ev.bytes;
+            }
+          }
+        }
+        if (hit) {
+          ctx.globalAlpha = parentAlpha;
+          ctx.filter = "none";
+          ctx.drawImage(hit.c, sx - hit.pad, sy - hit.pad, sw + hit.pad * 2, sh + hit.pad * 2);
+          ctx.restore();
+          return;
+        }
+        // No hit and unrasterizable: fall through to the live paint below.
+      }
       const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
       const round = () => {
         ctx.beginPath();
@@ -1068,13 +1225,16 @@ export function Canvas({
           } else {
             traceShape();
           }
-          if (n.strokeAlign === "inside") {
+          // Lines are always centre-stroked: clipping an open two-point path
+          // to "inside" would clip to a zero-area region and erase the shaft.
+          const align = n.kind === "line" || n.kind === "arrow" ? "center" : n.strokeAlign;
+          if (align === "inside") {
             ctx.save();
             ctx.clip();
             ctx.lineWidth = w * 2;
             ctx.stroke();
             ctx.restore();
-          } else if (n.strokeAlign === "outside") {
+          } else if (align === "outside") {
             ctx.lineWidth = w * 2;
             ctx.stroke();
             if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
@@ -1088,7 +1248,31 @@ export function Canvas({
             ctx.stroke();
           }
         };
-        if (perSide) {
+        // Variable-width stroke: expand the centerline to a filled outline.
+        // Centre-aligned by construction — dashes and per-side splits do not
+        // apply to a filled outline — and a vector with no path centerline
+        // (a bare branch network) keeps its uniform segment strokes.
+        let varOutline: PathPoint[] | null = null;
+        if (usesVariableWidth(n)) {
+          const center =
+            n.path.length >= 2 ? n.path : n.kind === "line" || n.kind === "arrow" ? shapePoly(n) : null;
+          if (center && center.length >= 2) {
+            varOutline = outlineVariableStroke(
+              center,
+              sides[0],
+              n.strokeWidthProfile,
+              n.closed,
+              n.strokeCap,
+              n.strokeJoin,
+              miterLimitFromAngle(n.strokeMiterAngle),
+            );
+          }
+        }
+        if (varOutline && varOutline.length >= 2) {
+          tracePath(ctx, varOutline, snap.panX + x * z, snap.panY + y * z, z, true);
+          ctx.fillStyle = cssRgba(n.strokePaint);
+          ctx.fill();
+        } else if (perSide) {
           const cones = sideCones(sx, sy, sw, sh);
           for (let i = 0; i < 4; i++) {
             if (sides[i] <= 0) continue;
@@ -1107,7 +1291,7 @@ export function Canvas({
           pass(sides[0]);
         }
         const isTip = (c?: StrokeCap) =>
-          c === "arrow" || c === "triangle" || c === "reverse-triangle" || c === "diamond";
+          c === "arrow" || c === "triangle" || c === "reverse-triangle" || c === "diamond" || c === "circle";
         const effEndCap = n.strokeCapEnd ?? (isTip(n.strokeCap) ? n.strokeCap : (n.kind === "arrow" ? "triangle" : "none"));
         const effStartCap = n.strokeCapStart ?? "none";
         const hasArrowCap =
@@ -1116,8 +1300,12 @@ export function Canvas({
         if (hasArrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
+          // Variable-width tips scale with the width at their end and vanish
+          // where the stroke tapers to nothing.
+          const varProf = usesVariableWidth(n) ? n.strokeWidthProfile : undefined;
+          const tipScale = (at: 0 | 1) => (varProf ? sampleVariableWidth(varProf, at) : 1);
           // Tips are placed on ends of an open path, with individual caps
-          const ends: { ex: number; ey: number; ux: number; uy: number; cap: StrokeCap }[] = [];
+          const ends: { ex: number; ey: number; ux: number; uy: number; cap: StrokeCap; at: 0 | 1 }[] = [];
           const pts = n.kind === "vector" || n.kind === "line" || n.kind === "arrow" ? (n.path.length ? n.path : shapePoly(n)) : [];
           if (pts.length > 1) {
             // End point (pts[pts.length - 1]): points in the direction the path was traveling
@@ -1127,7 +1315,7 @@ export function Canvas({
               const dxEnd = (lastA.x - lastB.x) * z;
               const dyEnd = (lastA.y - lastB.y) * z;
               const lenEnd = Math.hypot(dxEnd, dyEnd) || 1;
-              ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd, cap: effEndCap });
+              ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd, cap: effEndCap, at: 1 });
             }
 
             // Start point (pts[0]): only if start cap is explicitly configured
@@ -1137,51 +1325,61 @@ export function Canvas({
               const dxStart = (startA.x - startB.x) * z;
               const dyStart = (startA.y - startB.y) * z;
               const lenStart = Math.hypot(dxStart, dyStart) || 1;
-              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart, cap: effStartCap });
+              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart, cap: effStartCap, at: 0 });
             }
           } else {
             if (isTip(effEndCap)) {
-              ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0, cap: effEndCap });
+              ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0, cap: effEndCap, at: 1 });
             }
             if (isTip(effStartCap)) {
-              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0, cap: effStartCap });
+              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0, cap: effStartCap, at: 0 });
             }
           }
-          const back = (e: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
-            x: e.ex - e.ux * ah + e.uy * k * s,
-            y: e.ey - e.uy * ah - e.ux * k * s,
-          });
           for (const e of ends) {
+            const eah = ah * tipScale(e.at);
+            if (eah < 0.5) continue;
+            const back = (be: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
+              x: be.ex - be.ux * eah + be.uy * k * s,
+              y: be.ey - be.uy * eah - be.ux * k * s,
+            });
             ctx.beginPath();
             if (e.cap === "arrow") {
               // Two 45° lines, the same weight as the path.
-              const p1 = back(e, ah * 0.72, 1);
-              const p2 = back(e, ah * 0.72, -1);
+              const p1 = back(e, eah * 0.72, 1);
+              const p2 = back(e, eah * 0.72, -1);
               ctx.moveTo(p1.x, p1.y);
               ctx.lineTo(e.ex, e.ey);
               ctx.lineTo(p2.x, p2.y);
-              ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+              ctx.lineWidth = Math.max(0.5, n.strokeWidth * tipScale(e.at) * z);
               ctx.lineCap = "butt";
               ctx.lineJoin = "miter";
               ctx.stroke();
               continue;
             }
+            if (e.cap === "circle") {
+              // Ring on the endpoint, stroked at the path's own weight.
+              ctx.arc(e.ex, e.ey, Math.max(1, eah * 0.55), 0, Math.PI * 2);
+              ctx.lineWidth = Math.max(0.5, n.strokeWidth * tipScale(e.at) * z);
+              ctx.strokeStyle = cssRgba(n.strokePaint);
+              ctx.stroke();
+              continue;
+            }
             if (e.cap === "diamond") {
-              const mid = { x: e.ex - e.ux * ah * 0.8, y: e.ey - e.uy * ah * 0.8 };
+              const mid = { x: e.ex - e.ux * eah * 0.8, y: e.ey - e.uy * eah * 0.8 };
               ctx.moveTo(e.ex, e.ey);
-              ctx.lineTo(mid.x - e.uy * ah * 0.5, mid.y + e.ux * ah * 0.5);
-              ctx.lineTo(e.ex - e.ux * ah * 1.6, e.ey - e.uy * ah * 1.6);
-              ctx.lineTo(mid.x + e.uy * ah * 0.5, mid.y - e.ux * ah * 0.5);
+              ctx.lineTo(mid.x - e.uy * eah * 0.5, mid.y + e.ux * eah * 0.5);
+              ctx.lineTo(e.ex - e.ux * eah * 1.6, e.ey - e.uy * eah * 1.6);
+              ctx.lineTo(mid.x + e.uy * eah * 0.5, mid.y - e.ux * eah * 0.5);
             } else if (e.cap === "reverse-triangle") {
               // Flipped: the base sits on the end point, the apex points inward.
               ctx.moveTo(e.ex, e.ey);
-              ctx.lineTo(e.ex - e.uy * ah * 0.7, e.ey + e.ux * ah * 0.7);
-              ctx.lineTo(e.ex - e.ux * ah * 1.1, e.ey - e.uy * ah * 1.1);
-              ctx.lineTo(e.ex + e.uy * ah * 0.7, e.ey - e.ux * ah * 0.7);
+              ctx.lineTo(e.ex - e.uy * eah * 0.7, e.ey + e.ux * eah * 0.7);
+              ctx.lineTo(e.ex - e.ux * eah * 1.1, e.ey - e.uy * eah * 1.1);
+              ctx.lineTo(e.ex + e.uy * eah * 0.7, e.ey - e.ux * eah * 0.7);
             } else {
               ctx.moveTo(e.ex, e.ey);
-              ctx.lineTo(back(e, ah * 0.75, 1).x, back(e, ah * 0.75, 1).y);
-              ctx.lineTo(back(e, ah * 0.75, -1).x, back(e, ah * 0.75, -1).y);
+              ctx.lineTo(back(e, eah * 0.75, 1).x, back(e, eah * 0.75, 1).y);
+              ctx.lineTo(back(e, eah * 0.75, -1).x, back(e, eah * 0.75, -1).y);
             }
             ctx.closePath();
             ctx.fillStyle = cssRgba(n.strokePaint);
@@ -1429,7 +1627,7 @@ export function Canvas({
     // stays the same size as the canvas zooms. Selected or hovered, it takes
     // the accent colour indicating the name belongs to the frame you
     // are about to act on.
-    const labelNames = (n: XNode, px: number, py: number) => {
+    const labelNames = (n: XNode, parentIsFrame: boolean, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
       const screenX = snap.panX + x * z;
@@ -1437,6 +1635,10 @@ export function Canvas({
       if (
         n.kind === "frame" &&
         n.showName !== false &&
+        // A frame nested in another frame lives in the content flow: its tag
+        // would float over sibling layers (the demo card's "Card" sat 4px
+        // under body text). Top-level frames, sections and groups keep theirs.
+        !parentIsFrame &&
         // Skip names whose frame is off-screen: at any zoom a page can hold
         // hundreds of them, and fillText for each is the one thing on this
         // canvas that runs per layer rather than per visible pixel.
@@ -1445,7 +1647,7 @@ export function Canvas({
         screenY > -40 &&
         screenY < h + 400
       ) {
-        const active = snap.selection.includes(n.id) || hoverId === n.id;
+        const active = snap.selection.includes(n.id) || hoverId === n.id || panelHover === n.id;
         ctx.save();
         ctx.font = active ? "600 11px Inter, system-ui" : "500 11px Inter, system-ui";
         ctx.fillStyle = active ? BRAND_ACCENT : canvasLabel;
@@ -1453,10 +1655,10 @@ export function Canvas({
         ctx.fillText(n.name, screenX, screenY - 8);
         ctx.restore();
       }
-      for (const c of n.children) labelNames(c, x, y);
+      for (const c of n.children) labelNames(c, n.kind === "frame", x, y);
     };
     if (!snap.presentFrame) {
-      for (const ch of root.children) labelNames(ch, 0, 0);
+      for (const ch of root.children) labelNames(ch, false, 0, 0);
     }
 
     if (penBranch.current && snap.tool === "pen") {
@@ -1610,7 +1812,7 @@ export function Canvas({
           ctx.stroke();
         }
 
-        ctx.strokeStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.strokeStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
         ctx.lineWidth = isSelected ? 2.5 : 1.8;
         if (isOverlay) ctx.setLineDash([5, 4]);
 
@@ -1620,7 +1822,7 @@ export function Canvas({
         ctx.stroke();
 
         // Source circular anchor dot
-        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.fillStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
         ctx.beginPath();
         ctx.arc(sax, say, isSelected ? 5.5 : 4.5, 0, Math.PI * 2);
         ctx.fill();
@@ -1632,7 +1834,7 @@ export function Canvas({
         ctx.save();
         ctx.translate(sbx, sby);
         ctx.rotate(noodle.angle);
-        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.fillStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.lineTo(-8, -4.5);
@@ -1830,8 +2032,11 @@ export function Canvas({
       });
     }
 
-    if (hoverId && !snap.selection.includes(hoverId)) {
-      const hp = worldPos(root, hoverId);
+    // Either hover source — canvas pointer or Layers-panel row — draws the
+    // same outline; the canvas pointer wins when both are set.
+    const hovId = hoverId || panelHover;
+    if (hovId && !snap.selection.includes(hovId)) {
+      const hp = worldPos(root, hovId);
       if (hp) {
         ctx.save();
         const hb = nodeVisualBounds(hp);
@@ -1851,6 +2056,34 @@ export function Canvas({
       }
     }
 
+    // Frame tool: hovering a frame parks a + badge on each side edge for
+    // one-click duplication; ⌥-click places a blank same-size frame instead.
+    if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
+      const qf = worldPos(root, hoverId);
+      const qb = qf && qf.node.kind === "frame" && !qf.node.rotation ? nodeVisualBounds(qf) : null;
+      if (qf && qb) {
+        const qx = snap.panX + qb.x * z;
+        const qw = qb.w * z;
+        const cy = snap.panY + (qb.y + qb.h / 2) * z;
+        ctx.save();
+        for (const cx of [qx, qx + qw]) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+          ctx.fillStyle = BRAND_ACCENT;
+          ctx.fill();
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(cx - 4, cy);
+          ctx.lineTo(cx + 4, cy);
+          ctx.moveTo(cx, cy - 4);
+          ctx.lineTo(cx, cy + 4);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
     const multiSel = snap.selection.length > 1;
     for (const id of snap.selection) {
       if (edit?.id === id || vecEdit === id || (vecEdit && snap.selection.includes(vecEdit))) continue;
@@ -1861,7 +2094,7 @@ export function Canvas({
       const sy = snap.panY + nb.y * z;
       const sw = nb.w * z;
       const sh = nb.h * z;
-      const accent = wp.node.isComponent || wp.node.componentId ? "#a855f7" : BRAND_ACCENT;
+      const accent = wp.node.isComponent || wp.node.componentId ? COMP_PURPLE : BRAND_ACCENT;
       // P0-A contextual chrome: frame/section/group vs shape vs vector vs text
       const kind = wp.node.kind;
       const isFrame = kind === "frame" || kind === "component" || kind === "instance";
@@ -2256,6 +2489,49 @@ export function Canvas({
       ctx.restore();
     }
 
+    // Boolean live preview: the armed op's result over the live selection,
+    // recomputed every frame so it tracks drags and nudges until Apply/Esc.
+    if (snap.booleanPreview && snap.selection.length >= 2 && !snap.presentFrame) {
+      const prev = previewBoolean(snap.booleanPreview, root, snap.selection);
+      if (prev && prev.path.length >= 3) {
+        ctx.save();
+        tracePath(ctx, prev.path, snap.panX + prev.x * z, snap.panY + prev.y * z, z, true);
+        ctx.fillStyle = "rgba(16, 185, 129, 0.14)"; // BRAND_ACCENT at 14%
+        ctx.fill();
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Variable-width control points on the selected stroke. Display-only —
+    // the inspector's profile strip edits them — and hidden under rotation,
+    // where the translation-only page offset would misplace them.
+    if (snap.selection.length === 1 && !snap.presentFrame && !vecEdit) {
+      const sel = find(root, snap.selection[0]);
+      if (sel && usesVariableWidth(sel) && sel.path.length >= 2 && !sel.rotation && !sel.flipH && !sel.flipV) {
+        const wp = worldPos(root, sel.id);
+        if (wp) {
+          const dots = widthProfileStations(sel.path, sel.closed, sel.strokeWidthProfile);
+          if (dots.length) {
+            ctx.save();
+            for (const d of dots) {
+              ctx.beginPath();
+              ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 3.5, 0, Math.PI * 2);
+              ctx.fillStyle = "#ffffff";
+              ctx.fill();
+              ctx.lineWidth = 1.5;
+              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+        }
+      }
+    }
+
     if (vecEdit) {
       const wp = worldPos(root, vecEdit);
       if (wp) {
@@ -2584,7 +2860,7 @@ export function Canvas({
         }
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, panelHover, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -2654,6 +2930,50 @@ export function Canvas({
   const onDown = (e: React.MouseEvent) => {
     if (edit && (e.target as HTMLElement).closest(".text-edit")) return;
     if (e.button === 2) return;
+    // Frame quick-add badges, painted beside the hover outline. Left badge
+    // places the new frame to the left, right badge to the right; ⌥ makes
+    // the new frame blank instead of a duplicate.
+    if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
+      const qroot = snap.pages[snap.page].root;
+      const qf = worldPos(qroot, hoverId);
+      const qb = qf && qf.node.kind === "frame" && !qf.node.rotation ? nodeVisualBounds(qf) : null;
+      if (qf && qb) {
+        const c = ref.current;
+        if (c) {
+          const box = c.getBoundingClientRect();
+          const px = e.clientX - box.left;
+          const py = e.clientY - box.top;
+          const qx = snap.panX + qb.x * snap.zoom;
+          const qw = qb.w * snap.zoom;
+          const cy = snap.panY + (qb.y + qb.h / 2) * snap.zoom;
+          const side =
+            Math.hypot(px - qx, py - cy) <= 11 ? -1
+            : Math.hypot(px - (qx + qw), py - cy) <= 11 ? 1
+            : 0;
+          if (side !== 0) {
+            e.preventDefault();
+            const f = qf.node;
+            if (e.altKey) {
+              const par = findParent(qroot, f.id);
+              engine.dispatch({
+                type: "add",
+                kind: "frame",
+                x: side < 0 ? f.x - f.w - 24 : f.x + f.w + 24,
+                y: f.y,
+                w: f.w,
+                h: f.h,
+                parent: par && par !== qroot ? par.id : undefined,
+                extra: { name: "Frame" },
+              });
+            } else {
+              engine.dispatch({ type: "select", ids: [f.id] });
+              engine.dispatch({ type: "duplicate", dx: side * (f.w + 24), dy: 0 });
+            }
+            return;
+          }
+        }
+      }
+    }
     if (eyedropArmed()) {
       const c = ref.current;
       if (c) {
@@ -2693,6 +3013,8 @@ export function Canvas({
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
+      const pressHit = hitTest(root, wpt.x, wpt.y, { deep: true, includeLocked: true });
+      dragIx.current = { x: wpt.x, y: wpt.y, id: pressHit ? pressHit.id : "", fired: false };
 
       // Handle active overlay clicks & dismiss
       if (snap.activeOverlay?.id) {
@@ -2716,16 +3038,8 @@ export function Canvas({
               wpt.y >= oy &&
               wpt.y <= oy + overlayNode.h
             ) {
-              let n: XNode | null = hitTest(overlayNode, wpt.x - ox + overlayNode.x, wpt.y - oy + overlayNode.y, { includeLocked: true });
-              while (n) {
-                const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
-                if (ix) {
-                  runInteraction(ix);
-                  return;
-                }
-                const p = findParent(overlayNode, n.id);
-                n = p && p !== overlayNode ? p : null;
-              }
+              const n: XNode | null = hitTest(overlayNode, wpt.x - ox + overlayNode.x, wpt.y - oy + overlayNode.y, { includeLocked: true });
+              if (n) runTrigger(overlayNode, n.id, "onClick");
               return;
             } else if (snap.activeOverlay.closeOutside !== false) {
               engine.dispatch({ type: "closeOverlay" });
@@ -2735,16 +3049,8 @@ export function Canvas({
         }
       }
 
-      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
-      while (n) {
-        const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
-        if (ix) {
-          runInteraction(ix);
-          return;
-        }
-        const p = findParent(root, n.id);
-        n = p && p !== root ? p : null;
-      }
+      const n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
+      if (n) runTrigger(root, n.id, "onClick");
       return;
     }
     if (snap.tool === "eraser") {
@@ -3427,7 +3733,7 @@ export function Canvas({
       if (!vecEdit) {
         engine.dispatch({ type: "select", ids: [] });
       }
-      drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
+      drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, sel0: [...snap.selection] };
     }
   };
 
@@ -3450,20 +3756,24 @@ export function Canvas({
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
-      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { deep: true, includeLocked: true });
-      while (n) {
-        const ix = (n.interactions ?? []).find((i) => i.trigger === "onHover");
-        if (ix) {
-          if (hoverIx.current !== n.id) {
-            hoverIx.current = n.id;
-            runInteraction(ix);
-          }
-          return;
+      const n: XNode | null = hitTest(root, wpt.x, wpt.y, { deep: true, includeLocked: true });
+      const id = n ? n.id : "";
+      if (id !== hoverIx.current) {
+        const prev = hoverIx.current;
+        hoverIx.current = id;
+        if (prev) runTrigger(root, prev, "mouseLeave");
+        // "While hovering" fires on entry, like before; mouse enter joins it.
+        if (n) {
+          runTrigger(root, n.id, "mouseEnter");
+          runTrigger(root, n.id, "onHover");
         }
-        const p = findParent(root, n.id);
-        n = p && p !== root ? p : null;
       }
-      hoverIx.current = "";
+      // Drag trigger: fire once per press-drag-release past the threshold.
+      const d = dragIx.current;
+      if (d && !d.fired && d.id && Math.hypot(wpt.x - d.x, wpt.y - d.y) > 8) {
+        d.fired = true;
+        runTrigger(root, d.id, "onDrag");
+      }
       return;
     }
     if (!drag.current && !penDrag.current && !pencil.current && snap.tool === "select") {
@@ -3704,6 +4014,7 @@ export function Canvas({
           w: Math.max(1, o.w * sxScale),
           h: Math.max(1, o.h * syScale),
           scaleProps: snap.tool === "scale",
+          ignoreConstraints: e.metaKey || e.ctrlKey,
         });
       }
     } else if (d.mode === "multiRotate" && d.bounds && d.origs) {
@@ -3808,6 +4119,8 @@ export function Canvas({
         id: d.id,
         ...next,
         scaleProps: snap.tool === "scale",
+        // ⌘/Ctrl-drag resizes past the children's constraints.
+        ignoreConstraints: e.metaKey || e.ctrlKey,
       });
     } else if (d.mode === "grad" && d.id) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -4084,6 +4397,7 @@ export function Canvas({
   };
 
   const onUp = (e: React.MouseEvent) => {
+    dragIx.current = null;
     if (penDrag.current) {
       penDrag.current = null;
       return;
@@ -4170,6 +4484,26 @@ export function Canvas({
         });
       }
     }
+    // Pixel-grid settling runs before `end` so it joins the gesture's undo
+    // step: moves land on whole pixels, resizes additionally whole their
+    // sizes. Frames and main components always settle, even with snapping off.
+    if (d.mode === "move" || d.mode === "resize" || d.mode === "multiResize") {
+      const on = snap.pages[snap.page].pixelSnap ?? true;
+      const root = snap.pages[snap.page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = worldPos(root, id)?.node;
+        if (!n || n.locked || !wantsPixelSnap(n, on)) continue;
+        if (d.mode === "move") {
+          const x = Math.round(n.x);
+          const y = Math.round(n.y);
+          if (x !== n.x || y !== n.y) engine.dispatch({ type: "patch", id, patch: { x, y } });
+        } else {
+          const b = roundBox(n);
+          if (b.x !== n.x || b.y !== n.y || b.w !== n.w || b.h !== n.h)
+            engine.dispatch({ type: "patch", id, patch: b });
+        }
+      }
+    }
     if (
       d.mode === "move" ||
       d.mode === "resize" ||
@@ -4183,18 +4517,6 @@ export function Canvas({
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
-    if (d.mode === "move" && (snap.pages[snap.page].pixelSnap ?? true)) {
-      const root = snap.pages[snap.page].root;
-      for (const id of engine.snapshot().selection) {
-        const n = worldPos(root, id)?.node;
-        if (n && !n.locked)
-          engine.dispatch({
-            type: "patch",
-            id,
-            patch: { x: Math.round(n.x), y: Math.round(n.y) },
-          });
-      }
-    }
     if (d.mode === "move") {
       const selection = engine.snapshot().selection;
       const sel = selection[0];
@@ -4334,6 +4656,12 @@ export function Canvas({
           }
         }
       }
+      // Click-placed top-level frames reuse the last top-level size; nested
+      // clicks stay 100x100.
+      if (clicked && k === "frame" && !host && snap.lastFrameSize) {
+        nodeW = snap.lastFrameSize.w;
+        nodeH = snap.lastFrameSize.h;
+      }
       const extra: Partial<XNode> =
         snap.tool === "section"
           ? { name: "Section", fill: "#00000000", overflow: "visible" }
@@ -4354,6 +4682,14 @@ export function Canvas({
             : k === "line" || k === "arrow"
               ? { rotation: nodeRotation }
               : {};
+      // Placed layers settle on whole pixels, like moved and resized ones.
+      if (wantsPixelSnap({ kind: k, isComponent: false }, snap.pages[snap.page].pixelSnap ?? true)) {
+        const b = roundBox({ x: nodeX, y: nodeY, w: nodeW, h: nodeH });
+        nodeX = b.x;
+        nodeY = b.y;
+        nodeW = b.w;
+        nodeH = b.h;
+      }
       engine.dispatch({
         type: "add",
         kind: k,
@@ -4423,7 +4759,12 @@ export function Canvas({
         if (nest) for (const c of n.children) visit(c, x, y, n === snap.pages[snap.page].root);
       };
       visit(snap.pages[snap.page].root, 0, 0, false);
-      engine.dispatch({ type: "select", ids });
+      // ⇧-marquee adds to the pre-drag selection instead of replacing it;
+      // plain marquee still replaces.
+      engine.dispatch({
+        type: "select",
+        ids: e.shiftKey ? Array.from(new Set([...(d.sel0 ?? []), ...ids])) : ids,
+      });
     }
   };
 
@@ -4537,10 +4878,10 @@ export function Canvas({
         const my = e.clientY - r.top;
         const z = snap.zoom;
         let hitFrame: XNode | null = null;
-        const walk = (n: XNode, px: number, py: number) => {
+        const walk = (n: XNode, parentIsFrame: boolean, px: number, py: number) => {
           const x = px + n.x;
           const y = py + n.y;
-          if (n.kind === "frame" && n.showName !== false) {
+          if (n.kind === "frame" && n.showName !== false && !parentIsFrame) {
             const sx = snap.panX + x * z;
             const sy = snap.panY + y * z;
             const nameW = Math.max(40, n.name.length * 6.5);
@@ -4548,9 +4889,9 @@ export function Canvas({
               hitFrame = n;
             }
           }
-          for (const c of n.children) walk(c, x, y);
+          for (const c of n.children) walk(c, n.kind === "frame", x, y);
         };
-        for (const ch of root.children) walk(ch, 0, 0);
+        for (const ch of root.children) walk(ch, false, 0, 0);
         frameLabelHit = hitFrame;
       }
     }
@@ -4615,6 +4956,21 @@ export function Canvas({
       } else {
         setVecEdit(hit.id);
       }
+    } else if (hit && (hit.kind === "frame" || hit.kind === "group" || hit.kind === "boolean") && hit.children.length) {
+      // Double-click drills one level: the child under the cursor if there
+      // is one, else the first visible child, like the Enter key does.
+      const root = snap.pages[snap.page].root;
+      let pick: XNode | null = null;
+      for (const c of hit.children) {
+        if (!c.visible || c.locked) continue;
+        const loc = worldPos(root, c.id);
+        if (loc && wpt.x >= loc.x && wpt.x <= loc.x + c.w && wpt.y >= loc.y && wpt.y <= loc.y + c.h) {
+          pick = c;
+          break;
+        }
+      }
+      const child = pick ?? hit.children.find((c) => c.visible && !c.locked) ?? hit.children[0];
+      engine.dispatch({ type: "select", ids: [child.id] });
     } else if (hit) {
       engine.dispatch({ type: "select", ids: [hit.id] });
     } else if (vecEdit) {
@@ -4922,9 +5278,25 @@ export function Canvas({
       );
     };
     window.addEventListener("x-native-paste", onRequest);
+    // ⇧B in vector-edit mode arms the Paint bucket; the subtool state lives
+    // here, so the chrome shortcut asks through an event.
+    const onSubTool = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === "paint" && engine.snapshot().vecEdit) {
+        setVecSubTool("paint");
+        toast("Paint bucket: fill region / face");
+      }
+    };
+    window.addEventListener("x-native-vec-subtool", onSubTool);
+    // Hovering a Layers-panel row outlines the layer on the canvas.
+    const onPanelHover = (e: Event) => {
+      setPanelHover((e as CustomEvent<string | null>).detail ?? "");
+    };
+    window.addEventListener("x-panel-hover", onPanelHover);
     return () => {
       window.removeEventListener("paste", onPaste);
       window.removeEventListener("x-native-paste", onRequest);
+      window.removeEventListener("x-native-vec-subtool", onSubTool);
+      window.removeEventListener("x-panel-hover", onPanelHover);
     };
   }, []);
 
@@ -5028,7 +5400,7 @@ export function Canvas({
         setMenu({ x: e.clientX, y: e.clientY, wx: wpt.x, wy: wpt.y });
       }}
     >
-      <canvas ref={ref} />
+      <canvas ref={ref} role="img" aria-label="Design canvas" />
       {(snap.showComments || snap.tool === "comment") && (
         <Comments
           threads={snap.pages[snap.page].comments}
@@ -5550,7 +5922,7 @@ export function Canvas({
             }}
             title="Done (Esc / ↵ / Double-click to finish)"
           >
-            <Icon name="check" size={13} />
+            <Icon name="check" size={14} />
             Done
           </button>
         </div>
@@ -6220,7 +6592,15 @@ function findClickedNoodle(
   return hit;
 }
 
-const booleanCanvases = new Map<string, HTMLCanvasElement>();
+/** Boolean raster cache: a boolean's composited mask+fill raster depends only
+ *  on its own fields and its children, never on pan — so identical inputs
+ *  share one offscreen (keyed by a picked-fields signature) instead of
+ *  re-rasterizing every boolean every frame. Byte-bounded with LRU eviction;
+ *  the old id-keyed map thrashed past 64 entries and re-fetched the 2D
+ *  context per paint (7% of the live-edit profile). Strokes and drop-shadows
+ *  stay live paint. */
+const booleanRasters = new Map<string, { c: HTMLCanvasElement; bytes: number }>();
+let booleanRasterBytes = 0;
 
 /** One reused buffer for View > Pixel preview. Frames are resampled one at a
  *  time, so a single scratch canvas is enough. */
@@ -6244,23 +6624,72 @@ function paintBoolean(
   const z = snap.zoom;
   const w = Math.max(1, Math.ceil(n.w * z));
   const h = Math.max(1, Math.ceil(n.h * z));
-  let oc = booleanCanvases.get(n.id);
-  if (!oc) {
-    oc = document.createElement("canvas");
-    booleanCanvases.set(n.id, oc);
-  }
-  if (oc.width !== w || oc.height !== h) {
+  const kids = n.children.filter((c) => c.visible);
+  if (!kids.length) return;
+  // Every input of the raster below: zoom, op, box, the fill family, and the
+  // visible children (positions are boolean-local, so pan-excluded). Only the
+  // fields rasterizeBoolean/fillStyle/shapePoly actually read — a full-node
+  // JSON here cost more than the rasterize it saved. If those readers ever
+  // grow new inputs, this pick must grow with them.
+  const sig = JSON.stringify([
+    z.toFixed(4), n.booleanOp, w, h,
+    n.fill, n.fillB, n.fillVisible, n.fillOpacity, n.fillType,
+    n.fillGX, n.fillGY, n.fillHX, n.fillHY, n.gradientStops, n.fills,
+    kids.map((c) => [c.x, c.y, c.w, c.h, c.rotation, c.flipH, c.flipV, c.visible, c.closed, c.kind,
+      c.path, c.count, c.starRatio, c.cornerRadii, c.cornerIndependent, c.cornerSmoothing]),
+  ]);
+  let hit = booleanRasters.get(sig);
+  if (hit) {
+    booleanRasters.delete(sig);
+    booleanRasters.set(sig, hit);
+  } else if (w <= 2048 && h <= 2048) {
+    const oc = document.createElement("canvas");
     oc.width = w;
     oc.height = h;
+    const o = oc.getContext("2d");
+    if (o) {
+      rasterizeBoolean(o, n, kids, z, w, h);
+      hit = { c: oc, bytes: w * h * 4 };
+      booleanRasters.set(sig, hit);
+      booleanRasterBytes += hit.bytes;
+      while (booleanRasterBytes > 67108864 && booleanRasters.size > 1) {
+        const oldest = booleanRasters.keys().next();
+        if (oldest.done) break;
+        const ev = booleanRasters.get(oldest.value);
+        booleanRasters.delete(oldest.value);
+        if (ev) booleanRasterBytes -= ev.bytes;
+      }
+    }
   }
+  if (hit) {
+    ctx.drawImage(hit.c, snap.panX + px * z, snap.panY + py * z);
+    return;
+  }
+  // Unrasterizable (oversized / no context): live compositing, as before.
+  const oc = document.createElement("canvas");
+  oc.width = w;
+  oc.height = h;
   const o = oc.getContext("2d");
   if (!o) return;
+  rasterizeBoolean(o, n, kids, z, w, h);
+  ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);
+}
+
+/** Composite the children's mask and the boolean's fill into `o`. Pure of
+ *  pan: everything is in boolean-local coordinates. */
+function rasterizeBoolean(
+  o: CanvasRenderingContext2D,
+  n: XNode,
+  kids: XNode[],
+  z: number,
+  w: number,
+  h: number,
+) {
   o.setTransform(1, 0, 0, 1, 0, 0);
   o.globalAlpha = 1;
   o.globalCompositeOperation = "source-over";
   o.filter = "none";
   o.clearRect(0, 0, w, h);
-  const kids = n.children.filter((c) => c.visible);
   const draw = (c: XNode, op: GlobalCompositeOperation) => {
     o.globalCompositeOperation = op;
     o.save();
@@ -6293,9 +6722,4 @@ function paintBoolean(
   o.fillStyle = fillStyle(o, n, 0, 0, w, h);
   o.globalAlpha = n.fillVisible === false ? 0 : n.fillOpacity ?? 1;
   o.fillRect(0, 0, w, h);
-  ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);
-  if (booleanCanvases.size > 64) {
-    const first = booleanCanvases.keys().next().value;
-    if (first) booleanCanvases.delete(first);
-  }
 }

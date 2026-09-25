@@ -1,11 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { Engine, Snapshot, Tool, XNode, VariableItem } from "../engine/types";
-import { collectColors, find } from "../engine/memory";
+import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
+import { coerceVariableValue, fallbackForType, isAlias, resolveVariable } from "../engine/variables";
+import { collectColors, find, findParent } from "../engine/memory";
 import { alignKey } from "../engine/layout";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
-import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize } from "./icons";
+import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
+import { rankSearch, loadRecents, saveRecent } from "./search";
+import type { RecentEntry, SearchEntry, SearchKind } from "./search";
+import { useRestoreFocus } from "./a11y";
 import { selectInverse, selectMatching } from "./selectSame";
 import { popoverArmed } from "./popoverGuard";
 import {
@@ -47,7 +51,7 @@ export function NavRail({
 }) {
   const [menu, setMenu] = useState(false);
   const { pref, setPref } = useTheme();
-  const items: { id: NavId; icon: string; label: string; tab?: "layers" | "assets" | "tokens" }[] = [
+  const items: { id: NavId; icon: IconName; label: string; tab?: "layers" | "assets" | "tokens" }[] = [
     { id: "file", icon: "layers", label: "File", tab: "layers" },
     { id: "agent", icon: "agent", label: "Agent" },
     { id: "assets", icon: "component", label: "Assets", tab: "assets" },
@@ -55,7 +59,7 @@ export function NavRail({
     { id: "variables", icon: "vars", label: "Vars", tab: "tokens" },
   ];
   return (
-    <nav className="rail">
+    <nav className="rail" aria-label="Primary">
       <div className="logo-wrap">
         <button className="logo" title="Main menu" onClick={() => setMenu((v) => !v)}>
           <Icon name="logo" size={20} />
@@ -130,6 +134,7 @@ export function NavRail({
         </button>
       ))}
       <div className="spacer" />
+      <div className="div" aria-hidden />
       <button
         className="nav"
         title="Inspect design file (.fig)"
@@ -140,10 +145,10 @@ export function NavRail({
       </button>
       <button
         className="nav"
-        title="File history (show every autosaved version)"
+        title="Autosaved locally · no history to show yet"
         onClick={() => toast("This file autosaves locally · no history to show yet")}
       >
-        <Icon name="refresh" size={16} />
+        <span className="save-dot" aria-hidden />
         <span>Saved</span>
       </button>
     </nav>
@@ -179,18 +184,22 @@ interface LayerDrag {
   zone: DropZone;
 }
 
-function LayerRow({
-  n,
-  depth,
-  sel,
-  engine,
-  q,
-  siblings,
-  drag,
-  setDrag,
-  onDrop,
-  collapseTick = 0,
-}: {
+/** Display order (top-to-bottom) with the mask flag precomputed: a row is a
+ *  masked child when any row above it has isMask. Computed incrementally in one
+ *  pass so wide trees don't pay a findIndex scan per row. */
+function withMaskedAbove(kids: XNode[]): { n: XNode; maskedAbove: boolean }[] {
+  let seenMask = false;
+  return [...kids].reverse().map((n) => {
+    const maskedAbove = seenMask;
+    if (n.isMask) seenMask = true;
+    return { n, maskedAbove };
+  });
+}
+
+interface LayerRowProps {
+  /** Last plain-clicked row: the ⇧-range starts here. A shared ref, so rows
+   *  never re-render for it (and the memo comparator ignores it). */
+  rangeAnchor: { current: string };
   n: XNode;
   depth: number;
   sel: string[];
@@ -202,20 +211,119 @@ function LayerRow({
   onDrop: (d: LayerDrag) => void;
   /** Bumped by the panel's Collapse button; every row folds on the next value. */
   collapseTick?: number;
-}) {
+  /** Precomputed by withMaskedAbove (see above): any row above this one masked. */
+  maskedAbove: boolean;
+}
+
+function sameIds(a: XNode[], b: XNode[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i].id !== b[i].id) return false;
+  return true;
+}
+
+/** What one row's subtree last rendered, by node id. Nodes (and their children
+ *  arrays) mutate in place, so prev-props vs next-props always see the same
+ *  already-mutated values — the comparator must diff against this snapshot
+ *  of what is actually on screen instead. Entries are only consulted for
+ *  mounted rows (memo never gates the initial mount), so a doc switch cannot
+ *  inherit a stale skip; capped because unmounted ids linger. */
+const rowScreen = new Map<string, string>();
+
+/** Incremental 64-bit (cyrb53-style) hasher, reused across rows so the memo
+ *  pass allocates nothing. Single-threaded use only; digest() resets. */
+const rowHasher = {
+  h1: 0,
+  h2: 0,
+  reset() {
+    this.h1 = 0xdeadbeef;
+    this.h2 = 0x41c6ce57;
+  },
+  mix(n: number) {
+    this.h1 = Math.imul(this.h1 ^ n, 2654435761);
+    this.h2 = Math.imul(this.h2 ^ n, 1597334677);
+  },
+  mixStr(s: string) {
+    for (let i = 0; i < s.length; i++) this.mix(s.charCodeAt(i));
+    this.mix(0x1f);
+  },
+  digest(): string {
+    let h1 = Math.imul(this.h1 ^ (this.h1 >>> 16), 2246822507);
+    let h2 = Math.imul(this.h2 ^ (this.h2 >>> 16), 2246822507);
+    h1 = Math.imul(h1 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h1 >>> 13), 3266489909);
+    return `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}`;
+  },
+};
+
+/** Subtree display hash of a row's node: every node field the row render
+ *  reads, plus children's order/identity/masks, recursed so a memo skip on
+ *  a container never prunes a descendant that must re-render (a parent skip
+ *  bails out its whole React subtree). If the row render reads a new field,
+ *  it must be added here or the row goes stale. `holds` is only read by the
+ *  collapse effect, which always re-renders on its tick. */
+function rowHash(n: XNode): string {
+  const H = rowHasher;
+  H.reset();
+  const walk = (m: XNode) => {
+    H.mixStr(m.name);
+    H.mixStr(m.kind);
+    H.mixStr(m.imageSrc ?? "");
+    H.mix(m.visible ? 1 : 2);
+    H.mix(m.locked ? 1 : 2);
+    H.mix(m.isComponent ? 1 : 2);
+    H.mix(m.isMask ? 1 : 2);
+    H.mix(m.layout ? 1 : 2);
+    H.mix(m.children.length);
+    for (const c of m.children) {
+      H.mixStr(c.id);
+      walk(c);
+    }
+  };
+  walk(n);
+  return H.digest();
+}
+
+/** Row memo comparator. Plain props compare prev-vs-next (all are replaced,
+ *  never mutated — except `siblings`, which the parent reallocates, so it
+ *  compares by id content); the node diffs against the on-screen snapshot
+ *  above. setDrag is a useState setter (stable); onDrop closes over the live
+ *  root ref and reads the tree at drop time, so both are safe to ignore.
+ *  Search matches recurse into subtree names, so any query disables the
+ *  memo. */
+function rowPropsEqual(a: Readonly<LayerRowProps>, b: Readonly<LayerRowProps>): boolean {
+  if (a.q || b.q) return false;
+  if (a.depth !== b.depth) return false;
+  if ((a.collapseTick ?? 0) !== (b.collapseTick ?? 0)) return false;
+  if (a.maskedAbove !== b.maskedAbove) return false;
+  if (a.sel !== b.sel || a.engine !== b.engine || a.drag !== b.drag) return false;
+  if (!sameIds(a.siblings, b.siblings)) return false;
+  // Read-only: the store is written by the row's commit effect below, so an
+  // abandoned render can never mark uncommitted pixels as on screen.
+  return rowScreen.get(b.n.id) === rowHash(b.n);
+}
+
+const LayerRow = memo(LayerRowImpl, rowPropsEqual);
+
+function LayerRowImpl({
+  rangeAnchor,
+  n,
+  depth,
+  sel,
+  engine,
+  q,
+  // `siblings` stays on the props (the memo comparator diffs it) but the
+  // ⇧-range reads the DOM order now, so it is not destructured here.
+  drag,
+  setDrag,
+  onDrop,
+  collapseTick = 0,
+  maskedAbove,
+}: LayerRowProps) {
   const [open, setOpen] = useState(true);
   const holds = sel.includes(n.id) || n.children.some(function test(c: XNode): boolean {
     return sel.includes(c.id) || c.children.some(test);
   });
-  const isMaskedChild = (() => {
-    if (!siblings || !siblings.length) return false;
-    const idx = siblings.findIndex((s) => s.id === n.id);
-    if (idx <= 0) return false;
-    for (let i = 0; i < idx; i++) {
-      if (siblings[i].isMask) return true;
-    }
-    return false;
-  })();
+  const isMaskedChild = maskedAbove;
   useEffect(() => {
     if (!collapseTick) return;
     // Keeps the selected layer visible when it folds everything, so a row
@@ -235,6 +343,15 @@ function LayerRow({
     window.addEventListener("x-rename-layer", onReq);
     return () => window.removeEventListener("x-rename-layer", onReq);
   }, [n.id]);
+  // Commits this row's on-screen signature for the memo comparator above.
+  // Runs after every commit (no deps by design); the comparator only reads.
+  useEffect(() => {
+    rowScreen.set(n.id, rowHash(n));
+    if (rowScreen.size > 5000) {
+      const oldest = rowScreen.keys().next();
+      if (!oldest.done && oldest.value !== n.id) rowScreen.delete(oldest.value);
+    }
+  });
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (!matchesLayer(n, q)) return null;
   const container = n.kind === "frame" || n.kind === "group" || n.kind === "component";
@@ -242,6 +359,7 @@ function LayerRow({
   return (
     <>
       <div
+        data-row-id={n.id}
         className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}${
           isOver ? ` drop-${drag!.zone}` : ""
         }${drag?.ids.includes(n.id) ? " dragging" : ""}`}
@@ -282,15 +400,22 @@ function LayerRow({
         }}
         onDragEnd={() => setDrag(null)}
         onClick={(e) => {
-          // ⌘/Ctrl toggles one row; Shift extends across the visible siblings.
+          // ⌘/Ctrl toggles one row; Shift extends from the last clicked row
+          // across every visible row between, as Figma does. The DOM is the
+          // visible order, so expansion and search filtering are honored
+          // without lifting any row state.
           if (e.metaKey || e.ctrlKey) {
             const ids = sel.includes(n.id) ? sel.filter((i) => i !== n.id) : [...sel, n.id];
             engine.dispatch({ type: "select", ids });
+            rangeAnchor.current = n.id;
             return;
           }
-          if (e.shiftKey && sel.length) {
-            const order = siblings.map((c) => c.id);
-            const anchor = order.findIndex((id) => sel.includes(id));
+          if (e.shiftKey && rangeAnchor.current) {
+            const order = Array.from(
+              document.querySelectorAll('.tree [data-row-id]'),
+              (el) => el.getAttribute("data-row-id") as string,
+            ).filter(Boolean);
+            const anchor = order.indexOf(rangeAnchor.current);
             const here = order.indexOf(n.id);
             if (anchor >= 0 && here >= 0) {
               const [a, b] = anchor < here ? [anchor, here] : [here, anchor];
@@ -300,6 +425,7 @@ function LayerRow({
             }
           }
           engine.dispatch({ type: "select", ids: [n.id] });
+          rangeAnchor.current = n.id;
         }}
         // A real double-click on a draggable element does not reliably emit
         // dblclick (the drag machinery claims the second press), so rename is
@@ -315,6 +441,10 @@ function LayerRow({
           lastDown.current = t;
         }}
         onDoubleClick={() => setRenaming(true)}
+        // Hovering a layer row outlines it on the canvas, as Figma does; the
+        // canvas listens for this event and paints the outline itself.
+        onMouseEnter={() => window.dispatchEvent(new CustomEvent("x-panel-hover", { detail: n.id }))}
+        onMouseLeave={() => window.dispatchEvent(new CustomEvent("x-panel-hover", { detail: null }))}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -409,10 +539,12 @@ function LayerRow({
         </button>
       </div>
       {open &&
-        [...n.children].reverse().map((c) => (
+        withMaskedAbove(n.children).map(({ n: c, maskedAbove }) => (
           <LayerRow
             key={c.id}
+            rangeAnchor={rangeAnchor}
             n={c}
+            maskedAbove={maskedAbove}
             depth={depth + 1}
             sel={sel}
             engine={engine}
@@ -459,6 +591,7 @@ function LeftPanelImpl({
   // One counter for the whole tree: bumping it tells every row to fold, and the
   // rows answer by themselves so no open-state has to be lifted up here.
   const [collapseTick, setCollapseTick] = useState(0);
+  const rangeAnchor = useRef("");
   const root = snap.pages[snap.page].root;
 
   /**
@@ -486,7 +619,7 @@ function LeftPanelImpl({
     });
   };
   return (
-    <aside className="panel left">
+    <aside className="panel left" aria-label="Layers and pages">
       <div className="file-head">
         {onHome && (
           <Tooltip label="Back to files" placement="bottom">
@@ -500,9 +633,9 @@ function LeftPanelImpl({
             fontSize: 10,
             fontWeight: 800,
             letterSpacing: "0.06em",
-            color: "var(--blue)",
-            background: "rgba(99, 102, 241, 0.12)",
-            border: "1px solid rgba(99, 102, 241, 0.25)",
+            color: "var(--accent-ink)",
+            background: "var(--sel)",
+            border: "1px solid var(--accent-ring)",
             padding: "2px 6px",
             borderRadius: 4,
             marginRight: 6,
@@ -592,10 +725,12 @@ function LeftPanelImpl({
             }}
             onDrop={() => setDrag(null)}
           >
-            {[...root.children].reverse().map((n) => (
+            {withMaskedAbove(root.children).map(({ n, maskedAbove }) => (
               <LayerRow
                 key={n.id}
+                rangeAnchor={rangeAnchor}
                 n={n}
+                maskedAbove={maskedAbove}
                 depth={0}
                 sel={snap.selection}
                 engine={engine}
@@ -684,9 +819,12 @@ const GROUPS: Group[] = [
 ];
 
 
-/** The layers tree only depends on the document, the page and the selection.
- *  Without this guard every pan/zoom dispatch re-rendered every layer row,
- *  which dominated frame time on large documents (~47ms/frame at 1400 nodes). */
+/** The layers tree only depends on the document, the page and the selection:
+ *  pan/zoom snapshots skip it entirely, which dominated frame time on large
+ *  documents (~1s/frame at 10k nodes before this guard engaged). Edits mutate
+ *  nodes in place, so pages-identity cannot detect them — treeRev is the edit
+ *  signal instead (bumped on every dispatch except pan/setPan/setZoom). The
+ *  callbacks must be referentially stable or this memo never hits. */
 export const LeftPanel = memo(LeftPanelImpl, (a, b) =>
   a.nav === b.nav &&
   a.engine === b.engine &&
@@ -695,7 +833,8 @@ export const LeftPanel = memo(LeftPanelImpl, (a, b) =>
   a.snap.pages === b.snap.pages &&
   a.snap.page === b.snap.page &&
   a.snap.selection === b.snap.selection &&
-  a.snap.fileName === b.snap.fileName,
+  a.snap.fileName === b.snap.fileName &&
+  a.snap.treeRev === b.snap.treeRev,
 );
 
 export function Toolbar({
@@ -802,7 +941,7 @@ export function Toolbar({
                   aria-label="Create component"
                   onClick={() => engine.dispatch({ type: "makeComponent" })}
                 >
-                  <Icon name="component" size={15} />
+                  <Icon name="component" size={16} />
                 </button>
               </Tooltip>
             </div>
@@ -817,7 +956,7 @@ export function Toolbar({
                   aria-label="Boolean groups"
                   onClick={() => setBoolOpen((v) => !v)}
                 >
-                  <Icon name="boolean-union" size={15} />
+                  <Icon name="boolean-union" size={16} />
                   <Icon name="chevron" size={caretSize()} />
                 </button>
               </Tooltip>
@@ -964,8 +1103,13 @@ export function Actions({
   onInspectFig?: () => void;
 }) {
   const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<"all" | SearchKind>("all");
+  const [active, setActive] = useState(0);
   const { setPref } = useTheme();
-  const items = [
+  const snap = engine.snapshot();
+  const [recents, setRecents] = useState<RecentEntry[]>(() => loadRecents());
+  useRestoreFocus();
+  const commands = [
     {
       label: "Inspect file (.fig)",
       sc: "⇧⌘F",
@@ -1021,6 +1165,8 @@ export function Actions({
     { label: "Show/hide comments", sc: "⇧C", run: () => engine.dispatch({ type: "toggleComments" }) },
     { label: "Group", sc: "⌘G", run: () => engine.dispatch({ type: "group" }) },
     { label: "Ungroup", sc: "⇧⌘G", run: () => engine.dispatch({ type: "ungroup" }) },
+    { label: "Frame selection", sc: "⌥⌘G", run: () => engine.dispatch({ type: "frameSelection" }) },
+    { label: "Resize to fit", sc: "⌥⇧⌘R", run: () => engine.dispatch({ type: "resizeToFit" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
     { label: "Zen Mode (full canvas HUD)", sc: "Z", run: () => window.dispatchEvent(new CustomEvent("x-native-zen-mode")) },
     { label: "Marking / Radial menu", sc: "Q", run: () => window.dispatchEvent(new CustomEvent("x-native-radial-menu")) },
@@ -1082,43 +1228,213 @@ export function Actions({
     { label: "Zoom to 100%", sc: "⇧0", run: () => zoomAboutCentre(engine, 1) },
     { label: "Zoom to fit", sc: "⇧1", run: () => zoomTo(engine, "fit") },
     { label: "Zoom to selection", sc: "⇧2", run: () => zoomTo(engine, "selection") },
-  ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
+  ];
+
+  // -- unified Quick Open index -------------------------------------------
+  type QuickEntry = SearchEntry & { icon?: string; pageIndex?: number; sc?: string };
+  const vars = snap.variables ?? [];
+  const varCollections = snap.variableCollections ?? [];
+  const activeModes = snap.activeModes ?? {};
+  const index: QuickEntry[] = [];
+  for (const c of commands) index.push({ kind: "command", id: `cmd:${c.label}`, label: c.label, sc: c.sc || undefined });
+  snap.pages.forEach((pg, pi) => {
+    index.push({ kind: "page", id: pg.id, label: pg.name || `Page ${pi + 1}`, icon: "page" });
+    const walkQ = (n: XNode, trail: string[]) => {
+      if (n !== pg.root) {
+        index.push({
+          kind: "layer",
+          id: n.id,
+          label: n.name || n.kind,
+          detail: [...trail, pg.name].filter(Boolean).slice(-3).join(" / "),
+          icon: n.kind,
+          pageIndex: pi,
+        });
+      }
+      for (const ch of n.children) walkQ(ch, [...trail, n.name]);
+    };
+    walkQ(pg.root, []);
+    const walkF = (n: XNode) => {
+      if (n.kind === "frame" || n.kind === "component") {
+        let count = 0;
+        const inner = (m: XNode) => {
+          count += (m.interactions ?? []).length;
+          for (const ch of m.children) inner(ch);
+        };
+        inner(n);
+        if (count > 0) {
+          index.push({
+            kind: "flow",
+            id: n.id,
+            label: n.name || "Frame",
+            detail: `${pg.name} · ${count} interaction${count === 1 ? "" : "s"}`,
+            icon: "proto",
+            pageIndex: pi,
+          });
+        }
+      }
+      for (const ch of n.children) walkF(ch);
+    };
+    walkF(pg.root);
+  });
+  for (const c of snap.components) {
+    index.push({
+      kind: "component",
+      id: c.id,
+      label: c.name,
+      detail: `${c.variants?.length ?? 1} variant${(c.variants?.length ?? 1) === 1 ? "" : "s"}`,
+      icon: "component",
+    });
+  }
+  for (const v of vars) {
+    const r = resolveVariable(vars, varCollections, activeModes, v.id);
+    index.push({
+      kind: "variable",
+      id: v.id,
+      label: v.name,
+      detail: `${v.collection} · ${v.type}${r && !r.broken ? ` · ${String(r.value)}` : ""}`,
+      icon: "variable",
+    });
+  }
+
+  const trimmed = q.trim();
+  const pool = filter === "all" ? index : index.filter((e) => e.kind === filter);
+  const ranked = rankSearch(pool, trimmed);
+  const CAPS: Record<SearchKind, number> = { command: 20, layer: 15, page: 8, component: 8, variable: 8, flow: 8 };
+  const seen = new Map<string, number>();
+  const results = ranked.filter((e) => {
+    const n = (seen.get(e.kind) ?? 0) + 1;
+    seen.set(e.kind, n);
+    return n <= CAPS[e.kind];
+  });
+  const recentEntries =
+    !trimmed && filter === "all"
+      ? recents
+          .map((r) => index.find((e) => e.kind === r.kind && (e.id === r.id || (r.kind === "command" && e.id === `cmd:${r.id}`))))
+          .filter((e): e is QuickEntry => !!e)
+      : [];
+  const rows = [...recentEntries, ...results];
+  const clamped = rows.length === 0 ? 0 : Math.min(active, rows.length - 1);
+
+  const runEntry = (e: QuickEntry) => {
+    if (e.kind === "command") {
+      commands.find((c) => `cmd:${c.label}` === e.id)?.run();
+    } else if (e.kind === "layer" && e.pageIndex !== undefined) {
+      engine.dispatch({ type: "setPage", index: e.pageIndex });
+      engine.dispatch({ type: "select", ids: [e.id] });
+      zoomTo(engine, "selection");
+    } else if (e.kind === "page") {
+      const pi = snap.pages.findIndex((pg) => pg.id === e.id);
+      if (pi >= 0) engine.dispatch({ type: "setPage", index: pi });
+    } else if (e.kind === "component") {
+      const z = snap.zoom || 1;
+      engine.dispatch({
+        type: "placeComponent",
+        id: e.id,
+        x: Math.round((window.innerWidth / 2 - snap.panX) / z),
+        y: Math.round((window.innerHeight / 2 - snap.panY) / z),
+      });
+      toast(`Placed ${e.label}`);
+    } else if (e.kind === "variable") {
+      engine.dispatch({ type: "setLeftTab", tab: "tokens" });
+      toast(`“${e.label}” lives in the Tokens tab`);
+    } else if (e.kind === "flow") {
+      if (e.pageIndex !== undefined) engine.dispatch({ type: "setPage", index: e.pageIndex });
+      engine.dispatch({ type: "presentStart", id: e.id });
+    }
+    setRecents(saveRecent({ kind: e.kind, id: e.kind === "command" ? e.label : e.id, label: e.label }));
+    onClose();
+  };
+
+  const ORDER: SearchKind[] = ["command", "layer", "page", "component", "variable", "flow"];
+  const TITLES: Record<SearchKind, string> = {
+    command: "Commands",
+    layer: "Layers",
+    page: "Pages",
+    component: "Components",
+    variable: "Variables",
+    flow: "Flows",
+  };
+  let gi = -1;
+  const rowBtn = (e: QuickEntry) => {
+    gi++;
+    const i = gi;
+    return (
+      <button
+        key={`${e.kind}-${e.id}`}
+        id={`qo-${e.kind}-${e.id}`}
+        role="option"
+        aria-selected={i === clamped}
+        className={i === clamped ? "qo-active" : ""}
+        onMouseEnter={() => setActive(i)}
+        onClick={() => runEntry(e)}
+      >
+        {e.icon && <Icon name={e.kind === "layer" ? kindIcon(e.icon) : (e.icon as IconName)} size={14} />}
+        <span className="qo-label">{e.label}</span>
+        {e.detail && <span className="qo-detail">{e.detail}</span>}
+        {e.sc && <span className="sc">{e.sc}</span>}
+      </button>
+    );
+  };
   return (
-    <div className="actions">
+    <div className="actions" role="dialog" aria-label="Quick open">
       <input
         autoFocus
-        placeholder="Type a command or search…"
+        placeholder="Type a command or search layers, pages, components…"
         value={q}
-        onChange={(e) => setQ(e.target.value)}
+        role="combobox"
+        aria-expanded="true"
+        aria-controls="quickopen-list"
+        aria-activedescendant={rows[clamped] ? `qo-${rows[clamped].kind}-${rows[clamped].id}` : undefined}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setActive(0);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
-          if (e.key === "Enter" && items[0]) {
-            items[0].run();
-            onClose();
-          }
+          else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActive((a) => Math.min(a + 1, rows.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((a) => Math.max(a - 1, 0));
+          } else if (e.key === "Enter" && rows[clamped]) runEntry(rows[clamped]);
         }}
       />
-      {items.length === 0 && (
-        <div className="actions-empty">
-          No command matches “{q.trim()}” — try “component”, “export” or “zoom”.
-        </div>
-      )}
-      {items.map((i, idx) => (
-        <button
-          key={`${i.label}-${idx}`}
-          onClick={() => {
-            i.run();
-            onClose();
-          }}
-        >
-          {i.label}
-          <span className="sc">{i.sc}</span>
-        </button>
-      ))}
+      <div className="qo-filters" role="group" aria-label="Result type">
+        {(["all", "command", "layer", "page", "component", "variable", "flow"] as const).map((f) => (
+          <button
+            key={f}
+            className={filter === f ? "on" : ""}
+            aria-pressed={filter === f}
+            onClick={() => {
+              setFilter(f);
+              setActive(0);
+            }}
+          >
+            {f === "all" ? "All" : f[0].toUpperCase() + f.slice(1) + "s"}
+          </button>
+        ))}
+      </div>
+      <div id="quickopen-list" role="listbox" aria-label="Results">
+        {rows.length === 0 && (
+          <div className="actions-empty">No match for “{q.trim()}” — try a layer, component, or “zoom”.</div>
+        )}
+        {recentEntries.length > 0 && <div className="qo-head">Recent</div>}
+        {recentEntries.map((e) => rowBtn(e))}
+        {ORDER.map((kind) => {
+          const group = results.filter((e) => e.kind === kind);
+          if (!group.length) return null;
+          return (
+            <div key={kind}>
+              <div className="qo-head">{TITLES[kind]}</div>
+              {group.map((e) => rowBtn(e))}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
-
 
 export function bindHotkeys(
   engine: Engine,
@@ -1252,6 +1568,21 @@ export function bindHotkeys(
       engine.dispatch({ type: "toggleComments" });
       return;
     }
+    // Inside vector-edit mode ⇧E/⇧B are the Eraser and Paint bucket, not the
+    // tab toggle / stroke toggle they are on the bare canvas.
+    if (engine.snapshot().vecEdit && !meta && !e.altKey && e.shiftKey) {
+      const vk = e.key.toLowerCase();
+      if (vk === "e") {
+        e.preventDefault();
+        engine.dispatch({ type: "setTool", tool: "eraser" });
+        return;
+      }
+      if (vk === "b") {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("x-native-vec-subtool", { detail: "paint" }));
+        return;
+      }
+    }
     if (e.shiftKey && e.key.toLowerCase() === "e" && !meta && !e.altKey) {
       e.preventDefault();
       const cur = engine.snapshot().rightTab;
@@ -1273,19 +1604,22 @@ export function bindHotkeys(
         engine.dispatch({ type: "setLeftTab", tab: "tokens" });
       }
     }
+    // ⌥W/A/S/D/H/V align. e.code, not e.key: with ⌥ held macOS types dead-key
+    // characters (å, ∑) instead of letters, which left these chords working on
+    // Windows/Linux but dead on Mac.
     if (e.altKey && !meta && !e.shiftKey) {
       const am: Record<
         string,
         "align-left" | "align-right" | "align-top" | "align-bottom" | "align-hcenter" | "align-vcenter"
       > = {
-        a: "align-left",
-        d: "align-right",
-        w: "align-top",
-        s: "align-bottom",
-        h: "align-hcenter",
-        v: "align-vcenter",
+        KeyA: "align-left",
+        KeyD: "align-right",
+        KeyW: "align-top",
+        KeyS: "align-bottom",
+        KeyH: "align-hcenter",
+        KeyV: "align-vcenter",
       };
-      const mode = am[e.key.toLowerCase()];
+      const mode = am[e.code];
       if (mode) {
         e.preventDefault();
         align(engine, engine.snapshot(), mode);
@@ -1297,8 +1631,9 @@ export function bindHotkeys(
     // NB: `meta` above is metaKey||ctrlKey, so it is always true when Ctrl is
     // held — test e.ctrlKey directly and exclude Cmd instead.
     if (e.ctrlKey && e.altKey && !e.metaKey) {
-      const k = e.key.toLowerCase();
-      if (k === "h" || k === "v") {
+      // e.code: ⌃⌥ on macOS yields control characters in e.key, not letters.
+      const k = e.code === "KeyH" ? "h" : e.code === "KeyV" ? "v" : null;
+      if (k) {
         e.preventDefault();
         engine.dispatch({ type: "distribute", axis: k === "h" ? "h" : "v" });
         return;
@@ -1317,6 +1652,11 @@ export function bindHotkeys(
         window.dispatchEvent(new CustomEvent("x-rename-layer", { detail: id }));
         return;
       }
+    }
+    if (meta && e.altKey && e.shiftKey && e.code === "KeyR") {
+      e.preventDefault();
+      engine.dispatch({ type: "resizeToFit" });
+      return;
     }
     if (meta && e.key.toLowerCase() === "f") {
       e.preventDefault();
@@ -1423,7 +1763,8 @@ export function bindHotkeys(
     }
     if (meta && e.key.toLowerCase() === "g") {
       e.preventDefault();
-      engine.dispatch({ type: e.shiftKey ? "ungroup" : "group" });
+      if (e.altKey && !e.shiftKey) engine.dispatch({ type: "frameSelection" });
+      else engine.dispatch({ type: e.shiftKey ? "ungroup" : "group" });
       return;
     }
     if (meta && e.key === "]") {
@@ -1466,6 +1807,23 @@ export function bindHotkeys(
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {
+      // ⌘⌫ ungroups groups and frames instead of deleting them.
+      if (meta && !e.shiftKey && !e.altKey) {
+        const snap = engine.snapshot();
+        const root = snap.pages[snap.page].root;
+        const ids = snap.selection.filter((id) => {
+          const n = find(root, id);
+          return !!n && (n.kind === "group" || n.kind === "frame") && n.children.length > 0;
+        });
+        if (ids.length > 0 && ids.length === snap.selection.length) {
+          e.preventDefault();
+          for (const id of ids) {
+            engine.dispatch({ type: "select", ids: [id] });
+            engine.dispatch({ type: "ungroup" });
+          }
+          return;
+        }
+      }
       e.preventDefault();
       const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
@@ -1491,19 +1849,34 @@ export function bindHotkeys(
         return;
       }
       extra.onPresentExit?.();
+      // Escape walks one level up when a nested layer is selected, and only
+      // clears the selection once the top level is reached.
+      const escSnap = engine.snapshot();
+      const escRoot = escSnap.pages[escSnap.page].root;
+      if (escSnap.selection.length === 1) {
+        const par = findParent(escRoot, escSnap.selection[0]);
+        if (par && par !== escRoot) {
+          engine.dispatch({ type: "select", ids: [par.id] });
+          return;
+        }
+      }
       engine.dispatch({ type: "select", ids: [] });
       engine.dispatch({ type: "setTool", tool: "select" });
       return;
     }
-    if (e.altKey && e.shiftKey && !meta) {
+    // ⌥⇧U/S/I/E create booleans (as the Arrange menu advertises) and ⌥⇧F
+    // flattens. e.code, not e.key: with ⌥ held macOS types dead-key
+    // characters instead of letters. The Ctrl form rides along for Windows;
+    // ⌘ stays excluded.
+    if (e.altKey && e.shiftKey && !e.metaKey) {
       const op =
-        e.key.toLowerCase() === "u"
+        e.code === "KeyU"
           ? "union"
-          : e.key.toLowerCase() === "s"
+          : e.code === "KeyS"
             ? "subtract"
-            : e.key.toLowerCase() === "i"
+            : e.code === "KeyI"
               ? "intersect"
-              : e.key.toLowerCase() === "e"
+              : e.code === "KeyE"
                 ? "exclude"
                 : null;
       if (op) {
@@ -1511,7 +1884,7 @@ export function bindHotkeys(
         engine.dispatch({ type: "boolean", op });
         return;
       }
-      if (e.key.toLowerCase() === "f") {
+      if (e.code === "KeyF") {
         e.preventDefault();
         engine.dispatch({ type: "flatten" });
         return;
@@ -1739,6 +2112,7 @@ export function bindHotkeys(
       k: "scale",
       z: "zoom",
       f: "frame",
+      a: "frame",
       t: "text",
       r: "rect",
       o: "ellipse",
@@ -1803,6 +2177,23 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const comps = snap.components.filter(
     (c) => !q || c.name.toLowerCase().includes(q.toLowerCase()),
   );
+  // Image inventory: every distinct imageSrc with its usages, for P4 asset
+  // management. Masters are scanned too; their usages select the master node.
+  const images = useMemo(() => {
+    const bySrc = new Map<string, { name: string; uses: { page: number; id: string }[] }>();
+    const collect = (n: XNode, page: number) => {
+      if (n.imageSrc) {
+        const entry = bySrc.get(n.imageSrc) ?? { name: n.name || "Image", uses: [] };
+        entry.uses.push({ page, id: n.id });
+        bySrc.set(n.imageSrc, entry);
+      }
+      for (const ch of n.children) collect(ch, page);
+    };
+    snap.pages.forEach((pg, pi) => collect(pg.root, pi));
+    for (const c of snap.components) collect(c.node, snap.page);
+    return [...bySrc.entries()].map(([src, e]) => ({ src, ...e }));
+  }, [snap]);
+  const filteredImages = images.filter((im) => !q || im.name.toLowerCase().includes(q.toLowerCase()));
   return (
     <>
       <div className="search">
@@ -1827,7 +2218,294 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           </div>
         ))}
       </div>
+      <div className="section-label">Images ({images.reduce((n, im) => n + im.uses.length, 0)})</div>
+      <div className="tree">
+        {filteredImages.length === 0 && (
+          <p className="empty">No images in this file yet. Place one with the image tool (⇧⌘K).</p>
+        )}
+        {filteredImages.map((im, i) => {
+          const kb = Math.max(1, Math.round((im.src.length * 3) / 4 / 1024));
+          return (
+            <div
+              key={i}
+              className="row"
+              title={`${im.uses.length} use${im.uses.length === 1 ? "" : "s"} · ~${kb} KB — click to show first use`}
+              style={{ cursor: "pointer" }}
+              onClick={() => {
+                const first = im.uses[0];
+                if (!first) return;
+                engine.dispatch({ type: "setPage", index: first.page });
+                engine.dispatch({ type: "select", ids: [first.id] });
+                zoomTo(engine, "selection");
+              }}
+            >
+              <img
+                src={im.src}
+                alt=""
+                style={{ width: 22, height: 22, borderRadius: 4, objectFit: "cover", flexShrink: 0 }}
+              />
+              <span className="name">{im.name}</span>
+              <span style={{ fontSize: 10, color: "var(--dim)", flexShrink: 0 }}>
+                {im.uses.length > 1 ? `×${im.uses.length} · ` : ""}~{kb} KB
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </>
+  );
+}
+
+/** Layer props each variable type can bind to ("apply to selection"). */
+const VAR_APPLY_PROPS: Record<VariableItem["type"], { prop: string; label: string }[]> = {
+  color: [
+    { prop: "fill", label: "Fill" },
+    { prop: "strokePaint", label: "Stroke" },
+  ],
+  number: [
+    { prop: "strokeWidth", label: "Stroke width" },
+    { prop: "opacity", label: "Opacity" },
+    { prop: "fontSize", label: "Font size" },
+    { prop: "cornerRadii", label: "Corner radius" },
+  ],
+  string: [{ prop: "text", label: "Text content" }],
+  boolean: [{ prop: "visible", label: "Visibility" }],
+};
+
+function VarRow({
+  engine,
+  v,
+  vars,
+  varCollections,
+  activeModes,
+  activeCol,
+  activeModeId,
+  sel,
+  selNode,
+}: {
+  engine: Engine;
+  v: VariableItem;
+  vars: VariableItem[];
+  varCollections: VariableCollection[];
+  activeModes: Record<string, string>;
+  activeCol: VariableCollection | null;
+  activeModeId: string | undefined;
+  sel: string | undefined;
+  selNode: XNode | null | undefined;
+}) {
+  const options = VAR_APPLY_PROPS[v.type];
+  const defaultProp = options[0]?.prop ?? "fill";
+  const [applyProp, setApplyProp] = useState(defaultProp);
+  const prop = options.some((o) => o.prop === applyProp) ? applyProp : defaultProp;
+  const slot = activeModeId && v.values?.[activeModeId] !== undefined ? v.values[activeModeId] : v.value;
+  const res = resolveVariable(vars, varCollections, activeModes, v.id);
+  const resolved = res && !res.broken ? String(res.value) : null;
+  const targetName = isAlias(slot) ? (vars.find((x) => x.id === slot.alias)?.name ?? "missing") : null;
+  const modeName = activeCol?.modes.find((m) => m.id === activeModeId)?.name ?? "Default";
+  const isDefaultSlot = !activeCol || activeModeId === activeCol.modes[0]?.id;
+
+  const writeSlot = (value: VariableValue | undefined) => {
+    if (isDefaultSlot) {
+      engine.dispatch({
+        type: "patchVariable",
+        id: v.id,
+        patch: { value: (value ?? fallbackForType(v.type)) as VariableValue },
+      });
+    } else if (activeModeId) {
+      engine.dispatch({
+        type: "patchVariable",
+        id: v.id,
+        patch: { values: { [activeModeId]: value as VariableValue } },
+      });
+    }
+  };
+
+  const editValue = () => {
+    const current = isAlias(slot) ? `@${targetName}` : String(slot);
+    const next = window.prompt(
+      `Edit value for ${v.name}${isDefaultSlot ? "" : ` (${modeName})`} — @name makes it an alias`,
+      current,
+    );
+    if (next === null) return;
+    if (next.startsWith("@")) {
+      const target = vars.find((x) => x.name === next.slice(1) && x.type === v.type);
+      if (!target) {
+        toast(`No ${v.type} variable named "${next.slice(1)}"`);
+        return;
+      }
+      if (target.id === v.id) {
+        toast("A variable cannot alias itself");
+        return;
+      }
+      writeSlot({ alias: target.id });
+      return;
+    }
+    const coerced = coerceVariableValue(v.type, next);
+    if (!coerced.ok) {
+      toast(coerced.error);
+      return;
+    }
+    writeSlot(coerced.value);
+  };
+
+  const bind = (p: string = prop) => {
+    if (!sel || !selNode) {
+      toast("Select a layer first");
+      return;
+    }
+    if ((p === "text" || p === "fontSize") && selNode.kind !== "text") {
+      toast("That property needs a text layer");
+      return;
+    }
+    if (p === "cornerRadii" && !selNode.cornerRadii) {
+      toast("This layer has no corner radius");
+      return;
+    }
+    engine.dispatch({ type: "bindVariable", id: sel, prop: p, variableId: v.id });
+    const label = options.find((o) => o.prop === p)?.label ?? p;
+    toast(`Bound ${v.name} to ${label.toLowerCase()}`);
+  };
+
+  const propLabel = options.find((o) => o.prop === prop)?.label ?? prop;
+  return (
+    <div
+      className="color-row"
+      style={{
+        padding: "4px 6px",
+        borderRadius: 6,
+        background: "var(--hover)",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 11,
+      }}
+    >
+      {v.type === "color" && (
+        <span
+          className="swatch"
+          style={{
+            background: resolved ?? "transparent",
+            width: 16,
+            height: 16,
+            borderRadius: 4,
+            flexShrink: 0,
+            cursor: "pointer",
+            border: resolved === null ? "1px dashed var(--dim)" : undefined,
+          }}
+          title={resolved === null ? "Alias is broken" : `Click to bind ${v.name} to the selected layer's fill`}
+          onClick={() => bind("fill")}
+        />
+      )}
+      {v.type === "number" && (
+        <span
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            padding: "1px 4px",
+            borderRadius: 3,
+            background: "var(--input)",
+            flexShrink: 0,
+          }}
+        >
+          #
+        </span>
+      )}
+      {v.type === "string" && (
+        <span
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            padding: "1px 4px",
+            borderRadius: 3,
+            background: "var(--input)",
+            flexShrink: 0,
+          }}
+        >
+          T
+        </span>
+      )}
+      {v.type === "boolean" && (
+        <span
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            padding: "1px 4px",
+            borderRadius: 3,
+            background: "var(--input)",
+            flexShrink: 0,
+          }}
+        >
+          B
+        </span>
+      )}
+      <span
+        style={{
+          flex: 1,
+          fontWeight: 500,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {v.name}
+      </span>
+      <span
+        style={{
+          color: "var(--dim)",
+          fontSize: 10,
+          cursor: "pointer",
+          padding: "2px 4px",
+          borderRadius: 4,
+          background: "var(--input)",
+          maxWidth: 110,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          flexShrink: 0,
+        }}
+        title={`Click to edit${isDefaultSlot ? "" : ` ${modeName} override`} — @name makes it an alias`}
+        onClick={editValue}
+      >
+        {resolved === null ? "⚠ broken" : targetName !== null ? `@${targetName} · ${resolved}` : resolved}
+      </span>
+      {options.length > 1 && (
+        <select
+          style={{
+            fontSize: 10,
+            padding: "2px",
+            borderRadius: 4,
+            border: "1px solid var(--border)",
+            background: "var(--bg)",
+            color: "var(--text)",
+            maxWidth: 78,
+            flexShrink: 0,
+          }}
+          value={prop}
+          title="Layer property to bind"
+          onChange={(e) => setApplyProp(e.target.value)}
+        >
+          {options.map((o) => (
+            <option key={o.prop} value={o.prop}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      )}
+      <button
+        className="icon-btn"
+        title={sel ? `Bind to the selected layer's ${propLabel.toLowerCase()}` : "Select a layer, then bind this variable to it"}
+        onClick={() => bind()}
+      >
+        <Icon name="link" size={12} />
+      </button>
+      <button
+        className="icon-btn"
+        title={`Delete ${v.name}`}
+        onClick={() => engine.dispatch({ type: "deleteVariable", id: v.id })}
+      >
+        <Icon name="trash" size={12} />
+      </button>
+    </div>
   );
 }
 
@@ -1843,7 +2521,11 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const selNode = sel ? findNode(snap.pages[snap.page].root, sel)?.node : null;
 
   const vars = snap.variables ?? [];
-  const collections = ["All", ...Array.from(new Set(vars.map((v) => v.collection)))];
+  const varCollections = snap.variableCollections ?? [];
+  const activeModes = snap.activeModes ?? {};
+  const collections = ["All", ...varCollections.map((c) => c.name)];
+  const activeCol = col === "All" ? null : (varCollections.find((c) => c.name === col) ?? null);
+  const activeModeId = activeCol ? (activeModes[activeCol.id] ?? activeCol.modes[0]?.id) : undefined;
   const filteredVars = col === "All" ? vars : vars.filter((v) => v.collection === col);
 
   return (
@@ -1897,11 +2579,42 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                     color: col === c ? "var(--on-accent)" : "var(--text)",
                     cursor: "pointer",
                   }}
+                  title={c === "All" ? "Show every collection" : "Filter to this collection — double-click to rename"}
                   onClick={() => setCol(c)}
+                  onDoubleClick={() => {
+                    if (c === "All") return;
+                    const id = varCollections.find((x) => x.name === c)?.id;
+                    if (!id) return;
+                    const name = window.prompt("Rename collection", c);
+                    if (!name?.trim()) return;
+                    engine.dispatch({ type: "renameCollection", id, name: name.trim() });
+                    setCol(name.trim());
+                  }}
                 >
                   {c}
                 </button>
               ))}
+              <button
+                style={{
+                  padding: "2px 8px",
+                  borderRadius: 4,
+                  fontSize: 10,
+                  border: "1px dashed var(--border)",
+                  background: "transparent",
+                  color: "var(--dim)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+                title="Add collection"
+                onClick={() => {
+                  const name = window.prompt("Collection name", `Collection ${varCollections.length + 1}`);
+                  if (!name?.trim()) return;
+                  engine.dispatch({ type: "addCollection", name: name.trim() });
+                  setCol(name.trim());
+                }}
+              >
+                + New
+              </button>
             </div>
             <button
               className="plus"
@@ -1911,6 +2624,94 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               <Icon name={addingVar ? "x-mark" : "plus"} size={14} />
             </button>
           </div>
+
+          {activeCol && (
+            <div className="h-row" style={{ padding: "2px 12px" }}>
+              <div style={{ display: "flex", gap: 4, overflowX: "auto", alignItems: "center", flex: 1 }}>
+                <span style={{ fontSize: 10, color: "var(--dim)", flexShrink: 0 }}>Mode:</span>
+                {activeCol.modes.map((m) => (
+                  <button
+                    key={m.id}
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      fontSize: 10,
+                      border: 0,
+                      background: activeModeId === m.id ? "var(--blue)" : "var(--input)",
+                      color: activeModeId === m.id ? "var(--on-accent)" : "var(--text)",
+                      cursor: "pointer",
+                      flexShrink: 0,
+                    }}
+                    title={
+                      activeModeId === m.id
+                        ? "Active mode — double-click to rename"
+                        : "Switch to this mode — double-click to rename"
+                    }
+                    onClick={() =>
+                      engine.dispatch({ type: "setActiveMode", collectionId: activeCol.id, modeId: m.id })
+                    }
+                    onDoubleClick={() => {
+                      const name = window.prompt("Rename mode", m.name);
+                      if (!name?.trim()) return;
+                      engine.dispatch({
+                        type: "renameMode",
+                        collectionId: activeCol.id,
+                        modeId: m.id,
+                        name: name.trim(),
+                      });
+                    }}
+                  >
+                    {m.name}
+                  </button>
+                ))}
+                <button
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    fontSize: 10,
+                    border: "1px dashed var(--border)",
+                    background: "transparent",
+                    color: "var(--dim)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                  title="Add mode"
+                  onClick={() => {
+                    const name = window.prompt("Mode name", `Mode ${activeCol.modes.length + 1}`);
+                    if (!name?.trim()) return;
+                    engine.dispatch({ type: "addMode", collectionId: activeCol.id, name: name.trim() });
+                  }}
+                >
+                  +
+                </button>
+              </div>
+              {activeCol.modes.length > 1 && (
+                <button
+                  className="icon-btn"
+                  title="Delete the active mode and its overrides"
+                  onClick={() => {
+                    const m = activeCol.modes.find((x) => x.id === activeModeId);
+                    if (!m) return;
+                    if (!window.confirm(`Delete mode "${m.name}" and its overrides?`)) return;
+                    engine.dispatch({ type: "deleteMode", collectionId: activeCol.id, modeId: m.id });
+                  }}
+                >
+                  <Icon name="trash" size={12} />
+                </button>
+              )}
+              <button
+                className="icon-btn"
+                title={`Delete collection "${activeCol.name}" and its variables`}
+                onClick={() => {
+                  if (!window.confirm(`Delete collection "${activeCol.name}" and its variables?`)) return;
+                  engine.dispatch({ type: "deleteCollection", id: activeCol.id });
+                  setCol("All");
+                }}
+              >
+                <Icon name="x-mark" size={12} />
+              </button>
+            </div>
+          )}
 
           {addingVar && (
             <div
@@ -1948,6 +2749,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                     color: "var(--text)",
                     fontSize: 11,
                   }}
+                  aria-label="Variable type"
                   value={varType}
                   onChange={(e) => {
                     const t = e.target.value as VariableItem["type"];
@@ -1992,16 +2794,15 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                   }}
                   onClick={() => {
                     if (!varName.trim()) return;
-                    const value =
-                      varType === "number"
-                        ? Number(varVal) || 0
-                        : varType === "boolean"
-                          ? varVal === "true"
-                          : varVal;
-                    const collection = col === "All" ? "Brand" : col;
+                    const coerced = coerceVariableValue(varType, varVal);
+                    if (!coerced.ok) {
+                      toast(coerced.error);
+                      return;
+                    }
+                    const collection = activeCol ? activeCol.name : (varCollections[0]?.name ?? "Brand");
                     engine.dispatch({
                       type: "addVariable",
-                      variable: { id: "var_" + Date.now(), name: varName.trim(), type: varType, value, collection },
+                      variable: { id: "var_" + Date.now(), name: varName.trim(), type: varType, value: coerced.value, collection },
                     });
                     toast(`Added variable ${varName}`);
                     setAddingVar(false);
@@ -2025,112 +2826,18 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             }}
           >
             {filteredVars.map((v) => (
-              <div
+              <VarRow
                 key={v.id}
-                className="color-row"
-                style={{
-                  padding: "4px 6px",
-                  borderRadius: 6,
-                  background: "var(--hover)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize: 11,
-                }}
-              >
-                {v.type === "color" && (
-                  <span
-                    className="swatch"
-                    style={{
-                      background: String(v.value),
-                      width: 16,
-                      height: 16,
-                      borderRadius: 4,
-                      flexShrink: 0,
-                      cursor: "pointer",
-                    }}
-                    title="Click to apply color to selected layer fill"
-                    onClick={() => {
-                      if (sel) {
-                        engine.dispatch({
-                          type: "patch",
-                          id: sel,
-                          patch: { fill: String(v.value) },
-                        });
-                        toast(`Applied ${v.name} to fill`);
-                      }
-                    }}
-                  />
-                )}
-                {v.type === "number" && (
-                  <span
-                    style={{
-                      fontSize: 9,
-                      fontWeight: 700,
-                      padding: "1px 4px",
-                      borderRadius: 3,
-                      background: "var(--input)",
-                    }}
-                  >
-                    #
-                  </span>
-                )}
-                {v.type === "string" && (
-                  <span
-                    style={{
-                      fontSize: 9,
-                      fontWeight: 700,
-                      padding: "1px 4px",
-                      borderRadius: 3,
-                      background: "var(--input)",
-                    }}
-                  >
-                    T
-                  </span>
-                )}
-                <span
-                  style={{
-                    flex: 1,
-                    fontWeight: 500,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {v.name}
-                </span>
-                <span
-                  style={{
-                    color: "var(--dim)",
-                    fontSize: 10,
-                    cursor: "pointer",
-                    padding: "2px 4px",
-                    borderRadius: 4,
-                    background: "var(--input)",
-                  }}
-                  title="Click to edit value"
-                  onClick={() => {
-                    const next = window.prompt(`Edit value for ${v.name}`, String(v.value));
-                    if (next === null) return;
-                    const value =
-                      v.type === "number"
-                        ? Number(next) || 0
-                        : v.type === "boolean"
-                          ? next === "true"
-                          : next;
-                    engine.dispatch({ type: "patchVariable", id: v.id, patch: { value } });
-                  }}
-                >
-                  {String(v.value)}
-                </span>
-                <button
-                  className="icon-btn"
-                  title={`Delete ${v.name}`}
-                  onClick={() => engine.dispatch({ type: "deleteVariable", id: v.id })}
-                >
-                  <Icon name="trash" size={12} />
-                </button>
-              </div>
+                engine={engine}
+                v={v}
+                vars={vars}
+                varCollections={varCollections}
+                activeModes={activeModes}
+                activeCol={activeCol}
+                activeModeId={activeModeId}
+                sel={sel}
+                selNode={selNode}
+              />
             ))}
           </div>
         </>
@@ -2757,6 +3464,7 @@ export function FindReplaceBar({
   snap: Snapshot;
   onClose: () => void;
 }) {
+  useRestoreFocus();
   const [q, setQ] = useState("");
   const [replaceStr, setReplaceStr] = useState("");
   const [matchIdx, setMatchIdx] = useState(0);
