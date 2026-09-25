@@ -54,6 +54,19 @@ import {
   samplePathPoints,
 } from "./geometry";
 import { convertTextToVectorPaths } from "./textVector";
+import {
+  type Transaction,
+  type Operation,
+  TransactionStream,
+  invertOperation,
+} from "./transaction";
+import {
+  evaluateModifierStack,
+} from "./modifierStack";
+import {
+  evaluateExpression,
+  DependencyGraph,
+} from "./expressions";
 
 let seq = 1;
 export const uid = (p: string) => `${p}_${seq++}`;
@@ -933,6 +946,180 @@ export class MemoryEngine implements Engine {
     return () => this.listeners.delete(fn);
   }
 
+  private transactionStream = new TransactionStream();
+
+  public getTransactionStream(): TransactionStream {
+    return this.transactionStream;
+  }
+
+  public dispatchTransaction(tx: Transaction): void {
+    const executedOps: Operation[] = [];
+    try {
+      for (const op of tx.operations) {
+        this.executeOperation(op);
+        executedOps.push(op);
+      }
+      this.transactionStream.push(tx);
+    } catch (err) {
+      for (let i = executedOps.length - 1; i >= 0; i--) {
+        try {
+          this.executeOperation(invertOperation(executedOps[i]));
+        } catch (rollbackErr) {
+          console.error("Critical rollback error:", rollbackErr);
+        }
+      }
+      throw err;
+    }
+    this.relayout();
+    this.snapCache = this.build();
+    this.listeners.forEach((f) => f());
+  }
+
+  private executeOperation(op: Operation): void {
+    const s = this.state;
+    switch (op.type) {
+      case "setProperty": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        (n as any)[op.property] = op.newValue;
+        this.publishMaster(n);
+        break;
+      }
+      case "insertNode": {
+        const parent = find(this.root(), op.parentId);
+        if (!parent) throw new Error(`Parent node ${op.parentId} not found`);
+        const idx = op.index !== undefined ? Math.min(op.index, parent.children.length) : parent.children.length;
+        parent.children.splice(idx, 0, clone(op.node));
+        break;
+      }
+      case "removeNode": {
+        const parent = find(this.root(), op.parentId);
+        if (!parent) throw new Error(`Parent node ${op.parentId} not found`);
+        const idx = parent.children.findIndex((c) => c.id === op.nodeId);
+        if (idx >= 0) parent.children.splice(idx, 1);
+        break;
+      }
+      case "moveNode": {
+        const oldParent = find(this.root(), op.oldParentId);
+        const newParent = find(this.root(), op.newParentId);
+        if (!oldParent || !newParent) throw new Error("Parent node not found for moveNode");
+        const idx = oldParent.children.findIndex((c) => c.id === op.nodeId);
+        if (idx < 0) throw new Error(`Node ${op.nodeId} not found in oldParent`);
+        const [target] = oldParent.children.splice(idx, 1);
+        const newIdx = Math.min(op.newIndex, newParent.children.length);
+        newParent.children.splice(newIdx, 0, target);
+        break;
+      }
+      case "setVariable": {
+        const idx = s.variables.findIndex((v) => v.id === op.variableId);
+        if (idx >= 0) {
+          s.variables[idx].value = op.newValue;
+        } else {
+          s.variables.push({
+            id: op.variableId,
+            name: op.variableId,
+            collection: "Brand",
+            type: typeof op.newValue === "number" ? "number" : typeof op.newValue === "boolean" ? "boolean" : "string",
+            value: op.newValue,
+          });
+        }
+        break;
+      }
+      case "setVectorNetwork": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        n.vectorNetwork = clone(op.newNetwork);
+        const converted = vectorNetworkToPath(n.vectorNetwork);
+        n.path = converted.path;
+        n.closed = converted.closed;
+        break;
+      }
+      case "applyModifier": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        if (!n.modifiers) n.modifiers = [];
+        const idx = op.index !== undefined ? op.index : n.modifiers.length;
+        n.modifiers.splice(idx, 0, clone(op.modifier));
+        this.evaluateNodeModifiers(n);
+        break;
+      }
+      case "removeModifier": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        if (n.modifiers && op.index < n.modifiers.length) {
+          n.modifiers.splice(op.index, 1);
+          this.evaluateNodeModifiers(n);
+        }
+        break;
+      }
+      case "setExpression": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        if (!n.expressions) n.expressions = {};
+        n.expressions[op.property] = op.newExpr;
+        break;
+      }
+    }
+  }
+
+  private evaluateNodeModifiers(n: XNode) {
+    if (!n.modifiers || n.modifiers.length === 0) return;
+    const baseInput = {
+      path: n.path && n.path.length > 0 ? n.path : shapePoly(n),
+      closed: n.closed !== false,
+      vectorNetwork: n.vectorNetwork,
+    };
+    const evaluated = evaluateModifierStack(baseInput, n.modifiers);
+    n.path = evaluated.path;
+    n.closed = evaluated.closed;
+    if (evaluated.vectorNetwork) n.vectorNetwork = evaluated.vectorNetwork;
+    if (evaluated.bounds.w > 0 && evaluated.bounds.h > 0) {
+      n.w = Math.round(evaluated.bounds.w);
+      n.h = Math.round(evaluated.bounds.h);
+    }
+  }
+
+  private evaluateExpressionsInTree(root: XNode) {
+    const varMap: Record<string, any> = {};
+    for (const v of this.state.variables) {
+      varMap[v.name] = v.value;
+      varMap[v.id] = v.value;
+    }
+    const graph = new DependencyGraph();
+
+    const evaluateNode = (node: XNode, parent: XNode | null) => {
+      if (node.expressions) {
+        for (const [prop, expr] of Object.entries(node.expressions)) {
+          if (!expr) continue;
+          const targetKey = `${node.id}.${prop}`;
+          const res = evaluateExpression(
+            expr,
+            {
+              vars: varMap,
+              self: node as any,
+              parent: parent as any,
+              getNode: (id: string) => find(this.root(), id),
+            },
+            graph,
+            targetKey,
+          );
+          if (res.error) {
+            console.warn(`Expression error on ${targetKey}: ${res.error}`);
+          } else if (typeof res.value === "number" && !isNaN(res.value)) {
+            (node as any)[prop] = res.value;
+          } else if (typeof res.value === "string" || typeof res.value === "boolean") {
+            (node as any)[prop] = res.value;
+          }
+        }
+      }
+      for (const ch of node.children) {
+        evaluateNode(ch, node);
+      }
+    };
+
+    evaluateNode(root, null);
+  }
+
   dispatch(cmd: Command): void {
     if (cmd.type === "begin") {
       this.undo.push(clone(this.state));
@@ -1108,6 +1295,7 @@ export class MemoryEngine implements Engine {
   }
 
   private relayout() {
+    this.evaluateExpressionsInTree(this.root());
     // Fill cascades through nesting: a parent's pass resizes a nested auto
     // layout frame, and that frame's own layout then has to run again at its new
     // size - which is the whole point of the nesting article ("when you resize
@@ -2886,6 +3074,43 @@ export class MemoryEngine implements Engine {
             n.y = cursor;
             cursor += n.h + gap;
           }
+        }
+        break;
+      }
+      case "commitTransaction":
+        this.dispatchTransaction(cmd.transaction);
+        break;
+      case "applyModifier": {
+        const n = find(this.root(), cmd.id);
+        if (n) {
+          if (!n.modifiers) n.modifiers = [];
+          n.modifiers.push(clone(cmd.modifier));
+          this.evaluateNodeModifiers(n);
+        }
+        break;
+      }
+      case "removeModifier": {
+        const n = find(this.root(), cmd.id);
+        if (n && n.modifiers && cmd.index < n.modifiers.length) {
+          n.modifiers.splice(cmd.index, 1);
+          this.evaluateNodeModifiers(n);
+        }
+        break;
+      }
+      case "setExpression": {
+        const n = find(this.root(), cmd.id);
+        if (n) {
+          if (!n.expressions) n.expressions = {};
+          n.expressions[cmd.property] = cmd.expression;
+          this.evaluateExpressionsInTree(this.root());
+        }
+        break;
+      }
+      case "removeExpression": {
+        const n = find(this.root(), cmd.id);
+        if (n && n.expressions) {
+          delete n.expressions[cmd.property];
+          this.evaluateExpressionsInTree(this.root());
         }
         break;
       }

@@ -29,6 +29,17 @@ pub mod smart_animate;
 pub mod styles;
 pub mod transform;
 pub mod variables;
+pub mod transaction;
+pub mod vector_network;
+pub mod modifier;
+pub mod expression;
+pub mod plugin;
+
+pub use transaction::*;
+pub use vector_network::*;
+pub use modifier::*;
+pub use expression::*;
+pub use plugin::*;
 
 pub use analyze::{
     adoption, adoption_root, analyze as analyze_design, analyze_root as analyze_design_root,

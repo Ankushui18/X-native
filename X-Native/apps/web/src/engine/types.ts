@@ -616,6 +616,13 @@ export interface XNode {
   layoutGrids?: LayoutGrid[];
   /** Ellipse arc / donut properties */
   arcData?: ArcData;
+  /** Procedural non-destructive modifier stack */
+  modifiers?: import("./modifierStack").Modifier[];
+  /** Reactive dynamic expression bindings for properties */
+  expressions?: Record<string, string>;
+  /** Explicit identity for smart animate transitions */
+  animationId?: string;
+  prototypeIdentity?: string;
 }
 
 /** A single message inside a comment thread. */
@@ -876,6 +883,11 @@ export type Command =
   | { type: "presentStop" }
   | { type: "setPrototypeDevice"; device: ProtoDevice }
   | { type: "setPrototypeOrientation"; orientation: "portrait" | "landscape" }
+  | { type: "commitTransaction"; transaction: import("./transaction").Transaction }
+  | { type: "applyModifier"; id: string; modifier: import("./modifierStack").Modifier }
+  | { type: "removeModifier"; id: string; index: number }
+  | { type: "setExpression"; id: string; property: string; expression: string }
+  | { type: "removeExpression"; id: string; property: string }
   | { type: "setPrototypeScale"; scale: "fit" | "100%" | "fill" }
   | { type: "togglePrototypeHotspots"; enabled?: boolean }
   | { type: "togglePrototypeLiveInputs"; enabled?: boolean }

@@ -1,3 +1,15 @@
+/**
+ * Smart Animate Identity System (Phase 0/4 Foundation - Section 3.E)
+ *
+ * Matching Priority:
+ * 1. Explicit `animationId` or `prototypeIdentity`
+ * 2. `componentId` / `instanceId` match
+ * 3. Stable structural identity (tree path e.g. "0/2/1")
+ * 4. Layer `name` match
+ * 5. Geometry similarity (point count, aspect ratio, bounding box)
+ * 6. Heuristic fallback (closest spatial proximity)
+ */
+
 import type { ProtoEasing, XNode } from "./types";
 import { parseHex, toHexA } from "../ui/color";
 
@@ -27,10 +39,8 @@ export function solveEasing(easing: ProtoEasing = "easeOut", t: number): number 
     case "easeInOut":
       return clampT < 0.5 ? 4 * clampT * clampT * clampT : 1 - Math.pow(-2 * clampT + 2, 3) / 2;
     case "spring":
-      // Smooth damped spring (slight overshoot, settling at 1.0)
       return 1 - Math.exp(-6 * clampT) * Math.cos(6.5 * clampT);
     case "bouncy":
-      // Bouncy spring with noticeable overshoot oscillation
       return 1 - Math.exp(-5 * clampT) * Math.cos(9 * clampT);
     default:
       return 1 - Math.pow(1 - clampT, 3);
@@ -64,32 +74,170 @@ function lerpColor(c1: string, c2: string, t: number): string {
 
 interface NodeEntry {
   node: XNode;
-  path: string;
+  structuralPath: string; // e.g. "0/1/2"
+  namePath: string;       // e.g. "Root/Card/Button"
 }
 
-function collectNodes(root: XNode): { byId: Map<string, NodeEntry>; byPath: Map<string, NodeEntry> } {
-  const byId = new Map<string, NodeEntry>();
-  const byPath = new Map<string, NodeEntry>();
+interface NodeIndex {
+  all: NodeEntry[];
+  byId: Map<string, NodeEntry>;
+  byExplicitId: Map<string, NodeEntry>; // animationId or prototypeIdentity
+  byComponentId: Map<string, NodeEntry>;
+  byStructuralPath: Map<string, NodeEntry>;
+  byName: Map<string, NodeEntry>;
+}
 
-  function walk(n: XNode, currentPath: string) {
-    const entry: NodeEntry = { node: n, path: currentPath };
-    byId.set(n.id, entry);
-    if (currentPath) byPath.set(currentPath, entry);
-    for (const ch of n.children) {
-      const subPath = currentPath ? `${currentPath}/${ch.name}` : ch.name;
-      walk(ch, subPath);
+function indexNodes(root: XNode): NodeIndex {
+  const index: NodeIndex = {
+    all: [],
+    byId: new Map(),
+    byExplicitId: new Map(),
+    byComponentId: new Map(),
+    byStructuralPath: new Map(),
+    byName: new Map(),
+  };
+
+  function walk(n: XNode, structIdx: string, nameIdx: string) {
+    const entry: NodeEntry = { node: n, structuralPath: structIdx, namePath: nameIdx };
+    index.all.push(entry);
+    index.byId.set(n.id, entry);
+
+    const explicitId = n.animationId || n.prototypeIdentity;
+    if (explicitId) {
+      index.byExplicitId.set(explicitId, entry);
+    }
+
+    if (n.componentId) {
+      index.byComponentId.set(n.componentId, entry);
+    }
+
+    if (nameIdx) {
+      index.byStructuralPath.set(nameIdx, entry);
+    }
+
+    if (n.name) {
+      index.byName.set(n.name, entry);
+    }
+
+    n.children.forEach((ch, i) => {
+      const nextStruct = structIdx ? `${structIdx}/${i}` : `${i}`;
+      const nextName = nameIdx ? `${nameIdx}/${ch.name}` : ch.name;
+      walk(ch, nextStruct, nextName);
+    });
+  }
+
+  walk(root, "", "");
+  return index;
+}
+
+/**
+ * Geometric similarity metric between two nodes: 0.0 (identical) to higher (different).
+ */
+function geometryDistance(a: XNode, b: XNode): number {
+  if (a.kind !== b.kind) return Infinity;
+  const ratioA = a.w / (a.h || 1);
+  const ratioB = b.w / (b.h || 1);
+  const ratioDiff = Math.abs(ratioA - ratioB);
+  const sizeDiff = Math.abs(a.w - b.w) / Math.max(a.w, b.w, 1) + Math.abs(a.h - b.h) / Math.max(a.h, b.h, 1);
+  return ratioDiff + sizeDiff;
+}
+
+/**
+ * Spatial Euclidean distance between two nodes.
+ */
+function spatialDistance(a: XNode, b: XNode): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Finds the best match in `fromIndex` for a node `to` using the 6-tier matching hierarchy.
+ */
+function findBestMatch(
+  toEntry: NodeEntry,
+  fromIndex: NodeIndex,
+  matchedFromIds: Set<string>,
+): NodeEntry | null {
+  const to = toEntry.node;
+
+  // 1. Explicit animation_id or prototype_identity
+  const explicitId = to.animationId || to.prototypeIdentity;
+  if (explicitId && fromIndex.byExplicitId.has(explicitId)) {
+    const candidate = fromIndex.byExplicitId.get(explicitId)!;
+    if (!matchedFromIds.has(candidate.node.id)) return candidate;
+  }
+
+  // Exact node ID match
+  if (fromIndex.byId.has(to.id)) {
+    const candidate = fromIndex.byId.get(to.id)!;
+    if (!matchedFromIds.has(candidate.node.id)) return candidate;
+  }
+
+  // 2. Component ID / instance ID match
+  if (to.componentId && fromIndex.byComponentId.has(to.componentId)) {
+    const candidate = fromIndex.byComponentId.get(to.componentId)!;
+    if (!matchedFromIds.has(candidate.node.id)) return candidate;
+  }
+
+  // 3. Stable structural identity (path in the layer tree)
+  if (toEntry.namePath && fromIndex.byStructuralPath.has(toEntry.namePath)) {
+    const candidate = fromIndex.byStructuralPath.get(toEntry.namePath)!;
+    if (!matchedFromIds.has(candidate.node.id) && candidate.node.kind === to.kind) {
+      return candidate;
     }
   }
 
-  walk(root, "");
-  return { byId, byPath };
+  // 4. Layer name match
+  if (to.name && fromIndex.byName.has(to.name)) {
+    const candidate = fromIndex.byName.get(to.name)!;
+    if (!matchedFromIds.has(candidate.node.id) && candidate.node.kind === to.kind) {
+      return candidate;
+    }
+  }
+
+  // If layers have distinctly different explicit names, do NOT heuristically match them
+  // (e.g. "Old Badge" must not morph into "New Badge"; they should cross-dissolve)
+  const isGenericOrUnnamed = (name?: string) =>
+    !name || /^(Rectangle|Frame|Group|Vector|Line|Ellipse|Polygon|Star|Text)\s*\d*$/i.test(name.trim());
+
+  if (!isGenericOrUnnamed(to.name)) {
+    return null;
+  }
+
+  // 5. Geometry similarity (matching kind, similar aspect ratio & bounds)
+  let bestGeom: NodeEntry | null = null;
+  let minGeomDist = 0.3; // threshold
+  for (const candidate of fromIndex.all) {
+    if (matchedFromIds.has(candidate.node.id) || candidate.node.id === fromIndex.all[0]?.node.id) continue;
+    if (!isGenericOrUnnamed(candidate.node.name)) continue;
+    const dist = geometryDistance(to, candidate.node);
+    if (dist < minGeomDist) {
+      minGeomDist = dist;
+      bestGeom = candidate;
+    }
+  }
+  if (bestGeom) return bestGeom;
+
+  // 6. Heuristic fallback (closest spatial proximity with same kind)
+  let bestSpatial: NodeEntry | null = null;
+  let minSpatialDist = 60; // proximity radius in px
+  for (const candidate of fromIndex.all) {
+    if (matchedFromIds.has(candidate.node.id) || candidate.node.id === fromIndex.all[0]?.node.id) continue;
+    if (!isGenericOrUnnamed(candidate.node.name)) continue;
+    if (candidate.node.kind !== to.kind) continue;
+    const dist = spatialDistance(to, candidate.node);
+    if (dist < minSpatialDist) {
+      minSpatialDist = dist;
+      bestSpatial = candidate;
+    }
+  }
+
+  return bestSpatial;
 }
 
 /**
  * Smart-animate the destination frame against the frame it replaced at progress `t`.
- * Layers are matched by ID or ancestor name path.
- * Matched layers morph (position, size, opacity, rotation, corner radii, and fill).
- * Unmatched layers in destination dissolve in (opacity 0 -> target).
  */
 export function interpolateMatchingLayers(
   fromFrame: XNode,
@@ -98,16 +246,17 @@ export function interpolateMatchingLayers(
   easing: ProtoEasing = "easeOut",
 ): Map<string, InterpolatedNode> {
   const progress = solveEasing(easing, t);
-  const fromNodes = collectNodes(fromFrame);
-  const toNodes = collectNodes(toFrame);
+  const fromIndex = indexNodes(fromFrame);
+  const toIndex = indexNodes(toFrame);
   const result = new Map<string, InterpolatedNode>();
+  const matchedFromIds = new Set<string>();
 
-  for (const [id, toEntry] of toNodes.byId) {
+  for (const toEntry of toIndex.all) {
     const to = toEntry.node;
-    // Match by ID first, then by hierarchical name path
-    const fromEntry = fromNodes.byId.get(id) ?? fromNodes.byPath.get(toEntry.path);
+    const fromEntry = findBestMatch(toEntry, fromIndex, matchedFromIds);
 
     if (fromEntry) {
+      matchedFromIds.add(fromEntry.node.id);
       const from = fromEntry.node;
       const r0 = lerp(from.cornerRadii[0] ?? 0, to.cornerRadii[0] ?? 0, progress);
       const r1 = lerp(from.cornerRadii[1] ?? 0, to.cornerRadii[1] ?? 0, progress);
@@ -137,16 +286,16 @@ export function interpolateMatchingLayers(
         h: to.h,
         opacity: (to.opacity ?? 1) * progress,
         rotation: to.rotation ?? 0,
-        cornerRadii: [...to.cornerRadii],
-        fill: to.fill,
+        cornerRadii: to.cornerRadii ? [...to.cornerRadii] : [0, 0, 0, 0],
+        fill: to.fill || "#ffffff",
       });
     }
   }
 
-  // Record exiting layers (present in fromFrame, absent in toFrame) to dissolve out
-  for (const [id, fromEntry] of fromNodes.byId) {
+  // Record exiting layers to dissolve out
+  for (const fromEntry of fromIndex.all) {
     if (fromEntry.node === fromFrame) continue;
-    if (!toNodes.byId.has(id) && (!fromEntry.path || !toNodes.byPath.has(fromEntry.path))) {
+    if (!matchedFromIds.has(fromEntry.node.id)) {
       const from = fromEntry.node;
       result.set(from.id, {
         id: from.id,
@@ -157,8 +306,8 @@ export function interpolateMatchingLayers(
         h: from.h,
         opacity: (from.opacity ?? 1) * (1 - progress),
         rotation: from.rotation ?? 0,
-        cornerRadii: [...from.cornerRadii],
-        fill: from.fill,
+        cornerRadii: from.cornerRadii ? [...from.cornerRadii] : [0, 0, 0, 0],
+        fill: from.fill || "#ffffff",
       });
     }
   }

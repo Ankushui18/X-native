@@ -3598,6 +3598,183 @@ console.log("system clipboard — direct copy/paste from Figma and cross-tab fid
   t("vectorAlign top aligns all selected vertices to min Y", alignedNode?.path[0].y === alignedNode?.path[1].y && alignedNode?.path[1].y === 0);
 }
 
+console.log("Phase 0 & Phase 1 Architecture (Canonical Transaction System, Modifier Stack, Expressions, Plugin API):");
+{
+  // 1. Transaction creation & mathematical inversion
+  const { createTransactionId, invertTransaction, invertOperation, TransactionStream } = await import("../transaction.ts");
+  const testTx = {
+    id: createTransactionId(),
+    timestamp: Date.now(),
+    operations: [
+      {
+        type: "setProperty",
+        targetId: "node_1",
+        property: "w",
+        oldValue: 100,
+        newValue: 250,
+      },
+      {
+        type: "setVariable",
+        variableId: "var_color",
+        oldValue: "#000000",
+        newValue: "#10b981",
+      },
+    ],
+  };
+
+  const invTx = invertTransaction(testTx);
+  t("invertTransaction reverses operation order and flips values", invTx.operations.length === 2);
+  t("first inverted operation restores setVariable old value", invTx.operations[0].type === "setVariable" && invTx.operations[0].newValue === "#000000");
+  t("second inverted operation restores setProperty old value", invTx.operations[1].type === "setProperty" && invTx.operations[1].newValue === 100);
+
+  // 2. TransactionStream delta broadcast & undo/redo
+  const stream = new TransactionStream(50);
+  let deltaReceived = null;
+  const unsub = stream.subscribe((tx) => {
+    deltaReceived = tx;
+  });
+  stream.push(testTx);
+  t("TransactionStream emits transaction to delta subscribers", deltaReceived?.id === testTx.id);
+  unsub();
+
+  const undoTx = stream.popUndo();
+  t("TransactionStream popUndo yields inverted transaction", undoTx?.operations[1]?.newValue === 100);
+  const redoTx = stream.popRedo();
+  t("TransactionStream popRedo yields original transaction", redoTx?.id === testTx.id);
+
+  // 3. Engine Transaction execution
+  const eng = new MemoryEngine(false);
+  eng.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 50, h: 50 });
+  const rootNode = eng.snapshot().pages[0].root.children[0];
+
+  const mutateTx = {
+    id: createTransactionId(),
+    timestamp: Date.now(),
+    operations: [
+      {
+        type: "setProperty",
+        targetId: rootNode.id,
+        property: "w",
+        oldValue: 50,
+        newValue: 320,
+      },
+      {
+        type: "setVariable",
+        variableId: "padding_gap",
+        oldValue: 8,
+        newValue: 24,
+      },
+    ],
+  };
+  eng.dispatchTransaction(mutateTx);
+  const updatedNode = eng.snapshot().pages[0].root.children[0];
+  t("engine dispatchTransaction applies setProperty atomically", updatedNode.w === 320);
+
+  // 4. Procedural Modifier Stack
+  const { evaluateModifierStack } = await import("../modifierStack.ts");
+  const baseGeom = {
+    path: [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ],
+    closed: true,
+  };
+
+  const evalGeom = evaluateModifierStack(baseGeom, [
+    { type: "roundedCorners", radius: 12 },
+    { type: "offset", distance: 10 },
+  ]);
+  t("evaluateModifierStack computes offset boundary", evalGeom.bounds.w > 100);
+  t("evaluateModifierStack produces valid closed path", evalGeom.closed === true);
+  t("evaluateModifierStack generates synced VectorNetwork graph", evalGeom.vectorNetwork?.vertices?.length > 0);
+
+  // 5. Reactive Expressions & AST
+  const { parseExpression, evaluateExpression, DependencyGraph } = await import("../expressions.ts");
+  const parsedAst = parseExpression("parent.w * 0.5 + min(var.padding, 16)");
+  t("parseExpression parses arithmetic, member access and functions", parsedAst.type === "Binary");
+
+  const evalResult = evaluateExpression(
+    "parent.w * 0.5 + min(var.padding, 16)",
+    {
+      parent: { w: 400 },
+      vars: { padding: 32 },
+    },
+  );
+  t("evaluateExpression computes 400 * 0.5 + 16 = 216", evalResult.value === 216);
+
+  // 6. Reactive Dependency Graph & Cycle Detection
+  const depGraph = new DependencyGraph();
+  depGraph.addDependency("nodeA.w", "nodeB.w");
+  depGraph.addDependency("nodeB.w", "nodeC.w");
+  const noCycle = depGraph.detectCycle("nodeA.w");
+  t("detectCycle returns hasCycle: false for acyclic DAG", !noCycle.hasCycle);
+
+  depGraph.addDependency("nodeC.w", "nodeA.w");
+  const cycleFound = depGraph.detectCycle("nodeA.w");
+  t("detectCycle catches cycle A -> B -> C -> A", cycleFound.hasCycle === true && cycleFound.cycle.includes("nodeA.w"));
+
+  // 7. Plugin API boundary & Sandboxing
+  const { createPluginAPI } = await import("../pluginApi.ts");
+  let mockEngineState = eng.snapshot();
+  let dispatchedTx = null;
+  const mockHost = {
+    getSnapshot: () => mockEngineState,
+    dispatchTransaction: (tx) => {
+      dispatchedTx = tx;
+    },
+    eventBus: {
+      on: () => () => {},
+      emit: () => {},
+    },
+  };
+
+  const restrictedPlugin = createPluginAPI(
+    {
+      id: "unauthorized_plugin",
+      name: "Unauthorized Plugin",
+      version: "1.0.0",
+      permissions: ["read_document"], // lacks mutate_document
+    },
+    mockHost,
+  );
+
+  const deniedResult = restrictedPlugin.mutate(testTx);
+  t("plugin lacking mutate_document permission is rejected with PERMISSION_DENIED", deniedResult.ok === false && deniedResult.error.code === "PERMISSION_DENIED");
+
+  const authorizedPlugin = createPluginAPI(
+    {
+      id: "authorized_plugin",
+      name: "Authorized Plugin",
+      version: "1.0.0",
+      permissions: ["read_document", "mutate_document"],
+    },
+    mockHost,
+  );
+  const allowedResult = authorizedPlugin.mutate(testTx);
+  t("authorized plugin successfully mutates via transaction", allowedResult.ok === true && dispatchedTx !== null);
+
+  // 8. GeometryBoolean trait solver
+  const { defaultGeometryBoolean } = await import("../geometry.ts");
+  const box1 = [
+    { x: 0, y: 0 },
+    { x: 50, y: 0 },
+    { x: 50, y: 50 },
+    { x: 0, y: 50 },
+  ];
+  const box2 = [
+    { x: 25, y: 0 },
+    { x: 75, y: 0 },
+    { x: 75, y: 50 },
+    { x: 25, y: 50 },
+  ];
+  const unionVn = defaultGeometryBoolean.union(box1, box2);
+  t("defaultGeometryBoolean.union returns valid VectorNetwork", unionVn && unionVn.vertices.length > 0);
+  const subVn = defaultGeometryBoolean.subtract(box1, box2);
+  t("defaultGeometryBoolean.subtract returns valid VectorNetwork", subVn && subVn.vertices.length > 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
 

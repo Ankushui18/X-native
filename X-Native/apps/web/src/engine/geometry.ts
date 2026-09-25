@@ -250,6 +250,54 @@ function combine(op: BooleanOp, a: boolean, b: boolean): boolean {
   return a !== b;
 }
 
+/**
+ * Decoupled GeometryBoolean abstraction (Phase 0 / Section 3.A).
+ * Decouples the boolean engine from concrete representations, allowing
+ * different planar math solvers to be plugged in seamlessly.
+ */
+export interface GeometryBoolean {
+  union(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+  subtract(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+  intersect(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+  exclude(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+}
+
+function toPolyPoints(geom: VectorNetwork | PathPoint[]): PathPoint[] {
+  if (Array.isArray(geom)) return geom;
+  return vectorNetworkToPath(geom).path;
+}
+
+export const defaultGeometryBoolean: GeometryBoolean = {
+  union(a, b) {
+    const res = booleanPath("union", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+  subtract(a, b) {
+    const res = booleanPath("subtract", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+  intersect(a, b) {
+    const res = booleanPath("intersect", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+  exclude(a, b) {
+    const res = booleanPath("exclude", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+};
+
 /** Raster-guided boolean → polyline contours (same approach as x-core). */
 export function booleanPath(
   op: BooleanOp,
