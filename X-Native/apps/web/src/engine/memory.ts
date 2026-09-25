@@ -2265,6 +2265,7 @@ export class MemoryEngine implements Engine {
           strokePaint: "#1e1e1e",
           strokeVisible: true,
           strokeWidth: s.tool === "brush" ? 8 : cmd.closed ? 1 : 2,
+          vectorNetwork: pathToVectorNetwork(path, cmd.closed),
         });
         this.root().children.push(n);
         s.selection = [n.id];

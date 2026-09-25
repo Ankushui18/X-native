@@ -446,17 +446,16 @@ export function Canvas({
         if (e.type === "keydown" && !isTyping)
           e.preventDefault();
       }
-      if (e.type === "keydown" && e.key === "Escape" && !draft.length && penBranch.current) {
-        // A branch is written into its vector as it is drawn, so there is nothing
-        // to commit here; Escape only lets go of the anchor. (A pending path is
-        // finished through ui/penDraft.ts, which owns that key.)
-        penBranch.current = null;
+      if (e.type === "keydown" && (e.key === "Escape" || e.key === "Enter") && (draft.length >= 2 || penBranch.current)) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+        setDraft([]);
         setCloseHint(null);
+        penBranch.current = null;
         return;
       }
-      if (e.type === "keydown" && e.key === "Enter" && (draft.length >= 2 || penBranch.current)) {
-        e.stopImmediatePropagation();
-        if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+      if (e.type === "keydown" && e.key === "Escape" && draft.length < 2) {
         setDraft([]);
         setCloseHint(null);
         penBranch.current = null;
@@ -653,6 +652,18 @@ export function Canvas({
     });
     return () => registerPenFinisher(null);
   }, [draft, engine]);
+
+  // When switching away from drawing tools (e.g. to select or hand), auto-commit any draft path so it appears in layers
+  useEffect(() => {
+    if (snap.tool !== "pen" && snap.tool !== "pencil" && snap.tool !== "brush" && draft.length) {
+      if (draft.length >= 2) {
+        engine.dispatch({ type: "addPath", points: draft, closed: false });
+      }
+      setDraft([]);
+      setCloseHint(null);
+      penBranch.current = null;
+    }
+  }, [snap.tool, draft, engine]);
 
   useEffect(() => {
     if (vecEdit && !snap.selection.includes(vecEdit)) setVecEdit(null);
@@ -2669,9 +2680,9 @@ export function Canvas({
         const d = Math.hypot(wpt.x - last.x, wpt.y - last.y);
         wpt = { x: last.x + Math.cos(ang) * d, y: last.y + Math.sin(ang) * d };
       }
-      if (draft.length >= 3) {
+      if (draft.length >= 2) {
         const a = draft[0];
-        if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 8 / snap.zoom) {
+        if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 14 / snap.zoom) {
           engine.dispatch({ type: "addPath", points: draft, closed: true });
           setDraft([]);
           setCloseHint(null);
@@ -3417,7 +3428,7 @@ export function Canvas({
       // like a trap.
       let hint: number | null = null;
       for (let i = 0; i < draft.length; i++) {
-        if (Math.hypot(wpt.x - draft[i].x, wpt.y - draft[i].y) < 8 / snap.zoom) {
+        if (Math.hypot(wpt.x - draft[i].x, wpt.y - draft[i].y) < 14 / snap.zoom) {
           hint = i;
           break;
         }
@@ -4300,6 +4311,13 @@ export function Canvas({
   };
 
   const onDbl = (e: React.MouseEvent) => {
+    if ((snap.tool === "pen" || snap.tool === "pencil") && draft.length >= 2) {
+      engine.dispatch({ type: "addPath", points: draft, closed: false });
+      setDraft([]);
+      setCloseHint(null);
+      penBranch.current = null;
+      return;
+    }
     const wpt = toWorld(e.clientX, e.clientY);
     /* Double-clicking a bounding-box edge sets that axis's resizing, as the
      * guide's "From the canvas" table has it: hug contents on its own, or Fill
@@ -5001,6 +5019,7 @@ export function Canvas({
         }}
       />
       {snap.pages[snap.page].root.children.length === 0 &&
+        !draft.length &&
         snap.tool === "select" &&
         !edit &&
         !snap.presentFrame && (
@@ -5119,7 +5138,7 @@ export function Canvas({
             />
           );
         })()}
-      {vecEdit && !snap.presentFrame && (
+      {(vecEdit || snap.tool === "pen" || draft.length > 0) && !snap.presentFrame && (
         <div
           className="vector-edit-toolbar"
           style={{
@@ -5154,6 +5173,12 @@ export function Canvas({
               fontWeight: 500,
             }}
             onClick={() => {
+              if (draft.length >= 2) {
+                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                setDraft([]);
+                setCloseHint(null);
+                penBranch.current = null;
+              }
               setVecSubTool("select");
               engine.dispatch({ type: "setTool", tool: "select" });
             }}
@@ -5244,8 +5269,10 @@ export function Canvas({
               alignItems: "center",
             }}
             onClick={() => {
-              engine.dispatch({ type: "simplifyPath", id: vecEdit });
-              toast("Simplified path");
+              if (vecEdit) {
+                engine.dispatch({ type: "simplifyPath", id: vecEdit });
+                toast("Simplified path");
+              }
             }}
             title="Simplify path"
           >
@@ -5264,7 +5291,10 @@ export function Canvas({
               alignItems: "center",
             }}
             onClick={() => {
-              if (vecPt.current != null) {
+              if (draft.length > 0) {
+                setDraft((d) => d.slice(0, -1));
+                toast("Point deleted");
+              } else if (vecPt.current != null && vecEdit) {
                 const wp = worldPos(snap.pages[snap.page].root, vecEdit);
                 if (wp && wp.node.path.length > 2) {
                   const newPath = wp.node.path.filter((_, i) => i !== vecPt.current);
@@ -5293,8 +5323,23 @@ export function Canvas({
               alignItems: "center",
               gap: 4,
             }}
-            onClick={() => setVecEdit(null)}
-            title="Done (Esc / ↵)"
+            onClick={() => {
+              if (draft.length >= 2) {
+                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                setDraft([]);
+                setCloseHint(null);
+                penBranch.current = null;
+              } else if (draft.length < 2) {
+                setDraft([]);
+                setCloseHint(null);
+                penBranch.current = null;
+              }
+              if (snap.tool === "pen") {
+                engine.dispatch({ type: "setTool", tool: "select" });
+              }
+              setVecEdit(null);
+            }}
+            title="Done (Esc / ↵ / Double-click to finish)"
           >
             <Icon name="check" size={13} />
             Done
