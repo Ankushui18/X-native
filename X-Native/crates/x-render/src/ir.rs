@@ -39,7 +39,7 @@ pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;
 /// sites across the two encoders and they had already drifted — the scene's Frame
 /// arm faded a name to 70% while the other three did not, so the same frame's name
 /// was a different grey on the canvas than in an export. The contract this sits
-/// under — and the tests that pin it — is docs/_PARITY.md.
+/// under — and the tests that pin it — is docs/FIGMA_PARITY.md.
 ///
 /// This is the artwork-surface ink (raster, thumbnails, headless renders — light
 /// backgrounds). The canvas overlay paints through the theme roles instead
