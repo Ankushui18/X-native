@@ -5444,6 +5444,30 @@ export function Canvas({
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
+              gap: 4,
+            }}
+            onClick={() => {
+              if (vecEdit) {
+                engine.dispatch({ type: "vectorCleanup", id: vecEdit });
+                toast("Cleaned up vector (sketch to perfect Bézier)");
+              }
+            }}
+            title="Clean up vector (sketch to perfect Bézier)"
+          >
+            <Icon name="visual-search" size={14} />
+            <span style={{ fontSize: 11 }}>Clean up</span>
+          </button>
+          <button
+            className="tool-btn"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              padding: "6px 8px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
             }}
             onClick={() => {
               if (draft.length > 0) {

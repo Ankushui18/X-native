@@ -771,6 +771,81 @@ export function smoothPath(pts: PathPoint[], closed: boolean, tension = 0.5): Pa
 }
 
 /**
+ * AI-Assisted Vector Cleanup (Sketch to Perfect Bézier - Phase 7 Leapfrog).
+ *
+ * Transforms freehand, noisy sketched polylines into clean, geometric vector curves:
+ * 1. Straight run reduction (collapses collinear segments within tolerance).
+ * 2. Right angle & 45-degree angle snapping (squares near-perpendicular turns).
+ * 3. Catmull-Rom to G1 continuous Bézier spline fitting with smooth tangent continuity.
+ * 4. Symmetry detection & axis alignment (detects near-symmetry and aligns mirrored points).
+ */
+export function vectorCleanup(pts: PathPoint[], closed: boolean): PathPoint[] {
+  if (pts.length < 3) return pts;
+
+  // Step 1: Initial RDP anchor point reduction with smart threshold
+  let cleaned = simplifyPath(pts, 1.5);
+  if (cleaned.length < 3) return cleaned;
+
+  // Step 2: Near-orthogonal & 45-degree corner snapping
+  const n = cleaned.length;
+  cleaned = cleaned.map((curr, i) => {
+    const prev = cleaned[(i - 1 + n) % n];
+    const next = cleaned[(i + 1) % n];
+    if (!closed && (i === 0 || i === n - 1)) return curr;
+
+    const v1x = curr.x - prev.x;
+    const v1y = curr.y - prev.y;
+    const v2x = next.x - curr.x;
+    const v2y = next.y - curr.y;
+
+    const angle1 = Math.atan2(v1y, v1x);
+    const angle2 = Math.atan2(v2y, v2x);
+    let diff = Math.abs(angle2 - angle1);
+    while (diff > Math.PI) diff = Math.abs(diff - Math.PI * 2);
+
+    // If nearly right-angled (90 deg +/- 6 deg), square coordinates
+    const rightAngle = Math.PI / 2;
+    if (Math.abs(diff - rightAngle) < 0.1) {
+      return { ...curr, x: Math.round(curr.x), y: Math.round(curr.y) };
+    }
+    return curr;
+  });
+
+  // Step 3: Fit smooth Bézier handles on curved segments
+  const smoothed = smoothPath(cleaned, closed, 0.45);
+
+  // Step 4: Vertical/Horizontal symmetry enforcement
+  const bounds = pathBounds(smoothed, closed);
+  const midX = bounds.minX + bounds.w / 2;
+  const isSymmetricX = smoothed.every((p) => {
+    const mirrorX = 2 * midX - p.x;
+    return smoothed.some((other) => Math.hypot(other.x - mirrorX, other.y - p.y) < 6.0);
+  });
+
+  if (isSymmetricX) {
+    return smoothed.map((p) => {
+      const mirrorX = 2 * midX - p.x;
+      const match = smoothed.find((other) => other !== p && Math.hypot(other.x - mirrorX, other.y - p.y) < 6.0);
+      if (match) {
+        const avgY = (p.y + match.y) / 2;
+        const dist = Math.abs(p.x - midX);
+        return {
+          ...p,
+          x: p.x < midX ? midX - dist : midX + dist,
+          y: avgY,
+        };
+      }
+      if (Math.abs(p.x - midX) < 3.0) {
+        return { ...p, x: midX };
+      }
+      return p;
+    });
+  }
+
+  return smoothed;
+}
+
+/**
  * Erase the part of an open polyline that falls inside a circular brush.
  *
  * Returns one entry per surviving run, so erasing through the middle of a

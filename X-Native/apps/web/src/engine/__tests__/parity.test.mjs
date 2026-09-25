@@ -3773,6 +3773,30 @@ console.log("Phase 0 & Phase 1 Architecture (Canonical Transaction System, Modif
   t("defaultGeometryBoolean.union returns valid VectorNetwork", unionVn && unionVn.vertices.length > 0);
   const subVn = defaultGeometryBoolean.subtract(box1, box2);
   t("defaultGeometryBoolean.subtract returns valid VectorNetwork", subVn && subVn.vertices.length > 0);
+
+  // 9. AI-Assisted Vector Cleanup (Sketch to Perfect Bézier - Phase 7)
+  const { vectorCleanup } = await import("../geometry.ts");
+  const noisyPts = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0.2 },
+    { x: 20, y: -0.1 },
+    { x: 50, y: 0 },
+    { x: 50.3, y: 50 },
+    { x: 0, y: 50 },
+  ];
+  const cleaned = vectorCleanup(noisyPts, true);
+  t("vectorCleanup reduces redundant points along near-straight runs", cleaned.length < noisyPts.length);
+  t("vectorCleanup fits smooth continuous Bézier handles", cleaned.some((p) => p.ix !== undefined || p.ox !== undefined));
+
+  eng.dispatch({
+    type: "addPath",
+    points: noisyPts,
+    closed: true,
+  });
+  const sketchId = eng.snapshot().selection[0];
+  eng.dispatch({ type: "vectorCleanup", id: sketchId });
+  const cleanedNode = eng.snapshot().pages[0].root.children.slice(-1)[0];
+  t("engine vectorCleanup command updates path and normalizes bounding box", cleanedNode.path.length < noisyPts.length && cleanedNode.w >= 48);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

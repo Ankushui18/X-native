@@ -861,6 +861,7 @@ export type Command =
   | { type: "outlineStroke"; id?: string }
   | { type: "offsetPath"; id?: string; distance: number; join?: StrokeJoin }
   | { type: "simplifyPath"; id?: string; tolerance?: number }
+  | { type: "vectorCleanup"; id?: string }
   | { type: "convertTextToVector"; id?: string }
   | { type: "shapeBuilder"; op: "merge" | "subtract" }
   | { type: "vectorAlign"; alignment: "left" | "center" | "right" | "top" | "middle" | "bottom" }

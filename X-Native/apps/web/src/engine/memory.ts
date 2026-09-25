@@ -42,6 +42,7 @@ import {
   outlineStrokeNetwork,
   offsetPath,
   simplifyPath,
+  vectorCleanup,
   shapePoly,
   transformedPoly,
   addVectorBranch,
@@ -2800,6 +2801,15 @@ export class MemoryEngine implements Engine {
         const tol = cmd.tolerance ?? 1.5;
         n.path = simplifyPath(n.path, tol);
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "vectorCleanup": {
+        const targetId = cmd.id || s.vecEdit || s.selection[0];
+        const n = targetId ? find(this.root(), targetId) : null;
+        if (!n || !n.path.length) break;
+        n.path = vectorCleanup(n.path, n.closed);
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        normalizeVectorNode(n);
         break;
       }
       case "convertTextToVector": {
