@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
+import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import { rememberImage, hydrateNodes } from "../engine/assets";
@@ -19,6 +19,8 @@ import {
   cornerRadiiOf,
   hasCornerSmoothing,
   roundRectRadii,
+  pathBounds,
+  fillNetworkRegionAtPoint,
 } from "../engine/geometry";
 import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
@@ -204,6 +206,25 @@ function hasLayout(snap: Snapshot): boolean {
   const n = find(root, id);
   if (!n) return false;
   return !!n.layout || !!findParent(root, id)?.layout;
+}
+
+/** Computes accurate visual bounding box for any node, factoring cubic Bézier curves for vectors. */
+function nodeVisualBounds(wp: { x: number; y: number; node: XNode }): { x: number; y: number; w: number; h: number } {
+  if ((wp.node.kind === "vector" || wp.node.kind === "boolean") && wp.node.path.length > 0) {
+    const pb = pathBounds(wp.node.path, wp.node.closed);
+    return {
+      x: wp.x + pb.minX,
+      y: wp.y + pb.minY,
+      w: pb.w,
+      h: pb.h,
+    };
+  }
+  return {
+    x: wp.x,
+    y: wp.y,
+    w: wp.node.w,
+    h: wp.node.h,
+  };
 }
 
 export function Canvas({
@@ -955,6 +976,48 @@ export function Canvas({
         paintFill(ctx, n, sx, sy, sw, sh);
         ctx.restore();
       }
+      if (n.kind === "vector" && n.vectorNetwork?.regions?.some((r) => r.fill)) {
+        for (const reg of n.vectorNetwork.regions) {
+          if (!reg.fill || isNone(reg.fill)) continue;
+          ctx.save();
+          ctx.fillStyle = cssRgba(reg.fill);
+          ctx.globalAlpha = (n.opacity ?? 1) * (reg.fillOpacity ?? 1);
+          ctx.beginPath();
+          for (const loop of reg.loops) {
+            if (!loop.length) continue;
+            const v0 = n.vectorNetwork.vertices[loop[0]];
+            if (!v0) continue;
+            ctx.moveTo(snap.panX + (x + v0.x) * z, snap.panY + (y + v0.y) * z);
+            for (let i = 0; i < loop.length; i++) {
+              const curIdx = loop[i];
+              const nxtIdx = loop[(i + 1) % loop.length];
+              const curV = n.vectorNetwork.vertices[curIdx];
+              const nxtV = n.vectorNetwork.vertices[nxtIdx];
+              const seg = n.vectorNetwork.segments.find(
+                (s) => (s.start === curIdx && s.end === nxtIdx) || (s.start === nxtIdx && s.end === curIdx),
+              );
+              if (seg && (seg.tangentStart || seg.tangentEnd)) {
+                const isFwd = seg.start === curIdx;
+                const tStart = isFwd ? seg.tangentStart : seg.tangentEnd;
+                const tEnd = isFwd ? seg.tangentEnd : seg.tangentStart;
+                ctx.bezierCurveTo(
+                  snap.panX + (x + curV.x + (tStart?.x || 0)) * z,
+                  snap.panY + (y + curV.y + (tStart?.y || 0)) * z,
+                  snap.panX + (x + nxtV.x + (tEnd?.x || 0)) * z,
+                  snap.panY + (y + nxtV.y + (tEnd?.y || 0)) * z,
+                  snap.panX + (x + nxtV.x) * z,
+                  snap.panY + (y + nxtV.y) * z,
+                );
+              } else {
+                ctx.lineTo(snap.panX + (x + nxtV.x) * z, snap.panY + (y + nxtV.y) * z);
+              }
+            }
+            ctx.closePath();
+          }
+          ctx.fill(reg.windingRule === "EVENODD" ? "evenodd" : "nonzero");
+          ctx.restore();
+        }
+      }
       const noise = (n.effects ?? []).find((e) => e.kind === "noise" && e.visible);
       if (noise) {
         ctx.save();
@@ -1000,6 +1063,11 @@ export function Canvas({
         const pass = (lw: number) => {
           if (lw <= 0) return;
           const w = Math.max(0.5, lw * z);
+          if (n.kind === "vector" && n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+            traceVectorSegments(ctx, n.vectorNetwork, snap.panX + x * z, snap.panY + y * z, z);
+          } else {
+            traceShape();
+          }
           if (n.strokeAlign === "inside") {
             ctx.save();
             ctx.clip();
@@ -1038,42 +1106,45 @@ export function Canvas({
         } else {
           pass(sides[0]);
         }
-        const tipCap =
-          n.strokeCap === "arrow" ||
-          n.strokeCap === "triangle" ||
-          n.strokeCap === "reverse-triangle" ||
-          n.strokeCap === "diamond";
-        const arrowCap = n.kind === "arrow" || ((n.kind === "line" || n.kind === "vector") && !n.closed && tipCap);
-        if (arrowCap) {
+        const isTip = (c?: StrokeCap) =>
+          c === "arrow" || c === "triangle" || c === "reverse-triangle" || c === "diamond";
+        const effEndCap = n.strokeCapEnd ?? (isTip(n.strokeCap) ? n.strokeCap : (n.kind === "arrow" ? "triangle" : "none"));
+        const effStartCap = n.strokeCapStart ?? "none";
+        const hasArrowCap =
+          n.kind === "arrow" ||
+          ((n.kind === "line" || n.kind === "vector") && !n.closed && (isTip(effEndCap) || isTip(effStartCap)));
+        if (hasArrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
-          // Tips are placed on both ends of an open path, so each end is
-          // drawn with the unit vector pointing back along its own segment.
-          const ends: { ex: number; ey: number; ux: number; uy: number }[] = [];
+          // Tips are placed on ends of an open path, with individual caps
+          const ends: { ex: number; ey: number; ux: number; uy: number; cap: StrokeCap }[] = [];
           const pts = n.kind === "vector" || n.kind === "line" || n.kind === "arrow" ? (n.path.length ? n.path : shapePoly(n)) : [];
           if (pts.length > 1) {
             // End point (pts[pts.length - 1]): points in the direction the path was traveling
-            const lastA = pts[pts.length - 1];
-            const lastB = pts[pts.length - 2];
-            const dxEnd = (lastA.x - lastB.x) * z;
-            const dyEnd = (lastA.y - lastB.y) * z;
-            const lenEnd = Math.hypot(dxEnd, dyEnd) || 1;
-            ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd });
+            if (isTip(effEndCap)) {
+              const lastA = pts[pts.length - 1];
+              const lastB = pts[pts.length - 2];
+              const dxEnd = (lastA.x - lastB.x) * z;
+              const dyEnd = (lastA.y - lastB.y) * z;
+              const lenEnd = Math.hypot(dxEnd, dyEnd) || 1;
+              ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd, cap: effEndCap });
+            }
 
             // Start point (pts[0]): only if start cap is explicitly configured
-            const hasStartCap = n.strokeCapStart && n.strokeCapStart !== "none";
-            if (hasStartCap) {
+            if (isTip(effStartCap)) {
               const startA = pts[0];
               const startB = pts[1];
               const dxStart = (startA.x - startB.x) * z;
               const dyStart = (startA.y - startB.y) * z;
               const lenStart = Math.hypot(dxStart, dyStart) || 1;
-              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart });
+              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart, cap: effStartCap });
             }
           } else {
-            ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0 });
-            if (n.strokeCapStart && n.strokeCapStart !== "none") {
-              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0 });
+            if (isTip(effEndCap)) {
+              ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0, cap: effEndCap });
+            }
+            if (isTip(effStartCap)) {
+              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0, cap: effStartCap });
             }
           }
           const back = (e: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
@@ -1082,7 +1153,7 @@ export function Canvas({
           });
           for (const e of ends) {
             ctx.beginPath();
-            if (n.strokeCap === "arrow") {
+            if (e.cap === "arrow") {
               // Two 45° lines, the same weight as the path.
               const p1 = back(e, ah * 0.72, 1);
               const p2 = back(e, ah * 0.72, -1);
@@ -1095,13 +1166,13 @@ export function Canvas({
               ctx.stroke();
               continue;
             }
-            if (n.strokeCap === "diamond") {
+            if (e.cap === "diamond") {
               const mid = { x: e.ex - e.ux * ah * 0.8, y: e.ey - e.uy * ah * 0.8 };
               ctx.moveTo(e.ex, e.ey);
               ctx.lineTo(mid.x - e.uy * ah * 0.5, mid.y + e.ux * ah * 0.5);
               ctx.lineTo(e.ex - e.ux * ah * 1.6, e.ey - e.uy * ah * 1.6);
               ctx.lineTo(mid.x + e.uy * ah * 0.5, mid.y - e.ux * ah * 0.5);
-            } else if (n.strokeCap === "reverse-triangle") {
+            } else if (e.cap === "reverse-triangle") {
               // Flipped: the base sits on the end point, the apex points inward.
               ctx.moveTo(e.ex, e.ey);
               ctx.lineTo(e.ex - e.uy * ah * 0.7, e.ey + e.ux * ah * 0.7);
@@ -1763,10 +1834,11 @@ export function Canvas({
       const hp = worldPos(root, hoverId);
       if (hp) {
         ctx.save();
-        const hx = snap.panX + hp.x * z;
-        const hy = snap.panY + hp.y * z;
-        const hw = hp.node.w * z;
-        const hh = hp.node.h * z;
+        const hb = nodeVisualBounds(hp);
+        const hx = snap.panX + hb.x * z;
+        const hy = snap.panY + hb.y * z;
+        const hw = hb.w * z;
+        const hh = hb.h * z;
         if (hp.node.rotation) {
           ctx.translate(hx + hw / 2, hy + hh / 2);
           ctx.rotate((hp.node.rotation * Math.PI) / 180);
@@ -1781,20 +1853,21 @@ export function Canvas({
 
     const multiSel = snap.selection.length > 1;
     for (const id of snap.selection) {
-      if (edit?.id === id) continue;
+      if (edit?.id === id || vecEdit === id || (vecEdit && snap.selection.includes(vecEdit))) continue;
       const wp = worldPos(root, id);
       if (!wp) continue;
-      const sx = snap.panX + wp.x * z;
-      const sy = snap.panY + wp.y * z;
-      const sw = wp.node.w * z;
-      const sh = wp.node.h * z;
+      const nb = nodeVisualBounds(wp);
+      const sx = snap.panX + nb.x * z;
+      const sy = snap.panY + nb.y * z;
+      const sw = nb.w * z;
+      const sh = nb.h * z;
       const accent = wp.node.isComponent || wp.node.componentId ? "#a855f7" : BRAND_ACCENT;
       // P0-A contextual chrome: frame/section/group vs shape vs vector vs text
       const kind = wp.node.kind;
       const isFrame = kind === "frame" || kind === "component" || kind === "instance";
       const isVectorLike = kind === "vector" || kind === "boolean" || kind === "star" || kind === "poly";
       const isText = kind === "text";
-      const isLine = kind === "line" || kind === "arrow";
+      const isLine = (kind === "line" || kind === "arrow") && (!wp.node.path.length || wp.node.path.every((p) => !p.ox && !p.oy && !p.ix && !p.iy));
       ctx.save();
       if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
         ctx.translate(sx + sw / 2, sy + sh / 2);
@@ -1847,7 +1920,7 @@ export function Canvas({
       const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
       const dim = isRotating
         ? `${Math.round(wp.node.rotation ?? 0)}°`
-        : `${Math.round(wp.node.w)} × ${Math.round(wp.node.h)}`;
+        : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
       ctx.font = "500 11px Inter, system-ui";
       const tw = ctx.measureText(dim).width;
       const bw = tw + 16;
@@ -2100,7 +2173,7 @@ export function Canvas({
 
     // Combined bounding box for a multi-selection: one set of handles, one
     // rotate zone, one size badge.
-    if (multiSel) {
+    if (multiSel && !vecEdit) {
       const bb = selectionBounds(root, snap.selection);
       if (bb) {
         const sx = snap.panX + bb.x * z;
@@ -2205,24 +2278,47 @@ export function Canvas({
           const p = pts[i];
           const px = snap.panX + (wp.x + p.x) * z;
           const py = snap.panY + (wp.y + p.y) * z;
-          if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
-            ctx.beginPath();
-            ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
-            ctx.lineTo(px + (p.ox || 0) * z, py + (p.oy || 0) * z);
-            ctx.stroke();
-            for (const [hx, hy] of [
-              [px + (p.ix || 0) * z, py + (p.iy || 0) * z],
-              [px + (p.ox || 0) * z, py + (p.oy || 0) * z],
-            ] as const) {
-              ctx.fillStyle = "#fff";
+          const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
+
+          // Bézier tangent handles: only show for selected vertices (or when dragging) to keep canvas clean
+          if (isSelected) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(16, 185, 129, 0.75)";
+            ctx.lineWidth = 1;
+            if (p.ix != null && p.iy != null && (p.ix !== 0 || p.iy !== 0)) {
+              const hx = px + p.ix * z;
+              const hy = py + p.iy * z;
               ctx.beginPath();
-              ctx.arc(hx, hy, 3, 0, Math.PI * 2);
+              ctx.moveTo(px, py);
+              ctx.lineTo(hx, hy);
+              ctx.stroke();
+              ctx.fillStyle = "#ffffff";
+              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.lineWidth = 1.25;
+              ctx.beginPath();
+              ctx.arc(hx, hy, 3.5, 0, Math.PI * 2);
               ctx.fill();
               ctx.stroke();
             }
+            if (p.ox != null && p.oy != null && (p.ox !== 0 || p.oy !== 0)) {
+              const hx = px + p.ox * z;
+              const hy = py + p.oy * z;
+              ctx.beginPath();
+              ctx.moveTo(px, py);
+              ctx.lineTo(hx, hy);
+              ctx.stroke();
+              ctx.fillStyle = "#ffffff";
+              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.lineWidth = 1.25;
+              ctx.beginPath();
+              ctx.arc(hx, hy, 3.5, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+            ctx.restore();
           }
+
           const deg = vn ? vertexDegree(vn, i) : 2;
-          const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
           if (deg >= 3) {
             // Branching node indicator (Vector Network Degree >= 3)
             ctx.save();
@@ -2243,11 +2339,12 @@ export function Canvas({
             ctx.stroke();
             ctx.restore();
           } else {
-            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#fff";
+            // Vector anchor point: clean circular anchor point
+            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#ffffff";
             ctx.strokeStyle = isSelected ? "#ffffff" : BRAND_ACCENT;
-            ctx.lineWidth = isSelected ? 1.5 : 1;
+            ctx.lineWidth = isSelected ? 1.5 : 1.25;
             ctx.beginPath();
-            ctx.rect(px - 3.5, py - 3.5, 7, 7);
+            ctx.arc(px, py, 3.5, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
           }
@@ -2809,16 +2906,17 @@ export function Canvas({
       const wp = worldPos(root, snap.selection[0]);
       if (wp) {
         const z = snap.zoom;
-        const sx = snap.panX + wp.x * z;
-        const sy = snap.panY + wp.y * z;
+        const nb = nodeVisualBounds(wp);
+        const sx = snap.panX + nb.x * z;
+        const sy = snap.panY + nb.y * z;
         const r = wrap.current!.getBoundingClientRect();
         const rawX = e.clientX - r.left;
         const rawY = e.clientY - r.top;
         let px = rawX;
         let py = rawY;
         if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
-          const cx = sx + (wp.node.w * z) / 2;
-          const cy = sy + (wp.node.h * z) / 2;
+          const cx = sx + (nb.w * z) / 2;
+          const cy = sy + (nb.h * z) / 2;
           const u = wp.node.rotation ? unrot(px, py, cx, cy, wp.node.rotation) : { x: px, y: py };
           px = wp.node.flipH ? cx - (u.x - cx) : u.x;
           py = wp.node.flipV ? cy - (u.y - cy) : u.y;
@@ -3100,8 +3198,11 @@ export function Canvas({
           const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
           if (vecSubTool === "paint") {
             const nextFill = wp.node.fillVisible ? (wp.node.fill || "#d9d9d9") : "#10b981";
-            engine.dispatch({ type: "patch", id: wp.node.id, patch: { fill: nextFill, fillVisible: true } });
-            toast("Filled region (Paint tool)");
+            const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path, wp.node.closed);
+            const updatedVn = fillNetworkRegionAtPoint(vn, local.x, local.y, nextFill);
+            engine.dispatch({ type: "patchVectorNetwork", id: wp.node.id, network: updatedVn });
+            engine.dispatch({ type: "patch", id: wp.node.id, patch: { fillVisible: true } });
+            toast("Filled vector region (Paint Bucket)");
             return;
           }
           if (vecSubTool === "shapeBuilder") {
@@ -3165,9 +3266,9 @@ export function Canvas({
             return;
           }
         }
-        const hs = handles(sx, sy, wp.node.w * z, wp.node.h * z);
-        const cx = sx + (wp.node.w * z) / 2;
-        const cy = sy + (wp.node.h * z) / 2;
+        const hs = handles(sx, sy, nb.w * z, nb.h * z);
+        const cx = sx + (nb.w * z) / 2;
+        const cy = sy + (nb.h * z) / 2;
         // Corner rotation zone: outside any of the 4 corner handles
         for (let i = 0; i < hs.length; i += 2) {
           const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
@@ -3180,7 +3281,7 @@ export function Canvas({
               sy: e.clientY,
               wx: wpt.x,
               wy: wpt.y,
-              orig: { x: wp.x, y: wp.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation || 0 },
+              orig: { x: nb.x, y: nb.y, w: nb.w, h: nb.h, rotation: wp.node.rotation || 0 },
               origLocal: { x: wp.node.x, y: wp.node.y },
               id: wp.node.id,
               startAngle,
@@ -3352,8 +3453,9 @@ export function Canvas({
         const px0 = e.clientX - r0.left;
         const py0 = e.clientY - r0.top;
         const bb = snap.selection.length === 1 ? worldPos(root0, snap.selection[0]) : null;
-        const box = bb
-          ? { x: bb.x, y: bb.y, w: bb.node.w, h: bb.node.h, rot: bb.node.rotation }
+        const b = bb ? nodeVisualBounds(bb) : null;
+        const box = bb && b
+          ? { x: b.x, y: b.y, w: b.w, h: b.h, rot: bb.node.rotation }
           : (() => {
               const b = selectionBounds(root0, snap.selection);
               return b ? { x: b.x, y: b.y, w: b.w, h: b.h, rot: 0 } : null;
@@ -5133,16 +5235,15 @@ export function Canvas({
         !snap.presentFrame &&
         snap.tool === "select" && (() => {
           const root = snap.pages[snap.page].root;
-          const bb = snap.selection.length === 1
-            ? worldPos(root, snap.selection[0])
+          const wp = snap.selection.length === 1 ? worldPos(root, snap.selection[0]) : null;
+          const bb = wp
+            ? nodeVisualBounds(wp)
             : selectionBounds(root, snap.selection);
           if (!bb) return null;
-          const node = snap.selection.length === 1
-            ? worldPos(root, snap.selection[0])?.node
-            : null;
+          const node = wp?.node ?? null;
           const z = snap.zoom;
-          const sw = (node ? node.w : (bb as { w: number }).w) * z;
-          const sh = (node ? node.h : (bb as { h: number }).h) * z;
+          const sw = bb.w * z;
+          const sh = bb.h * z;
           const sx = snap.panX + bb.x * z;
           const sy = snap.panY + bb.y * z;
           const tx = sx + sw / 2 - 140;
@@ -5505,10 +5606,11 @@ function selectionBounds(
   for (const id of ids) {
     const wp = worldPos(root, id);
     if (!wp) continue;
-    minX = Math.min(minX, wp.x);
-    minY = Math.min(minY, wp.y);
-    maxX = Math.max(maxX, wp.x + wp.node.w);
-    maxY = Math.max(maxY, wp.y + wp.node.h);
+    const b = nodeVisualBounds(wp);
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w);
+    maxY = Math.max(maxY, b.y + b.h);
   }
   if (!isFinite(minX)) return null;
   return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
@@ -5748,6 +5850,34 @@ function tracePath(
       );
     }
     ctx.closePath();
+  }
+}
+
+function traceVectorSegments(
+  ctx: CanvasRenderingContext2D,
+  vn: VectorNetwork,
+  ox: number,
+  oy: number,
+  z: number,
+) {
+  ctx.beginPath();
+  for (const seg of vn.segments) {
+    const v0 = vn.vertices[seg.start];
+    const v1 = vn.vertices[seg.end];
+    if (!v0 || !v1) continue;
+    ctx.moveTo(ox + v0.x * z, oy + v0.y * z);
+    if (seg.tangentStart || seg.tangentEnd) {
+      ctx.bezierCurveTo(
+        ox + (v0.x + (seg.tangentStart?.x || 0)) * z,
+        oy + (v0.y + (seg.tangentStart?.y || 0)) * z,
+        ox + (v1.x + (seg.tangentEnd?.x || 0)) * z,
+        oy + (v1.y + (seg.tangentEnd?.y || 0)) * z,
+        ox + v1.x * z,
+        oy + v1.y * z,
+      );
+    } else {
+      ctx.lineTo(ox + v1.x * z, oy + v1.y * z);
+    }
   }
 }
 

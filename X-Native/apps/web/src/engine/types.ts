@@ -178,6 +178,8 @@ export interface VectorSegment {
 export interface VectorRegion {
   windingRule?: "NONZERO" | "EVENODD";
   loops: number[][]; // array of vertex index sequences forming closed loops
+  fill?: string;
+  fillOpacity?: number;
 }
 
 export interface VectorNetwork {

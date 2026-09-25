@@ -1,4 +1,4 @@
-import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
+import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
 
 /**
  * Corner geometry.
@@ -229,7 +229,7 @@ export function transformedPoly(n: XNode): PathPoint[] {
   });
 }
 
-function inside(poly: PathPoint[], x: number, y: number): boolean {
+export function pointInPolygon(poly: { x: number; y: number }[], x: number, y: number): boolean {
   let hit = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const a = poly[i];
@@ -237,6 +237,10 @@ function inside(poly: PathPoint[], x: number, y: number): boolean {
     if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y + 1e-9) + a.x) hit = !hit;
   }
   return hit;
+}
+
+function inside(poly: PathPoint[], x: number, y: number): boolean {
+  return pointInPolygon(poly, x, y);
 }
 
 function combine(op: BooleanOp, a: boolean, b: boolean): boolean {
@@ -599,7 +603,7 @@ export function outlineStrokeNetwork(
 /**
  * Samples a path containing cubic handles into subdivided polyline points.
  */
-function samplePathPoints(path: PathPoint[], closed: boolean): PathPoint[] {
+export function samplePathPoints(path: PathPoint[], closed: boolean): PathPoint[] {
   const hasCurves = path.some((p) => p.ox || p.oy || p.ix || p.iy);
   if (!hasCurves) return path;
 
@@ -634,6 +638,56 @@ function samplePathPoints(path: PathPoint[], closed: boolean): PathPoint[] {
   }
 
   return result;
+}
+
+export function pathBounds(
+  path: PathPoint[],
+  closed: boolean,
+): { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number } {
+  const pts = samplePathPoints(path, closed);
+  if (!pts.length) return { minX: 0, minY: 0, maxX: 1, maxY: 1, w: 1, h: 1 };
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    w: Math.max(1, maxX - minX),
+    h: Math.max(1, maxY - minY),
+  };
+}
+
+export function normalizeVectorNode(n: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  kind?: string;
+  closed?: boolean;
+  path: PathPoint[];
+  vectorNetwork?: VectorNetwork;
+}) {
+  if (!n.path.length) return;
+  const pb = pathBounds(n.path, !!n.closed);
+  if (Math.abs(pb.minX) > 0.001 || Math.abs(pb.minY) > 0.001) {
+    const dx = pb.minX;
+    const dy = pb.minY;
+    n.x += dx;
+    n.y += dy;
+    n.path = n.path.map((p) => ({
+      ...p,
+      x: p.x - dx,
+      y: p.y - dy,
+    }));
+    n.vectorNetwork = pathToVectorNetwork(n.path, !!n.closed);
+  }
+  n.w = pb.w;
+  n.h = pb.h;
 }
 
 /**
@@ -1024,6 +1078,147 @@ export function findNetworkLoops(vn: VectorNetwork): number[][] {
   }
 
   return loops;
+}
+
+/**
+ * Line segment intersection test between [p1, p2] and [p3, p4].
+ */
+export function lineIntersection(
+  x1: number, y1: number, x2: number, y2: number,
+  x3: number, y3: number, x4: number, y4: number,
+): { x: number; y: number; t: number; u: number } | null {
+  const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+  if (Math.abs(denom) < 1e-7) return null;
+  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+  const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+  if (t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98) {
+    return {
+      x: x1 + t * (x2 - x1),
+      y: y1 + t * (y2 - y1),
+      t,
+      u,
+    };
+  }
+  return null;
+}
+
+/**
+ * Splits intersecting segments in a VectorNetwork, inserting new vertices at intersection points.
+ * Creates a planarized graph so all enclosed regions can be detected and filled independently.
+ */
+export function splitVectorNetworkIntersections(vn: VectorNetwork): VectorNetwork {
+  const vertices: VectorVertex[] = vn.vertices.map((v) => ({ ...v }));
+  const segments: VectorSegment[] = vn.segments.map((s) => ({ ...s }));
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 30) {
+    changed = false;
+    iterations++;
+    for (let i = 0; i < segments.length; i++) {
+      const s1 = segments[i];
+      const v1 = vertices[s1.start];
+      const v2 = vertices[s1.end];
+      if (!v1 || !v2) continue;
+
+      for (let j = i + 1; j < segments.length; j++) {
+        const s2 = segments[j];
+        if (s1.start === s2.start || s1.start === s2.end || s1.end === s2.start || s1.end === s2.end) continue;
+        const v3 = vertices[s2.start];
+        const v4 = vertices[s2.end];
+        if (!v3 || !v4) continue;
+
+        const hit = lineIntersection(v1.x, v1.y, v2.x, v2.y, v3.x, v3.y, v4.x, v4.y);
+        if (hit) {
+          const newIdx = vertices.length;
+          vertices.push({ x: hit.x, y: hit.y });
+
+          // Split segment 1
+          const s1End = s1.end;
+          s1.end = newIdx;
+          segments.push({ start: newIdx, end: s1End });
+
+          // Split segment 2
+          const s2End = s2.end;
+          s2.end = newIdx;
+          segments.push({ start: newIdx, end: s2End });
+
+          changed = true;
+          break;
+        }
+      }
+      if (changed) break;
+    }
+  }
+
+  return { vertices, segments, regions: vn.regions };
+}
+
+/**
+ * Detects all closed planar face regions in a VectorNetwork.
+ */
+export function detectPlanarRegions(vn: VectorNetwork): VectorRegion[] {
+  const planar = splitVectorNetworkIntersections(vn);
+  const loops = findNetworkLoops(planar);
+  if (!loops.length) {
+    return vn.regions || [];
+  }
+
+  const existing = vn.regions || [];
+  return loops.map((loop, idx) => {
+    const prev = existing[idx];
+    return {
+      windingRule: "NONZERO" as const,
+      loops: [loop],
+      fill: prev?.fill,
+      fillOpacity: prev?.fillOpacity,
+    };
+  });
+}
+
+/**
+ * Fills the planar face / region containing point (px, py) using Paint Bucket tool semantics.
+ */
+export function fillNetworkRegionAtPoint(
+  vn: VectorNetwork,
+  px: number,
+  py: number,
+  fillColor: string,
+  opacity = 1,
+): VectorNetwork {
+  const planar = splitVectorNetworkIntersections(vn);
+  let regions = planar.regions && planar.regions.length > 0 ? planar.regions : detectPlanarRegions(planar);
+  if (!regions.length) {
+    // If no regions detected yet, detect them now
+    const loops = findNetworkLoops(planar);
+    if (loops.length > 0) {
+      regions = loops.map((loop) => ({
+        windingRule: "NONZERO" as const,
+        loops: [loop],
+      }));
+    }
+  }
+
+  let matched = false;
+  const updatedRegions: VectorRegion[] = regions.map((reg) => {
+    for (const loop of reg.loops) {
+      const poly = loop.map((idx: number) => planar.vertices[idx]).filter(Boolean) as { x: number; y: number }[];
+      if (poly.length >= 3 && pointInPolygon(poly, px, py)) {
+        matched = true;
+        return {
+          ...reg,
+          fill: reg.fill === fillColor ? undefined : fillColor, // toggle fill if same
+          fillOpacity: opacity,
+        };
+      }
+    }
+    return reg;
+  });
+
+  return {
+    ...planar,
+    regions: matched ? updatedRegions : regions,
+  };
 }
 
 export interface NoodleCurve {

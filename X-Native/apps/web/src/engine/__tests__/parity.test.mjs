@@ -27,6 +27,9 @@ import {
   insertPointOnPath,
   projectPointOnSegment,
   computeFigmaNoodle,
+  splitVectorNetworkIntersections,
+  detectPlanarRegions,
+  fillNetworkRegionAtPoint,
 } from "../geometry.ts";
 import { MemoryEngine, defaultEffect, find, findParent, insideInstance, node, worldPos } from "../memory.ts";
 import { evalField } from "../../ui/fieldExpr.ts";
@@ -640,6 +643,48 @@ console.log("component instance overrides:");
   e.dispatch({ type: "bendSegment", id: vid, segIndex: 0, dragX: 50, dragY: 50 });
   const bentNode = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === vid);
   t("engine bendSegment dispatches and updates node handles", bentNode?.path[0].ox != null);
+
+  // Vector network planar graph & region detection tests
+  // Crossing X segments: (0,0)-(100,100) and (0,100)-(100,0)
+  const crossNetwork = {
+    vertices: [
+      { x: 0, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+      { x: 100, y: 0 },
+    ],
+    segments: [
+      { start: 0, end: 1 },
+      { start: 2, end: 3 },
+    ],
+  };
+  const splitCross = splitVectorNetworkIntersections(crossNetwork);
+  t("splitVectorNetworkIntersections splits crossing segments at intersection", splitCross.vertices.length === 5);
+  t("splitVectorNetworkIntersections creates 4 split segments", splitCross.segments.length === 4);
+  t("intersection vertex has degree 4", vertexDegree(splitCross, 4) === 4);
+
+  // Square with crossing diagonal: 2 distinct triangular planar regions
+  const squareDiagonal = {
+    vertices: [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ],
+    segments: [
+      { start: 0, end: 1 },
+      { start: 1, end: 2 },
+      { start: 2, end: 3 },
+      { start: 3, end: 0 },
+      { start: 0, end: 2 }, // diagonal
+    ],
+  };
+  const detectedRegions = detectPlanarRegions(squareDiagonal);
+  t("detectPlanarRegions finds 2 distinct faces for square with diagonal", detectedRegions.length >= 2);
+
+  // Paint Bucket region fill
+  const filledVn = fillNetworkRegionAtPoint(squareDiagonal, 30, 20, "#10b981");
+  t("fillNetworkRegionAtPoint fills specific planar face with color", filledVn.regions?.some((r) => r.fill === "#10b981"));
 }
 
 {
