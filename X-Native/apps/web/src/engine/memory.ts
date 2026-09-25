@@ -49,6 +49,9 @@ import {
   vectorNetworkToPath,
   bendSegment,
   insertPointOnPath,
+  pathBounds,
+  normalizeVectorNode,
+  samplePathPoints,
 } from "./geometry";
 import { convertTextToVectorPaths } from "./textVector";
 
@@ -2279,12 +2282,9 @@ export class MemoryEngine implements Engine {
         if (cmd.closed != null) n.closed = cmd.closed;
         n.kind = "vector";
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
-        const xs = n.path.map((pt) => pt.x);
-        const ys = n.path.map((pt) => pt.y);
-        if (xs.length) {
-          n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
-          n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
-        }
+        const pb = pathBounds(n.path, n.closed);
+        n.w = pb.w;
+        n.h = pb.h;
         break;
       }
       case "patchVectorNetwork": {
@@ -2353,6 +2353,9 @@ export class MemoryEngine implements Engine {
         if (!n || n.locked || n.path.length < 2) break;
         n.path = bendSegment(n.path, cmd.segIndex, n.closed, cmd.dragX, cmd.dragY);
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        const pb = pathBounds(n.path, n.closed);
+        n.w = pb.w;
+        n.h = pb.h;
         break;
       }
       case "insertPointOnPath": {
@@ -2385,6 +2388,10 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "setVecEdit": {
+        if (s.vecEdit && (cmd.id == null || cmd.id !== s.vecEdit)) {
+          const prev = find(this.root(), s.vecEdit);
+          if (prev) normalizeVectorNode(prev);
+        }
         s.vecEdit = cmd.id;
         s.vecPoint = cmd.pointIndex ?? null;
         s.vecPoints = cmd.pointIndices ?? (cmd.pointIndex != null ? [cmd.pointIndex] : []);
@@ -3214,8 +3221,9 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
     return segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <= Math.max(12, n.strokeWidth / 2 + 4);
   }
   if (n.kind === "vector" || n.kind === "boolean") {
-    const poly = n.path.length ? n.path : shapePoly(n);
+    const rawPoly = n.path.length ? n.path : shapePoly(n);
     const isClosed = n.closed || (n.vectorNetwork?.regions?.length ?? 0) > 0;
+    const poly = samplePathPoints(rawPoly, isClosed);
     if (isClosed) {
       if (n.fillVisible !== false && !n.fill.startsWith("#00000000") && n.fill !== "#00000000") {
         if (polygonHit(poly as any, px, py)) return true;

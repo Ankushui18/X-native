@@ -4452,7 +4452,7 @@ function Design({
                             ? "Diamond tip"
                             : `Cap ${c}`
                 }
-                onClick={() => patch({ strokeCap: c })}
+                onClick={() => patch({ strokeCap: c, strokeCapEnd: c })}
               >
                 <Icon name={c === "arrow" ? "arrow" : c === "triangle" ? "poly" : `cap-${c}`} size={14} />
               </button>
@@ -4480,6 +4480,61 @@ function Design({
             <Icon name="dash" size={14} />
           </button>
           </div>
+          {((n.kind === "line" || n.kind === "arrow" || n.kind === "vector") && !n.closed) && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 4 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <span style={{ fontSize: 9, color: "var(--dim)" }}>Start point</span>
+                <select
+                  value={n.strokeCapStart ?? "none"}
+                  style={{
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    color: "inherit",
+                    fontSize: 11,
+                    padding: "2px 4px",
+                    height: 24,
+                  }}
+                  onChange={(e) => patch({ strokeCapStart: e.target.value as StrokeCap })}
+                >
+                  <option value="none">None</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                  <option value="arrow">Line arrow</option>
+                  <option value="triangle">Triangle arrow</option>
+                  <option value="reverse-triangle">Reverse triangle</option>
+                  <option value="diamond">Diamond arrow</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <span style={{ fontSize: 9, color: "var(--dim)" }}>End point</span>
+                <select
+                  value={n.strokeCapEnd ?? n.strokeCap}
+                  style={{
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    color: "inherit",
+                    fontSize: 11,
+                    padding: "2px 4px",
+                    height: 24,
+                  }}
+                  onChange={(e) => {
+                    const cap = e.target.value as StrokeCap;
+                    patch({ strokeCapEnd: cap, strokeCap: cap });
+                  }}
+                >
+                  <option value="none">None</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                  <option value="arrow">Line arrow</option>
+                  <option value="triangle">Triangle arrow</option>
+                  <option value="reverse-triangle">Reverse triangle</option>
+                  <option value="diamond">Diamond arrow</option>
+                </select>
+              </div>
+            </div>
+          )}
           {strokeMore && (
             <div className="adv-stroke">
               <div className="grid2">
