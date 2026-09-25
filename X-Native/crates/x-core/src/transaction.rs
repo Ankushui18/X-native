@@ -4,7 +4,7 @@
 //! of reversible Operations. This guarantees:
 //! 1. Deterministic local Undo/Redo by inverting operations.
 //! 2. Immutable transaction delta stream for Phase 6 CRDT sync.
-//! 3. Single source of truth for Editor, Renderer, and Prototype runtime.
+//! 3. Single source of truth for the editor, render pipeline, and prototype runtime.
 
 use serde::{Deserialize, Serialize};
 
@@ -155,19 +155,19 @@ impl Operation {
 impl Transaction {
     /// Inverts the entire transaction.
     pub fn invert(&self) -> Self {
-        let mut inverted_ops: Vec<Operation> = self
-            .operations
-            .iter()
-            .rev()
-            .map(|op| op.invert())
-            .collect();
+        let inverted_ops: Vec<Operation> =
+            self.operations.iter().rev().map(|op| op.invert()).collect();
 
         Self {
             id: format!("inv_{}", self.id),
             timestamp: self.timestamp,
             operations: inverted_ops,
             metadata: Some(TransactionMetadata {
-                label: self.metadata.as_ref().and_then(|m| m.label.as_ref()).map(|l| format!("Undo: {}", l)),
+                label: self
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.label.as_ref())
+                    .map(|l| format!("Undo: {}", l)),
                 author_id: self.metadata.as_ref().and_then(|m| m.author_id.clone()),
                 origin: Some("history".to_string()),
             }),

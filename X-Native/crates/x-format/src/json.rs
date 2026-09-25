@@ -4,7 +4,7 @@
 
 // ------------------------------------------------------------------- parser
 
-/// Recursion ceiling for untrusted documents (. packages, 
+/// Recursion ceiling for untrusted documents (. packages,
 /// REST JSON). Every legitimate file nests far below this; a hostile
 /// deeply-nested input errors cleanly instead of overflowing the stack.
 pub(crate) const MAX_JSON_DEPTH: usize = 512;

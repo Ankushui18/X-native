@@ -30,12 +30,12 @@ pub enum ExprAst {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct DependencyGraph {
+pub struct ExpressionDependencyGraph {
     /// Directed edge: `from_key` depends on `to_key`
     pub edges: HashMap<String, HashSet<String>>,
 }
 
-impl DependencyGraph {
+impl ExpressionDependencyGraph {
     pub fn new() -> Self {
         Self {
             edges: HashMap::new(),

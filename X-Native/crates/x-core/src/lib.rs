@@ -12,6 +12,7 @@ pub mod booleans;
 pub mod clip;
 pub mod components;
 pub mod document;
+pub mod expression;
 pub mod fallbacks;
 pub mod geometry;
 pub mod grid;
@@ -19,27 +20,26 @@ pub mod image_transform;
 pub mod layout_types;
 pub mod library;
 pub mod lint;
+pub mod modifier;
 pub mod node;
 pub mod paint;
 pub mod pins;
+pub mod plugin;
 pub mod prototype;
 pub mod query;
 pub mod registry;
 pub mod smart_animate;
 pub mod styles;
+pub mod transaction;
 pub mod transform;
 pub mod variables;
-pub mod transaction;
 pub mod vector_network;
-pub mod modifier;
-pub mod expression;
-pub mod plugin;
 
+pub use expression::*;
+pub use modifier::*;
+pub use plugin::*;
 pub use transaction::*;
 pub use vector_network::*;
-pub use modifier::*;
-pub use expression::*;
-pub use plugin::*;
 
 pub use analyze::{
     adoption, adoption_root, analyze as analyze_design, analyze_root as analyze_design_root,

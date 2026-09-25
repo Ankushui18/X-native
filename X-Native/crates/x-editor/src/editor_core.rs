@@ -2036,7 +2036,7 @@ impl Editor {
 
     /// Wrap the current selection in a labelled Section container.
     ///
-    /// the own rule stands behind the two paths here: "Sections in 
+    /// the own rule stands behind the two paths here: "Sections in
     /// Design are a top-level element on the canvas by default. Sections can
     /// contain all layer types, including other sections, but cannot be
     /// contained within frames or groups." A selection that already lives on

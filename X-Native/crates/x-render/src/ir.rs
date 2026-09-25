@@ -39,7 +39,7 @@ pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;
 /// sites across the two encoders and they had already drifted — the scene's Frame
 /// arm faded a name to 70% while the other three did not, so the same frame's name
 /// was a different grey on the canvas than in an export. The contract this sits
-/// under — and the tests that pin it — is docs/_PARITY.md.
+/// under — and the tests that pin it — is docs/FIGMA_PARITY.md.
 ///
 /// This is the artwork-surface ink (raster, thumbnails, headless renders — light
 /// backgrounds). The canvas overlay paints through the theme roles instead
@@ -1118,7 +1118,7 @@ pub fn build_render_tree_of(root: &Node, id: &str, vars: &Variables) -> Option<R
 /// Build a render tree for a Slice: the flattened canvas content inside the
 /// slice's world bounds, re-origined to (0,0). Returns the tree plus the
 /// slice's (w, h) as the export canvas size. The whole page is lowered (so
-/// content from every layer that overlaps the region is captured, 
+/// content from every layer that overlaps the region is captured,
 /// style), then every command is shifted by the slice's world offset and
 /// clipped to the slice rect at the origin. `id` must resolve to a Slice node.
 pub fn build_render_tree_slice(

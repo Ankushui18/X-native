@@ -68,7 +68,7 @@ pub fn prepare_export(
         None => x_render::build_render_tree(root, vars),
     };
     // A FRAME's name is canvas chrome (like the canvas grid): it helps identify
-    // layers while editing but is never part of the exported artwork — 
+    // layers while editing but is never part of the exported artwork —
     // exports frame names out of the output too. Stripping here (before
     // outlining) keeps label glyph outlines out of BOTH the export content and
     // the computed bounds, in one place, for every export format (PNG / SVG /
