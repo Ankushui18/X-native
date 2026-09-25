@@ -2554,8 +2554,30 @@ input:focus-visible,
   pointer-events: auto;
   background: #f2495c;
 }
-/* A 1px line is nearly impossible to grab, so the hit area is padded out
-   with a transparent border while the painted line stays hairline. */
+/* The lines span the viewport on their free axis. A 1px line is nearly
+   impossible to grab, so the hit area is padded out with a transparent
+   border while background-clip keeps the painted line hairline. */
+.guide-x {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  background-clip: padding-box;
+  cursor: ew-resize;
+}
+.guide-y {
+  left: 0;
+  right: 0;
+  height: 1px;
+  margin-top: -4px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  background-clip: padding-box;
+  cursor: ns-resize;
+}
+.guide.sel { background: #0e9f6e; }
 .guide.on { background: #ff2d55; }
 .guide-hint { opacity: 0.4; pointer-events: none; }
 .guide-badge {

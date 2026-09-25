@@ -1824,6 +1824,13 @@ export function bindHotkeys(
           return;
         }
       }
+      // A selected ruler guide deletes instead of the (empty) layer selection.
+      const gsel = engine.snapshot();
+      if (!gsel.selection.length && gsel.selectedGuide) {
+        e.preventDefault();
+        engine.dispatch({ type: "removeGuide", id: gsel.selectedGuide });
+        return;
+      }
       e.preventDefault();
       const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
@@ -1849,6 +1856,12 @@ export function bindHotkeys(
         return;
       }
       extra.onPresentExit?.();
+      // A selected guide deselects first, without touching the tool.
+      const gesc = engine.snapshot();
+      if (!gesc.selection.length && gesc.selectedGuide) {
+        engine.dispatch({ type: "selectGuide", id: null });
+        return;
+      }
       // Escape walks one level up when a nested layer is selected, and only
       // clears the selection once the top level is reached.
       const escSnap = engine.snapshot();

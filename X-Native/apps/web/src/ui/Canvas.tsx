@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
+import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveVariable } from "../engine/variables";
 import { prefersReducedMotion } from "./a11y";
@@ -97,6 +97,17 @@ const CREATE: Tool[] = [
   "star",
   "image",
 ];
+
+/** Ruler guides in world positions for snapping; frame-level guides resolve
+ *  against their frame, stale ones (frame gone) drop out. */
+function worldGuides(root: XNode, guides: RulerGuide[]): { axis: "x" | "y"; at: number }[] {
+  return guides.flatMap((g) => {
+    if (!g.frameId) return [{ axis: g.axis, at: g.at }];
+    const wp = worldPos(root, g.frameId);
+    if (!wp) return [];
+    return [{ axis: g.axis, at: (g.axis === "x" ? wp.x : wp.y) + g.at }];
+  });
+}
 
 function kindOf(t: Tool): NodeKind | null {
   if (t === "section") return "frame";
@@ -1406,40 +1417,62 @@ export function Canvas({
         snap.viewLayoutGuides !== false
       ) {
         ctx.save();
+        // Layout grids live inside their frame even when the frame's own
+        // overflow is visible - an offset count can push columns past the
+        // edge, and the spill must not paint over the canvas.
+        ctx.beginPath();
+        ctx.rect(snap.panX + x * z, snap.panY + y * z, n.w * z, n.h * z);
+        ctx.clip();
         for (const g of n.layoutGrids) {
           if (g.visible === false) continue;
-          const color = g.color || "rgba(255, 0, 0, 0.08)";
+          const color = g.color || "rgba(255, 0, 0, 0.1)";
           ctx.fillStyle = color;
           if (g.pattern === "columns") {
             const count = g.count || 12;
             const gutter = g.gutter !== undefined ? g.gutter : 20;
             const margin = g.margin !== undefined ? g.margin : 20;
-            const avail = n.w - margin * 2 - gutter * (count - 1);
-            const colW = Math.max(1, avail / count);
+            const offset = g.offset !== undefined ? g.offset : 0;
+            const x0 = x + margin + offset;
+            const avail = n.w - margin * 2 - offset - gutter * (count - 1);
+            const colW = g.cell !== undefined ? g.cell : Math.max(1, avail / count);
+            // Fixed-width columns narrower than the frame honour alignment;
+            // stretch columns fill margin to margin, so there is no slack.
+            const total = colW * count + gutter * (count - 1);
+            const slack = Math.max(0, n.w - margin * 2 - offset - total);
+            const start = x0 + (g.alignment === "center" ? slack / 2 : g.alignment === "max" ? slack : 0);
             for (let ci = 0; ci < count; ci++) {
-              const cx = x + margin + ci * (colW + gutter);
+              const cx = start + ci * (colW + gutter);
               ctx.fillRect(snap.panX + cx * z, snap.panY + y * z, colW * z, n.h * z);
             }
           } else if (g.pattern === "rows") {
             const count = g.count || 8;
             const gutter = g.gutter !== undefined ? g.gutter : 20;
             const margin = g.margin !== undefined ? g.margin : 20;
-            const avail = n.h - margin * 2 - gutter * (count - 1);
-            const rowH = Math.max(1, avail / count);
+            const offset = g.offset !== undefined ? g.offset : 0;
+            const y0 = y + margin + offset;
+            const avail = n.h - margin * 2 - offset - gutter * (count - 1);
+            const rowH = g.cell !== undefined ? g.cell : Math.max(1, avail / count);
+            const total = rowH * count + gutter * (count - 1);
+            const slack = Math.max(0, n.h - margin * 2 - offset - total);
+            const start = y0 + (g.alignment === "center" ? slack / 2 : g.alignment === "max" ? slack : 0);
             for (let ri = 0; ri < count; ri++) {
-              const cy = y + margin + ri * (rowH + gutter);
+              const cy = start + ri * (rowH + gutter);
               ctx.fillRect(snap.panX + x * z, snap.panY + cy * z, n.w * z, rowH * z);
             }
           } else if (g.pattern === "grid") {
             const sz = g.sectionSize || 10;
+            const offset = g.offset !== undefined ? g.offset : 0;
+            const origin = ((offset % sz) + sz) % sz;
             ctx.strokeStyle = color;
             ctx.lineWidth = 1;
             ctx.beginPath();
-            for (let gx = sz; gx < n.w; gx += sz) {
+            // Zero offset keeps the old rhythm (first line at one cell in);
+            // a nonzero offset shifts the whole lattice over by it.
+            for (let gx = origin === 0 ? sz : origin; gx < n.w; gx += sz) {
               ctx.moveTo(snap.panX + (x + gx) * z, snap.panY + y * z);
               ctx.lineTo(snap.panX + (x + gx) * z, snap.panY + (y + n.h) * z);
             }
-            for (let gy = sz; gy < n.h; gy += sz) {
+            for (let gy = origin === 0 ? sz : origin; gy < n.h; gy += sz) {
               ctx.moveTo(snap.panX + x * z, snap.panY + (y + gy) * z);
               ctx.lineTo(snap.panX + (x + n.w) * z, snap.panY + (y + gy) * z);
             }
@@ -3979,7 +4012,7 @@ export function Canvas({
               moved,
               snapTargets.current,
               SNAP_PX / snap.zoom,
-              snap.pages[snap.page].guides,
+              worldGuides(root2, snap.pages[snap.page].guides),
             );
             dx += res.dx;
             dy += res.dy;
@@ -4097,7 +4130,13 @@ export function Canvas({
           w: next.w,
           h: next.h,
         };
-        const r2 = snapResize(worldBox, d.corner, snapTargets.current, SNAP_PX / snap.zoom);
+        const r2 = snapResize(
+          worldBox,
+          d.corner,
+          snapTargets.current,
+          SNAP_PX / snap.zoom,
+          worldGuides(snap.pages[snap.page].root, snap.pages[snap.page].guides),
+        );
         setGuides(r2.guides);
         const movesLeft = d.corner === 0 || d.corner === 6 || d.corner === 7;
         const movesTop = d.corner === 0 || d.corner === 1 || d.corner === 2;
@@ -5416,6 +5455,7 @@ export function Canvas({
       {snap.showRulers && (
         <Guides
           guides={snap.pages[snap.page].guides}
+          root={snap.pages[snap.page].root}
           engine={engine}
           zoom={snap.zoom}
           panX={snap.panX}

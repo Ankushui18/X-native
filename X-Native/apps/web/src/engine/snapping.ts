@@ -211,8 +211,10 @@ export function snapResize(
   corner: number,
   others: Box[],
   tol: number,
+  /** Ruler guide positions per axis, like snapMove: resizing snaps to guides. */
+  rulerGuides: { axis: "x" | "y"; at: number }[] = [],
 ): { dx: number; dy: number; guides: Guide[] } {
-  if (!others.length || tol <= 0) return { dx: 0, dy: 0, guides: [] };
+  if ((!others.length && !rulerGuides.length) || tol <= 0) return { dx: 0, dy: 0, guides: [] };
   const movesLeft = corner === 0 || corner === 6 || corner === 7;
   const movesRight = corner === 2 || corner === 3 || corner === 4;
   const movesTop = corner === 0 || corner === 1 || corner === 2;
@@ -229,7 +231,7 @@ export function snapResize(
     const hi = lo + (axis === "x" ? box.w : box.h);
     const active = lowEdge ? lo : hi;
 
-    let best: { delta: number; at: number; other: Box } | null = null;
+    let best: { delta: number; at: number; other: Box | null } | null = null;
     for (const o of others) {
       for (const theirs of edges(o, axis)) {
         const delta = theirs.at - active;
@@ -239,11 +241,20 @@ export function snapResize(
         }
       }
     }
+    // An explicit guide wins ties against a coincidental object edge.
+    for (const g of rulerGuides) {
+      if (g.axis !== axis) continue;
+      const delta = g.at - active;
+      if (Math.abs(delta) > tol) continue;
+      if (!best || Math.abs(delta) <= Math.abs(best.delta) + 1e-6) {
+        best = { delta, at: g.at, other: null };
+      }
+    }
     if (!best) continue;
     if (axis === "x") dx = best.delta;
     else dy = best.delta;
     const [ma, mb] = span(box, axis);
-    const [oa, ob] = span(best.other, axis);
+    const [oa, ob] = best.other ? span(best.other, axis) : [ma, mb];
     guides.push({ axis, at: best.at, from: Math.min(ma, oa), to: Math.max(mb, ob) });
   }
   return { dx, dy, guides };

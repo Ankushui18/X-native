@@ -739,6 +739,8 @@ interface Internal {
   vecPoint: number | null;
   vecPoints: number[];
   booleanPreview: BooleanOp | null;
+  /** Selected ruler guide; mutually exclusive with the layer selection. */
+  selectedGuide: string | null;
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -748,18 +750,23 @@ const MAX_UNDO = 200;
 /** Commands whose rapid repeats collapse into a single undo step. Only
  *  incremental, self-repeating gestures belong here — structural edits must
  *  always get their own entry. */
-const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch", "autoLayout"]);
+const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch", "autoLayout", "moveGuide"]);
 
 /** Identity used to decide whether two consecutive history commands belong to
  *  the same burst. For `patch` this includes the target ids and the property
  *  names being written, so typing "45" into the rotation field coalesces into
  *  one undo step while a patch of a *different* property still starts a new
  *  one. Without this, each keystroke in a numeric field cost its own undo. */
-function coalesceKey(cmd: Command): string {
+function coalesceKey(cmd: Command, lastType: string | null = null): string {
   if (cmd.type === "patch") {
     const c = cmd as Extract<Command, { type: "patch" }>;
     const ids = "id" in c && c.id ? String(c.id) : "";
     return `patch:${ids}:${Object.keys(c.patch ?? {}).sort().join(",")}`;
+  }
+  if (cmd.type === "moveGuide") {
+    // The drag that places a newborn guide joins the addGuide's undo step.
+    if (lastType === "addGuide") return "addGuide";
+    return `moveGuide:${(cmd as Extract<Command, { type: "moveGuide" }>).id}`;
   }
   if (cmd.type === "autoLayout") {
     // Typing into a gap/padding field rewrites the whole layout object, so key
@@ -940,6 +947,7 @@ export class MemoryEngine implements Engine {
       vecPoint: null,
       vecPoints: [],
       booleanPreview: null,
+      selectedGuide: null,
     };
     this.relayout();
     this.snapCache = this.build();
@@ -1237,6 +1245,10 @@ export class MemoryEngine implements Engine {
       "presentStop",
       "setVecEdit",
       "setBooleanPreview",
+      // Creation's second half (canvas- vs frame-level); the addGuide owns it.
+      "setGuideFrame",
+      // Guide selection, like layer selection, is not a document edit.
+      "selectGuide",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
@@ -1244,7 +1256,7 @@ export class MemoryEngine implements Engine {
       // gesture instead of one keypress at a time.
       const now = Date.now();
       const COALESCE_MS = 600;
-      const key = coalesceKey(cmd);
+      const key = coalesceKey(cmd, this.lastHist?.type ?? null);
       const repeat =
         COALESCABLE.has(cmd.type) &&
         this.lastHist !== null &&
@@ -1374,6 +1386,7 @@ export class MemoryEngine implements Engine {
       pages: this.state.pages,
       page: this.state.page,
       selection: this.state.selection,
+      selectedGuide: this.state.selectedGuide,
       treeRev: this.state.treeRev,
       tool: this.state.tool,
       zoom: this.state.zoom,
@@ -1424,12 +1437,16 @@ export class MemoryEngine implements Engine {
       case "select":
         s.selection = cmd.ids;
         s.booleanPreview = null;
+        s.selectedGuide = null;
         this.justDuplicated = false;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
           s.vecPoint = null;
           s.vecPoints = [];
         }
+        break;
+      case "selectGuide":
+        s.selectedGuide = cmd.id;
         break;
       case "setTool":
         s.tool = cmd.tool;
@@ -1813,6 +1830,14 @@ export class MemoryEngine implements Engine {
           if (p && n && !n.locked) p.children = p.children.filter((c) => c.id !== id);
         }
         s.selection = s.selection.filter((id) => !!find(this.root(), id));
+        // Frame-level guides die with their frame rather than going stale.
+        const gone = new Set(
+          s.pages[s.page].guides.map((g) => g.frameId).filter((f): f is string => !!f && !find(this.root(), f)),
+        );
+        if (gone.size) {
+          s.pages[s.page].guides = s.pages[s.page].guides.filter((g) => !g.frameId || !gone.has(g.frameId));
+          if (s.selectedGuide && !s.pages[s.page].guides.some((g) => g.id === s.selectedGuide)) s.selectedGuide = null;
+        }
         break;
       }
       case "duplicate": {
@@ -2432,7 +2457,7 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "addGuide": {
-        s.pages[s.page].guides.push({ id: uid("guide"), axis: cmd.axis, at: cmd.at });
+        s.pages[s.page].guides.push({ id: uid("guide"), axis: cmd.axis, at: cmd.at, frameId: cmd.frameId });
         break;
       }
       case "moveGuide": {
@@ -2440,9 +2465,18 @@ export class MemoryEngine implements Engine {
         if (g) g.at = cmd.at;
         break;
       }
+      case "setGuideFrame": {
+        const g = s.pages[s.page].guides.find((x) => x.id === cmd.id);
+        if (g) {
+          if (cmd.frameId) g.frameId = cmd.frameId;
+          else delete g.frameId;
+        }
+        break;
+      }
       case "removeGuide": {
         const pg = s.pages[s.page];
         pg.guides = pg.guides.filter((x) => x.id !== cmd.id);
+        if (s.selectedGuide === cmd.id) s.selectedGuide = null;
         break;
       }
       case "makeComponent": {

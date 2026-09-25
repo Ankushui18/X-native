@@ -34,6 +34,7 @@ import type {
   ProtoEasing,
   ProtoTrigger,
   LayoutGrid,
+  GridAlignment,
   GridPattern,
   VariableItem,
   XNode,
@@ -4837,7 +4838,7 @@ function Design({
                     gutter: 20,
                     margin: 20,
                     alignment: "stretch",
-                    color: "rgba(255, 0, 0, 0.08)",
+                    color: "rgba(255, 0, 0, 0.1)",
                     visible: true,
                   };
                   engine.dispatch({
@@ -4853,7 +4854,24 @@ function Design({
           >
             {(n.layoutGrids ?? []).length > 0 && (
               <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
-                {(n.layoutGrids ?? []).map((g, gi) => (
+                {(n.layoutGrids ?? []).map((g, gi) => {
+                  const setGrid = (patch: Partial<LayoutGrid>) => {
+                    const next = [...n.layoutGrids!];
+                    next[gi] = { ...g, ...patch };
+                    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                  };
+                  // The swatch edits hue; grid paint keeps its own translucency.
+                  const alphaOf = (c: string | undefined) => {
+                    const m = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(c ?? "");
+                    return m ? parseFloat(m[1]) : 0.1;
+                  };
+                  const hexOf = (c: string | undefined) => {
+                    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
+                    if (!m) return "#ff0000";
+                    const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
+                    return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
+                  };
+                  return (
                   <div
                     key={g.id}
                     style={{
@@ -4868,7 +4886,7 @@ function Design({
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <select
                         style={{ fontSize: 11, fontWeight: 500 }}
-                        aria-label="Fill pattern"
+                        aria-label="Grid pattern"
                         value={g.pattern}
                         onChange={(e) => {
                           const next = [...n.layoutGrids!];
@@ -4905,22 +4923,50 @@ function Design({
                       </div>
                     </div>
                     {g.pattern === "grid" ? (
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Size</span>
-                        <input
-                          type="number"
-                          min={1}
-                          value={g.sectionSize ?? 10}
-                          style={{ width: 60, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                          onChange={(e) => {
-                            const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
-                            const next = [...n.layoutGrids!];
-                            next[gi] = { ...g, sectionSize: sz };
-                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                          }}
-                        />
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Size</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={g.sectionSize ?? 10}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
+                              setGrid({ sectionSize: sz });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.offset ?? 0}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Color</span>
+                          <input
+                            type="color"
+                            aria-label="Grid color"
+                            value={hexOf(g.color)}
+                            style={{ width: "100%", height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
+                            onChange={(e) => {
+                              const r = parseInt(e.target.value.slice(1, 3), 16);
+                              const b = parseInt(e.target.value.slice(3, 5), 16);
+                              const bl = parseInt(e.target.value.slice(5, 7), 16);
+                              setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
+                            }}
+                          />
+                        </div>
                       </div>
                     ) : (
+                      <>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
                         <div style={{ display: "grid", gap: 2 }}>
                           <span style={{ fontSize: 9, color: "var(--dim)" }}>Count</span>
@@ -4961,16 +5007,83 @@ function Design({
                             style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
                             onChange={(e) => {
                               const mg = Math.max(0, parseInt(e.target.value, 10) || 0);
-                              const next = [...n.layoutGrids!];
-                              next[gi] = { ...g, margin: mg };
-                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                              setGrid({ margin: mg });
                             }}
                           />
                         </div>
                       </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Type</span>
+                          <select
+                            aria-label="Grid alignment"
+                            value={g.alignment ?? "stretch"}
+                            style={{ fontSize: 11, padding: "2px 4px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const a = e.target.value as GridAlignment;
+                              // Stretch fills the frame, so a fixed width no
+                              // longer applies; a fixed type without a width
+                              // falls back to stretch in paint.
+                              setGrid(a === "stretch"
+                                ? { alignment: a, cell: undefined }
+                                : { alignment: a });
+                            }}
+                          >
+                            <option value="stretch">Stretch</option>
+                            <option value="min">{g.pattern === "columns" ? "Left" : "Top"}</option>
+                            <option value="center">Center</option>
+                            <option value="max">{g.pattern === "columns" ? "Right" : "Bottom"}</option>
+                          </select>
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>{g.pattern === "columns" ? "Width" : "Height"}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            disabled={(g.alignment ?? "stretch") === "stretch"}
+                            placeholder="Auto"
+                            value={g.cell ?? ""}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10);
+                              const fixed = Number.isFinite(v) ? Math.max(1, v) : undefined;
+                              setGrid({ cell: fixed });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.offset ?? 0}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Color</span>
+                        <input
+                          type="color"
+                          aria-label="Grid color"
+                          value={hexOf(g.color)}
+                          style={{ width: 60, height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
+                          onChange={(e) => {
+                            const r = parseInt(e.target.value.slice(1, 3), 16);
+                            const b = parseInt(e.target.value.slice(3, 5), 16);
+                            const bl = parseInt(e.target.value.slice(5, 7), 16);
+                            setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
+                          }}
+                        />
+                      </div>
+                      </>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Section>

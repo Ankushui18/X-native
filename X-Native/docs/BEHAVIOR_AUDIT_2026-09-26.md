@@ -210,3 +210,61 @@ no-op (no ⇧1 fallback); zoom never disturbs selection or tool.
   benchmark against — new-feature territory, not a behavior fix. Recorded, not built.
 - Layout-guides chord is ⇧G (Figma: ^G): X-Native shortcut vocabulary, kept deliberately.
 - Rulers/guides mechanics: §9. Multiplayer cursors: no X-Native equivalent — OUT OF SCOPE.
+
+## §9 Rulers, guides, grids — evidence & fixes (2026-09-26)
+
+Figma refs: "Create layout guides" (uniform/column/row types, red-10% default,
+count/type/width/offset/margin/gutter, multiples combine, per-guide + ⇧G
+visibility) and "Add guides to canvas or frames" (rulers prerequisite,
+ruler-drag create, ⌥-drag duplicate, canvas- vs frame-level by drop target,
+drag-back/Delete/right-click removal). After: full suite green
+(934 + 64 + 46 + 63 + 49 + 92 + 19 new guide checks).
+
+### Fixed (shipped in the §9 guides commit on this branch)
+
+- G-000 (P0) — Guide lines were painted as 0×0 divs: `.guide` had no axis
+  rules, so guides were invisible and ungrabbable. Fix: `.guide-x/.guide-y`
+  span the viewport on the free axis, hairline paint with padded grab area,
+  ew/ns-resize cursors.
+- G-001 — Every guide nudge was its own undo step. Fix: `moveGuide` is
+  coalescible per guide, and the drag that places a newborn guide joins the
+  `addGuide` step — creation is one undo, a later reposition its own.
+- G-002 — Guides had no selection: no click-select, Delete/Esc did nothing,
+  no context menu. Fix: engine `selectedGuide` + `selectGuide` command,
+  mutually exclusive with the layer selection (not persisted, not history);
+  chrome routes Delete/Escape to the guide when no layers are selected;
+  right-click menu removes; selected guides paint green.
+- G-003 — No frame-level guides. Fix: `RulerGuide.frameId`, creation re-homes
+  by drop target (`deepestFrame`, stored in frame space), ⌥-drag duplicates
+  inheriting the level, frame deletion cleans up its guides and a dangling
+  selection, stale guides never paint.
+- G-004 — Resize ignored guides (move already snapped to page guides only).
+  Fix: `snapResize` takes ruler guides with guides-winning-ties over
+  coincidental layer edges; Canvas resolves frame guides to world space for
+  both move and resize.
+- G-005 — New-grid default corrected to Columns at red 10% (was 8%); paint
+  fallback matches.
+- G-006 — Fixed types were model-only: paint ignored `alignment`/`offset`/
+  `cell` and grids spilled past the frame. Fix: fixed-width columns/rows
+  honour min/center/max with offset, stretch shrinks to fit, uniform grids
+  shift by offset, all clipped to the frame.
+- G-007 — Inspector exposed only count/gutter/margin/size. Fix: type select,
+  fixed width/height (empty = stretch), offset, and hue swatch (alpha kept)
+  for every pattern; "Fill pattern" mislabel corrected to "Grid pattern".
+
+### Verified parity (traced, no fix needed)
+
+Ruler rails create on drag; drag-back-to-rail and off-viewport discard;
+double-click removes; hover hints; drag badge; per-guide eye; multiples
+combine; ⇧G global toggle; guide redlines while ⌥-dragging (existing snap
+guides); undo/redo of add/remove; keyboard nudging is layer-only in both
+products (no guide-arrow-move either side — not a gap).
+
+### Deferred / out of scope
+
+- Guide styles / shared guide presets: no X-Native equivalent — OUT OF SCOPE.
+- Dotted frame-intersection indicator on the ruler while dragging: Figma
+  micro-feedback with no X-Native counterpart; the drop re-homes correctly.
+- Blue ruler highlight tracking the selected guide: same, cosmetic only.
+- Ruler pixel numbering origin at canvas 0,0 with pan/zoom: existing rulers
+  verified visually unchanged; numbering audit is rendering, not behavior.

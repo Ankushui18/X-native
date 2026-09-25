@@ -533,6 +533,10 @@ export interface LayoutGrid {
   gutter?: number;
   margin?: number;
   alignment?: GridAlignment;
+  /** Shifts the grid over: fixed types start late, stretch types shrink to fit. */
+  offset?: number;
+  /** Fixed types: column width / row height in px. */
+  cell?: number;
   color?: string;
   visible?: boolean;
 }
@@ -765,8 +769,10 @@ export interface CommentThread {
 export interface RulerGuide {
   id: string;
   axis: "x" | "y";
-  /** Position in world units. */
+  /** Position in world units — or in the frame's units when `frameId` is set. */
   at: number;
+  /** Frame-level guide: lives on this frame and moves with it. */
+  frameId?: string;
 }
 
 export interface Page {
@@ -790,6 +796,7 @@ export interface Snapshot {
   pages: Page[];
   page: number;
   selection: string[];
+  selectedGuide: string | null;
   /** Bumped on every dispatch except pure viewport moves (pan/zoom), so panels
    *  showing document state can skip re-rendering viewport-only snapshots even
    *  though tree edits mutate nodes in place (which defeats reference
@@ -976,8 +983,10 @@ export type Command =
   /** Recolour a style; every bound node follows. */
   | { type: "editStyle"; id: string; color?: string; name?: string }
   | { type: "deleteStyle"; id: string }
-  | { type: "addGuide"; axis: "x" | "y"; at: number }
+  | { type: "addGuide"; axis: "x" | "y"; at: number; frameId?: string }
   | { type: "moveGuide"; id: string; at: number }
+  | { type: "setGuideFrame"; id: string; frameId: string | null }
+  | { type: "selectGuide"; id: string | null }
   | { type: "removeGuide"; id: string }
   | { type: "makeComponent" }
   | { type: "detachInstance" }
