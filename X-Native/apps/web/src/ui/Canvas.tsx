@@ -1756,6 +1756,12 @@ export function Canvas({
       const sw = wp.node.w * z;
       const sh = wp.node.h * z;
       const accent = wp.node.isComponent || wp.node.componentId ? "#a855f7" : BRAND_ACCENT;
+      // P0-A contextual chrome: frame/section/group vs shape vs vector vs text
+      const kind = wp.node.kind;
+      const isFrame = kind === "frame" || kind === "component" || kind === "instance";
+      const isVectorLike = kind === "vector" || kind === "boolean" || kind === "star" || kind === "poly";
+      const isText = kind === "text";
+      const isLine = kind === "line" || kind === "arrow";
       ctx.save();
       if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
         ctx.translate(sx + sw / 2, sy + sh / 2);
@@ -1772,13 +1778,40 @@ export function Canvas({
         ctx.restore();
         continue;
       }
-      const hs = handles(sx, sy, sw, sh);
+      // Contextual handles: frames show full 8, text shows side-only when hug, vector shows diamond corners
+      const hsFull = handles(sx, sy, sw, sh);
+      // For text hug, hide corner handles to hint resize behavior; for lines, hide vertical handles
+      let hs = hsFull;
+      if (isText && wp.node.sizingW === "hug" && wp.node.sizingH === "hug") {
+        hs = [hsFull[1], hsFull[3], hsFull[5], hsFull[7]]; // only sides for auto text
+      } else if (isLine) {
+        hs = [hsFull[0], hsFull[4]]; // only ends for line
+      }
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
         ctx.strokeStyle = accent;
         ctx.lineWidth = 1;
-        ctx.fillRect(hx - 3, hy - 3, 6, 6);
-        ctx.strokeRect(hx - 3, hy - 3, 6, 6);
+        if (isVectorLike && !isFrame) {
+          // diamond handle for vector nodes vs square for frames/shapes
+          ctx.beginPath();
+          ctx.moveTo(hx, hy - 3.5);
+          ctx.lineTo(hx + 3.5, hy);
+          ctx.lineTo(hx, hy + 3.5);
+          ctx.lineTo(hx - 3.5, hy);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else if (isFrame) {
+          // frame handles: slightly larger with inner dot to signal container
+          ctx.fillRect(hx - 3.5, hy - 3.5, 7, 7);
+          ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
+          ctx.fillStyle = accent;
+          ctx.fillRect(hx - 1, hy - 1, 2, 2);
+          ctx.fillStyle = "#ffffff";
+        } else {
+          ctx.fillRect(hx - 3, hy - 3, 6, 6);
+          ctx.strokeRect(hx - 3, hy - 3, 6, 6);
+        }
       }
       ctx.beginPath();
       ctx.moveTo(sx + sw / 2, sy);
