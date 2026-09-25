@@ -2624,6 +2624,7 @@ function Design({
           </button>
         </div>
       </div>
+      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Sizing</div>
       <div className="insp-pad">
         <div className="grid3">
           <Field
@@ -3245,7 +3246,7 @@ function Design({
               onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
             />
           )}
-          <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Spacing & Padding</div>
+          <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Spacing</div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             {isGrid ? (
               // A grid has a gap per axis rather than one gap and a packing
@@ -3311,6 +3312,7 @@ function Design({
               </button>
             </div>
             )}
+            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Padding</div>
             {padOpen ? (
               <div className="grid2">
                 {(["L", "R", "T", "B"] as const).map((lab, i) => (
@@ -3377,6 +3379,7 @@ function Design({
               <Icon name="independent" size={14} />
             </button>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
+              <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px", gridColumn:"1 / -1"}}>Positioning</div>
               <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
               <button
                 className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
