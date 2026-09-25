@@ -3851,7 +3851,7 @@ function Design({
               engine.dispatch({
                 type: "patch",
                 id: n.id,
-                patch: { fill: "#00000000", fillVisible: false },
+                patch: { fillVisible: false },
               })
             }
             onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
