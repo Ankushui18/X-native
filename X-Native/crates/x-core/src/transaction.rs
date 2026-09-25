@@ -4,7 +4,7 @@
 //! of reversible Operations. This guarantees:
 //! 1. Deterministic local Undo/Redo by inverting operations.
 //! 2. Immutable transaction delta stream for Phase 6 CRDT sync.
-//! 3. Single source of truth for Editor, Renderer, and Prototype runtime.
+//! 3. Single source of truth for the editor, render pipeline, and prototype runtime.
 
 use serde::{Deserialize, Serialize};
 
