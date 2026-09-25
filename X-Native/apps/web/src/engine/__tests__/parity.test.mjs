@@ -3463,6 +3463,94 @@ console.log("system clipboard — direct copy/paste from Figma and cross-tab fid
       t("the same container via clipboard base64 imports identically", !!res2 && res2.nodes.length === res.nodes.length);
     }
   }
+
+  // --- Advanced Vector Editing Suite Parity ---
+  console.log("advanced vector editing suite (flatten, outline stroke, offset, simplify, shape builder):");
+  const ve = new MemoryEngine(false);
+
+  // 1. Multi-selection flatten
+  ve.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 50, h: 50 });
+  const r1 = ve.snapshot().selection[0];
+  ve.dispatch({ type: "add", kind: "ellipse", x: 40, y: 40, w: 50, h: 50 });
+  const r2 = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [r1, r2] });
+  ve.dispatch({ type: "flatten" });
+  const flatNode = ve.snapshot().pages[ve.snapshot().page].root.children.find((c) => c.kind === "vector");
+  t("multi-selection flatten creates single vector node", !!flatNode);
+  t("flattened vector contains combined vertices and network", (flatNode?.vectorNetwork?.vertices.length ?? 0) > 4);
+
+  // 2. Text flatten / outline text
+  ve.dispatch({ type: "add", kind: "text", x: 100, y: 100, w: 120, h: 40, extra: { text: "Hello" } });
+  const tid = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [tid] });
+  ve.dispatch({ type: "flatten" });
+  const textVecNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("flattening text converts layer to vector kind", textVecNode?.kind === "vector");
+  t("outlined text node has vectorNetwork with loops", (textVecNode?.vectorNetwork?.regions?.[0]?.loops.length ?? 0) >= 1);
+
+  // 3. Outline stroke
+  ve.dispatch({ type: "add", kind: "line", x: 0, y: 0, w: 100, h: 0, extra: { strokeWidth: 10, strokePaint: "#ff0000" } });
+  const lineId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [lineId] });
+  ve.dispatch({ type: "outlineStroke" });
+  const outLineNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("outline stroke converts stroked line into closed vector", outLineNode?.kind === "vector" && outLineNode?.closed === true);
+  t("outlined stroke inherits fill from strokePaint and zeroes strokeWidth", outLineNode?.fill === "#ff0000" && outLineNode?.strokeWidth === 0);
+
+  // 4. Offset path
+  ve.dispatch({
+    type: "addPath",
+    points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 50 }, { x: 0, y: 50 }],
+    closed: true,
+  });
+  const pathId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [pathId] });
+  const origFirstX = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0].path[0].x;
+  ve.dispatch({ type: "offsetPath", distance: 10 });
+  const offsetNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("offset path expands vector geometry", offsetNode?.path?.length >= 4 && offsetNode.path[0].x !== origFirstX);
+
+  // 5. Simplify path
+  ve.dispatch({
+    type: "addPath",
+    points: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0.1 },
+      { x: 20, y: 0 },
+      { x: 30, y: 0.1 },
+      { x: 40, y: 0 },
+      { x: 50, y: 50 },
+    ],
+    closed: false,
+  });
+  const denseId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [denseId] });
+  ve.dispatch({ type: "simplifyPath", tolerance: 1.0 });
+  const simplifiedNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("simplify path reduces redundant collinear anchor points", simplifiedNode?.path?.length < 6);
+
+  // 6. Shape builder merge
+  ve.dispatch({ type: "add", kind: "rect", x: 200, y: 200, w: 60, h: 60 });
+  const sbA = ve.snapshot().selection[0];
+  ve.dispatch({ type: "add", kind: "rect", x: 230, y: 200, w: 60, h: 60 });
+  const sbB = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [sbA, sbB] });
+  ve.dispatch({ type: "shapeBuilder", op: "merge" });
+  const mergedSb = ve.snapshot().pages[ve.snapshot().page].root.children.find((c) => c.id === sbA);
+  t("shape builder merge combines overlapping shapes into vector", mergedSb?.kind === "vector");
+  t("shape builder merge deletes second input shape", !ve.snapshot().pages[ve.snapshot().page].root.children.some((c) => c.id === sbB));
+
+  // 7. Vector align
+  ve.dispatch({
+    type: "addPath",
+    points: [{ x: 10, y: 20 }, { x: 30, y: 80 }, { x: 50, y: 40 }],
+    closed: false,
+  });
+  const vAlignId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "setVecEdit", id: vAlignId, pointIndices: [0, 1, 2] });
+  ve.dispatch({ type: "vectorAlign", alignment: "top" });
+  const alignedNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("vectorAlign top aligns all selected vertices to min Y", alignedNode?.path[0].y === alignedNode?.path[1].y && alignedNode?.path[1].y === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -708,6 +708,7 @@ export function Toolbar({
   onActions: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [boolOpen, setBoolOpen] = useState(false);
   const hold = useRef<number | null>(null);
   const last = (g: Group) => g.tools.find((t) => t.id === snap.tool)?.id ?? g.tools[0].id;
 
@@ -787,6 +788,103 @@ export function Toolbar({
         );
       })}
       </div>
+      {snap.selection.length >= 2 && (
+        <>
+          <div className="div" />
+          <div className="toolset" style={{ display: "flex", alignItems: "center", gap: 3 }}>
+            <span style={{ fontSize: 11, fontWeight: 500, color: "var(--dim)", padding: "0 6px" }}>
+              {snap.selection.length} selected
+            </span>
+            <div className="tool">
+              <Tooltip label="Create component" shortcut="⌥⌘K">
+                <button
+                  className="hit"
+                  aria-label="Create component"
+                  onClick={() => engine.dispatch({ type: "makeComponent" })}
+                >
+                  <Icon name="component" size={15} />
+                </button>
+              </Tooltip>
+            </div>
+            <div
+              className={`tool${boolOpen ? " open" : ""}`}
+              onMouseLeave={() => setBoolOpen(false)}
+            >
+              <Tooltip label="Boolean groups">
+                <button
+                  className="hit"
+                  style={{ width: "auto", padding: "0 6px", gap: 3 }}
+                  aria-label="Boolean groups"
+                  onClick={() => setBoolOpen((v) => !v)}
+                >
+                  <Icon name="boolean-union" size={15} />
+                  <Icon name="chevron" size={caretSize()} />
+                </button>
+              </Tooltip>
+              {boolOpen && (
+                <div className="fly" role="menu" style={{ width: 180, left: 0 }}>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      engine.dispatch({ type: "boolean", op: "union" });
+                      setBoolOpen(false);
+                    }}
+                  >
+                    <Icon name="boolean-union" size={14} />
+                    Union selection
+                    <span className="sc">⌥⇧U</span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      engine.dispatch({ type: "boolean", op: "subtract" });
+                      setBoolOpen(false);
+                    }}
+                  >
+                    <Icon name="boolean-subtract" size={14} />
+                    Subtract selection
+                    <span className="sc">⌥⇧S</span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      engine.dispatch({ type: "boolean", op: "intersect" });
+                      setBoolOpen(false);
+                    }}
+                  >
+                    <Icon name="boolean-intersect" size={14} />
+                    Intersect selection
+                    <span className="sc">⌥⇧I</span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      engine.dispatch({ type: "boolean", op: "exclude" });
+                      setBoolOpen(false);
+                    }}
+                  >
+                    <Icon name="boolean-exclude" size={14} />
+                    Exclude selection
+                    <span className="sc">⌥⇧E</span>
+                  </button>
+                  <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      engine.dispatch({ type: "flatten" });
+                      setBoolOpen(false);
+                    }}
+                  >
+                    <Icon name="vector" size={14} />
+                    Flatten selection
+                    <span className="sc">⌘E</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
       <div className="div" />
       <div className="toolset right">
       <div className="tool">

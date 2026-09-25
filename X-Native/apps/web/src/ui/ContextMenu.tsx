@@ -253,16 +253,19 @@ export function canvasMenu(
       icon: "rect",
       items: [
         { kind: "action", id: "union", label: "Union selection", shortcut: "⌥⇧U" },
-        { kind: "action", id: "subtract", label: "Subtract", shortcut: "⌥⇧S" },
-        { kind: "action", id: "intersect", label: "Intersect", shortcut: "⌥⇧I" },
-        { kind: "action", id: "exclude", label: "Exclude", shortcut: "⌥⇧E" },
-        { kind: "action", id: "flatten", label: "Flatten" },
+        { kind: "action", id: "subtract", label: "Subtract selection", shortcut: "⌥⇧S" },
+        { kind: "action", id: "intersect", label: "Intersect selection", shortcut: "⌥⇧I" },
+        { kind: "action", id: "exclude", label: "Exclude selection", shortcut: "⌥⇧E" },
+        { kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" },
       ],
     });
   }
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
   items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O" });
+  items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
+  items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });
+  items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths" });
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" });
   items.push({ kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye-off" });
@@ -511,6 +514,18 @@ export function runMenu(
       break;
     case "outlineStroke":
       engine.dispatch({ type: "outlineStroke" });
+      break;
+    case "offsetPath":
+      engine.dispatch({ type: "offsetPath", distance: 10 });
+      toast("Offset path +10px");
+      break;
+    case "simplifyPath":
+      engine.dispatch({ type: "simplifyPath" });
+      toast("Simplified vector path");
+      break;
+    case "convertTextToVector":
+      engine.dispatch({ type: "convertTextToVector" });
+      toast("Converted text to vector paths");
       break;
     case "useAsMask": {
       const s = engine.snapshot();

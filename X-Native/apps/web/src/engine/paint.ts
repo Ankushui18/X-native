@@ -210,11 +210,15 @@ function paintOnePaint(
     ctx.restore();
     return;
   }
+  const fillRule: CanvasFillRule =
+    n.vectorNetwork?.regions?.[0]?.windingRule === "EVENODD" || n.booleanOp === "exclude"
+      ? "evenodd"
+      : "nonzero";
   if (n.fillType === "linear") {
     const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
     ramp(g, stops);
     ctx.fillStyle = g;
-    ctx.fill();
+    ctx.fill(fillRule);
     return;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
@@ -224,11 +228,11 @@ function paintOnePaint(
     // avoid a hard seam at the sweep origin.
     ramp(g, conicStops(stops));
     ctx.fillStyle = g;
-    ctx.fill();
+    ctx.fill(fillRule);
     return;
   }
   ctx.fillStyle = cssRgba(a);
-  ctx.fill();
+  ctx.fill(fillRule);
 }
 
 function paintDiamond(

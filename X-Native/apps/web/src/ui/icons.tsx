@@ -210,6 +210,23 @@ export function Icon({
           <circle cx="7" cy="9" r="0.75" fill="currentColor" stroke="none" />
         </svg>
       );
+    case "bend":
+      return (
+        <svg {...p}>
+          <rect x="2" y="11" width="3" height="3" strokeWidth={1.25} />
+          <rect x="11" y="2" width="3" height="3" strokeWidth={1.25} />
+          <path d="M3.5 11 C 3.5 5, 8 3.5, 11 3.5" strokeWidth={1.25} fill="none" />
+          <circle cx="8" cy="4" r="1.2" fill="currentColor" stroke="none" />
+          <line x1="11" y1="3.5" x2="8" y2="4" strokeWidth={1} strokeDasharray="1,1" />
+        </svg>
+      );
+    case "lasso":
+      return (
+        <svg {...p}>
+          <path d="M7 2 C11 2, 14 5, 14 9 C14 12, 11 14, 7 14 C4 14, 2 12, 2 9 C2 6, 4 4, 7 4" strokeWidth={1.25} strokeDasharray="2,1.5" fill="none" />
+          <path d="M7 4 L9 1 L11 3" strokeWidth={1.25} fill="none" />
+        </svg>
+      );
     case "pencil":
       return (
         <svg {...p}>

@@ -236,6 +236,7 @@ export function Canvas({
     },
     [engine],
   );
+  const [vecSubTool, setVecSubTool] = useState<"select" | "bend" | "paint" | "lasso">("select");
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
@@ -2235,6 +2236,32 @@ export function Canvas({
             ctx.stroke();
           }
         }
+
+        // Segment mid-point hover affordance (insert anchor hint)
+        if (cursorPos && !drag.current) {
+          const local = nodeLocalPoint(cursorPos.x, cursorPos.y, wp.x, wp.y, wp.node);
+          const npts = pts.length;
+          const count = wp.node.closed ? npts : npts - 1;
+          for (let si = 0; si < count; si++) {
+            const p1 = pts[si];
+            const p2 = pts[(si + 1) % npts];
+            const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
+            if (pr.dist < 12 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
+              const hx = snap.panX + (wp.x + pr.x) * z;
+              const hy = snap.panY + (wp.y + pr.y) * z;
+              ctx.save();
+              ctx.fillStyle = BRAND_ACCENT;
+              ctx.strokeStyle = "#ffffff";
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+              ctx.restore();
+              break;
+            }
+          }
+        }
         ctx.restore();
       }
     }
@@ -3055,7 +3082,13 @@ export function Canvas({
             }
           }
           const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
-          const meta = e.metaKey || e.ctrlKey || e.altKey;
+          if (vecSubTool === "paint") {
+            const nextFill = wp.node.fillVisible ? (wp.node.fill || "#d9d9d9") : "#10b981";
+            engine.dispatch({ type: "patch", id: wp.node.id, patch: { fill: nextFill, fillVisible: true } });
+            toast("Filled region (Paint tool)");
+            return;
+          }
+          const meta = e.metaKey || e.ctrlKey || e.altKey || vecSubTool === "bend";
           if (meta) {
             const npts = pts.length;
             const count = wp.node.closed ? npts : npts - 1;
@@ -3063,7 +3096,7 @@ export function Canvas({
               const p1 = pts[si];
               const p2 = pts[(si + 1) % npts];
               const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
-              if (pr.dist < 12 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
+              if (pr.dist < 14 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
                 engine.dispatch({ type: "begin" });
                 drag.current = { mode: "bend", id: wp.node.id, segIndex: si, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
                 toast("Bending segment (Bend tool)");
@@ -5086,6 +5119,188 @@ export function Canvas({
             />
           );
         })()}
+      {vecEdit && !snap.presentFrame && (
+        <div
+          className="vector-edit-toolbar"
+          style={{
+            position: "absolute",
+            bottom: 32,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#18181b",
+            borderRadius: 24,
+            padding: "4px 8px",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px #27272a",
+            zIndex: 40,
+            userSelect: "none",
+          }}
+        >
+          <button
+            className={`tool-btn ${snap.tool === "select" && vecSubTool === "select" ? "on" : ""}`}
+            style={{
+              background: snap.tool === "select" && vecSubTool === "select" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: snap.tool === "select" && vecSubTool === "select" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              setVecSubTool("select");
+              engine.dispatch({ type: "setTool", tool: "select" });
+            }}
+            title="Move / Select (V)"
+          >
+            <Icon name="move" size={14} />
+            <span>Select</span>
+          </button>
+          <button
+            className={`tool-btn ${snap.tool === "pen" ? "on" : ""}`}
+            style={{
+              background: snap.tool === "pen" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: snap.tool === "pen" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => engine.dispatch({ type: "setTool", tool: "pen" })}
+            title="Pen (P)"
+          >
+            <Icon name="pen" size={14} />
+            <span>Pen</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "bend" ? "on" : ""}`}
+            style={{
+              background: vecSubTool === "bend" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: vecSubTool === "bend" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              setVecSubTool((t) => (t === "bend" ? "select" : "bend"));
+              toast(vecSubTool === "bend" ? "Select mode" : "Bend tool active (drag segment to curve)");
+            }}
+            title="Bend Tool (⌥)"
+          >
+            <Icon name="bend" size={14} />
+            <span>Bend</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "paint" ? "on" : ""}`}
+            style={{
+              background: vecSubTool === "paint" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: vecSubTool === "paint" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              setVecSubTool((t) => (t === "paint" ? "select" : "paint"));
+              toast(vecSubTool === "paint" ? "Select mode" : "Paint bucket: fill region / face");
+            }}
+            title="Paint Bucket (B)"
+          >
+            <Icon name="paint" size={14} />
+            <span>Paint</span>
+          </button>
+          <button
+            className="tool-btn"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              padding: "6px 8px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+            }}
+            onClick={() => {
+              engine.dispatch({ type: "simplifyPath", id: vecEdit });
+              toast("Simplified path");
+            }}
+            title="Simplify path"
+          >
+            <Icon name="scissors" size={14} />
+          </button>
+          <button
+            className="tool-btn"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              padding: "6px 8px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+            }}
+            onClick={() => {
+              if (vecPt.current != null) {
+                const wp = worldPos(snap.pages[snap.page].root, vecEdit);
+                if (wp && wp.node.path.length > 2) {
+                  const newPath = wp.node.path.filter((_, i) => i !== vecPt.current);
+                  engine.dispatch({ type: "patchPath", id: vecEdit, path: newPath, closed: wp.node.closed });
+                  setVecEdit(vecEdit, null, []);
+                  toast("Point deleted");
+                }
+              }
+            }}
+            title="Delete point (⌫)"
+          >
+            <Icon name="eraser" size={14} />
+          </button>
+          <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.15)", margin: "0 4px" }} />
+          <button
+            style={{
+              background: "var(--accent)",
+              border: 0,
+              color: "#ffffff",
+              padding: "5px 14px",
+              borderRadius: 14,
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+            onClick={() => setVecEdit(null)}
+            title="Done (Esc / ↵)"
+          >
+            <Icon name="check" size={13} />
+            Done
+          </button>
+        </div>
+      )}
       {menu && (
         <ContextMenu
           x={menu.x}

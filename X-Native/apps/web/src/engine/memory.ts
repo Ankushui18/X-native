@@ -39,7 +39,9 @@ import {
 } from "./layout";
 import {
   booleanPath,
-  outlineStroke as outlineStrokePath,
+  outlineStrokeNetwork,
+  offsetPath,
+  simplifyPath,
   shapePoly,
   transformedPoly,
   addVectorBranch,
@@ -48,6 +50,7 @@ import {
   bendSegment,
   insertPointOnPath,
 } from "./geometry";
+import { convertTextToVectorPaths } from "./textVector";
 
 let seq = 1;
 export const uid = (p: string) => `${p}_${seq++}`;
@@ -2026,6 +2029,8 @@ export class MemoryEngine implements Engine {
             g.path = baked.path;
             g.closed = true;
             g.kind = "boolean";
+            if (baked.network) g.vectorNetwork = baked.network;
+            else g.vectorNetwork = pathToVectorNetwork(baked.path, true);
           }
         }
         break;
@@ -2385,16 +2390,142 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "flatten": {
+        if (s.selection.length > 1) {
+          const selectedNodes = s.selection
+            .map((id) => find(this.root(), id))
+            .filter((n): n is XNode => !!n);
+          if (selectedNodes.length >= 2) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            const worldItems: { node: XNode; wp: { x: number; y: number } }[] = [];
+            for (const sn of selectedNodes) {
+              const wp = worldPos(this.root(), sn.id);
+              if (!wp) continue;
+              worldItems.push({ node: sn, wp });
+              minX = Math.min(minX, wp.x);
+              minY = Math.min(minY, wp.y);
+              maxX = Math.max(maxX, wp.x + sn.w);
+              maxY = Math.max(maxY, wp.y + sn.h);
+            }
+
+            if (isFinite(minX)) {
+              const mergedVertices: any[] = [];
+              const mergedSegments: any[] = [];
+              const mergedLoops: number[][] = [];
+              const mergedPath: PathPoint[] = [];
+
+              let dominantFill = "#d9d9d9";
+              let dominantStroke = "#000000";
+              let dominantStrokeWidth = 0;
+
+              for (const item of worldItems) {
+                const { node: n, wp } = item;
+                if (n.fill && n.fillVisible !== false) dominantFill = n.fill;
+                if (n.strokePaint && n.strokeVisible && n.strokeWidth > 0) {
+                  dominantStroke = n.strokePaint;
+                  dominantStrokeWidth = n.strokeWidth;
+                }
+
+                let vn: any = null;
+                if (n.kind === "text") {
+                  const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
+                  vn = res.network;
+                } else if (n.kind === "boolean" && n.children.length) {
+                  const baked = booleanPath(
+                    n.booleanOp || "union",
+                    n.children.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
+                  );
+                  if (baked?.network) vn = baked.network;
+                  else if (baked?.path) vn = pathToVectorNetwork(baked.path, true);
+                } else if (n.vectorNetwork && n.vectorNetwork.vertices.length) {
+                  vn = n.vectorNetwork;
+                } else {
+                  const poly = n.path.length ? n.path : shapePoly(n);
+                  vn = pathToVectorNetwork(poly, n.closed || (n.kind !== "line" && n.kind !== "arrow"));
+                }
+
+                if (vn && vn.vertices.length) {
+                  const offsetStart = mergedVertices.length;
+                  const dx = wp.x - minX;
+                  const dy = wp.y - minY;
+
+                  for (const v of vn.vertices) {
+                    mergedVertices.push({
+                      x: v.x + dx,
+                      y: v.y + dy,
+                      strokeCap: v.strokeCap,
+                      strokeJoin: v.strokeJoin,
+                      cornerRadius: v.cornerRadius,
+                    });
+                    mergedPath.push({ x: v.x + dx, y: v.y + dy, cornerRadius: v.cornerRadius });
+                  }
+
+                  for (const seg of vn.segments) {
+                    mergedSegments.push({
+                      start: offsetStart + seg.start,
+                      end: offsetStart + seg.end,
+                      tangentStart: seg.tangentStart ? { ...seg.tangentStart } : undefined,
+                      tangentEnd: seg.tangentEnd ? { ...seg.tangentEnd } : undefined,
+                    });
+                  }
+
+                  if (vn.regions) {
+                    for (const reg of vn.regions) {
+                      for (const loop of reg.loops) {
+                        mergedLoops.push(loop.map((i: number) => offsetStart + i));
+                      }
+                    }
+                  }
+                }
+              }
+
+              const combinedW = Math.max(1, maxX - minX);
+              const combinedH = Math.max(1, maxY - minY);
+              const flatNode = node("vector", "Flattened Vector", minX, minY, combinedW, combinedH, {
+                path: mergedPath,
+                vectorNetwork: {
+                  vertices: mergedVertices,
+                  segments: mergedSegments,
+                  regions: mergedLoops.length ? [{ windingRule: "EVENODD", loops: mergedLoops }] : undefined,
+                },
+                closed: true,
+                fill: dominantFill,
+                fillVisible: true,
+                strokePaint: dominantStroke,
+                strokeWidth: dominantStrokeWidth,
+                strokeVisible: dominantStrokeWidth > 0,
+              });
+
+              const firstId = selectedNodes[0].id;
+              const container = findParent(this.root(), firstId) || this.root();
+              const firstIdx = container.children.findIndex((c) => c.id === firstId);
+              const selSet = new Set(s.selection);
+              container.children = container.children.filter((c) => !selSet.has(c.id));
+              container.children.splice(Math.max(0, firstIdx), 0, flatNode);
+              s.selection = [flatNode.id];
+              break;
+            }
+          }
+        }
+
         const id = s.selection[0];
         const n = id ? find(this.root(), id) : null;
         if (!n) break;
-        if (n.kind === "boolean" && n.children.length) {
+        if (n.kind === "text") {
+          const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
+          n.kind = "vector";
+          n.path = res.path;
+          n.vectorNetwork = res.network;
+          n.closed = true;
+          n.w = res.w;
+          n.h = res.h;
+        } else if (n.kind === "boolean" && n.children.length) {
           const baked = booleanPath(
             n.booleanOp || "union",
             n.children.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
           );
           if (baked) {
             n.path = baked.path;
+            n.vectorNetwork = baked.network || pathToVectorNetwork(baked.path, true);
             n.closed = true;
             n.kind = "vector";
             n.children = [];
@@ -2404,25 +2535,152 @@ export class MemoryEngine implements Engine {
             n.w = baked.w;
             n.h = baked.h;
           }
+        } else if (n.kind === "group" && n.children.length) {
+          const childPaths: PathPoint[] = [];
+          for (const c of n.children) {
+            const poly = c.path.length ? c.path : shapePoly(c);
+            childPaths.push(...poly.map((p) => ({ x: p.x + c.x, y: p.y + c.y })));
+          }
+          n.path = childPaths;
+          n.vectorNetwork = pathToVectorNetwork(childPaths, true);
+          n.kind = "vector";
+          n.children = [];
         } else if (!n.path.length) {
           n.path = shapePoly(n);
+          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed || (n.kind !== "line" && n.kind !== "arrow"));
           n.closed = n.kind !== "line" && n.kind !== "arrow";
           n.kind = "vector";
         }
         break;
       }
       case "outlineStroke": {
-        const id = s.selection[0];
-        const n = id ? find(this.root(), id) : null;
-        if (!n || n.strokeWidth <= 0) break;
-        const src = n.path.length ? n.path : shapePoly(n);
-        n.path = outlineStrokePath(src, n.strokeWidth, n.closed || n.kind !== "line");
+        const targetIds = cmd.id ? [cmd.id] : [...s.selection];
+        for (const id of targetIds) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          if (n.kind === "text") {
+            const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
+            n.kind = "vector";
+            n.path = res.path;
+            n.vectorNetwork = res.network;
+            n.closed = true;
+            n.w = res.w;
+            n.h = res.h;
+            continue;
+          }
+          if (n.strokeWidth <= 0 && n.kind !== "line" && n.kind !== "arrow") continue;
+          const sw = n.strokeWidth > 0 ? n.strokeWidth : 1;
+          const src = n.path.length ? n.path : shapePoly(n);
+          const isClosed = n.closed || (n.kind !== "line" && n.kind !== "arrow");
+          const out = outlineStrokeNetwork(src, sw, isClosed, n.strokeCap || "round", n.strokeJoin || "round");
+          n.path = out.path;
+          n.vectorNetwork = out.network;
+          n.kind = "vector";
+          n.closed = true;
+          n.fill = n.strokePaint || "#000000";
+          n.fillVisible = true;
+          n.fillOpacity = n.strokeOpacity ?? 1;
+          n.strokeWidth = 0;
+          n.strokeVisible = false;
+        }
+        break;
+      }
+      case "offsetPath": {
+        const targetIds = cmd.id ? [cmd.id] : [...s.selection];
+        for (const id of targetIds) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          const src = n.path.length ? n.path : shapePoly(n);
+          n.path = offsetPath(src, cmd.distance, n.closed || (n.kind !== "line" && n.kind !== "arrow"), cmd.join || "round");
+          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+          n.kind = "vector";
+        }
+        break;
+      }
+      case "simplifyPath": {
+        const targetId = cmd.id || s.vecEdit || s.selection[0];
+        const n = targetId ? find(this.root(), targetId) : null;
+        if (!n || !n.path.length) break;
+        const tol = cmd.tolerance ?? 1.5;
+        n.path = simplifyPath(n.path, tol);
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "convertTextToVector": {
+        const targetId = cmd.id || s.selection[0];
+        const n = targetId ? find(this.root(), targetId) : null;
+        if (!n || n.kind !== "text") break;
+        const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
         n.kind = "vector";
+        n.path = res.path;
+        n.vectorNetwork = res.network;
         n.closed = true;
-        n.fill = n.strokePaint;
-        n.fillVisible = true;
-        n.strokeWidth = 0;
-        n.strokeVisible = false;
+        n.w = res.w;
+        n.h = res.h;
+        break;
+      }
+      case "shapeBuilder": {
+        if (s.selection.length < 2) break;
+        const [idA, idB] = s.selection;
+        const na = find(this.root(), idA);
+        const nb = find(this.root(), idB);
+        if (!na || !nb) break;
+        const polyA = na.path.length ? na.path : shapePoly(na);
+        const polyB = nb.path.length ? nb.path : shapePoly(nb);
+        const baked = booleanPath(
+          cmd.op === "merge" ? "union" : "subtract",
+          [
+            { poly: polyA, ox: na.x, oy: na.y },
+            { poly: polyB, ox: nb.x, oy: nb.y },
+          ],
+        );
+        if (baked) {
+          na.kind = "vector";
+          na.path = baked.path;
+          na.vectorNetwork = baked.network || pathToVectorNetwork(baked.path, true);
+          na.x = baked.x;
+          na.y = baked.y;
+          na.w = baked.w;
+          na.h = baked.h;
+          na.closed = true;
+          const parentB = findParent(this.root(), idB) || this.root();
+          parentB.children = parentB.children.filter((c) => c.id !== idB);
+          s.selection = [idA];
+        }
+        break;
+      }
+      case "vectorAlign": {
+        const vecId = s.vecEdit || s.selection[0];
+        const n = vecId ? find(this.root(), vecId) : null;
+        if (!n || !n.path.length) break;
+        const ptIndices = s.vecPoints && s.vecPoints.length > 0
+          ? s.vecPoints
+          : (s.vecPoint !== null && s.vecPoint !== undefined ? [s.vecPoint] : n.path.map((_, i) => i));
+        if (ptIndices.length < 2) break;
+
+        const selPts = ptIndices.map((i) => n.path[i]).filter(Boolean);
+        const xs = selPts.map((p) => p.x);
+        const ys = selPts.map((p) => p.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const midX = (minX + maxX) / 2;
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const midY = (minY + maxY) / 2;
+
+        for (const idx of ptIndices) {
+          const pt = n.path[idx];
+          if (!pt) continue;
+          switch (cmd.alignment) {
+            case "left": pt.x = minX; break;
+            case "center": pt.x = midX; break;
+            case "right": pt.x = maxX; break;
+            case "top": pt.y = minY; break;
+            case "middle": pt.y = midY; break;
+            case "bottom": pt.y = maxY; break;
+          }
+        }
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         break;
       }
       case "addVariant": {

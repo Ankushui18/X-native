@@ -64,7 +64,7 @@ import {
   unionBox,
   type ScaleAnchor,
 } from "./scaleModel";
-import { pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
+import { vectorNetworkToSvgPath, smoothPath } from "../engine/geometry";
 import {
   SPACING_MODES,
   alignKey,
@@ -3121,44 +3121,75 @@ function Design({
           )}
         </div>
       </div>
-      {(n.kind === "vector" || n.path.length > 0) && (
+      {(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
         <div className="insp-pad" style={{ marginTop: 2 }}>
-          <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 8 }}>
+          <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 10 }}>
+            {/* Header */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong style={{ fontSize: 11 }}>Vector Network</strong>
+              <strong style={{ fontSize: 11, letterSpacing: "0.02em" }}>Vector</strong>
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 {snap.vecEdit === n.id ? (
                   <button
                     className="export-run"
-                    style={{ padding: "2px 8px", fontSize: 10, background: "var(--accent)", color: "#fff" }}
+                    style={{ padding: "2px 10px", fontSize: 10, background: "var(--accent)", color: "#fff", borderRadius: 12, fontWeight: 600 }}
                     onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
-                    title="Exit vector edit mode (Esc / ⌘↵)"
+                    title="Done editing path (Esc / ↵)"
                   >
                     Done
                   </button>
                 ) : (
                   <button
                     className="export-run"
-                    style={{ padding: "2px 8px", fontSize: 10 }}
+                    style={{ padding: "2px 10px", fontSize: 10, borderRadius: 12 }}
                     onClick={() => engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 })}
                     title="Enter vector edit mode (↵)"
                   >
                     Edit Path
                   </button>
                 )}
-                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--accent)", color: "#fff", borderRadius: 10 }}>
-                  Evan Wallace Graph
+                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--bg-subtle)", color: "var(--dim)", borderRadius: 10, border: "1px solid var(--border)" }}>
+                  Native Graph
                 </span>
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 10, color: "var(--dim)" }}>
-              <div>Vertices: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.vertices.length ?? n.path.length}</strong></div>
-              <div>Segments: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.segments.length ?? (n.path.length > 1 ? n.path.length - (n.closed ? 0 : 1) : 0)}</strong></div>
-              <div>Branching (≥3): <strong style={{ color: "var(--text)" }}>{n.vectorNetwork ? n.vectorNetwork.vertices.filter((_, i) => vertexDegree(n.vectorNetwork!, i) >= 3).length : 0}</strong></div>
-              <div>Closed: <strong style={{ color: "var(--text)" }}>{n.closed ? "Yes" : "No"}</strong></div>
+
+            {/* Alignment Row for Vector Points */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: 10, color: "var(--dim)" }}>Alignment</div>
+              <div style={{ display: "flex", gap: 2, background: "var(--bg-subtle)", padding: 2, borderRadius: 6, border: "1px solid var(--border)" }}>
+                {[
+                  { id: "left", label: "Align left", icon: "align-left" },
+                  { id: "center", label: "Align horizontal centers", icon: "align-center" },
+                  { id: "right", label: "Align right", icon: "align-right" },
+                  { id: "top", label: "Align top", icon: "align-top" },
+                  { id: "middle", label: "Align vertical centers", icon: "align-middle" },
+                  { id: "bottom", label: "Align bottom", icon: "align-bottom" },
+                ].map((a) => (
+                  <button
+                    key={a.id}
+                    style={{
+                      flex: 1,
+                      height: 24,
+                      background: "transparent",
+                      border: 0,
+                      color: "inherit",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                    onClick={() => engine.dispatch({ type: "vectorAlign", alignment: a.id as any })}
+                    title={a.label}
+                  >
+                    <Icon name={a.icon} size={13} />
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {snap.vecEdit === n.id && (() => {
+            {/* Position & Active Vertex */}
+            {(() => {
               const activePtIdx =
                 snap.vecPoint !== null &&
                 snap.vecPoint !== undefined &&
@@ -3167,68 +3198,119 @@ function Design({
                   ? snap.vecPoint
                   : (n.path.length > 0 ? 0 : null);
               const pt = activePtIdx !== null ? n.path[activePtIdx] : null;
-              if (activePtIdx === null || !pt) return null;
+              if (!pt || activePtIdx === null) return null;
+
               return (
-                <div style={{ padding: 8, background: "var(--bg-subtle)", borderRadius: 6, border: "1px solid var(--border)", display: "grid", gap: 6 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 11, fontWeight: 600 }}>Vertex #{activePtIdx + 1}</span>
-                    <span style={{ fontSize: 10, color: "var(--dim)" }}>({Math.round(pt.x)}, {Math.round(pt.y)})</span>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 10, color: "var(--dim)" }}>Position</span>
+                      <span style={{ fontSize: 9, color: "var(--dim)" }}>Vertex #{activePtIdx + 1}</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                      <div className="prop-row" style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 6px" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)", width: 10 }}>X</span>
+                        <input
+                          type="number"
+                          value={Math.round(pt.x)}
+                          style={{ width: "100%", background: "transparent", border: 0, color: "inherit", fontSize: 11 }}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const newPath = [...n.path];
+                            newPath[activePtIdx] = { ...newPath[activePtIdx], x: val };
+                            engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                          }}
+                        />
+                      </div>
+                      <div className="prop-row" style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 6px" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)", width: 10 }}>Y</span>
+                        <input
+                          type="number"
+                          value={Math.round(pt.y)}
+                          style={{ width: "100%", background: "transparent", border: 0, color: "inherit", fontSize: 11 }}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const newPath = [...n.path];
+                            newPath[activePtIdx] = { ...newPath[activePtIdx], y: val };
+                            engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Point Radius</span>
+
+                  {/* Mirroring */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Mirroring</span>
+                    <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
+                      <button
+                        className={pt.mirrorMode === "none" || !pt.mirrorMode ? "on" : ""}
+                        title="No mirroring (sharp corner / independent handles)"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "none" })}
+                      >
+                        No mirror
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angleAndLength" ? "on" : ""}
+                        title="Mirror angle and length (symmetric handles)"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angleAndLength" })}
+                      >
+                        Angle & len
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angle" ? "on" : ""}
+                        title="Mirror angle only (asymmetric lengths)"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angle" })}
+                      >
+                        Angle only
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Corner radius with slider */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 10, color: "var(--dim)" }}>Corner radius</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={pt.cornerRadius ?? 0}
+                        style={{ width: 44, padding: "1px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit", textAlign: "right" }}
+                        onChange={(e) => {
+                          const r = Math.max(0, parseFloat(e.target.value) || 0);
+                          engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
+                        }}
+                      />
+                    </div>
                     <input
-                      type="number"
+                      type="range"
                       min={0}
+                      max={60}
                       value={pt.cornerRadius ?? 0}
-                      style={{ width: 64, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                      style={{ width: "100%", height: 4, accentColor: "var(--accent)", cursor: "pointer" }}
                       onChange={(e) => {
                         const r = parseFloat(e.target.value) || 0;
                         engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
                       }}
                     />
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Vertex Mirror Mode</span>
-                    <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
-                      <button
-                        className={pt.mirrorMode === "none" || !pt.mirrorMode ? "on" : ""}
-                        title="Independent handles / Sharp corner"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "none" })}
-                      >
-                        Corner
-                      </button>
-                      <button
-                        className={pt.mirrorMode === "angle" ? "on" : ""}
-                        title="Mirror angle only, independent length"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angle" })}
-                      >
-                        Angle
-                      </button>
-                      <button
-                        className={pt.mirrorMode === "angleAndLength" ? "on" : ""}
-                        title="Symmetric mirror angle & length"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angleAndLength" })}
-                      >
-                        Mirror
-                      </button>
-                    </div>
-                  </div>
                 </div>
               );
             })()}
 
-            <div style={{ display: "flex", gap: 6 }}>
+            {/* Quick Actions */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
               <button
                 className="export-run"
-                style={{ flex: 1, padding: "4px 8px", fontSize: 10 }}
+                style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
-                  const vn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
-                  const svgD = vectorNetworkToSvgPath(vn);
-                  copyText(svgD);
-                  toast("Copied SVG Path");
+                  engine.dispatch({ type: "simplifyPath", id: n.id });
+                  toast("Simplified path");
                 }}
+                title="Reduce redundant anchor points"
               >
-                Copy SVG Path
+                Simplify
               </button>
               <button
                 className="export-run"
@@ -3238,6 +3320,7 @@ function Design({
                   engine.dispatch({ type: "patchPath", id: n.id, path: smoothed, closed: n.closed });
                   toast("Smoothed vector handles");
                 }}
+                title="Smooth bezier curves"
               >
                 Smooth
               </button>
@@ -3245,48 +3328,24 @@ function Design({
                 className="export-run"
                 style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
-                  const simplified = simplifyPath(n.path, 1.5);
-                  engine.dispatch({ type: "patchPath", id: n.id, path: simplified, closed: n.closed });
-                  toast("Simplified vector path");
+                  engine.dispatch({ type: "offsetPath", id: n.id, distance: 8 });
+                  toast("Expanded path +8px");
                 }}
+                title="Expand outline path"
               >
-                Simplify
+                Offset Path
               </button>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-              <div style={{ fontSize: 10, color: "var(--dim)" }}>Global Symmetry:</div>
-              <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
-                <button
-                  title="Symmetric angle and length"
-                  onClick={() => {
-                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angleAndLength" as const }));
-                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                    toast("Handles: Mirrored (Angle & Length)");
-                  }}
-                >
-                  Mirrored
-                </button>
-                <button
-                  title="Mirror angle only, independent length"
-                  onClick={() => {
-                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angle" as const }));
-                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                    toast("Handles: Asymmetric Angle");
-                  }}
-                >
-                  Asymmetric
-                </button>
-                <button
-                  title="Independent angle and length (sharp corner)"
-                  onClick={() => {
-                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "none" as const }));
-                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                    toast("Handles: Corner (Independent)");
-                  }}
-                >
-                  Corner
-                </button>
-              </div>
+              <button
+                className="export-run"
+                style={{ padding: "4px 8px", fontSize: 10 }}
+                onClick={() => {
+                  engine.dispatch({ type: "outlineStroke", id: n.id });
+                  toast("Outlined stroke");
+                }}
+                title="Convert stroke to vector path (⇧⌘O)"
+              >
+                Outline Stroke
+              </button>
             </div>
           </div>
         </div>

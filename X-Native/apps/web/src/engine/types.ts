@@ -848,8 +848,13 @@ export type Command =
   | { type: "insertPointOnPath"; id: string; x: number; y: number }
   | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
   | { type: "setPointCornerRadius"; id: string; pointIndex: number; radius: number }
-  | { type: "flatten" }
-  | { type: "outlineStroke" }
+  | { type: "flatten"; id?: string }
+  | { type: "outlineStroke"; id?: string }
+  | { type: "offsetPath"; id?: string; distance: number; join?: StrokeJoin }
+  | { type: "simplifyPath"; id?: string; tolerance?: number }
+  | { type: "convertTextToVector"; id?: string }
+  | { type: "shapeBuilder"; op: "merge" | "subtract" }
+  | { type: "vectorAlign"; alignment: "left" | "center" | "right" | "top" | "middle" | "bottom" }
   | { type: "addVariant"; name: string }
   | { type: "setVariant"; id: string; name: string }
   | { type: "setVecEdit"; id: string | null; pointIndex?: number | null; pointIndices?: number[] }

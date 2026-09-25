@@ -1,4 +1,4 @@
-import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
+import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
 
 /**
  * Corner geometry.
@@ -250,7 +250,7 @@ function combine(op: BooleanOp, a: boolean, b: boolean): boolean {
 export function booleanPath(
   op: BooleanOp,
   shapes: { poly: PathPoint[]; ox: number; oy: number }[],
-): { path: PathPoint[]; x: number; y: number; w: number; h: number } | null {
+): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
   if (shapes.length < 2) return null;
   let minX = Infinity,
     minY = Infinity,
@@ -292,6 +292,7 @@ export function booleanPath(
     cov.push(row);
   }
   const path: PathPoint[] = [];
+  const rings: PathPoint[][] = [];
   const seen = new Set<string>();
   const at = (x: number, y: number) => y >= 0 && x >= 0 && y < gh && x < gw && cov[y][x];
   for (let y = 0; y < gh; y++) {
@@ -326,7 +327,9 @@ export function booleanPath(
       if (ring.length >= 3) {
         const simp = simplify(ring, Math.max(sx, sy) * 0.85);
         const curved = shapes.some((s) => s.poly.some((p) => (p.ox && p.ox !== 0) || (p.oy && p.oy !== 0)));
-        path.push(...(curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp));
+        const finalRing = curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp;
+        rings.push(finalRing);
+        path.push(...finalRing);
       }
     }
   }
@@ -335,12 +338,38 @@ export function booleanPath(
   const ys = path.map((p) => p.y);
   const x0 = Math.min(...xs);
   const y0 = Math.min(...ys);
+
+  let network: VectorNetwork | undefined;
+  if (rings.length > 0) {
+    const vertices: VectorVertex[] = [];
+    const segments: VectorSegment[] = [];
+    const loops: number[][] = [];
+    let curIdx = 0;
+    for (const r of rings) {
+      const loop: number[] = [];
+      const n = r.length;
+      for (let i = 0; i < n; i++) {
+        vertices.push({ x: r[i].x - x0, y: r[i].y - y0 });
+        loop.push(curIdx + i);
+        segments.push({ start: curIdx + i, end: curIdx + ((i + 1) % n) });
+      }
+      loops.push(loop);
+      curIdx += n;
+    }
+    network = {
+      vertices,
+      segments,
+      regions: [{ windingRule: op === "exclude" ? "EVENODD" : "NONZERO", loops }],
+    };
+  }
+
   return {
     path: path.map((p) => ({ x: p.x - x0, y: p.y - y0 })),
     x: x0,
     y: y0,
     w: Math.max(1, Math.max(...xs) - x0),
     h: Math.max(1, Math.max(...ys) - y0),
+    network,
   };
 }
 
@@ -372,23 +401,239 @@ function simplify(pts: PathPoint[], eps: number): PathPoint[] {
   return [pts[0], last];
 }
 
-export function outlineStroke(path: PathPoint[], width: number, closed: boolean): PathPoint[] {
+/**
+ * Offset a path along its vertex normals by `distance`.
+ * Positive distance expands closed shapes outward / open paths to the left;
+ * negative contracts / moves right.
+ */
+export function offsetPath(
+  path: PathPoint[],
+  distance: number,
+  closed: boolean,
+  join: StrokeJoin = "round",
+): PathPoint[] {
+  if (path.length < 2 || !isFinite(distance) || Math.abs(distance) < 1e-6) return path;
+
+  const pts = samplePathPoints(path, closed);
+  const n = pts.length;
+  if (n < 2) return path;
+
+  const normals: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = pts[i === 0 ? (closed ? n - 1 : 0) : i - 1];
+    const next = pts[i === n - 1 ? (closed ? 0 : n - 1) : i + 1];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    normals.push({ x: -dy / len, y: dx / len });
+  }
+
+  const out: PathPoint[] = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    const norm = normals[i];
+    if (join === "round") {
+      const prevNorm = normals[i === 0 ? (closed ? n - 1 : 0) : i - 1];
+      const dot = norm.x * prevNorm.x + norm.y * prevNorm.y;
+      if (closed && dot < 0.92 && i > 0) {
+        const midX = (prevNorm.x + norm.x) * 0.5;
+        const midY = (prevNorm.y + norm.y) * 0.5;
+        const midLen = Math.hypot(midX, midY) || 1;
+        out.push({ x: p.x + prevNorm.x * distance, y: p.y + prevNorm.y * distance });
+        out.push({ x: p.x + (midX / midLen) * distance, y: p.y + (midY / midLen) * distance });
+        out.push({ x: p.x + norm.x * distance, y: p.y + norm.y * distance });
+      } else {
+        out.push({ x: p.x + norm.x * distance, y: p.y + norm.y * distance });
+      }
+    } else {
+      out.push({ x: p.x + norm.x * distance, y: p.y + norm.y * distance });
+    }
+  }
+
+  return simplifyPath(out, 0.4);
+}
+
+/**
+ * Converts a stroked path into a closed vector contour.
+ */
+export function outlineStroke(
+  path: PathPoint[],
+  width: number,
+  closed: boolean,
+  strokeCap: StrokeCap = "round",
+  strokeJoin: StrokeJoin = "round",
+): PathPoint[] {
   if (path.length < 2 || width <= 0) return path;
   const hw = width / 2;
+
+  if (closed) {
+    const outer = offsetPath(path, hw, true, strokeJoin);
+    const inner = offsetPath(path, -hw, true, strokeJoin);
+    return [...outer, ...inner.reverse()];
+  }
+
+  // Open path: trace left (+hw), add end cap, trace right (-hw), add start cap
+  const pts = samplePathPoints(path, false);
+  const n = pts.length;
   const left: PathPoint[] = [];
   const right: PathPoint[] = [];
-  for (let i = 0; i < path.length; i++) {
-    const prev = path[i === 0 ? (closed ? path.length - 1 : 0) : i - 1];
-    const next = path[i === path.length - 1 ? (closed ? 0 : i) : i + 1];
+
+  for (let i = 0; i < n; i++) {
+    const prev = pts[Math.max(0, i - 1)];
+    const next = pts[Math.min(n - 1, i + 1)];
     const dx = next.x - prev.x;
     const dy = next.y - prev.y;
     const len = Math.hypot(dx, dy) || 1;
     const nx = (-dy / len) * hw;
     const ny = (dx / len) * hw;
-    left.push({ x: path[i].x + nx, y: path[i].y + ny });
-    right.push({ x: path[i].x - nx, y: path[i].y - ny });
+    left.push({ x: pts[i].x + nx, y: pts[i].y + ny });
+    right.push({ x: pts[i].x - nx, y: pts[i].y - ny });
   }
-  return [...left, ...right.reverse()];
+
+  const pLast = pts[n - 1];
+  const pFirst = pts[0];
+  const endDirX = pts[n - 1].x - pts[Math.max(0, n - 2)].x;
+  const endDirY = pts[n - 1].y - pts[Math.max(0, n - 2)].y;
+  const endLen = Math.hypot(endDirX, endDirY) || 1;
+  const endUx = endDirX / endLen;
+  const endUy = endDirY / endLen;
+
+  const startDirX = pts[0].x - pts[Math.min(n - 1, 1)].x;
+  const startDirY = pts[0].y - pts[Math.min(n - 1, 1)].y;
+  const startLen = Math.hypot(startDirX, startDirY) || 1;
+  const startUx = startDirX / startLen;
+  const startUy = startDirY / startLen;
+
+  const endCapPts: PathPoint[] = [];
+  const startCapPts: PathPoint[] = [];
+
+  if (strokeCap === "round") {
+    const lastLeft = left[left.length - 1];
+    const normEnd = { x: (lastLeft.x - pLast.x) / hw, y: (lastLeft.y - pLast.y) / hw };
+    for (let step = 1; step <= 5; step++) {
+      const angle = (step / 6) * Math.PI;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      endCapPts.push({
+        x: pLast.x + (normEnd.x * cos + endUx * sin) * hw,
+        y: pLast.y + (normEnd.y * cos + endUy * sin) * hw,
+      });
+    }
+    const firstRight = right[0];
+    const normStart = { x: (firstRight.x - pFirst.x) / hw, y: (firstRight.y - pFirst.y) / hw };
+    for (let step = 1; step <= 5; step++) {
+      const angle = (step / 6) * Math.PI;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      startCapPts.push({
+        x: pFirst.x + (normStart.x * cos + startUx * sin) * hw,
+        y: pFirst.y + (normStart.y * cos + startUy * sin) * hw,
+      });
+    }
+  } else if (strokeCap === "square") {
+    endCapPts.push({
+      x: left[left.length - 1].x + endUx * hw,
+      y: left[left.length - 1].y + endUy * hw,
+    });
+    endCapPts.push({
+      x: right[right.length - 1].x + endUx * hw,
+      y: right[right.length - 1].y + endUy * hw,
+    });
+    startCapPts.push({
+      x: right[0].x + startUx * hw,
+      y: right[0].y + startUy * hw,
+    });
+    startCapPts.push({
+      x: left[0].x + startUx * hw,
+      y: left[0].y + startUy * hw,
+    });
+  }
+
+  return [...left, ...endCapPts, ...right.reverse(), ...startCapPts];
+}
+
+export function outlineStrokeNetwork(
+  path: PathPoint[],
+  width: number,
+  closed: boolean,
+  strokeCap: StrokeCap = "round",
+  strokeJoin: StrokeJoin = "round",
+): { path: PathPoint[]; network: VectorNetwork } {
+  const hw = width / 2;
+  if (closed) {
+    const outer = offsetPath(path, hw, true, strokeJoin);
+    const inner = offsetPath(path, -hw, true, strokeJoin);
+
+    const vertices: VectorVertex[] = [];
+    const segments: VectorSegment[] = [];
+
+    const outerLoop: number[] = [];
+    for (let i = 0; i < outer.length; i++) {
+      vertices.push({ x: outer[i].x, y: outer[i].y });
+      outerLoop.push(i);
+      segments.push({ start: i, end: (i + 1) % outer.length });
+    }
+
+    const innerLoop: number[] = [];
+    const innerStart = vertices.length;
+    for (let i = 0; i < inner.length; i++) {
+      vertices.push({ x: inner[i].x, y: inner[i].y });
+      innerLoop.push(innerStart + i);
+      segments.push({ start: innerStart + i, end: innerStart + ((i + 1) % inner.length) });
+    }
+
+    const network: VectorNetwork = {
+      vertices,
+      segments,
+      regions: [{ windingRule: "EVENODD", loops: [outerLoop, innerLoop] }],
+    };
+
+    return { path: [...outer, ...inner.reverse()], network };
+  }
+
+  const flat = outlineStroke(path, width, false, strokeCap, strokeJoin);
+  const network = pathToVectorNetwork(flat, true);
+  return { path: flat, network };
+}
+
+/**
+ * Samples a path containing cubic handles into subdivided polyline points.
+ */
+function samplePathPoints(path: PathPoint[], closed: boolean): PathPoint[] {
+  const hasCurves = path.some((p) => p.ox || p.oy || p.ix || p.iy);
+  if (!hasCurves) return path;
+
+  const result: PathPoint[] = [];
+  const n = path.length;
+  const count = closed ? n : n - 1;
+
+  for (let i = 0; i < count; i++) {
+    const p0 = path[i];
+    const p1 = path[(i + 1) % n];
+    result.push({ x: p0.x, y: p0.y });
+
+    if (p0.ox || p0.oy || p1.ix || p1.iy) {
+      const c1x = p0.x + (p0.ox ?? 0);
+      const c1y = p0.y + (p0.oy ?? 0);
+      const c2x = p1.x + (p1.ix ?? 0);
+      const c2y = p1.y + (p1.iy ?? 0);
+
+      // Subdivide cubic segment into 8 steps
+      for (let s = 1; s < 8; s++) {
+        const t = s / 8;
+        const mt = 1 - t;
+        const x = mt * mt * mt * p0.x + 3 * mt * mt * t * c1x + 3 * mt * t * t * c2x + t * t * t * p1.x;
+        const y = mt * mt * mt * p0.y + 3 * mt * mt * t * c1y + 3 * mt * t * t * c2y + t * t * t * p1.y;
+        result.push({ x, y });
+      }
+    }
+  }
+
+  if (!closed) {
+    result.push({ x: path[n - 1].x, y: path[n - 1].y });
+  }
+
+  return result;
 }
 
 /**
