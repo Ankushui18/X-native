@@ -35,6 +35,7 @@ import type {
   GridPattern,
   XNode,
 } from "../engine/types";
+import type { Modifier } from "../engine/modifierStack";
 import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
 import { evalField, hasExpression } from "./fieldExpr";
@@ -4691,6 +4692,8 @@ function Design({
 
       <div className="hr" />
       <Effects n={n} engine={engine} />
+      <ModifiersSection n={n} engine={engine} />
+      <ExpressionsSection n={n} engine={engine} />
       <SelectionColors
         n={n}
         nodes={snap.selection
@@ -5160,6 +5163,276 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
           onClose={() => setEditing(null)}
         />
       )}
+    </>
+  );
+}
+
+function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
+  const [open, setOpen] = useState(false);
+  const modifiers = n.modifiers ?? [];
+
+  const addModifier = (type: Modifier["type"]) => {
+    openSection("modifiers");
+    let mod: Modifier;
+    if (type === "roundedCorners") {
+      mod = { type: "roundedCorners", radius: 8 };
+    } else if (type === "offset") {
+      mod = { type: "offset", distance: 10, join: "miter" };
+    } else if (type === "simplify") {
+      mod = { type: "simplify", tolerance: 1.0 };
+    } else if (type === "stroke") {
+      mod = { type: "stroke", width: 4, join: "miter", cap: "none" };
+    } else {
+      mod = { type: "roundedCorners", radius: 8 };
+    }
+    engine.dispatch({ type: "applyModifier", id: n.id, modifier: mod });
+    setOpen(false);
+  };
+
+  const removeModifier = (index: number) => {
+    engine.dispatch({ type: "removeModifier", id: n.id, index });
+  };
+
+  const updateModifier = (index: number, patch: Partial<Modifier>) => {
+    const next = modifiers.map((m, i) => (i === index ? ({ ...m, ...patch } as Modifier) : m));
+    engine.dispatch({ type: "patch", id: n.id, patch: { modifiers: next } });
+  };
+
+  return (
+    <>
+      <Section
+        id="modifiers"
+        title={`Modifiers · ${modifiers.length}`}
+        defaultOpen={modifiers.length > 0}
+        actions={
+          <div style={{ position: "relative", display: "flex" }}>
+            <button
+              className="plus"
+              title="Add non-destructive procedural modifier"
+              onClick={() => {
+                if (!modifiers.length) openSection("modifiers");
+                setOpen((v) => !v);
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            {open && (
+              <div
+                className="type-menu"
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: 28,
+                  left: "auto",
+                  width: 170,
+                  zIndex: 200,
+                }}
+              >
+                <button onClick={() => addModifier("roundedCorners")}>
+                  Rounded corners
+                </button>
+                <button onClick={() => addModifier("offset")}>
+                  Offset path
+                </button>
+                <button onClick={() => addModifier("simplify")}>
+                  Simplify path
+                </button>
+                <button onClick={() => addModifier("stroke")}>
+                  Stroke outline
+                </button>
+              </div>
+            )}
+          </div>
+        }
+      >
+        {!modifiers.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No modifiers</span>
+              <div className="empty-add-menu">
+                <button onClick={() => addModifier("roundedCorners")}>Corners</button>
+                <button onClick={() => addModifier("offset")}>Offset</button>
+                <button onClick={() => addModifier("simplify")}>Simplify</button>
+                <button onClick={() => addModifier("stroke")}>Stroke</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {modifiers.map((m, i) => (
+          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
+              <button
+                className="mini"
+                title={m.enabled === false ? "Enable modifier" : "Disable modifier"}
+                onClick={() => updateModifier(i, { enabled: m.enabled === false ? true : false })}
+                style={{ opacity: m.enabled === false ? 0.35 : 1 }}
+              >
+                <Icon name={m.enabled === false ? "eye-off" : "eye"} size={13} />
+              </button>
+              <span style={{ flex: 1, fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {m.type === "roundedCorners"
+                  ? "Rounded Corners"
+                  : m.type === "offset"
+                  ? "Offset Path"
+                  : m.type === "simplify"
+                  ? "Simplify Path"
+                  : m.type === "stroke"
+                  ? "Stroke Outline"
+                  : m.type}
+              </span>
+              {m.type === "roundedCorners" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.radius}
+                  onChange={(e) => updateModifier(i, { radius: parseFloat(e.target.value) || 0 })}
+                />
+              )}
+              {m.type === "offset" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.distance}
+                  onChange={(e) => updateModifier(i, { distance: parseFloat(e.target.value) || 0 })}
+                />
+              )}
+              {m.type === "simplify" && (
+                <input
+                  type="number"
+                  step="0.5"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.tolerance}
+                  onChange={(e) => updateModifier(i, { tolerance: parseFloat(e.target.value) || 0.1 })}
+                />
+              )}
+              {m.type === "stroke" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.width}
+                  onChange={(e) => updateModifier(i, { width: parseFloat(e.target.value) || 1 })}
+                />
+              )}
+              <button
+                className="mini minus"
+                title="Remove modifier"
+                onClick={() => removeModifier(i)}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Section>
+    </>
+  );
+}
+
+function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
+  const [propSelect, setPropSelect] = useState<string>("w");
+  const expressions = n.expressions ?? {};
+  const entries = Object.entries(expressions);
+
+  const addExpr = () => {
+    openSection("expressions");
+    if (!propSelect) return;
+    engine.dispatch({
+      type: "setExpression",
+      id: n.id,
+      property: propSelect,
+      expression: propSelect === "w" ? "parent.w * 0.5" : propSelect === "h" ? "parent.h * 0.5" : "0",
+    });
+  };
+
+  const removeExpr = (prop: string) => {
+    engine.dispatch({ type: "removeExpression", id: n.id, property: prop });
+  };
+
+  const updateExpr = (prop: string, expr: string) => {
+    engine.dispatch({ type: "setExpression", id: n.id, property: prop, expression: expr });
+  };
+
+  return (
+    <>
+      <Section
+        id="expressions"
+        title={`Expressions · ${entries.length}`}
+        defaultOpen={entries.length > 0}
+        actions={
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <select
+              style={{
+                background: "var(--input-bg)",
+                border: "1px solid var(--border)",
+                color: "var(--fg)",
+                fontSize: 11,
+                borderRadius: 3,
+                padding: "2px 4px",
+              }}
+              value={propSelect}
+              onChange={(e) => setPropSelect(e.target.value)}
+            >
+              <option value="w">W</option>
+              <option value="h">H</option>
+              <option value="x">X</option>
+              <option value="y">Y</option>
+              <option value="rotation">Rot</option>
+              <option value="fillOpacity">Opacity</option>
+            </select>
+            <button
+              className="plus"
+              title="Bind property expression"
+              onClick={addExpr}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+        }
+      >
+        {!entries.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No expressions bound</span>
+              <div className="empty-add-menu">
+                <button onClick={() => { setPropSelect("w"); addExpr(); }}>ƒ(w)</button>
+                <button onClick={() => { setPropSelect("h"); addExpr(); }}>ƒ(h)</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {entries.map(([prop, expr]) => (
+          <div className="insp-pad" key={prop} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
+              <span style={{ fontWeight: 600, fontSize: 11, color: "var(--accent, #10b981)", minWidth: 28 }}>
+                ƒ({prop})
+              </span>
+              <input
+                type="text"
+                style={{
+                  flex: 1,
+                  background: "var(--input-bg)",
+                  border: "1px solid var(--border)",
+                  color: "var(--fg)",
+                  borderRadius: 3,
+                  padding: "2px 6px",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono, monospace)",
+                }}
+                value={expr}
+                onChange={(e) => updateExpr(prop, e.target.value)}
+                placeholder="e.g. parent.w * 0.5 + 20"
+              />
+              <button
+                className="mini minus"
+                title="Remove expression"
+                onClick={() => removeExpr(prop)}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Section>
     </>
   );
 }
