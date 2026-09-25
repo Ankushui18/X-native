@@ -1033,7 +1033,12 @@ export function bindHotkeys(
 ) {
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
-    const typing = t.tagName === "INPUT" || t.tagName === "TEXTAREA";
+    const typing =
+      t.tagName === "INPUT" ||
+      t.tagName === "TEXTAREA" ||
+      t.tagName === "SELECT" ||
+      t.isContentEditable ||
+      !!t.closest?.("input, textarea, select, [contenteditable='true'], .x-field, .x-popover, .inspector");
     // Escape belongs to the open sheet, even while one of its own fields has
     // focus — so it is resolved before the typing guard below can skip it.
     if (e.key === "Escape" && !engine.snapshot().presentFrame && extra.onEscapeOverlay?.()) {

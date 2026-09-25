@@ -2354,6 +2354,288 @@ function Design({
       strokes: [...(n.strokes ?? []), { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
     });
   };
+
+  const renderTypographySection = () => {
+    if (n.kind !== "text") return null;
+    return (
+      <>
+        <Section
+          id="typography"
+          title="Typography"
+          actions={
+            <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
+              <Icon name="type-settings" size={14} />
+            </button>
+          }
+        >
+          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+            <div className="field">
+              <select
+                value={n.fontFamily}
+                onChange={(e) =>
+                  patchType({ fontFamily: e.target.value })
+                }
+              >
+                {(() => {
+                  const base = [
+                    "Inter",
+                    "Roboto",
+                    "SF Pro",
+                    "Geist",
+                    "Space Grotesk",
+                    "Plus Jakarta Sans",
+                    "Poppins",
+                    "Outfit",
+                    "Fira Code",
+                    "JetBrains Mono",
+                    "system-ui",
+                  ];
+                  const merged = (() => {
+                    const seen = new Set(base.map((b) => b.toLowerCase()));
+                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
+                    const list = [...base];
+                    if (extra.length) {
+                      list.push("— System fonts —");
+                      list.push(...extra);
+                    }
+                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
+                    return list;
+                  })();
+                  return merged.map((f) =>
+                    f.startsWith("—") ? (
+                      <option key={f} disabled>
+                        {f}
+                      </option>
+                    ) : (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ),
+                  );
+                })()}
+              </select>
+              {localFonts.length === 0 && (
+                <button
+                  type="button"
+                  className="link muted"
+                  style={{ fontSize: 11, marginTop: 4 }}
+                  onClick={async () => {
+                    try {
+                      const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+                      if (!q) {
+                        toast("Local fonts not supported in this browser");
+                        return;
+                      }
+                      const list: { family: string }[] = await q.call(window);
+                      const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
+                        a.localeCompare(b),
+                      );
+                      setLocalFonts(families.slice(0, 400));
+                      toast(`Loaded ${families.length} system fonts`);
+                    } catch {
+                      toast("Could not load system fonts");
+                    }
+                  }}
+                >
+                  Load system fonts
+                </button>
+              )}
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <select
+                  value={n.fontWeight}
+                  onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
+                >
+                  <option value={100}>Thin (100)</option>
+                  <option value={200}>Extra Light (200)</option>
+                  <option value={300}>Light (300)</option>
+                  <option value={400}>Regular (400)</option>
+                  <option value={500}>Medium (500)</option>
+                  <option value={600}>Semi Bold (600)</option>
+                  <option value={700}>Bold (700)</option>
+                  <option value={800}>Extra Bold (800)</option>
+                  <option value={900}>Black (900)</option>
+                </select>
+              </div>
+              <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
+              <Field
+                label={n.lineHeight ? "↑" : "Auto"}
+                value={n.lineHeight || n.fontSize * 1.2}
+                onLabelClick={() => num("lineHeight", 0)}
+                onChange={(v) => num("lineHeight", v)}
+              />
+              <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
+            </div>
+            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
+              <Tooltip label="Auto width" shortcut="">
+                <button
+                  className={n.sizingW === "hug" ? "on" : ""}
+                  onClick={() => setSizing("hug", "hug")}
+                >
+                  <Icon name="text-auto-width" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Auto height" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
+                  onClick={() => setSizing("fixed", "hug")}
+                >
+                  <Icon name="text-auto-height" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Fixed size" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
+                  onClick={() => setSizing("fixed", "fixed")}
+                >
+                  <Icon name="text-fixed" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
+                </button>
+              </Tooltip>
+            </div>
+            <div className="seg icons">
+              {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
+                <button
+                  key={a}
+                  className={n.textAlign === a ? "on" : ""}
+                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
+                >
+                  <Icon name={`align-text-${a}`} size={14} />
+                </button>
+              ))}
+            </div>
+            <div className="seg icons">
+              {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
+                <button
+                  key={a}
+                  className={n.textAlignVertical === a ? "on" : ""}
+                  onClick={() =>
+                    engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
+                  }
+                >
+                  <Icon name={`valign-${a}`} size={14} />
+                </button>
+              ))}
+            </div>
+          </div>
+          {typeOpen && (
+            <div className="type-pop">
+              <h4>Type settings</h4>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <button
+                    className={n.textDecoration === "underline" ? "on" : ""}
+                    onClick={() =>
+                      engine.dispatch({
+                        type: "patch",
+                        id: n.id,
+                        patch: {
+                          textDecoration: n.textDecoration === "underline" ? "none" : "underline",
+                        },
+                      })
+                    }
+                  >
+                    <Icon name="underline" />
+                  </button>
+                  <button
+                    className={n.textDecoration === "strikethrough" ? "on" : ""}
+                    onClick={() =>
+                      engine.dispatch({
+                        type: "patch",
+                        id: n.id,
+                        patch: {
+                          textDecoration:
+                            n.textDecoration === "strikethrough" ? "none" : "strikethrough",
+                        },
+                      })
+                    }
+                  >
+                    <Icon name="strike" />
+                  </button>
+                  <select
+                    aria-label="Letter case"
+                    value={n.textCase}
+                    onChange={(e) => patchType({ textCase: e.target.value as XNode["textCase"] })}
+                  >
+                    <option value="none">Aa</option>
+                    <option value="upper">AA</option>
+                    <option value="lower">aa</option>
+                    <option value="title">Title Case</option>
+                    <option value="small-caps">Small caps</option>
+                  </select>
+                </div>
+              </div>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={n.truncate}
+                  onChange={(e) =>
+                    patchType({ truncate: e.target.checked })
+                  }
+                />
+                Truncate text
+              </label>
+              {n.truncate && (
+                <div className="insp-pad">
+                  <Field
+                    label="L"
+                    value={n.maxLines}
+                    onChange={(v) =>
+                      patchType({ maxLines: v })
+                    }
+                  />
+                </div>
+              )}
+              <div className="insp-pad">
+                <Field
+                  label="¶"
+                  value={n.paragraphSpacing}
+                  onChange={(v) => num("paragraphSpacing", v)}
+                  aria="Space after each paragraph"
+                />
+                <Field
+                  label="⇥"
+                  value={n.paragraphIndent}
+                  onChange={(v) =>
+                    patchType({ paragraphIndent: v })
+                  }
+                  aria="First-line indent of each paragraph"
+                />
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Wrap style"
+                    title="Wrap style - how a fixed-width paragraph breaks its lines"
+                    value={n.textWrap}
+                    onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
+                  >
+                    <option value="auto">Wrap: Off</option>
+                    <option value="balance">Wrap: Balance</option>
+                    <option value="pretty">Wrap: Pretty</option>
+                  </select>
+                  <select
+                    aria-label="List"
+                    title="List - markers hang in the gutter beside the paragraph"
+                    value={n.listStyle}
+                    onChange={(e) => patchType({ listStyle: e.target.value as XNode["listStyle"] })}
+                  >
+                    <option value="none">No list</option>
+                    <option value="bulleted">Bulleted</option>
+                    <option value="numbered">Numbered</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+        </Section>
+        <div className="hr" />
+      </>
+    );
+  };
   return (
     <>
       <div className="layer-type">
@@ -2450,6 +2732,9 @@ function Design({
           </div>
         </>
       )}
+
+      {/* Typography prominently placed at top for text layers (Audit P0-B) */}
+      {renderTypographySection()}
 
       <Section
         id="position"
@@ -4175,285 +4460,6 @@ function Design({
               }}
             />
           </div>
-        </>
-      )}
-
-      {n.kind === "text" && (
-        <>
-          <div className="hr" />
-          <Section
-            id="typography"
-            title="Typography"
-            actions={
-              <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
-                <Icon name="type-settings" size={14} />
-              </button>
-            }
-          >
-          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-            <div className="field">
-              <select
-                value={n.fontFamily}
-                onChange={(e) =>
-                  patchType({ fontFamily: e.target.value })
-                }
-              >
-                {(() => {
-                  const base = [
-                    "Inter",
-                    "Roboto",
-                    "SF Pro",
-                    "Geist",
-                    "Space Grotesk",
-                    "Plus Jakarta Sans",
-                    "Poppins",
-                    "Outfit",
-                    "Fira Code",
-                    "JetBrains Mono",
-                    "system-ui",
-                  ];
-                  const merged = (() => {
-                    const seen = new Set(base.map((b) => b.toLowerCase()));
-                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
-                    const list = [...base];
-                    if (extra.length) {
-                      list.push("— System fonts —");
-                      list.push(...extra);
-                    }
-                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
-                    return list;
-                  })();
-                  return merged.map((f) =>
-                    f.startsWith("—") ? (
-                      <option key={f} disabled>
-                        {f}
-                      </option>
-                    ) : (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ),
-                  );
-                })()}
-              </select>
-              {localFonts.length === 0 && (
-                <button
-                  type="button"
-                  className="link muted"
-                  style={{ fontSize: 11, marginTop: 4 }}
-                  onClick={async () => {
-                    try {
-                      const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
-                      if (!q) {
-                        toast("Local fonts not supported in this browser");
-                        return;
-                      }
-                      const list: { family: string }[] = await q.call(window);
-                      const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
-                        a.localeCompare(b),
-                      );
-                      setLocalFonts(families.slice(0, 400));
-                      toast(`Loaded ${families.length} system fonts`);
-                    } catch {
-                      toast("Could not load system fonts");
-                    }
-                  }}
-                >
-                  Load system fonts
-                </button>
-              )}
-            </div>
-            <div className="grid2">
-              <div className="field">
-                <select
-                  value={n.fontWeight}
-                  onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
-                >
-                  <option value={100}>Thin (100)</option>
-                  <option value={200}>Extra Light (200)</option>
-                  <option value={300}>Light (300)</option>
-                  <option value={400}>Regular (400)</option>
-                  <option value={500}>Medium (500)</option>
-                  <option value={600}>Semi Bold (600)</option>
-                  <option value={700}>Bold (700)</option>
-                  <option value={800}>Extra Bold (800)</option>
-                  <option value={900}>Black (900)</option>
-                </select>
-              </div>
-              <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
-              <Field
-                label={n.lineHeight ? "↑" : "Auto"}
-                value={n.lineHeight || n.fontSize * 1.2}
-                onLabelClick={() => num("lineHeight", 0)}
-                onChange={(v) => num("lineHeight", v)}
-              />
-              <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
-            </div>
-            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
-              <Tooltip label="Auto width" shortcut="">
-                <button
-                  className={n.sizingW === "hug" ? "on" : ""}
-                  onClick={() => setSizing("hug", "hug")}
-                >
-                  <Icon name="text-auto-width" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
-                </button>
-              </Tooltip>
-              <Tooltip label="Auto height" shortcut="">
-                <button
-                  className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
-                  onClick={() => setSizing("fixed", "hug")}
-                >
-                  <Icon name="text-auto-height" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
-                </button>
-              </Tooltip>
-              <Tooltip label="Fixed size" shortcut="">
-                <button
-                  className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
-                  onClick={() => setSizing("fixed", "fixed")}
-                >
-                  <Icon name="text-fixed" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
-                </button>
-              </Tooltip>
-            </div>
-            <div className="seg icons">
-              {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlign === a ? "on" : ""}
-                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
-                >
-                  <Icon name={`align-text-${a}`} size={14} />
-                </button>
-              ))}
-            </div>
-            <div className="seg icons">
-              {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlignVertical === a ? "on" : ""}
-                  onClick={() =>
-                    engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
-                  }
-                >
-                  <Icon name={`valign-${a}`} size={14} />
-                </button>
-              ))}
-            </div>
-          </div>
-          {typeOpen && (
-            <div className="type-pop">
-              <h4>Type settings</h4>
-              <div className="dir-row">
-                <div className="seg icons">
-                  <button
-                    className={n.textDecoration === "underline" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration: n.textDecoration === "underline" ? "none" : "underline",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="underline" />
-                  </button>
-                  <button
-                    className={n.textDecoration === "strikethrough" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration:
-                            n.textDecoration === "strikethrough" ? "none" : "strikethrough",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="strike" />
-                  </button>
-                  <select
-                    aria-label="Letter case"
-                    value={n.textCase}
-                    onChange={(e) => patchType({ textCase: e.target.value as XNode["textCase"] })}
-                  >
-                    <option value="none">Aa</option>
-                    <option value="upper">AA</option>
-                    <option value="lower">aa</option>
-                    <option value="title">Title Case</option>
-                    <option value="small-caps">Small caps</option>
-                  </select>
-                </div>
-              </div>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={n.truncate}
-                  onChange={(e) =>
-                    patchType({ truncate: e.target.checked })
-                  }
-                />
-                Truncate text
-              </label>
-              {n.truncate && (
-                <div className="insp-pad">
-                  <Field
-                    label="L"
-                    value={n.maxLines}
-                    onChange={(v) =>
-                      patchType({ maxLines: v })
-                    }
-                  />
-                </div>
-              )}
-              <div className="insp-pad">
-                <Field
-                  label="¶"
-                  value={n.paragraphSpacing}
-                  onChange={(v) => num("paragraphSpacing", v)}
-                  aria="Space after each paragraph"
-                />
-                <Field
-                  label="⇥"
-                  value={n.paragraphIndent}
-                  onChange={(v) =>
-                    patchType({ paragraphIndent: v })
-                  }
-                  aria="First-line indent of each paragraph"
-                />
-              </div>
-              <div className="dir-row">
-                <div className="seg icons">
-                  <select
-                    aria-label="Wrap style"
-                    title="Wrap style - how a fixed-width paragraph breaks its lines"
-                    value={n.textWrap}
-                    onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
-                  >
-                    <option value="auto">Wrap: Off</option>
-                    <option value="balance">Wrap: Balance</option>
-                    <option value="pretty">Wrap: Pretty</option>
-                  </select>
-                  <select
-                    aria-label="List"
-                    title="List - markers hang in the gutter beside the paragraph"
-                    value={n.listStyle}
-                    onChange={(e) => patchType({ listStyle: e.target.value as XNode["listStyle"] })}
-                  >
-                    <option value="none">No list</option>
-                    <option value="bulleted">Bulleted</option>
-                    <option value="numbered">Numbered</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          )}
-          </Section>
         </>
       )}
 

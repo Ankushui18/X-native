@@ -56,6 +56,9 @@ import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
 import { getNudgePrefs } from "./nudgePrefs";
 import { alignKey } from "../engine/layout";
+import { ContextToolbar } from "./x-ui";
+import { addAutoLayout, removeAutoLayout } from "./layoutActions";
+import { align } from "./inspector";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -166,6 +169,10 @@ type Drag =
       bounds?: { x: number; y: number; w: number; h: number };
       origs?: MultiOrigin[];
       origPts?: PathPoint[];
+      startAngle?: number;
+      origRotation?: number;
+      cx?: number;
+      cy?: number;
     };
 
 /** Snapshot every selected node's world + local box before a group transform. */
@@ -411,6 +418,15 @@ export function Canvas({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const targetEl = e.target as HTMLElement;
+      const isTyping =
+        targetEl?.tagName === "INPUT" ||
+        targetEl?.tagName === "TEXTAREA" ||
+        targetEl?.tagName === "SELECT" ||
+        targetEl?.isContentEditable ||
+        !!targetEl?.closest?.("input, textarea, select, [contenteditable='true'], .x-field, .x-popover, .inspector");
+      if (isTyping && e.key !== "Escape") return;
+
       // The alignment box in the right panel owns arrows and W/A/S/D while it
       // is focused, so the canvas does not nudge under it. Other letters still
       // reach the app's own shortcuts.
@@ -418,7 +434,7 @@ export function Canvas({
         !e.metaKey &&
         !e.ctrlKey &&
         alignKey(e.key) &&
-        (e.target as HTMLElement)?.closest?.("[data-align-box]")
+        targetEl?.closest?.("[data-align-box]")
       )
         return;
       if (e.key === "Alt") {
@@ -426,7 +442,7 @@ export function Canvas({
       }
       if (e.code === "Space") {
         space.current = e.type === "keydown";
-        if (e.type === "keydown" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA")
+        if (e.type === "keydown" && !isTyping)
           e.preventDefault();
       }
       if (e.type === "keydown" && e.key === "Escape" && !draft.length && penBranch.current) {
@@ -1780,12 +1796,12 @@ export function Canvas({
       }
       // Contextual handles: frames show full 8, text shows side-only when hug, vector shows diamond corners
       const hsFull = handles(sx, sy, sw, sh);
-      // For text hug, hide corner handles to hint resize behavior; for lines, hide vertical handles
+      // For text hug, hide corner handles to hint resize behavior; for lines, only show end handles
       let hs = hsFull;
       if (isText && wp.node.sizingW === "hug" && wp.node.sizingH === "hug") {
         hs = [hsFull[1], hsFull[3], hsFull[5], hsFull[7]]; // only sides for auto text
       } else if (isLine) {
-        hs = [hsFull[0], hsFull[4]]; // only ends for line
+        hs = [[sx, sy + sh / 2], [sx + sw, sy + sh / 2]]; // only ends for line
       }
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
@@ -1802,27 +1818,19 @@ export function Canvas({
           ctx.fill();
           ctx.stroke();
         } else if (isFrame) {
-          // frame handles: slightly larger with inner dot to signal container
+          // frame handles: clean 7x7 square container affordance
           ctx.fillRect(hx - 3.5, hy - 3.5, 7, 7);
           ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
-          ctx.fillStyle = accent;
-          ctx.fillRect(hx - 1, hy - 1, 2, 2);
-          ctx.fillStyle = "#ffffff";
         } else {
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
       }
-      ctx.beginPath();
-      ctx.moveTo(sx + sw / 2, sy);
-      ctx.lineTo(sx + sw / 2, sy - 16);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(sx + sw / 2, sy - 20, 4, 0, Math.PI * 2);
-      ctx.fillStyle = "#fff";
-      ctx.fill();
-      ctx.stroke();
-      const dim = `${Math.round(wp.node.w)} × ${Math.round(wp.node.h)}`;
+      // Dynamic rotation angle readout badge when rotating
+      const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
+      const dim = isRotating
+        ? `${Math.round(wp.node.rotation ?? 0)}°`
+        : `${Math.round(wp.node.w)} × ${Math.round(wp.node.h)}`;
       ctx.font = "500 11px Inter, system-ui";
       const tw = ctx.measureText(dim).width;
       const bw = tw + 16;
@@ -2092,15 +2100,6 @@ export function Canvas({
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
-        ctx.beginPath();
-        ctx.moveTo(sx + sw / 2, sy);
-        ctx.lineTo(sx + sw / 2, sy - 16);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(sx + sw / 2, sy - 20, 4, 0, Math.PI * 2);
-        ctx.fillStyle = "#fff";
-        ctx.fill();
-        ctx.stroke();
         const dim = `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
         ctx.font = "500 11px Inter, system-ui";
         const bw = ctx.measureText(dim).width + 16;
@@ -2722,20 +2721,29 @@ export function Canvas({
         const bsy = snap.panY + bb.y * z;
         const bsw = bb.w * z;
         const bsh = bb.h * z;
-        if (Math.hypot(px - (bsx + bsw / 2), py - (bsy - 20)) < 8) {
-          engine.dispatch({ type: "begin" });
-          drag.current = {
-            mode: "multiRotate",
-            sx: e.clientX,
-            sy: e.clientY,
-            wx: wpt.x,
-            wy: wpt.y,
-            bounds: bb,
-            origs: multiOrigins(root, snap.selection),
-          };
-          return;
-        }
+        const bcx = bsx + bsw / 2;
+        const bcy = bsy + bsh / 2;
         const hs = handles(bsx, bsy, bsw, bsh);
+        for (let i = 0; i < hs.length; i += 2) {
+          const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
+          if (d >= 6 && d <= 22) {
+            engine.dispatch({ type: "begin" });
+            const startAngle = Math.atan2(e.clientY - bcy, e.clientX - bcx);
+            drag.current = {
+              mode: "multiRotate",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              bounds: bb,
+              origs: multiOrigins(root, snap.selection),
+              startAngle,
+              cx: bcx,
+              cy: bcy,
+            };
+            return;
+          }
+        }
         for (let i = 0; i < hs.length; i++) {
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
             engine.dispatch({ type: "begin" });
@@ -3098,21 +3106,37 @@ export function Canvas({
             return;
           }
         }
-        if (Math.hypot(px - (sx + (wp.node.w * z) / 2), py - (sy - 20)) < 8) {
-          drag.current = {
-            mode: "rotate",
-            sx: e.clientX,
-            sy: e.clientY,
-            wx: wpt.x,
-            wy: wpt.y,
-            orig: { x: wp.x, y: wp.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation },
-            origLocal: { x: wp.node.x, y: wp.node.y },
-            id: wp.node.id,
-          };
-          return;
-        }
         const hs = handles(sx, sy, wp.node.w * z, wp.node.h * z);
+        const cx = sx + (wp.node.w * z) / 2;
+        const cy = sy + (wp.node.h * z) / 2;
+        // Corner rotation zone: outside any of the 4 corner handles
+        for (let i = 0; i < hs.length; i += 2) {
+          const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
+          if (d >= 6 && d <= 22) {
+            const startAngle = Math.atan2(rawY - cy, rawX - cx);
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "rotate",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              orig: { x: wp.x, y: wp.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation || 0 },
+              origLocal: { x: wp.node.x, y: wp.node.y },
+              id: wp.node.id,
+              startAngle,
+              origRotation: wp.node.rotation || 0,
+              cx,
+              cy,
+            };
+            return;
+          }
+        }
+        const isLine = wp.node.kind === "line" || wp.node.kind === "arrow";
+        const isTextHug = wp.node.kind === "text" && wp.node.sizingW === "hug" && wp.node.sizingH === "hug";
         for (let i = 0; i < hs.length; i++) {
+          if (isLine && i !== 3 && i !== 7) continue;
+          if (isTextHug && i % 2 === 0) continue;
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
             // Figma's scale tool ignores layers nested inside an instance; a
             // plain resize is still allowed, because that is an override.
@@ -3294,7 +3318,9 @@ export function Canvas({
               break;
             }
             // Just outside a corner is the rotate zone, as in Figma.
-            if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 18) next = "grab";
+            if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) <= 22 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) >= 6) {
+              next = ROT_CURSOR;
+            }
           }
           if (!next && bb?.node.layout) {
             const l = bb.node.layout;
@@ -3490,20 +3516,26 @@ export function Canvas({
         });
       }
     } else if (d.mode === "multiRotate" && d.bounds && d.origs) {
-      const cx = d.bounds.x + d.bounds.w / 2;
-      const cy = d.bounds.y + d.bounds.h / 2;
-      const b = toWorld(e.clientX, e.clientY);
-      let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
+      const z = snap.zoom;
+      const r = wrap.current?.getBoundingClientRect();
+      const rawX = e.clientX - (r?.left ?? 0);
+      const rawY = e.clientY - (r?.top ?? 0);
+      const cx = d.cx ?? (snap.panX + (d.bounds.x + d.bounds.w / 2) * z);
+      const cy = d.cy ?? (snap.panY + (d.bounds.y + d.bounds.h / 2) * z);
+      const curAngle = Math.atan2(rawY - cy, rawX - cx);
+      let deltaDeg = ((curAngle - (d.startAngle ?? 0)) * 180) / Math.PI;
+      let ang = deltaDeg;
       if (e.shiftKey) ang = Math.round(ang / 15) * 15;
       const rad = (ang * Math.PI) / 180;
       const cos = Math.cos(rad);
       const sin = Math.sin(rad);
-      // Orbit every member around the shared centre and spin it in place.
+      const wcx = d.bounds.x + d.bounds.w / 2;
+      const wcy = d.bounds.y + d.bounds.h / 2;
       for (const o of d.origs) {
-        const ox = o.x + o.w / 2 - cx;
-        const oy = o.y + o.h / 2 - cy;
-        const wx = cx + ox * cos - oy * sin - o.w / 2;
-        const wy = cy + ox * sin + oy * cos - o.h / 2;
+        const ox = o.x + o.w / 2 - wcx;
+        const oy = o.y + o.h / 2 - wcy;
+        const wx = wcx + ox * cos - oy * sin - o.w / 2;
+        const wy = wcy + ox * sin + oy * cos - o.h / 2;
         engine.dispatch({
           type: "resize",
           id: o.id,
@@ -3515,7 +3547,7 @@ export function Canvas({
         engine.dispatch({
           type: "patch",
           id: o.id,
-          patch: { rotation: Math.round(o.rotation + ang) },
+          patch: { rotation: Math.round(((o.rotation || 0) + ang) * 10) / 10 },
         });
       }
     } else if (d.mode === "marquee" && d.id === "erase") {
@@ -3669,17 +3701,25 @@ export function Canvas({
     } else if (d.mode === "rotate" && d.orig && d.id) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (!wp) return;
-      const cx = wp.x + wp.node.w / 2;
-      const cy = wp.y + wp.node.h / 2;
-      const b = toWorld(e.clientX, e.clientY);
-      let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
-      if (e.shiftKey) ang = Math.round(ang / 15) * 15;
+      const z = snap.zoom;
+      const r = wrap.current?.getBoundingClientRect();
+      const rawX = e.clientX - (r?.left ?? 0);
+      const rawY = e.clientY - (r?.top ?? 0);
+      const cx = d.cx ?? (snap.panX + (wp.x + wp.node.w / 2) * z);
+      const cy = d.cy ?? (snap.panY + (wp.y + wp.node.h / 2) * z);
+      const curAngle = Math.atan2(rawY - cy, rawX - cx);
+      let deltaDeg = ((curAngle - (d.startAngle ?? 0)) * 180) / Math.PI;
+      let nextRot = (d.origRotation ?? d.orig.rotation ?? 0) + deltaDeg;
+      if (e.shiftKey) nextRot = Math.round(nextRot / 15) * 15;
+      else nextRot = Math.round(nextRot * 10) / 10;
+      while (nextRot > 180) nextRot -= 360;
+      while (nextRot <= -180) nextRot += 360;
       // A moved rotation origin means the box has to slide as it turns, so the
       // pivot is the point that stays put; the spin itself is unchanged.
       const next = rotateAboutOrigin(
         { x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h, rotation: d.orig.rotation },
         wp.node.rotOrigin ?? [0.5, 0.5],
-        Math.round(ang),
+        Math.round(nextRot),
       );
       engine.dispatch({
         type: "patch",
@@ -5004,6 +5044,48 @@ export function Canvas({
           </button>
         </div>
       )}
+      {snap.selection.length >= 1 &&
+        !drag.current &&
+        !edit &&
+        !vecEdit &&
+        !snap.presentFrame &&
+        snap.tool === "select" && (() => {
+          const root = snap.pages[snap.page].root;
+          const bb = snap.selection.length === 1
+            ? worldPos(root, snap.selection[0])
+            : selectionBounds(root, snap.selection);
+          if (!bb) return null;
+          const node = snap.selection.length === 1
+            ? worldPos(root, snap.selection[0])?.node
+            : null;
+          const z = snap.zoom;
+          const sw = (node ? node.w : (bb as { w: number }).w) * z;
+          const sh = (node ? node.h : (bb as { h: number }).h) * z;
+          const sx = snap.panX + bb.x * z;
+          const sy = snap.panY + bb.y * z;
+          const tx = sx + sw / 2 - 140;
+          let ty = sy + sh + 28;
+          if (ty > window.innerHeight - 70) ty = Math.max(12, sy - 44);
+          return (
+            <ContextToolbar
+              x={tx}
+              y={ty}
+              node={node}
+              multi={snap.selection.length > 1}
+              onAutoLayout={() => {
+                if (node?.layout) removeAutoLayout(engine, snap);
+                else addAutoLayout(engine, snap);
+              }}
+              onAlign={(m) => align(engine, snap, m as any)}
+              onGroup={() => engine.dispatch({ type: "group" })}
+              onComponent={() => engine.dispatch({ type: "makeComponent" })}
+              onDuplicate={() => engine.dispatch({ type: "duplicate" })}
+              onDelete={() => engine.dispatch({ type: "delete" })}
+              onFlipH={() => engine.dispatch({ type: "flip", axis: "h" })}
+              onFlipV={() => engine.dispatch({ type: "flip", axis: "v" })}
+            />
+          );
+        })()}
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -5124,6 +5206,8 @@ function selectionBounds(
  * TL,T,TR,R,BR,B,BL,L (see `handles`); each sits 45deg apart, so rotating by the
  * node angle and snapping back to the nearest 45deg step picks the right glyph.
  */
+const ROT_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M21 12a9 9 0 1 1-3.2-6.9l2.2-2.1M20 3v6h-6' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' filter='drop-shadow(0 0 1.5px %23fff)'/%3E%3C/svg%3E\") 12 12, crosshair";
+
 const RESIZE_CURSORS = [
   "nwse-resize", // TL
   "ns-resize", // T
