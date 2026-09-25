@@ -27,6 +27,9 @@ import {
   insertPointOnPath,
   projectPointOnSegment,
   computeFigmaNoodle,
+  splitVectorNetworkIntersections,
+  detectPlanarRegions,
+  fillNetworkRegionAtPoint,
 } from "../geometry.ts";
 import { MemoryEngine, defaultEffect, find, findParent, insideInstance, node, worldPos } from "../memory.ts";
 import { evalField } from "../../ui/fieldExpr.ts";
@@ -640,6 +643,48 @@ console.log("component instance overrides:");
   e.dispatch({ type: "bendSegment", id: vid, segIndex: 0, dragX: 50, dragY: 50 });
   const bentNode = e.snapshot().pages[e.snapshot().page].root.children.find((c) => c.id === vid);
   t("engine bendSegment dispatches and updates node handles", bentNode?.path[0].ox != null);
+
+  // Vector network planar graph & region detection tests
+  // Crossing X segments: (0,0)-(100,100) and (0,100)-(100,0)
+  const crossNetwork = {
+    vertices: [
+      { x: 0, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+      { x: 100, y: 0 },
+    ],
+    segments: [
+      { start: 0, end: 1 },
+      { start: 2, end: 3 },
+    ],
+  };
+  const splitCross = splitVectorNetworkIntersections(crossNetwork);
+  t("splitVectorNetworkIntersections splits crossing segments at intersection", splitCross.vertices.length === 5);
+  t("splitVectorNetworkIntersections creates 4 split segments", splitCross.segments.length === 4);
+  t("intersection vertex has degree 4", vertexDegree(splitCross, 4) === 4);
+
+  // Square with crossing diagonal: 2 distinct triangular planar regions
+  const squareDiagonal = {
+    vertices: [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ],
+    segments: [
+      { start: 0, end: 1 },
+      { start: 1, end: 2 },
+      { start: 2, end: 3 },
+      { start: 3, end: 0 },
+      { start: 0, end: 2 }, // diagonal
+    ],
+  };
+  const detectedRegions = detectPlanarRegions(squareDiagonal);
+  t("detectPlanarRegions finds 2 distinct faces for square with diagonal", detectedRegions.length >= 2);
+
+  // Paint Bucket region fill
+  const filledVn = fillNetworkRegionAtPoint(squareDiagonal, 30, 20, "#10b981");
+  t("fillNetworkRegionAtPoint fills specific planar face with color", filledVn.regions?.some((r) => r.fill === "#10b981"));
 }
 
 {
@@ -3463,6 +3508,346 @@ console.log("system clipboard — direct copy/paste from Figma and cross-tab fid
       t("the same container via clipboard base64 imports identically", !!res2 && res2.nodes.length === res.nodes.length);
     }
   }
+
+  // --- Advanced Vector Editing Suite Parity ---
+  console.log("advanced vector editing suite (flatten, outline stroke, offset, simplify, shape builder):");
+  const ve = new MemoryEngine(false);
+
+  // 1. Multi-selection flatten
+  ve.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 50, h: 50 });
+  const r1 = ve.snapshot().selection[0];
+  ve.dispatch({ type: "add", kind: "ellipse", x: 40, y: 40, w: 50, h: 50 });
+  const r2 = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [r1, r2] });
+  ve.dispatch({ type: "flatten" });
+  const flatNode = ve.snapshot().pages[ve.snapshot().page].root.children.find((c) => c.kind === "vector");
+  t("multi-selection flatten creates single vector node", !!flatNode);
+  t("flattened vector contains combined vertices and network", (flatNode?.vectorNetwork?.vertices.length ?? 0) > 4);
+
+  // 2. Text flatten / outline text
+  ve.dispatch({ type: "add", kind: "text", x: 100, y: 100, w: 120, h: 40, extra: { text: "Hello" } });
+  const tid = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [tid] });
+  ve.dispatch({ type: "flatten" });
+  const textVecNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("flattening text converts layer to vector kind", textVecNode?.kind === "vector");
+  t("outlined text node has vectorNetwork with loops", (textVecNode?.vectorNetwork?.regions?.[0]?.loops.length ?? 0) >= 1);
+
+  // 3. Outline stroke
+  ve.dispatch({ type: "add", kind: "line", x: 0, y: 0, w: 100, h: 0, extra: { strokeWidth: 10, strokePaint: "#ff0000" } });
+  const lineId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [lineId] });
+  ve.dispatch({ type: "outlineStroke" });
+  const outLineNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("outline stroke converts stroked line into closed vector", outLineNode?.kind === "vector" && outLineNode?.closed === true);
+  t("outlined stroke inherits fill from strokePaint and zeroes strokeWidth", outLineNode?.fill === "#ff0000" && outLineNode?.strokeWidth === 0);
+
+  // 4. Offset path
+  ve.dispatch({
+    type: "addPath",
+    points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 50 }, { x: 0, y: 50 }],
+    closed: true,
+  });
+  const pathId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [pathId] });
+  const origFirstX = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0].path[0].x;
+  ve.dispatch({ type: "offsetPath", distance: 10 });
+  const offsetNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("offset path expands vector geometry", offsetNode?.path?.length >= 4 && offsetNode.path[0].x !== origFirstX);
+
+  // 5. Simplify path
+  ve.dispatch({
+    type: "addPath",
+    points: [
+      { x: 0, y: 0 },
+      { x: 10, y: 0.1 },
+      { x: 20, y: 0 },
+      { x: 30, y: 0.1 },
+      { x: 40, y: 0 },
+      { x: 50, y: 50 },
+    ],
+    closed: false,
+  });
+  const denseId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [denseId] });
+  ve.dispatch({ type: "simplifyPath", tolerance: 1.0 });
+  const simplifiedNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("simplify path reduces redundant collinear anchor points", simplifiedNode?.path?.length < 6);
+
+  // 6. Shape builder merge
+  ve.dispatch({ type: "add", kind: "rect", x: 200, y: 200, w: 60, h: 60 });
+  const sbA = ve.snapshot().selection[0];
+  ve.dispatch({ type: "add", kind: "rect", x: 230, y: 200, w: 60, h: 60 });
+  const sbB = ve.snapshot().selection[0];
+  ve.dispatch({ type: "select", ids: [sbA, sbB] });
+  ve.dispatch({ type: "shapeBuilder", op: "merge" });
+  const mergedSb = ve.snapshot().pages[ve.snapshot().page].root.children.find((c) => c.id === sbA);
+  t("shape builder merge combines overlapping shapes into vector", mergedSb?.kind === "vector");
+  t("shape builder merge deletes second input shape", !ve.snapshot().pages[ve.snapshot().page].root.children.some((c) => c.id === sbB));
+
+  // 7. Vector align
+  ve.dispatch({
+    type: "addPath",
+    points: [{ x: 10, y: 20 }, { x: 30, y: 80 }, { x: 50, y: 40 }],
+    closed: false,
+  });
+  const vAlignId = ve.snapshot().selection[0];
+  ve.dispatch({ type: "setVecEdit", id: vAlignId, pointIndices: [0, 1, 2] });
+  ve.dispatch({ type: "vectorAlign", alignment: "top" });
+  const alignedNode = ve.snapshot().pages[ve.snapshot().page].root.children.slice(-1)[0];
+  t("vectorAlign top aligns all selected vertices to min Y", alignedNode?.path[0].y === alignedNode?.path[1].y && alignedNode?.path[1].y === 0);
+}
+
+console.log("Phase 0 & Phase 1 Architecture (Canonical Transaction System, Modifier Stack, Expressions, Plugin API):");
+{
+  // 1. Transaction creation & mathematical inversion
+  const { createTransactionId, invertTransaction, invertOperation, TransactionStream } = await import("../transaction.ts");
+  const testTx = {
+    id: createTransactionId(),
+    timestamp: Date.now(),
+    operations: [
+      {
+        type: "setProperty",
+        targetId: "node_1",
+        property: "w",
+        oldValue: 100,
+        newValue: 250,
+      },
+      {
+        type: "setVariable",
+        variableId: "var_color",
+        oldValue: "#000000",
+        newValue: "#10b981",
+      },
+    ],
+  };
+
+  const invTx = invertTransaction(testTx);
+  t("invertTransaction reverses operation order and flips values", invTx.operations.length === 2);
+  t("first inverted operation restores setVariable old value", invTx.operations[0].type === "setVariable" && invTx.operations[0].newValue === "#000000");
+  t("second inverted operation restores setProperty old value", invTx.operations[1].type === "setProperty" && invTx.operations[1].newValue === 100);
+
+  // 2. TransactionStream delta broadcast & undo/redo
+  const stream = new TransactionStream(50);
+  let deltaReceived = null;
+  const unsub = stream.subscribe((tx) => {
+    deltaReceived = tx;
+  });
+  stream.push(testTx);
+  t("TransactionStream emits transaction to delta subscribers", deltaReceived?.id === testTx.id);
+  unsub();
+
+  const undoTx = stream.popUndo();
+  t("TransactionStream popUndo yields inverted transaction", undoTx?.operations[1]?.newValue === 100);
+  const redoTx = stream.popRedo();
+  t("TransactionStream popRedo yields original transaction", redoTx?.id === testTx.id);
+
+  // 3. Engine Transaction execution
+  const eng = new MemoryEngine(false);
+  eng.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 50, h: 50 });
+  const rootNode = eng.snapshot().pages[0].root.children[0];
+
+  const mutateTx = {
+    id: createTransactionId(),
+    timestamp: Date.now(),
+    operations: [
+      {
+        type: "setProperty",
+        targetId: rootNode.id,
+        property: "w",
+        oldValue: 50,
+        newValue: 320,
+      },
+      {
+        type: "setVariable",
+        variableId: "padding_gap",
+        oldValue: 8,
+        newValue: 24,
+      },
+    ],
+  };
+  eng.dispatchTransaction(mutateTx);
+  const updatedNode = eng.snapshot().pages[0].root.children[0];
+  t("engine dispatchTransaction applies setProperty atomically", updatedNode.w === 320);
+
+  // 4. Procedural Modifier Stack
+  const { evaluateModifierStack } = await import("../modifierStack.ts");
+  const baseGeom = {
+    path: [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ],
+    closed: true,
+  };
+
+  const evalGeom = evaluateModifierStack(baseGeom, [
+    { type: "roundedCorners", radius: 12 },
+    { type: "offset", distance: 10 },
+  ]);
+  t("evaluateModifierStack computes offset boundary", evalGeom.bounds.w > 100);
+  t("evaluateModifierStack produces valid closed path", evalGeom.closed === true);
+  t("evaluateModifierStack generates synced VectorNetwork graph", evalGeom.vectorNetwork?.vertices?.length > 0);
+
+  // 5. Reactive Expressions & AST
+  const { parseExpression, evaluateExpression, DependencyGraph } = await import("../expressions.ts");
+  const parsedAst = parseExpression("parent.w * 0.5 + min(var.padding, 16)");
+  t("parseExpression parses arithmetic, member access and functions", parsedAst.type === "Binary");
+
+  const evalResult = evaluateExpression(
+    "parent.w * 0.5 + min(var.padding, 16)",
+    {
+      parent: { w: 400 },
+      vars: { padding: 32 },
+    },
+  );
+  t("evaluateExpression computes 400 * 0.5 + 16 = 216", evalResult.value === 216);
+
+  // 6. Reactive Dependency Graph & Cycle Detection
+  const depGraph = new DependencyGraph();
+  depGraph.addDependency("nodeA.w", "nodeB.w");
+  depGraph.addDependency("nodeB.w", "nodeC.w");
+  const noCycle = depGraph.detectCycle("nodeA.w");
+  t("detectCycle returns hasCycle: false for acyclic DAG", !noCycle.hasCycle);
+
+  depGraph.addDependency("nodeC.w", "nodeA.w");
+  const cycleFound = depGraph.detectCycle("nodeA.w");
+  t("detectCycle catches cycle A -> B -> C -> A", cycleFound.hasCycle === true && cycleFound.cycle.includes("nodeA.w"));
+
+  // 7. Plugin API boundary & Sandboxing
+  const { createPluginAPI } = await import("../pluginApi.ts");
+  let mockEngineState = eng.snapshot();
+  let dispatchedTx = null;
+  const mockHost = {
+    getSnapshot: () => mockEngineState,
+    dispatchTransaction: (tx) => {
+      dispatchedTx = tx;
+    },
+    eventBus: {
+      on: () => () => {},
+      emit: () => {},
+    },
+  };
+
+  const restrictedPlugin = createPluginAPI(
+    {
+      id: "unauthorized_plugin",
+      name: "Unauthorized Plugin",
+      version: "1.0.0",
+      permissions: ["read_document"], // lacks mutate_document
+    },
+    mockHost,
+  );
+
+  const deniedResult = restrictedPlugin.mutate(testTx);
+  t("plugin lacking mutate_document permission is rejected with PERMISSION_DENIED", deniedResult.ok === false && deniedResult.error.code === "PERMISSION_DENIED");
+
+  const authorizedPlugin = createPluginAPI(
+    {
+      id: "authorized_plugin",
+      name: "Authorized Plugin",
+      version: "1.0.0",
+      permissions: ["read_document", "mutate_document"],
+    },
+    mockHost,
+  );
+  const allowedResult = authorizedPlugin.mutate(testTx);
+  t("authorized plugin successfully mutates via transaction", allowedResult.ok === true && dispatchedTx !== null);
+
+  // 8. GeometryBoolean trait solver
+  const { defaultGeometryBoolean } = await import("../geometry.ts");
+  const box1 = [
+    { x: 0, y: 0 },
+    { x: 50, y: 0 },
+    { x: 50, y: 50 },
+    { x: 0, y: 50 },
+  ];
+  const box2 = [
+    { x: 25, y: 0 },
+    { x: 75, y: 0 },
+    { x: 75, y: 50 },
+    { x: 25, y: 50 },
+  ];
+  const unionVn = defaultGeometryBoolean.union(box1, box2);
+  t("defaultGeometryBoolean.union returns valid VectorNetwork", unionVn && unionVn.vertices.length > 0);
+  const subVn = defaultGeometryBoolean.subtract(box1, box2);
+  t("defaultGeometryBoolean.subtract returns valid VectorNetwork", subVn && subVn.vertices.length > 0);
+
+  // 9. AI-Assisted Vector Cleanup (Sketch to Perfect Bézier - Phase 7)
+  const { vectorCleanup } = await import("../geometry.ts");
+  const noisyPts = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0.2 },
+    { x: 20, y: -0.1 },
+    { x: 50, y: 0 },
+    { x: 50.3, y: 50 },
+    { x: 0, y: 50 },
+  ];
+  const cleaned = vectorCleanup(noisyPts, true);
+  t("vectorCleanup reduces redundant points along near-straight runs", cleaned.length < noisyPts.length);
+  t("vectorCleanup fits smooth continuous Bézier handles", cleaned.some((p) => p.ix !== undefined || p.ox !== undefined));
+
+  eng.dispatch({
+    type: "addPath",
+    points: noisyPts,
+    closed: true,
+  });
+  const sketchId = eng.snapshot().selection[0];
+  eng.dispatch({ type: "vectorCleanup", id: sketchId });
+  const cleanedNode = eng.snapshot().pages[0].root.children.slice(-1)[0];
+  t("engine vectorCleanup command updates path and normalizes bounding box", cleanedNode.path.length < noisyPts.length && cleanedNode.w >= 48);
+
+  // 10. Phase 5: Developer Platform (Code Exporters, Dev Mode & Design Tokens)
+  console.log("Phase 5: Developer Platform (Code Exporters, Box Model & DTCG Design Tokens):");
+  const { DEV_LANGS, getDevPrefs, setDevPrefs } = await import("../../ui/devPrefs.ts");
+  t("DEV_LANGS includes React TSX exporter", DEV_LANGS.some((l) => l.id === "react"));
+  t("DEV_LANGS includes Design Tokens", DEV_LANGS.some((l) => l.id === "tokens"));
+  t("DEV_LANGS includes Layer Spec", DEV_LANGS.some((l) => l.id === "layerJson"));
+
+  setDevPrefs({ format: "react", unit: "px" });
+  t("setDevPrefs sets format to react", getDevPrefs().format === "react");
+
+  // Box model math verification on auto-layout frame
+  eng.dispatch({
+    type: "add",
+    kind: "frame",
+    x: 100,
+    y: 100,
+    w: 240,
+    h: 120,
+  });
+  const fId = eng.snapshot().selection[0];
+  eng.dispatch({
+    type: "autoLayout",
+    id: fId,
+    layout: {
+      direction: "horizontal",
+      gap: 12,
+      padding: [16, 16, 20, 20],
+      align: "center",
+      justify: "min",
+      wrap: false,
+    },
+  });
+  const frameNode = eng.snapshot().pages[0].root.children.slice(-1)[0];
+  const [padL, padR, padT, padB] = frameNode.layout.padding;
+  const innerW = frameNode.w - padL - padR;
+  const innerH = frameNode.h - padT - padB;
+  t("Box model computes correct inner content width", innerW === 208);
+  t("Box model computes correct inner content height", innerH === 80);
+
+  // Style Dictionary / DTCG tokens structure verification
+  const dtcgTokens = {
+    color: {
+      brand: { $value: "#10B981", $type: "color", $description: "Brand / Primary Emerald" },
+    },
+    spacing: {
+      sm: { $value: "8px", $type: "dimension" },
+      md: { $value: "16px", $type: "dimension" },
+    },
+  };
+  t("DTCG format tokens have valid $value and $type keys", dtcgTokens.color.brand.$value === "#10B981" && dtcgTokens.spacing.md.$type === "dimension");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

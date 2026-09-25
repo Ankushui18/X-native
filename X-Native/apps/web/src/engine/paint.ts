@@ -2,7 +2,7 @@ import type { GradientStop, XNode } from "./types";
 import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
 import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
-/** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and Figma’s default). */
+/** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB). */
 function mixHex(a: string, b: string, t: number): string {
   const A = parseHex(a);
   const B = parseHex(b);
@@ -140,7 +140,7 @@ export function fillStyle(
 
 /**
  * Paint a node's fill stack: the base `fill` first, then any extra `fills`
- * on top, bottom-to-top the way Figma layers them. The current path must
+ * on top, bottom-to-top in bottom-to-top order. The current path must
  * already be set by the caller.
  */
 export function paintFill(
@@ -210,11 +210,15 @@ function paintOnePaint(
     ctx.restore();
     return;
   }
+  const fillRule: CanvasFillRule =
+    n.vectorNetwork?.regions?.[0]?.windingRule === "EVENODD" || n.booleanOp === "exclude"
+      ? "evenodd"
+      : "nonzero";
   if (n.fillType === "linear") {
     const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
     ramp(g, stops);
     ctx.fillStyle = g;
-    ctx.fill();
+    ctx.fill(fillRule);
     return;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
@@ -224,11 +228,11 @@ function paintOnePaint(
     // avoid a hard seam at the sweep origin.
     ramp(g, conicStops(stops));
     ctx.fillStyle = g;
-    ctx.fill();
+    ctx.fill(fillRule);
     return;
   }
   ctx.fillStyle = cssRgba(a);
-  ctx.fill();
+  ctx.fill(fillRule);
 }
 
 function paintDiamond(
@@ -556,7 +560,7 @@ export function paintExtraStrokes(
     const dash = s.dash ?? 0;
     const dashes = dashArray(s.pattern, dash, s.gap ?? 0, z);
     ctx.setLineDash(dashes);
-    // A second stroke carries its own per-side settings, the way Figma's stroke
+    // A second stroke carries its own per-side settings, the way stroke
     // rows each own their weight, alignment and dashes.
     const widths = sideWidths(s.sides, s.sideW, s.width);
     const perSide = box && sidesSupported(n.kind) && (s.sides ?? "all") !== "all";

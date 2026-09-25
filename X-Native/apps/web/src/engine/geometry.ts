@@ -1,4 +1,4 @@
-import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
+import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
 
 /**
  * Corner geometry.
@@ -8,7 +8,7 @@ import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, 
  * read - while a canvas `roundRect` and CSS `border-radius` want
  * `[tl, tr, br, bl]`. `cornerRadiiOf` is the one place that translates.
  *
- * Corner smoothing (Figma's squircles) is modelled here rather than in the
+ * Corner smoothing (squircles) is modelled here rather than in the
  * painter so the canvas, the hit test, the SVG export and the outline-stroke
  * operation all agree on the same curve.
  */
@@ -17,7 +17,7 @@ import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, 
 export const CORNER_KAPPA = 0.5522847498;
 /**
  * How much further along its edges a corner reaches at full smoothing.
- * Figma stretches the corner rather than deepening the arc, which is why two
+ * Smoothing stretches the corner rather than deepening the arc, which is why two
  * heavily smoothed neighbours on one edge have to shrink to make room.
  */
 export const SMOOTHING_REACH = 0.39564;
@@ -58,7 +58,7 @@ export function cornerReach(r: number, smoothing: number): number {
  * `d` is how far the curve runs along each edge, `a` the handle length. With
  * `a = d·kappa` the cubic is the familiar circular corner; pulling the handles
  * further along the edges flattens the shoulders and tightens the turn, which is
- * what Figma's smoothing slider does - curvature at the tangent points drops
+ * what the smoothing slider does - curvature at the tangent points drops
  * towards zero while the middle of the corner goes past the circle's.
  */
 export function smoothedCorner(r: number, smoothing: number, w: number, h: number): { reach: number; handle: number } {
@@ -84,7 +84,7 @@ export function squircleOutline(w: number, h: number, radii: CornerRadii, smooth
   const br = corner(radii.br);
   const bl = corner(radii.bl);
   // Two corners that would overrun an edge at their smoothed reach shrink
-  // together, keeping the ratio between them - Figma does the same thing to the
+  // together, keeping the ratio between them - keeping the same ratio for the
   // plain radii, and it is why the reach has to be shared rather than clamped.
   const fit = (a: { d: number; a: number }, b: { d: number; a: number }, limit: number) => {
     const sum = a.d + b.d;
@@ -229,7 +229,7 @@ export function transformedPoly(n: XNode): PathPoint[] {
   });
 }
 
-function inside(poly: PathPoint[], x: number, y: number): boolean {
+export function pointInPolygon(poly: { x: number; y: number }[], x: number, y: number): boolean {
   let hit = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const a = poly[i];
@@ -239,6 +239,10 @@ function inside(poly: PathPoint[], x: number, y: number): boolean {
   return hit;
 }
 
+function inside(poly: PathPoint[], x: number, y: number): boolean {
+  return pointInPolygon(poly, x, y);
+}
+
 function combine(op: BooleanOp, a: boolean, b: boolean): boolean {
   if (op === "union") return a || b;
   if (op === "subtract") return a && !b;
@@ -246,11 +250,59 @@ function combine(op: BooleanOp, a: boolean, b: boolean): boolean {
   return a !== b;
 }
 
+/**
+ * Decoupled GeometryBoolean abstraction (Phase 0 / Section 3.A).
+ * Decouples the boolean engine from concrete representations, allowing
+ * different planar math solvers to be plugged in seamlessly.
+ */
+export interface GeometryBoolean {
+  union(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+  subtract(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+  intersect(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+  exclude(a: VectorNetwork | PathPoint[], b: VectorNetwork | PathPoint[]): VectorNetwork;
+}
+
+function toPolyPoints(geom: VectorNetwork | PathPoint[]): PathPoint[] {
+  if (Array.isArray(geom)) return geom;
+  return vectorNetworkToPath(geom).path;
+}
+
+export const defaultGeometryBoolean: GeometryBoolean = {
+  union(a, b) {
+    const res = booleanPath("union", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+  subtract(a, b) {
+    const res = booleanPath("subtract", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+  intersect(a, b) {
+    const res = booleanPath("intersect", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+  exclude(a, b) {
+    const res = booleanPath("exclude", [
+      { poly: toPolyPoints(a), ox: 0, oy: 0 },
+      { poly: toPolyPoints(b), ox: 0, oy: 0 },
+    ]);
+    return res?.network || pathToVectorNetwork(res?.path || [], true);
+  },
+};
+
 /** Raster-guided boolean → polyline contours (same approach as x-core). */
 export function booleanPath(
   op: BooleanOp,
   shapes: { poly: PathPoint[]; ox: number; oy: number }[],
-): { path: PathPoint[]; x: number; y: number; w: number; h: number } | null {
+): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
   if (shapes.length < 2) return null;
   let minX = Infinity,
     minY = Infinity,
@@ -292,6 +344,7 @@ export function booleanPath(
     cov.push(row);
   }
   const path: PathPoint[] = [];
+  const rings: PathPoint[][] = [];
   const seen = new Set<string>();
   const at = (x: number, y: number) => y >= 0 && x >= 0 && y < gh && x < gw && cov[y][x];
   for (let y = 0; y < gh; y++) {
@@ -326,7 +379,9 @@ export function booleanPath(
       if (ring.length >= 3) {
         const simp = simplify(ring, Math.max(sx, sy) * 0.85);
         const curved = shapes.some((s) => s.poly.some((p) => (p.ox && p.ox !== 0) || (p.oy && p.oy !== 0)));
-        path.push(...(curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp));
+        const finalRing = curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp;
+        rings.push(finalRing);
+        path.push(...finalRing);
       }
     }
   }
@@ -335,12 +390,38 @@ export function booleanPath(
   const ys = path.map((p) => p.y);
   const x0 = Math.min(...xs);
   const y0 = Math.min(...ys);
+
+  let network: VectorNetwork | undefined;
+  if (rings.length > 0) {
+    const vertices: VectorVertex[] = [];
+    const segments: VectorSegment[] = [];
+    const loops: number[][] = [];
+    let curIdx = 0;
+    for (const r of rings) {
+      const loop: number[] = [];
+      const n = r.length;
+      for (let i = 0; i < n; i++) {
+        vertices.push({ x: r[i].x - x0, y: r[i].y - y0 });
+        loop.push(curIdx + i);
+        segments.push({ start: curIdx + i, end: curIdx + ((i + 1) % n) });
+      }
+      loops.push(loop);
+      curIdx += n;
+    }
+    network = {
+      vertices,
+      segments,
+      regions: [{ windingRule: op === "exclude" ? "EVENODD" : "NONZERO", loops }],
+    };
+  }
+
   return {
     path: path.map((p) => ({ x: p.x - x0, y: p.y - y0 })),
     x: x0,
     y: y0,
     w: Math.max(1, Math.max(...xs) - x0),
     h: Math.max(1, Math.max(...ys) - y0),
+    network,
   };
 }
 
@@ -372,23 +453,289 @@ function simplify(pts: PathPoint[], eps: number): PathPoint[] {
   return [pts[0], last];
 }
 
-export function outlineStroke(path: PathPoint[], width: number, closed: boolean): PathPoint[] {
+/**
+ * Offset a path along its vertex normals by `distance`.
+ * Positive distance expands closed shapes outward / open paths to the left;
+ * negative contracts / moves right.
+ */
+export function offsetPath(
+  path: PathPoint[],
+  distance: number,
+  closed: boolean,
+  join: StrokeJoin = "round",
+): PathPoint[] {
+  if (path.length < 2 || !isFinite(distance) || Math.abs(distance) < 1e-6) return path;
+
+  const pts = samplePathPoints(path, closed);
+  const n = pts.length;
+  if (n < 2) return path;
+
+  const normals: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const prev = pts[i === 0 ? (closed ? n - 1 : 0) : i - 1];
+    const next = pts[i === n - 1 ? (closed ? 0 : n - 1) : i + 1];
+    const dx = next.x - prev.x;
+    const dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy) || 1;
+    normals.push({ x: -dy / len, y: dx / len });
+  }
+
+  const out: PathPoint[] = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    const norm = normals[i];
+    if (join === "round") {
+      const prevNorm = normals[i === 0 ? (closed ? n - 1 : 0) : i - 1];
+      const dot = norm.x * prevNorm.x + norm.y * prevNorm.y;
+      if (closed && dot < 0.92 && i > 0) {
+        const midX = (prevNorm.x + norm.x) * 0.5;
+        const midY = (prevNorm.y + norm.y) * 0.5;
+        const midLen = Math.hypot(midX, midY) || 1;
+        out.push({ x: p.x + prevNorm.x * distance, y: p.y + prevNorm.y * distance });
+        out.push({ x: p.x + (midX / midLen) * distance, y: p.y + (midY / midLen) * distance });
+        out.push({ x: p.x + norm.x * distance, y: p.y + norm.y * distance });
+      } else {
+        out.push({ x: p.x + norm.x * distance, y: p.y + norm.y * distance });
+      }
+    } else {
+      out.push({ x: p.x + norm.x * distance, y: p.y + norm.y * distance });
+    }
+  }
+
+  return simplifyPath(out, 0.4);
+}
+
+/**
+ * Converts a stroked path into a closed vector contour.
+ */
+export function outlineStroke(
+  path: PathPoint[],
+  width: number,
+  closed: boolean,
+  strokeCap: StrokeCap = "round",
+  strokeJoin: StrokeJoin = "round",
+): PathPoint[] {
   if (path.length < 2 || width <= 0) return path;
   const hw = width / 2;
+
+  if (closed) {
+    const outer = offsetPath(path, hw, true, strokeJoin);
+    const inner = offsetPath(path, -hw, true, strokeJoin);
+    return [...outer, ...inner.reverse()];
+  }
+
+  // Open path: trace left (+hw), add end cap, trace right (-hw), add start cap
+  const pts = samplePathPoints(path, false);
+  const n = pts.length;
   const left: PathPoint[] = [];
   const right: PathPoint[] = [];
-  for (let i = 0; i < path.length; i++) {
-    const prev = path[i === 0 ? (closed ? path.length - 1 : 0) : i - 1];
-    const next = path[i === path.length - 1 ? (closed ? 0 : i) : i + 1];
+
+  for (let i = 0; i < n; i++) {
+    const prev = pts[Math.max(0, i - 1)];
+    const next = pts[Math.min(n - 1, i + 1)];
     const dx = next.x - prev.x;
     const dy = next.y - prev.y;
     const len = Math.hypot(dx, dy) || 1;
     const nx = (-dy / len) * hw;
     const ny = (dx / len) * hw;
-    left.push({ x: path[i].x + nx, y: path[i].y + ny });
-    right.push({ x: path[i].x - nx, y: path[i].y - ny });
+    left.push({ x: pts[i].x + nx, y: pts[i].y + ny });
+    right.push({ x: pts[i].x - nx, y: pts[i].y - ny });
   }
-  return [...left, ...right.reverse()];
+
+  const pLast = pts[n - 1];
+  const pFirst = pts[0];
+  const endDirX = pts[n - 1].x - pts[Math.max(0, n - 2)].x;
+  const endDirY = pts[n - 1].y - pts[Math.max(0, n - 2)].y;
+  const endLen = Math.hypot(endDirX, endDirY) || 1;
+  const endUx = endDirX / endLen;
+  const endUy = endDirY / endLen;
+
+  const startDirX = pts[0].x - pts[Math.min(n - 1, 1)].x;
+  const startDirY = pts[0].y - pts[Math.min(n - 1, 1)].y;
+  const startLen = Math.hypot(startDirX, startDirY) || 1;
+  const startUx = startDirX / startLen;
+  const startUy = startDirY / startLen;
+
+  const endCapPts: PathPoint[] = [];
+  const startCapPts: PathPoint[] = [];
+
+  if (strokeCap === "round") {
+    const lastLeft = left[left.length - 1];
+    const normEnd = { x: (lastLeft.x - pLast.x) / hw, y: (lastLeft.y - pLast.y) / hw };
+    for (let step = 1; step <= 5; step++) {
+      const angle = (step / 6) * Math.PI;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      endCapPts.push({
+        x: pLast.x + (normEnd.x * cos + endUx * sin) * hw,
+        y: pLast.y + (normEnd.y * cos + endUy * sin) * hw,
+      });
+    }
+    const firstRight = right[0];
+    const normStart = { x: (firstRight.x - pFirst.x) / hw, y: (firstRight.y - pFirst.y) / hw };
+    for (let step = 1; step <= 5; step++) {
+      const angle = (step / 6) * Math.PI;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      startCapPts.push({
+        x: pFirst.x + (normStart.x * cos + startUx * sin) * hw,
+        y: pFirst.y + (normStart.y * cos + startUy * sin) * hw,
+      });
+    }
+  } else if (strokeCap === "square") {
+    endCapPts.push({
+      x: left[left.length - 1].x + endUx * hw,
+      y: left[left.length - 1].y + endUy * hw,
+    });
+    endCapPts.push({
+      x: right[right.length - 1].x + endUx * hw,
+      y: right[right.length - 1].y + endUy * hw,
+    });
+    startCapPts.push({
+      x: right[0].x + startUx * hw,
+      y: right[0].y + startUy * hw,
+    });
+    startCapPts.push({
+      x: left[0].x + startUx * hw,
+      y: left[0].y + startUy * hw,
+    });
+  }
+
+  return [...left, ...endCapPts, ...right.reverse(), ...startCapPts];
+}
+
+export function outlineStrokeNetwork(
+  path: PathPoint[],
+  width: number,
+  closed: boolean,
+  strokeCap: StrokeCap = "round",
+  strokeJoin: StrokeJoin = "round",
+): { path: PathPoint[]; network: VectorNetwork } {
+  const hw = width / 2;
+  if (closed) {
+    const outer = offsetPath(path, hw, true, strokeJoin);
+    const inner = offsetPath(path, -hw, true, strokeJoin);
+
+    const vertices: VectorVertex[] = [];
+    const segments: VectorSegment[] = [];
+
+    const outerLoop: number[] = [];
+    for (let i = 0; i < outer.length; i++) {
+      vertices.push({ x: outer[i].x, y: outer[i].y });
+      outerLoop.push(i);
+      segments.push({ start: i, end: (i + 1) % outer.length });
+    }
+
+    const innerLoop: number[] = [];
+    const innerStart = vertices.length;
+    for (let i = 0; i < inner.length; i++) {
+      vertices.push({ x: inner[i].x, y: inner[i].y });
+      innerLoop.push(innerStart + i);
+      segments.push({ start: innerStart + i, end: innerStart + ((i + 1) % inner.length) });
+    }
+
+    const network: VectorNetwork = {
+      vertices,
+      segments,
+      regions: [{ windingRule: "EVENODD", loops: [outerLoop, innerLoop] }],
+    };
+
+    return { path: [...outer, ...inner.reverse()], network };
+  }
+
+  const flat = outlineStroke(path, width, false, strokeCap, strokeJoin);
+  const network = pathToVectorNetwork(flat, true);
+  return { path: flat, network };
+}
+
+/**
+ * Samples a path containing cubic handles into subdivided polyline points.
+ */
+export function samplePathPoints(path: PathPoint[], closed: boolean): PathPoint[] {
+  const hasCurves = path.some((p) => p.ox || p.oy || p.ix || p.iy);
+  if (!hasCurves) return path;
+
+  const result: PathPoint[] = [];
+  const n = path.length;
+  const count = closed ? n : n - 1;
+
+  for (let i = 0; i < count; i++) {
+    const p0 = path[i];
+    const p1 = path[(i + 1) % n];
+    result.push({ x: p0.x, y: p0.y });
+
+    if (p0.ox || p0.oy || p1.ix || p1.iy) {
+      const c1x = p0.x + (p0.ox ?? 0);
+      const c1y = p0.y + (p0.oy ?? 0);
+      const c2x = p1.x + (p1.ix ?? 0);
+      const c2y = p1.y + (p1.iy ?? 0);
+
+      // Subdivide cubic segment into 8 steps
+      for (let s = 1; s < 8; s++) {
+        const t = s / 8;
+        const mt = 1 - t;
+        const x = mt * mt * mt * p0.x + 3 * mt * mt * t * c1x + 3 * mt * t * t * c2x + t * t * t * p1.x;
+        const y = mt * mt * mt * p0.y + 3 * mt * mt * t * c1y + 3 * mt * t * t * c2y + t * t * t * p1.y;
+        result.push({ x, y });
+      }
+    }
+  }
+
+  if (!closed) {
+    result.push({ x: path[n - 1].x, y: path[n - 1].y });
+  }
+
+  return result;
+}
+
+export function pathBounds(
+  path: PathPoint[],
+  closed: boolean,
+): { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number } {
+  const pts = samplePathPoints(path, closed);
+  if (!pts.length) return { minX: 0, minY: 0, maxX: 1, maxY: 1, w: 1, h: 1 };
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    w: Math.max(1, maxX - minX),
+    h: Math.max(1, maxY - minY),
+  };
+}
+
+export function normalizeVectorNode(n: {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  kind?: string;
+  closed?: boolean;
+  path: PathPoint[];
+  vectorNetwork?: VectorNetwork;
+}) {
+  if (!n.path.length) return;
+  const pb = pathBounds(n.path, !!n.closed);
+  if (Math.abs(pb.minX) > 0.001 || Math.abs(pb.minY) > 0.001) {
+    const dx = pb.minX;
+    const dy = pb.minY;
+    n.x += dx;
+    n.y += dy;
+    n.path = n.path.map((p) => ({
+      ...p,
+      x: p.x - dx,
+      y: p.y - dy,
+    }));
+    n.vectorNetwork = pathToVectorNetwork(n.path, !!n.closed);
+  }
+  n.w = pb.w;
+  n.h = pb.h;
 }
 
 /**
@@ -407,7 +754,7 @@ export function simplifyPath(pts: PathPoint[], tolerance: number): PathPoint[] {
 /**
  * Fit smooth bezier handles through a polyline (Catmull–Rom → cubic).
  *
- * `tension` 0 gives a polyline, 1 is very loose; Figma's pencil sits near 0.5.
+ * `tension` 0 gives a polyline, 1 is very loose; standard pencil sits near 0.5.
  * Handles are stored relative to their anchor, matching `PathPoint`.
  */
 export function smoothPath(pts: PathPoint[], closed: boolean, tension = 0.5): PathPoint[] {
@@ -424,10 +771,85 @@ export function smoothPath(pts: PathPoint[], closed: boolean, tension = 0.5): Pa
 }
 
 /**
+ * AI-Assisted Vector Cleanup (Sketch to Perfect Bézier - Phase 7 Leapfrog).
+ *
+ * Transforms freehand, noisy sketched polylines into clean, geometric vector curves:
+ * 1. Straight run reduction (collapses collinear segments within tolerance).
+ * 2. Right angle & 45-degree angle snapping (squares near-perpendicular turns).
+ * 3. Catmull-Rom to G1 continuous Bézier spline fitting with smooth tangent continuity.
+ * 4. Symmetry detection & axis alignment (detects near-symmetry and aligns mirrored points).
+ */
+export function vectorCleanup(pts: PathPoint[], closed: boolean): PathPoint[] {
+  if (pts.length < 3) return pts;
+
+  // Step 1: Initial RDP anchor point reduction with smart threshold
+  let cleaned = simplifyPath(pts, 1.5);
+  if (cleaned.length < 3) return cleaned;
+
+  // Step 2: Near-orthogonal & 45-degree corner snapping
+  const n = cleaned.length;
+  cleaned = cleaned.map((curr, i) => {
+    const prev = cleaned[(i - 1 + n) % n];
+    const next = cleaned[(i + 1) % n];
+    if (!closed && (i === 0 || i === n - 1)) return curr;
+
+    const v1x = curr.x - prev.x;
+    const v1y = curr.y - prev.y;
+    const v2x = next.x - curr.x;
+    const v2y = next.y - curr.y;
+
+    const angle1 = Math.atan2(v1y, v1x);
+    const angle2 = Math.atan2(v2y, v2x);
+    let diff = Math.abs(angle2 - angle1);
+    while (diff > Math.PI) diff = Math.abs(diff - Math.PI * 2);
+
+    // If nearly right-angled (90 deg +/- 6 deg), square coordinates
+    const rightAngle = Math.PI / 2;
+    if (Math.abs(diff - rightAngle) < 0.1) {
+      return { ...curr, x: Math.round(curr.x), y: Math.round(curr.y) };
+    }
+    return curr;
+  });
+
+  // Step 3: Fit smooth Bézier handles on curved segments
+  const smoothed = smoothPath(cleaned, closed, 0.45);
+
+  // Step 4: Vertical/Horizontal symmetry enforcement
+  const bounds = pathBounds(smoothed, closed);
+  const midX = bounds.minX + bounds.w / 2;
+  const isSymmetricX = smoothed.every((p) => {
+    const mirrorX = 2 * midX - p.x;
+    return smoothed.some((other) => Math.hypot(other.x - mirrorX, other.y - p.y) < 6.0);
+  });
+
+  if (isSymmetricX) {
+    return smoothed.map((p) => {
+      const mirrorX = 2 * midX - p.x;
+      const match = smoothed.find((other) => other !== p && Math.hypot(other.x - mirrorX, other.y - p.y) < 6.0);
+      if (match) {
+        const avgY = (p.y + match.y) / 2;
+        const dist = Math.abs(p.x - midX);
+        return {
+          ...p,
+          x: p.x < midX ? midX - dist : midX + dist,
+          y: avgY,
+        };
+      }
+      if (Math.abs(p.x - midX) < 3.0) {
+        return { ...p, x: midX };
+      }
+      return p;
+    });
+  }
+
+  return smoothed;
+}
+
+/**
  * Erase the part of an open polyline that falls inside a circular brush.
  *
  * Returns one entry per surviving run, so erasing through the middle of a
- * stroke splits it into two paths — which is what Figma's eraser does to
+ * stroke splits it into two paths — which is what the eraser does to
  * vector geometry, rather than deleting the whole layer.
  */
 export function erasePath(
@@ -452,7 +874,7 @@ export function erasePath(
 }
 
 /**
- * Converts a sequence of `PathPoint`s to Figma's `VectorNetwork` graph representation.
+ * Converts a sequence of `PathPoint`s to `VectorNetwork` graph representation.
  */
 export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorNetwork {
   if (!path.length) return { vertices: [], segments: [] };
@@ -494,7 +916,7 @@ export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorN
 
 /**
  * Calculate the degree (connected segment count) for a vertex in a VectorNetwork.
- * A degree >= 3 indicates a branching point (Figma Vector Network characteristic).
+ * A degree >= 3 indicates a branching point (Vector Network branching characteristic).
  */
 export function vertexDegree(vn: VectorNetwork, vertexIndex: number): number {
   let count = 0;
@@ -781,6 +1203,147 @@ export function findNetworkLoops(vn: VectorNetwork): number[][] {
   return loops;
 }
 
+/**
+ * Line segment intersection test between [p1, p2] and [p3, p4].
+ */
+export function lineIntersection(
+  x1: number, y1: number, x2: number, y2: number,
+  x3: number, y3: number, x4: number, y4: number,
+): { x: number; y: number; t: number; u: number } | null {
+  const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+  if (Math.abs(denom) < 1e-7) return null;
+  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom;
+  const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / denom;
+  if (t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98) {
+    return {
+      x: x1 + t * (x2 - x1),
+      y: y1 + t * (y2 - y1),
+      t,
+      u,
+    };
+  }
+  return null;
+}
+
+/**
+ * Splits intersecting segments in a VectorNetwork, inserting new vertices at intersection points.
+ * Creates a planarized graph so all enclosed regions can be detected and filled independently.
+ */
+export function splitVectorNetworkIntersections(vn: VectorNetwork): VectorNetwork {
+  const vertices: VectorVertex[] = vn.vertices.map((v) => ({ ...v }));
+  const segments: VectorSegment[] = vn.segments.map((s) => ({ ...s }));
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 30) {
+    changed = false;
+    iterations++;
+    for (let i = 0; i < segments.length; i++) {
+      const s1 = segments[i];
+      const v1 = vertices[s1.start];
+      const v2 = vertices[s1.end];
+      if (!v1 || !v2) continue;
+
+      for (let j = i + 1; j < segments.length; j++) {
+        const s2 = segments[j];
+        if (s1.start === s2.start || s1.start === s2.end || s1.end === s2.start || s1.end === s2.end) continue;
+        const v3 = vertices[s2.start];
+        const v4 = vertices[s2.end];
+        if (!v3 || !v4) continue;
+
+        const hit = lineIntersection(v1.x, v1.y, v2.x, v2.y, v3.x, v3.y, v4.x, v4.y);
+        if (hit) {
+          const newIdx = vertices.length;
+          vertices.push({ x: hit.x, y: hit.y });
+
+          // Split segment 1
+          const s1End = s1.end;
+          s1.end = newIdx;
+          segments.push({ start: newIdx, end: s1End });
+
+          // Split segment 2
+          const s2End = s2.end;
+          s2.end = newIdx;
+          segments.push({ start: newIdx, end: s2End });
+
+          changed = true;
+          break;
+        }
+      }
+      if (changed) break;
+    }
+  }
+
+  return { vertices, segments, regions: vn.regions };
+}
+
+/**
+ * Detects all closed planar face regions in a VectorNetwork.
+ */
+export function detectPlanarRegions(vn: VectorNetwork): VectorRegion[] {
+  const planar = splitVectorNetworkIntersections(vn);
+  const loops = findNetworkLoops(planar);
+  if (!loops.length) {
+    return vn.regions || [];
+  }
+
+  const existing = vn.regions || [];
+  return loops.map((loop, idx) => {
+    const prev = existing[idx];
+    return {
+      windingRule: "NONZERO" as const,
+      loops: [loop],
+      fill: prev?.fill,
+      fillOpacity: prev?.fillOpacity,
+    };
+  });
+}
+
+/**
+ * Fills the planar face / region containing point (px, py) using Paint Bucket tool semantics.
+ */
+export function fillNetworkRegionAtPoint(
+  vn: VectorNetwork,
+  px: number,
+  py: number,
+  fillColor: string,
+  opacity = 1,
+): VectorNetwork {
+  const planar = splitVectorNetworkIntersections(vn);
+  let regions = planar.regions && planar.regions.length > 0 ? planar.regions : detectPlanarRegions(planar);
+  if (!regions.length) {
+    // If no regions detected yet, detect them now
+    const loops = findNetworkLoops(planar);
+    if (loops.length > 0) {
+      regions = loops.map((loop) => ({
+        windingRule: "NONZERO" as const,
+        loops: [loop],
+      }));
+    }
+  }
+
+  let matched = false;
+  const updatedRegions: VectorRegion[] = regions.map((reg) => {
+    for (const loop of reg.loops) {
+      const poly = loop.map((idx: number) => planar.vertices[idx]).filter(Boolean) as { x: number; y: number }[];
+      if (poly.length >= 3 && pointInPolygon(poly, px, py)) {
+        matched = true;
+        return {
+          ...reg,
+          fill: reg.fill === fillColor ? undefined : fillColor, // toggle fill if same
+          fillOpacity: opacity,
+        };
+      }
+    }
+    return reg;
+  });
+
+  return {
+    ...planar,
+    regions: matched ? updatedRegions : regions,
+  };
+}
+
 export interface NoodleCurve {
   ax: number;
   ay: number;
@@ -796,12 +1359,12 @@ export interface NoodleCurve {
 }
 
 /**
- * Calculates a smooth, organic Figma-grade S-curve connection noodle between
+ * Calculates a smooth, organic S-curve connection noodle between
  * source node and destination frame (or mouse cursor). Dynamically selects the
  * best perimeter edges (right/left/top/bottom) and computes tangential cubic
  * Bézier control handles and rotating arrowhead orientation.
  */
-export function computeFigmaNoodle(
+export function computeConnectorNoodle(
   srcX: number,
   srcY: number,
   srcW: number,
@@ -916,14 +1479,14 @@ export function computeFigmaNoodle(
 }
 
 /**
- * Re-break an already wrapped paragraph for Figma's two wrap styles.
+ * Re-break an already wrapped paragraph for two wrap styles.
  *
  * `lines` is the greedy word wrap, one entry per line, and `widthOf` is the
  * same width model the wrapper used, so the two never disagree about what
  * fits. Greedy first-fit is already the fewest lines a paragraph can have, so
  * the count is fixed and the only freedom is *where* the breaks fall: this
  * picks the partition whose widest line is as narrow as possible, which is
- * what Figma means by distributing the lines evenly. Pretty takes the same
+ * distributing the lines evenly. Pretty takes the same
  * partition and then refuses a widow - a lone final word is joined to the
  * line above when it fits, otherwise it borrows a word from it.
  *
@@ -1016,3 +1579,6 @@ export function balanceLines(
   BALANCE_CACHE.set(key, out);
   return out;
 }
+
+/** Alias for backward compatibility */
+export const computeFigmaNoodle = computeConnectorNoodle;

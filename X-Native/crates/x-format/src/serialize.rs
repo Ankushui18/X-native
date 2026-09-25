@@ -41,7 +41,7 @@ fn paint_json(p: &Paint) -> String {
                 .map(|(t, c)| format!("[{},\"{}\"]", t, color_to_hex(*c)))
                 .collect::<Vec<_>>()
                 .join(","),
-            // perceptual interpolation (Sketch 2026.2); omitted for Srgb
+            // perceptual interpolation ( 2026.2); omitted for Srgb
             if *space == GradSpace::Oklab {
                 ",\"gs\":\"oklab\""
             } else {
@@ -446,7 +446,7 @@ fn interaction_json(i: &Interaction) -> String {
     } else {
         String::new()
     };
-    // Figma's "Animate matching layers" tick. Absent means off, so files that
+    // the "Animate matching layers" tick. Absent means off, so files that
     // predate the tick carry on meaning what they meant.
     let smart = if i.animate_matching_layers {
         ",\"smartmatch\":true".to_string()
@@ -552,7 +552,7 @@ fn kind_json(k: &NodeKind) -> String {
             l.gap_var.as_deref().map(|v| format!(",\"gap_var\":\"{}\"", esc(v))).unwrap_or_default(),
             l.padding_var.as_deref().map(|v| format!(",\"padding_var\":\"{}\"", esc(v))).unwrap_or_default(),
             l.cross_sizing.map(|s| format!(",\"cross_sizing\":\"{}\"", if s == Sizing::Hug { "hug" } else { "fixed" })).unwrap_or_default(),
-            // CSS-grid mode (Figma Grid): omitted entirely when not a grid
+            // CSS-grid mode ( Grid): omitted entirely when not a grid
             format_args!("{}{}", l.grid.as_ref().map(grid_json).unwrap_or_default(), layout_extras(l)),
         ),
         NodeKind::Group => "{\"t\":\"group\"}".into(),
@@ -1079,7 +1079,7 @@ pub fn save_x(doc: &Document) -> String {
         out.push_str(&format!(",\"exposed\":[{}]", names.join(",")));
     }
     out.push_str("},");
-    // named styles (Figma paint/text/effect styles). Sorted for determinism.
+    // named styles ( paint/text/effect styles). Sorted for determinism.
     let mut style_keys: Vec<_> = doc.styles.keys().collect();
     style_keys.sort();
     out.push_str("\"styles\":{");

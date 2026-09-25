@@ -154,7 +154,7 @@ impl Editor {
     }
 
     /// Node tool drag in WORLD space: move a bezier control handle.
-    /// `mirror` follows Figma — the default drag keeps the point smooth, Alt
+    /// `mirror` follows  — the default drag keeps the point smooth, Alt
     /// breaks the tangent (see [`Editor::move_handle`]).
     pub fn drag_handle_world(
         &mut self,

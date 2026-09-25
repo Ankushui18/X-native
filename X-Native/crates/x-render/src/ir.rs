@@ -16,7 +16,7 @@ use vello::peniko::{Brush, Color, Fill, Mix};
 use vello::Scene;
 use x_core::*;
 
-/// OpenPencil / Figma UI3 canvas frame names: 11px Inter Regular, with an
+/// OpenPencil /  UI3 canvas frame names: 11px Inter Regular, with an
 /// 8px gap between the bottom of the glyphs and the frame's top edge.
 /// `LABEL_ABOVE_Y` is the world-space translation used by the IR / direct
 /// encoders (top of an 11px line); the canvas overlay places by baseline so
@@ -29,7 +29,7 @@ pub const LABEL_OFFSET_Y: f64 = 8.0;
 pub const LABEL_ABOVE_Y: f64 = -(LABEL_OFFSET_Y + LABEL_FONT_SIZE);
 
 /// Point size of that label — OpenPencil `LABEL_FONT_SIZE` (11px), which is
-/// Figma UI3's frame name. One constant for both encoders, both arms, and the
+///  UI3's frame name. One constant for both encoders, both arms, and the
 /// canvas overlay (`editor_ui::paint_frame_labels`).
 pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;
 
@@ -39,7 +39,7 @@ pub const LABEL_SIZE: f64 = LABEL_FONT_SIZE;
 /// sites across the two encoders and they had already drifted — the scene's Frame
 /// arm faded a name to 70% while the other three did not, so the same frame's name
 /// was a different grey on the canvas than in an export. The contract this sits
-/// under — and the tests that pin it — is docs/FIGMA_PARITY.md.
+/// under — and the tests that pin it — is docs/_PARITY.md.
 ///
 /// This is the artwork-surface ink (raster, thumbnails, headless renders — light
 /// backgrounds). The canvas overlay paints through the theme roles instead
@@ -49,7 +49,7 @@ pub fn label_ink() -> Color {
     Color::from_rgba8(0x4b, 0x55, 0x63, 0xff)
 }
 
-/// Ink of a SELECTED frame's name label — Figma's accent blue. The canvas
+/// Ink of a SELECTED frame's name label — the accent blue. The canvas
 /// overlay reads the theme's selection role (the same blue); this is the
 /// engine-side spelling for surfaces without a theme.
 pub fn label_ink_selected() -> Color {
@@ -71,7 +71,7 @@ pub struct FrameLabelTarget {
 
 /// The frames whose names the canvas paints: a page's outermost frames (plus
 /// the frames sitting directly in a Section), honouring visibility and each
-/// frame's own **Show name** switch — Figma names those only. The render root
+/// frame's own **Show name** switch —  names those only. The render root
 /// (the page) is never named, frames nested inside another frame are not, and
 /// a master's internal frames (instance content) are not. Mirrors the gate in
 /// `lower` (`!path.is_empty() && !in_frame && node.show_name`, Frame arm only)
@@ -112,7 +112,7 @@ pub fn frame_label_targets(root: &Node) -> Vec<FrameLabelTarget> {
     out
 }
 
-/// Figma draws a Section's name as a **filled chip in the section's own colour**,
+///  draws a Section's name as a **filled chip in the section's own colour**,
 /// not as a bare frame-style label — and, unlike a frame name, a section's chip IS
 /// part of its export. These are the chip's numbers, in the section's own
 /// coordinate space (the chip sits in the gutter above the section's top-left
@@ -244,7 +244,7 @@ pub enum RenderCommand {
         paragraph_indent: f64,
         /// Underline / strikethrough, drawn per line by the shaper.
         decoration: x_core::TextDecoration,
-        /// Figma's list style: the shaper reserves a marker column and
+        /// the list style: the shaper reserves a marker column and
         /// draws the bullet or counter in it (help 360040449773).
         list: x_core::ListStyle,
         runs: Vec<x_core::TextPart>,
@@ -320,9 +320,9 @@ impl RenderTree {
 }
 
 /// A mask node's clip geometry (vector path / rect / ellipse).
-/// Figma: *"any layer can be a mask"* (help 360040450253). Kinds with an
+/// : *"any layer can be a mask"* (help 360040450253). Kinds with an
 /// outline of their own use it; the rest — text, images, groups, frames,
-/// instances — clip to their bounds, a superset of Figma's per-pixel
+/// instances — clip to their bounds, a superset of the per-pixel
 /// coverage (glyph coverage, image alpha) and the named delta there.
 fn node_fill_override(
     overrides: &std::collections::HashMap<String, String>,
@@ -362,7 +362,7 @@ fn mask_path_of(n: &Node) -> Option<BezPath> {
     }
 }
 
-/// The uniform alpha Figma's mask type asks for. Container masks have no fill
+/// The uniform alpha the mask type asks for. Container masks have no fill
 /// of their own to key on (a group or frame reveals where its children
 /// painted), so only a leaf's own paint scales the scope; those stay at 1.0
 /// and the clip does the work.
@@ -1026,7 +1026,7 @@ pub fn is_frame_name_label(key: &str) -> bool {
 /// * `/label` — a frame's name, in the gutter above it;
 /// * `/pill` + `/chip` — a Section's title chip.
 ///
-/// The two objects differ in an EXPORT: Figma exports a section's title with the
+/// The two objects differ in an EXPORT:  exports a section's title with the
 /// section, so only the label is stripped there. A PRESENTATION has no canvas to
 /// identify anything on, so `strip_canvas_chrome` takes both.
 pub fn is_canvas_chrome(key: &str) -> bool {
@@ -1034,7 +1034,7 @@ pub fn is_canvas_chrome(key: &str) -> bool {
 }
 
 /// Drop the canvas chrome from a lowered tree. A presentation paints the
-/// artwork: Figma does not draw frame names in presentation mode, and the
+/// artwork:  does not draw frame names in presentation mode, and the
 /// canvas around a presented frame is not on screen at all.
 pub fn strip_canvas_chrome(tree: &mut RenderTree) {
     tree.commands.retain(|c| !is_canvas_chrome(c.key()));
@@ -1073,7 +1073,7 @@ pub fn build_render_tree_with_hidden(
 }
 
 /// Render a single node's subtree at its OWN origin (position zeroed, size
-/// and rotation kept) — the Figma "export this layer" view. Components are
+/// and rotation kept) — the  "export this layer" view. Components are
 /// still resolved against the WHOLE document's masters, and nested instances
 /// keep their overrides (they live on the instance node, so the clone carries
 /// them). Returns None if `id` is not found.
@@ -1118,7 +1118,7 @@ pub fn build_render_tree_of(root: &Node, id: &str, vars: &Variables) -> Option<R
 /// Build a render tree for a Slice: the flattened canvas content inside the
 /// slice's world bounds, re-origined to (0,0). Returns the tree plus the
 /// slice's (w, h) as the export canvas size. The whole page is lowered (so
-/// content from every layer that overlaps the region is captured, Figma
+/// content from every layer that overlaps the region is captured, 
 /// style), then every command is shifted by the slice's world offset and
 /// clipped to the slice rect at the origin. `id` must resolve to a Slice node.
 pub fn build_render_tree_slice(
@@ -1171,7 +1171,7 @@ pub fn build_render_tree_slice(
 }
 
 /// `in_frame`: true when a FRAME (not the page, not a Section) already encloses
-/// this node in THIS render. Figma only draws a name for a page's outermost
+/// this node in THIS render.  only draws a name for a page's outermost
 /// frames — "when nesting frames to organize them, only the top-level /
 /// outermost frame title is shown" (frames inside a Section reset the flag) —
 /// so a frame nested in a frame stays silent. It also keeps a nested frame's
@@ -1273,7 +1273,7 @@ fn lower(
     };
 
     // Frames clip their children to their own (possibly rounded) bounds by
-    // default, same as Figma frames — this also stops a child's drop
+    // default, same as  frames — this also stops a child's drop
     // shadow / overflow from bleeding past the frame edge onto the canvas.
     let mut frame_clip_shape: Option<BezPath> = None;
 
@@ -1647,7 +1647,7 @@ fn lower(
                 } else {
                     node.name.as_str()
                 };
-                // the chip first, then the label ON it: Figma's section title is
+                // the chip first, then the label ON it: the section title is
                 // a filled tag in the section's own colour, not a bare label
                 tree.commands.push(RenderCommand::FillPath {
                     key: format!("{key}/pill"),
@@ -1666,7 +1666,7 @@ fn lower(
                 });
                 // `/chip`, NOT `/label`: a frame's name is canvas chrome and the
                 // exporter strips it, while a section's title is part of the
-                // section's own artwork and exports with it (Figma). Same suffix
+                // section's own artwork and exports with it (). Same suffix
                 // would have exported a solid tag with no text on it.
                 tree.commands.push(RenderCommand::Glyphs {
                     key: format!("{key}/chip"),
@@ -1752,7 +1752,7 @@ fn lower(
             // "not the root" test the traversal already carries; `!in_frame`
             // drops the names of frames nested inside other frames (see the
             // parameter).
-            // ...and the frame may switch its own name OFF (Figma's right
+            // ...and the frame may switch its own name OFF (the right
             // sidebar: Layer → "Show name"), which is the third and last gate on
             // a frame label.
             if !path.is_empty() && !in_frame && node.show_name {
@@ -1765,7 +1765,7 @@ fn lower(
                     key: format!("{key}/label"),
                     // ABOVE the frame's top-left corner — a name is canvas
                     // chrome, so it must not sit on the artwork it names
-                    // (Figma draws it in the gutter above the frame; ours was
+                    // ( draws it in the gutter above the frame; ours was
                     // painted inside the top-left corner, over the content).
                     transform: world * Affine::translate((0.0, LABEL_ABOVE_Y)),
                     text: name.to_string(),
@@ -1813,7 +1813,7 @@ fn lower(
             if depth < MAX_INSTANCE_DEPTH {
                 let name = swap_component.as_deref().unwrap_or(component.as_str());
                 if let Some(def) = registry.get(name) {
-                    // Figma slots: masters with Slot props substitute the
+                    //  slots: masters with Slot props substitute the
                     // instance's tagged content at the anchor nodes.
                     let resolved = resolve_slots(def, node);
                     let kids: &[Node] = resolved.as_deref().unwrap_or(&def.children);
@@ -1889,7 +1889,7 @@ fn lower(
                     path: mask_path,
                 });
                 mask_layers += 1;
-                // Figma's mask types (help 360040450253; the Mask section's
+                // the mask types (help 360040450253; the Mask section's
                 // dropdown): Vector is outline only, so the clip above is the
                 // whole story. Alpha and Luminance key the masked result on
                 // the mask's own opacity / brightness, which for a single
@@ -2279,7 +2279,7 @@ mod tests {
                 assert!((t.y - (60.0 + LABEL_ABOVE_Y)).abs() < 1e-9, "{t:?}");
                 assert!(t.y < 60.0, "the label sits ABOVE the frame");
                 assert_eq!(*size, LABEL_SIZE);
-                assert_eq!(*size, 11.0, "OpenPencil / Figma UI3 frame name is 11px");
+                assert_eq!(*size, 11.0, "Frame name is 11px");
                 assert_eq!(*max_width, 280.0);
             }
             other => panic!("expected Glyphs, got {other:?}"),
@@ -2296,7 +2296,7 @@ mod tests {
         // ...and a frame nested inside ANOTHER frame is silent — here the
         // render root is a frame, so it is not labelled (rule 1) and neither is
         // the frame inside its child frame (rule 2); only "Middle" is a page's
-        // outermost frame. Figma names those only, which is also what keeps a
+        // outermost frame.  names those only, which is also what keeps a
         // nested frame's label from being cropped by its parent's clip scope.
         let outer = Node::frame("Outer", 400.0, 300.0)
             .child(Node::frame("Middle", 300.0, 200.0).child(Node::frame("Inner", 100.0, 80.0)));
@@ -2310,7 +2310,7 @@ mod tests {
             })
             .collect();
         assert_eq!(labels3, vec!["Middle"], "only the outermost frame is named");
-        // a Section does not hide the names of the frames it contains (Figma:
+        // a Section does not hide the names of the frames it contains (:
         // frame names stay visible inside sections)
         let mut band = Node::section("Band", 300.0, 200.0);
         band.name = "Band".into(); // `Node::section` names itself "Section"
@@ -2574,7 +2574,7 @@ mod tests {
         assert!(tiny.width() <= 40.0, "{tiny:?}");
     }
 
-    /// Figma's per-frame **Show name** switch is the third gate on a frame
+    /// the per-frame **Show name** switch is the third gate on a frame
     /// label, after "not the root" and "not nested in a frame": the frame is
     /// still named by the rules, it just stops painting the name.
     #[test]
@@ -2796,7 +2796,7 @@ mod tests {
                 assert!(co[4] >= -0.001 && co[4] < 100.0, "unexpected tx {}", co[4]);
             }
         }
-        // Figma: a frame's name is canvas chrome and is never part of the
+        // : a frame's name is canvas chrome and is never part of the
         // exported artwork (forum "Section titles are exporting as part of the
         // image?"); an exported subtree therefore carries no `/label` command,
         // not even for a frame nested in the exported one.

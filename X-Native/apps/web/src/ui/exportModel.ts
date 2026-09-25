@@ -1,8 +1,7 @@
 /**
- * Export settings, as Figma's "Export formats and settings for static designs"
- * documents them.
+ * Export settings for static designs.
  *
- * The article is unusually specific - it publishes a capability table per format
+ * Publishes a capability table per format
  * - so this module is that table, plus the scale syntax, in one place. The
  * inspector renders the settings a format actually supports and the exporter
  * reads the same capabilities, so a control can never appear for something the
@@ -33,7 +32,7 @@ export interface FormatCaps {
 }
 
 /**
- * Figma's capability table, verbatim. PNG and JPG take the two overlap
+ * Export capability table. PNG and JPG take the two overlap
  * settings; SVG adds the three markup settings; PDF takes none of them but does
  * take quality and resampling.
  */
@@ -87,7 +86,7 @@ export const FORMATS: ExportFormat[] = ["PNG", "JPG", "SVG", "PDF"];
  *  conveniences. */
 export const SCALE_PRESETS = [0.5, 0.75, 1, 1.5, 2, 3, 4];
 
-/** Figma's default JPG quality is High and its default PDF quality is Medium. */
+/** Default JPG quality is High and default PDF quality is Medium. */
 export function defaultQuality(format: ExportFormat): Quality {
   return format === "JPG" ? "high" : "medium";
 }
@@ -107,11 +106,10 @@ export interface ExportSize {
 /**
  * The size an export will come out at.
  *
- * Figma's scale field takes a plain multiplier, or a size with a unit: `2x` is
+ * Scale field takes a plain multiplier, or a size with a unit: `2x` is
  * twice the layer, `500w` is 500 wide with the height following the aspect
  * ratio, `300h` is 300 tall with the width following it. A vector format is
- * pinned at 1x - the article is explicit that "Figma only supports exports for
- * SVGs at 1x" and the same for PDFs - so `2x` on an SVG still comes out at the
+ * pinned at 1x - SVG/PDF exports are supported at 1x - so `2x` on an SVG still comes out at the
  * design size rather than silently scaling a "vector" file.
  */
 export function exportSize(
@@ -196,7 +194,7 @@ export function resolveSettings(preset: ExportPreset): ResolvedSettings {
   const caps = FORMAT_CAPS[preset.format];
   const p = preset as ExportPreset & Partial<ResolvedSettings>;
   return {
-    // Both overlap settings are on out of the box, as in Figma.
+    // Both overlap settings are enabled by default.
     ignoreOverlap: caps.ignoreOverlap ? p.ignoreOverlap !== false : false,
     boundingBox: caps.boundingBox ? p.boundingBox !== false : false,
     includeId: caps.includeId ? p.includeId === true : false,
@@ -209,7 +207,7 @@ export function resolveSettings(preset: ExportPreset): ResolvedSettings {
   };
 }
 
-/** A new preset for a format, with Figma's defaults. */
+/** A new preset for a format with default settings. */
 export function newPreset(format: ExportFormat, scale: number | string = 1): ExportPreset {
   return { format, scale: FORMAT_CAPS[format].oneToOne ? 1 : (scale as number), suffix: "" };
 }

@@ -70,7 +70,7 @@ pub struct EncodeCtx<'a> {
 /// own for the design sheet to own.
 pub const OUTLINE_COLOR: Color = Color::WHITE;
 
-/// Figma's outline mode (⌘Y): a stripped **copy** of `root` in which the
+/// the outline mode (⌘Y): a stripped **copy** of `root` in which the
 /// canvas renders each layer as a wireframe — fills, images, blends and
 /// effects are not painted, only the outline. Per node: the fill, stroke and
 /// effect stacks (and the legacy single-paint fallback) are cleared, the
@@ -78,7 +78,7 @@ pub const OUTLINE_COLOR: Color = Color::WHITE;
 /// [`OUTLINE_COLOR`] at `width` — the app passes `1.0 / zoom`, so the line
 /// stays ≈1 screen pixel at any zoom. Image and Text nodes paint themselves
 /// (a bitmap, glyphs) and would swallow the stroke, so they become plain
-/// `Rect { radius: 0.0 }` — the layer's own box (the named delta: Figma
+/// `Rect { radius: 0.0 }` — the layer's own box (the named delta: 
 /// outlines the glyphs). Children are stripped recursively, so an instance
 /// resolves from the stripped registry — the master's children in the copy —
 /// and nothing in the original document moves. A render mode, not a document
@@ -86,7 +86,7 @@ pub const OUTLINE_COLOR: Color = Color::WHITE;
 /// `hidden_text`.
 ///
 /// The ONE exception to "per node": the render ROOT. On the canvas the root
-/// is the PAGE, and the page is not a layer — Figma's outline mode outlines
+/// is the PAGE, and the page is not a layer — the outline mode outlines
 /// layers, and our page frame is the canvas itself, so outlining it would
 /// ring the whole window.
 pub fn outline_view(root: &Node, width: f64) -> Node {
@@ -327,7 +327,7 @@ fn encode_vector_layers(
 
 /// `in_frame` mirrors `ir::lower`'s flag: true when a FRAME already encloses
 /// this node in this render, so the direct encoder draws the same labels the IR
-/// path draws (Figma names a page's outermost frames only).
+/// path draws ( names a page's outermost frames only).
 #[allow(clippy::too_many_arguments)]
 fn encode(
     scene: &mut Scene,
@@ -515,7 +515,7 @@ fn encode(
             }
         }
         NodeKind::Text { text } => {
-            // Figma Fixed size / Truncate: glyphs never paint outside the
+            //  Fixed size / Truncate: glyphs never paint outside the
             // text layer's box (help 360039956634 / 27378154668951).
             let text_clip = Rect::new(0.0, 0.0, node.w.max(0.0), node.h.max(0.0)).into_path(0.1);
             scene.push_clip_layer(Fill::NonZero, world, &text_clip);
@@ -781,7 +781,7 @@ fn encode(
                 // instance) has already been applied by the parent pass;
                 // here resolve our own component name.
                 if let Some(def) = registry.get(component.as_str()) {
-                    // Figma slots: masters with Slot props substitute the
+                    //  slots: masters with Slot props substitute the
                     // instance's tagged content at the anchor nodes.
                     let resolved = resolve_slots(def, node);
                     let kids: &[Node] = resolved.as_deref().unwrap_or(&def.children);
@@ -806,7 +806,7 @@ fn encode(
         }
         NodeKind::Frame { .. } => {
             // Frames draw their background fill when it isn't transparent
-            // (matches Figma: frames have fills; groups do not). Corner
+            // (matches : frames have fills; groups do not). Corner
             // radii apply here too, same as a Rect node.
             let color = effective_fill(node, overrides, vars);
             let shape = shape_for_rect(node, 0.0);
@@ -841,9 +841,9 @@ fn encode(
             //     whose name belongs in the pages list; it used to print
             //     across an empty artboard and stay there after everything on
             //     the page was deleted), or
-            //   * a frame nested inside another frame (Figma names a page's
+            //   * a frame nested inside another frame ( names a page's
             //     outermost frames only — `in_frame`), or
-            //   * a frame whose own **Show name** switch is off (Figma's right
+            //   * a frame whose own **Show name** switch is off (the right
             //     sidebar: Layer → "Show name").
             if depth > 0 && !in_frame && node.show_name {
                 let name = if node.name.is_empty() {
@@ -878,7 +878,7 @@ fn encode(
             }
         }
         NodeKind::Section => {
-            // Figma-style section: tinted rounded container, hairline
+            // standard section: tinted rounded container, hairline
             // border, and the node NAME as a header label above the
             // content (children render through the shared path below).
             let color = effective_fill(node, overrides, vars);
@@ -903,12 +903,12 @@ fn encode(
                 );
                 stats.paths += 1;
             }
-            // Header: Figma draws a Section's name as a filled chip in the
+            // Header:  draws a Section's name as a filled chip in the
             // section's own colour, and — unlike a frame name, which is chrome —
             // a section's chip IS part of its export. The geometry comes from
             // `crate::ir::section_pill_*`, so the direct encoder and the IR
             // encoder draw the same chip. A section is labelled wherever it
-            // appears (Figma: "in sections, frame name is always visible"); only
+            // appears (: "in sections, frame name is always visible"); only
             // the root of the render is silent, because on the canvas the root is
             // the page itself.
             if depth > 0 {

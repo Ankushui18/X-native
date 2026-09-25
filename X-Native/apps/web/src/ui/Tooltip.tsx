@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { createPortal } from "react-dom";
 
 /**
- * Figma-style tooltip: a dark pill that appears after a short delay and always
+ * Floating tooltip: a dark pill that appears after a short delay and always
  * shows the keyboard shortcut alongside the label. The native `title` attribute
  * can't do this — it waits ~1.5s, can't be styled, and drops the shortcut — so
  * every control that has a shortcut should use this instead.
  *
  * Once one tooltip has been shown the delay is skipped for a moment, matching
- * Figma's behaviour of tracking along a toolbar without re-waiting each time.
+ * the standard behaviour of tracking along a toolbar without re-waiting each time.
  */
 
 const DELAY = 380;

@@ -9,7 +9,7 @@
 //! - **Reusable Components**: No screen-specific UI code
 //! - **Accessibility First**: Built-in ARIA roles, keyboard navigation, focus management
 //! - **Performance**: Retained mode, virtualized lists, efficient repaint
-//! - **X-Native Identity**: Our visual language, not a Figma clone
+//! - **X-Native Identity**: Our visual language, not a  clone
 //!
 //! ## Architecture:
 //! ```text

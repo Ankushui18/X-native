@@ -22,7 +22,7 @@ export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth"
 export type Sizing = "fixed" | "hug" | "fill";
 export type LayoutDirection = "horizontal" | "vertical" | "grid";
 /**
- * How a grid track is sized, Figma's three options for a column or a row.
+ * How a grid track is sized, Three options for a column or a row.
  *
  * - `hug` keeps the smallest track the objects in it need.
  * - `fill` shares the leftover space by fractional unit - the article's `fr`:
@@ -44,7 +44,7 @@ export type LayoutJustify = "min" | "center" | "max" | "between";
 export type TextAlign = "left" | "center" | "right" | "justified";
 export type TextAlignVertical = "top" | "middle" | "bottom";
 /**
- * How a wrapped paragraph breaks its lines - the type setting Figma exposes as
+ * How a wrapped paragraph breaks its lines - the type setting for
  * "Wrap style". Mirrors x-core's TextWrap enum, which rides the node as the
  * "tw" binding: Auto is the greedy first-fit, Balance evens the line lengths
  * out per paragraph, Pretty balances and keeps a lone word off the last line.
@@ -66,7 +66,7 @@ export type StrokeCap =
   | "triangle"
   | "reverse-triangle"
   | "diamond";
-/** Figma's Individual strokes picker; `custom` keeps a weight per side. */
+/** Individual strokes picker; `custom` keeps a weight per side. */
 export type StrokeSides = "all" | "top" | "right" | "bottom" | "left" | "custom";
 export type StrokeJoin = "miter" | "bevel" | "round";
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
@@ -145,7 +145,7 @@ export interface AnnotationItem {
 export interface PathPoint {
   x: number;
   y: number;
-  /** Incoming bezier handle, relative to the point (Figma pen). */
+  /** Incoming bezier handle, relative to the point (Pen tool). */
   ix?: number;
   iy?: number;
   /** Outgoing bezier handle, relative to the point. */
@@ -156,7 +156,7 @@ export interface PathPoint {
 }
 
 /**
- * Evan Wallace / Figma Vector Network Model.
+ * Vector Network Model.
  * Represents vector paths as an arbitrary planar graph where vertices
  * can connect to 3 or more segments (branching, T-junctions, interior faces).
  */
@@ -178,6 +178,8 @@ export interface VectorSegment {
 export interface VectorRegion {
   windingRule?: "NONZERO" | "EVENODD";
   loops: number[][]; // array of vertex index sequences forming closed loops
+  fill?: string;
+  fillOpacity?: number;
 }
 
 export interface VectorNetwork {
@@ -213,7 +215,7 @@ export interface ComponentVariant {
 }
 
 /**
- * A named, reusable paint definition — Figma's colour styles.
+ * A named, reusable paint definition — reusable color styles.
  *
  * A style owns the paint; nodes reference it by id through `XNode.fillStyle` /
  * `XNode.strokeStyle`. Editing the style repaints every node bound to it,
@@ -250,13 +252,13 @@ export interface ComponentMaster {
 
 export interface ExportPreset {
   format: ExportFormat;
-  /** Figma's scale field: a multiplier, or a size with a unit. A number is
+  /** Scale field: a multiplier, or a size with a unit. A number is
    *  read as a multiplier, the strings "500w" and "300h" as a fixed width or
    *  height with the other side following the aspect ratio. */
   scale: number | string;
   suffix: string;
   /** Format-specific settings. All optional: a preset saved before these
-   *  existed reads through `resolveSettings`, which fills in Figma's defaults
+   *  existed reads through `resolveSettings`, which fills in default settings
    *  rather than treating a missing boolean as off. */
   ignoreOverlap?: boolean;
   boundingBox?: boolean;
@@ -295,7 +297,7 @@ export interface TextRun {
 /**
  * One entry in a node's fill stack.
  *
- * Figma paints a list of fills bottom-to-top. The existing scalar `fill`/
+ * List of fills paints bottom-to-top. The existing scalar `fill`/
  * `fillType`/`gradientStops` fields on XNode describe the *bottom* fill and
  * remain authoritative on their own, so every existing call site keeps working.
  * `XNode.fills` holds any *additional* fills painted over it; an empty or
@@ -321,11 +323,11 @@ export interface Paint {
  * Same split as fills: the scalar `strokePaint`/`strokeWidth`/… fields on
  * XNode describe the *bottom* stroke and stay authoritative on their own, so
  * every existing call site keeps working. `XNode.strokes` holds any extra
- * strokes drawn on top, bottom-to-top, the way Figma stacks them. An empty or
+ * strokes drawn on top, bottom-to-top, in bottom-to-top order. An empty or
  * absent array means "single stroke", which is the legacy behaviour.
  *
  * Each layer carries its own geometry (width, align, dash, caps) because in
- * Figma a second stroke is a genuinely independent outline, not a recolour of
+ * a second stroke is a genuinely independent outline, not a recolour of
  * the first.
  */
 export interface StrokeLayer {
@@ -354,10 +356,10 @@ export interface Effect {
   spread: number;
   visible: boolean;
   /** How this effect blends with what is already on the canvas. Only inner
-   *  shadows, drop shadows and noise offer it in Figma; "Normal" is the
+   *  shadows, drop shadows and noise offer it; "Normal" is the
    *  default, and "Pass through" is not available to fills or effects. */
   blend?: string;
-  /** Drop shadows only. Figma's checkbox; off by default, which means the
+  /** Drop shadows only. Checkbox; off by default, which means the
    *  shadow is masked by whatever the layer actually paints, so a stroke-only
    *  layer casts the shadow of its ring rather than of the whole outline. */
   showBehind?: boolean;
@@ -383,7 +385,7 @@ export type Tool =
   | "eraser"
   | "comment"
   | "hand"
-  /** Sketch's Zoom tool: click to zoom in, ⌥-click out, drag to a region. */
+  /** Zoom tool: click to zoom in, ⌥-click out, drag to a region. */
   | "zoom";
 
 export interface AutoLayout {
@@ -395,15 +397,15 @@ export interface AutoLayout {
   wrap: boolean;
   align: LayoutAlign;
   justify: LayoutJustify;
-  /** Figma's Auto gap. When `"auto"`, `gap` is ignored and the space left over
+  /** Auto gap. When `"auto"`, `gap` is ignored and the space left over
    *  is distributed by `spacing` - which is what makes a frame's contents sit
    *  against its padding, or evenly through it, as the frame is resized. */
   gapMode?: "fixed" | "auto";
   spacing?: "between" | "around" | "evenly";
-  /** Canvas stacking: true = First on top, false = Last on top (Figma parity) */
+  /** Canvas stacking: true = First on top, false = Last on top (canvas stacking) */
   itemReverseZIndex?: boolean;
   /* ── The grid flow ────────────────────────────────────────────────────────
-   * Figma's third flow, "Use the grid in auto layout flow": cells arranged
+   * Grid flow, "Use the grid in auto layout flow": cells arranged
    * into columns and rows, where an object can span several of each. Only read
    * when `direction` is `"grid"`. */
   /** Number of columns. */
@@ -419,7 +421,7 @@ export interface AutoLayout {
   /** Per-track sizing; a missing entry is a hug. */
   colTracks?: GridTrack[];
   rowTracks?: GridTrack[];
-  /** Figma's automatic positioning, on by default: objects flow left to right
+  /** Automatic positioning, on by default: objects flow left to right
    *  from the top row. Switching it off keeps every object in the cell it is
    *  in, which is how empty cells survive a deletion. */
   autoPosition?: boolean;
@@ -456,7 +458,7 @@ export interface XNode {
   h: number;
   rotation: number;
   /** Where the layer turns about, as a fraction of its own box: [0.5, 0.5] is
-   *  the centre, which is Figma's default. `⌥R` reveals a target that drags
+   *  the centre, which is default. `⌥R` reveals a target that drags
    *  this point, and rotating then slides the box so the point stays put. */
   rotOrigin?: [number, number];
   fill: string;
@@ -471,14 +473,14 @@ export interface XNode {
   gradientStops: GradientStop[];
   /**
    * Extra fills painted on top of the base `fill`, bottom-to-top, the way
-   * Figma stacks them. Absent/empty means the node has a single fill.
+   * stacked order. Absent/empty means the node has a single fill.
    */
   fills?: Paint[];
   /** Extra strokes painted over the base stroke; see StrokeLayer. */
   strokes?: StrokeLayer[];
   /** Id of the SharedStyle driving `fill`, if the fill is bound to one.
    *  Editing that style updates this node; editing the node's colour directly
-   *  detaches it, as in Figma. */
+   *  detaches it. */
   fillStyle?: string;
   /** Id of the SharedStyle driving `strokePaint`. */
   strokeStyle?: string;
@@ -502,24 +504,24 @@ export interface XNode {
   cornerRadii: [number, number, number, number];
   cornerIndependent: boolean;
   /**
-   * Figma's corner smoothing, 0-1: keeps the radius but flattens the corner's
+   * Corner smoothing, 0-1: keeps the radius but flattens the corner's
    * shoulders into a squircle. A whole-shape property, never per corner, which
    * is why it sits next to `cornerIndependent` rather than inside `cornerRadii`.
    */
   cornerSmoothing?: number;
   /**
    * Which sides of a rectangle/frame/component/instance carry the stroke.
-   * Figma exposes this as "Individual strokes": the four pickers plus `custom`,
+   * Individual strokes: the four pickers plus `custom`,
    * which lets every side keep its own weight.
    */
   strokeSides?: StrokeSides;
   /** Per-side weights in [top, right, bottom, left] order, used by `custom`. */
   strokeSideW?: [number, number, number, number];
-  /** Custom dash sequence (Figma's `dash, gap, dash, gap…` syntax). Wins over the dash/gap pair. */
+  /** Custom dash sequence (`dash, gap, dash, gap…` syntax). Wins over the dash/gap pair. */
   strokeDashPattern?: number[];
   /** Cap drawn on each dash segment. */
   strokeDashCap?: "butt" | "round" | "square";
-  /** Figma's "Miter angle": joins sharper than this bevel instead of pointing. */
+  /** "Miter angle": joins sharper than this bevel instead of pointing. */
   strokeMiterAngle?: number;
   aspectLocked: boolean;
   /** The ratio the lock was taken at (height ÷ width), remembered so a size
@@ -547,14 +549,14 @@ export interface XNode {
   imageHighlights: number;
   imageShadows: number;
   /** Set once the user renames a layer by hand, so automatic naming (e.g. a
-   *  text layer following its content, as in Figma) stops overriding it. */
+   *  text layer following its content, ) stops overriding it. */
   nameLocked?: boolean;
-  /** Sizing constraints (Figma min/max width & height) */
+  /** Sizing constraints (min/max width & height) */
   minW?: number;
   maxW?: number;
   minH?: number;
   maxH?: number;
-  /** Figma's Absolute position inside auto-layout frame */
+  /** Absolute position inside auto-layout frame */
   absolutePosition?: boolean;
   /* ── Inside a grid ──────────────────────────────────────────────────────
    * "Column span" / "Row span": how many cells the object stretches across.
@@ -610,10 +612,17 @@ export interface XNode {
   maskType: "alpha" | "vector" | "luminance";
   variant: string;
   componentProperties?: Record<string, string | boolean>;
-  /** Figma frame layout grids (columns, rows, grid) */
+  /** Frame layout grids (columns, rows, grid) */
   layoutGrids?: LayoutGrid[];
-  /** Figma ellipse arc / donut properties */
+  /** Ellipse arc / donut properties */
   arcData?: ArcData;
+  /** Procedural non-destructive modifier stack */
+  modifiers?: import("./modifierStack").Modifier[];
+  /** Reactive dynamic expression bindings for properties */
+  expressions?: Record<string, string>;
+  /** Explicit identity for smart animate transitions */
+  animationId?: string;
+  prototypeIdentity?: string;
 }
 
 /** A single message inside a comment thread. */
@@ -658,7 +667,7 @@ export interface Page {
   guides: RulerGuide[];
   pixelGrid: boolean;
   pixelGridColor: string;
-  /** Figma separates the visual grid from "Snap to pixel grid", which is the
+  /** Separates the visual grid from "Snap to pixel grid", which is the
    *  behaviour (whole-pixel coordinates while moving/resizing). Optional so
    *  documents written before the split keep loading; the default is on. */
   pixelSnap?: boolean;
@@ -696,31 +705,31 @@ export interface Snapshot {
     backdrop?: boolean;
     backdropColor?: string;
   } | null;
-  /** Figma's View > Prototype flows. When off the canvas hides connection
+  /** View > Prototype flows. When off the canvas hides connection
    *  noodles and hotspot handles, which is what makes Design mode look like
    *  Design mode. */
   showFlows: boolean;
-  /** Figma's View > Rulers (⇧R). */
+  /** View > Rulers (⇧R). */
   showRulers: boolean;
-  /** Figma's View > Minimap. Off by default; it costs its own render pass. */
+  /** View > Minimap. Off by default; it costs its own render pass. */
   showMinimap: boolean;
-  /** Figma's "Pixel preview" in the Zoom/view options menu: vectors drawn as
+  /** "Pixel preview" in the Zoom/view options menu: vectors drawn as
    *  the raster they would export as, at 1x or 2x device pixels. */
   pixelPreview: PixelPreview;
-  /** Figma's "Layout guides" in the same menu: one switch to hide every
+  /** "Layout guides" in the same menu: one switch to hide every
    *  frame's layout grid without deleting any of them. */
   viewLayoutGuides: boolean;
-  /** Figma's "Property labels": names beside the icon-only controls in the
+  /** "Property labels": names beside the icon-only controls in the
    *  right sidebar, for someone still learning what each one does. */
   propertyLabels: boolean;
   /** Comment pins are hidden unless the comment tool is active or the user
-   *  has explicitly turned them on, as in Figma. */
+   *  has explicitly turned them on, by default. */
   showComments: boolean;
-  /** Figma's View > Outlines (⇧O / ⌘Y): wireframe mode showing object outlines without fills. */
+  /** View > Outlines (⇧O / ⌘Y): wireframe mode showing object outlines without fills. */
   outlineMode?: boolean;
   /** Thread whose popover is open, if any. */
   openComment: string;
-  /** Figma Variables / Tokens store */
+  /** Variables / Tokens store */
   variables?: VariableItem[];
   /** Dev Mode Annotations store */
   annotations?: AnnotationItem[];
@@ -785,7 +794,7 @@ export type Command =
   | { type: "patch"; id: string; patch: Partial<XNode> }
   | { type: "autoLayout"; id: string; layout: AutoLayout | null }
   // "Auto layout is only supported on frames. If you have one or more layers
-  // selected, Figma will create an auto layout frame around them." Selecting a
+  // selected, an auto layout frame wraps them." Selecting a
   // frame sets the layout on it; anything else - a plain layer, a group, a
   // multi-selection - is wrapped in a new frame that gets the layout.
   | { type: "wrapAutoLayout"; ids: string[]; layout: AutoLayout }
@@ -848,8 +857,14 @@ export type Command =
   | { type: "insertPointOnPath"; id: string; x: number; y: number }
   | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
   | { type: "setPointCornerRadius"; id: string; pointIndex: number; radius: number }
-  | { type: "flatten" }
-  | { type: "outlineStroke" }
+  | { type: "flatten"; id?: string }
+  | { type: "outlineStroke"; id?: string }
+  | { type: "offsetPath"; id?: string; distance: number; join?: StrokeJoin }
+  | { type: "simplifyPath"; id?: string; tolerance?: number }
+  | { type: "vectorCleanup"; id?: string }
+  | { type: "convertTextToVector"; id?: string }
+  | { type: "shapeBuilder"; op: "merge" | "subtract" }
+  | { type: "vectorAlign"; alignment: "left" | "center" | "right" | "top" | "middle" | "bottom" }
   | { type: "addVariant"; name: string }
   | { type: "setVariant"; id: string; name: string }
   | { type: "setVecEdit"; id: string | null; pointIndex?: number | null; pointIndices?: number[] }
@@ -869,6 +884,11 @@ export type Command =
   | { type: "presentStop" }
   | { type: "setPrototypeDevice"; device: ProtoDevice }
   | { type: "setPrototypeOrientation"; orientation: "portrait" | "landscape" }
+  | { type: "commitTransaction"; transaction: import("./transaction").Transaction }
+  | { type: "applyModifier"; id: string; modifier: import("./modifierStack").Modifier }
+  | { type: "removeModifier"; id: string; index: number }
+  | { type: "setExpression"; id: string; property: string; expression: string }
+  | { type: "removeExpression"; id: string; property: string }
   | { type: "setPrototypeScale"; scale: "fit" | "100%" | "fill" }
   | { type: "togglePrototypeHotspots"; enabled?: boolean }
   | { type: "togglePrototypeLiveInputs"; enabled?: boolean }

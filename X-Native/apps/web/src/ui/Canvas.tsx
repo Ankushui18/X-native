@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, Tool, VectorNetwork, XNode } from "../engine/types";
+import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
 import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import { rememberImage, hydrateNodes } from "../engine/assets";
@@ -12,13 +12,15 @@ import {
   vertexDegree,
   insertPointOnPath,
   projectPointOnSegment,
-  computeFigmaNoodle,
+  computeConnectorNoodle,
   pathToVectorNetwork,
   balanceLines,
   cornerPinPoints,
   cornerRadiiOf,
   hasCornerSmoothing,
   roundRectRadii,
+  pathBounds,
+  fillNetworkRegionAtPoint,
 } from "../engine/geometry";
 import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
@@ -56,6 +58,9 @@ import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
 import { getNudgePrefs } from "./nudgePrefs";
 import { alignKey } from "../engine/layout";
+import { ContextToolbar } from "./x-ui";
+import { addAutoLayout, removeAutoLayout } from "./layoutActions";
+import { align } from "./inspector";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -64,10 +69,10 @@ const ERASER_PX = 10;
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
 
-/** X-Native signature brand accents (electric cyber indigo). */
-const BRAND_ACCENT = "#6366f1";
-const BRAND_ACCENT_WASH = "rgba(99, 102, 241, 0.14)";
-const BRAND_ACCENT_GLOW = "rgba(99, 102, 241, 0.35)";
+/** X-Native signature brand accents (Graphite & Signal Emerald). */
+const BRAND_ACCENT = "#10b981";
+const BRAND_ACCENT_WASH = "rgba(16, 185, 129, 0.14)";
+const BRAND_ACCENT_GLOW = "rgba(16, 185, 129, 0.35)";
 
 const CREATE: Tool[] = [
   "frame",
@@ -142,7 +147,7 @@ type Drag =
       padOpp?: boolean;
       padAll?: boolean;
       /** A padding handle that was clicked rather than dragged opens a field to
-       *  type a value into - Figma: "Click handles to open input fields and
+       *  type a value into: "Click handles to open input fields and
        *  enter a numeric value". */
       moved?: boolean;
       origPad?: [number, number, number, number];
@@ -166,6 +171,10 @@ type Drag =
       bounds?: { x: number; y: number; w: number; h: number };
       origs?: MultiOrigin[];
       origPts?: PathPoint[];
+      startAngle?: number;
+      origRotation?: number;
+      cx?: number;
+      cy?: number;
     };
 
 /** Snapshot every selected node's world + local box before a group transform. */
@@ -199,6 +208,25 @@ function hasLayout(snap: Snapshot): boolean {
   return !!n.layout || !!findParent(root, id)?.layout;
 }
 
+/** Computes accurate visual bounding box for any node, factoring cubic Bézier curves for vectors. */
+function nodeVisualBounds(wp: { x: number; y: number; node: XNode }): { x: number; y: number; w: number; h: number } {
+  if ((wp.node.kind === "vector" || wp.node.kind === "boolean") && wp.node.path.length > 0) {
+    const pb = pathBounds(wp.node.path, wp.node.closed);
+    return {
+      x: wp.x + pb.minX,
+      y: wp.y + pb.minY,
+      w: pb.w,
+      h: pb.h,
+    };
+  }
+  return {
+    x: wp.x,
+    y: wp.y,
+    w: wp.node.w,
+    h: wp.node.h,
+  };
+}
+
 export function Canvas({
   engine,
   snap,
@@ -229,6 +257,7 @@ export function Canvas({
     },
     [engine],
   );
+  const [vecSubTool, setVecSubTool] = useState<"select" | "bend" | "paint" | "shapeBuilder" | "eraser" | "lasso">("select");
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
@@ -245,7 +274,7 @@ export function Canvas({
   /**
    * Set while the pen is drawing a branch into an existing vector network: the
    * node to keep adding to and the vertex index the next click connects from.
-   * Figma's networks "don't require a specific direction" — clicking a point of
+   * Vector networks "don't require a specific direction" — clicking a point of
    * the selected shape with the pen resumes drawing from that point, in any
    * direction, in the same layer.
    */
@@ -260,7 +289,7 @@ export function Canvas({
   const hoverIx = useRef("");
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
-  /* Figma keeps the rotation origin out of the way until `⌥R` asks for it. */
+  /* Keeps the rotation origin out of the way until `⌥R` asks for it. */
   const [rotTarget, setRotTarget] = useState(false);
   /** An open padding entry, from clicking a handle on an auto layout frame. */
   const [padInput, setPadInput] = useState<{
@@ -411,6 +440,15 @@ export function Canvas({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const targetEl = e.target as HTMLElement;
+      const isTyping =
+        targetEl?.tagName === "INPUT" ||
+        targetEl?.tagName === "TEXTAREA" ||
+        targetEl?.tagName === "SELECT" ||
+        targetEl?.isContentEditable ||
+        !!targetEl?.closest?.("input, textarea, select, [contenteditable='true'], .x-field, .x-popover, .inspector");
+      if (isTyping && e.key !== "Escape") return;
+
       // The alignment box in the right panel owns arrows and W/A/S/D while it
       // is focused, so the canvas does not nudge under it. Other letters still
       // reach the app's own shortcuts.
@@ -418,7 +456,7 @@ export function Canvas({
         !e.metaKey &&
         !e.ctrlKey &&
         alignKey(e.key) &&
-        (e.target as HTMLElement)?.closest?.("[data-align-box]")
+        targetEl?.closest?.("[data-align-box]")
       )
         return;
       if (e.key === "Alt") {
@@ -426,20 +464,19 @@ export function Canvas({
       }
       if (e.code === "Space") {
         space.current = e.type === "keydown";
-        if (e.type === "keydown" && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "TEXTAREA")
+        if (e.type === "keydown" && !isTyping)
           e.preventDefault();
       }
-      if (e.type === "keydown" && e.key === "Escape" && !draft.length && penBranch.current) {
-        // A branch is written into its vector as it is drawn, so there is nothing
-        // to commit here; Escape only lets go of the anchor. (A pending path is
-        // finished through ui/penDraft.ts, which owns that key.)
-        penBranch.current = null;
+      if (e.type === "keydown" && (e.key === "Escape" || e.key === "Enter") && (draft.length >= 2 || penBranch.current)) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+        setDraft([]);
         setCloseHint(null);
+        penBranch.current = null;
         return;
       }
-      if (e.type === "keydown" && e.key === "Enter" && (draft.length >= 2 || penBranch.current)) {
-        e.stopImmediatePropagation();
-        if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+      if (e.type === "keydown" && e.key === "Escape" && draft.length < 2) {
         setDraft([]);
         setCloseHint(null);
         penBranch.current = null;
@@ -452,7 +489,7 @@ export function Canvas({
         return;
       }
       if (e.type === "keydown" && e.altKey && (e.key === "r" || e.key === "R") && !edit) {
-        // Figma: Option/Alt R reveals the target; it rotates about itself until
+        // Option/Alt R reveals the target; it rotates about itself until
         // it is moved, and Escape puts it away again. A multi-selection turns
         // about the middle of its bounds and has nothing to drag.
         setRotTarget((v) => !v);
@@ -524,8 +561,13 @@ export function Canvas({
             n.kind === "line" ||
             n.kind === "arrow")
         ) {
-          if (n.kind !== "vector") engine.dispatch({ type: "flatten" });
-          setVecEdit(n.id);
+          if (n.kind !== "vector") {
+            engine.dispatch({ type: "flatten" });
+            const newId = engine.snapshot().selection[0];
+            setVecEdit(newId);
+          } else {
+            setVecEdit(n.id);
+          }
           e.stopImmediatePropagation();
         } else if (vecEdit) {
           setVecEdit(null);
@@ -582,7 +624,7 @@ export function Canvas({
           e.stopImmediatePropagation();
         }
       }
-      // Sketch vector editing: 1=Straight, 2=Mirrored, 3=Disconnected, 4=Asymmetric
+      // Vector editing mirror modes: 1=Straight, 2=Mirrored, 3=Disconnected, 4=Asymmetric
       if (e.type === "keydown" && !e.metaKey && !e.ctrlKey && !e.altKey && vecEdit && !edit) {
         const ptIdx = snap.vecPoint ?? vecPt.current;
         if (ptIdx >= 0) {
@@ -621,7 +663,7 @@ export function Canvas({
     };
   }, [snap, edit, draft, engine, vecEdit]);
 
-  // Figma: Escape finishes the path and leaves it open. The finisher is published
+  // Escape finishes the path and leaves it open. The finisher is published
   // to ui/penDraft.ts because that is the layer which actually decides Escape.
   useEffect(() => {
     if (!draft.length) {
@@ -636,6 +678,18 @@ export function Canvas({
     });
     return () => registerPenFinisher(null);
   }, [draft, engine]);
+
+  // When switching away from drawing tools (e.g. to select or hand), auto-commit any draft path so it appears in layers
+  useEffect(() => {
+    if (snap.tool !== "pen" && snap.tool !== "pencil" && snap.tool !== "brush" && draft.length) {
+      if (draft.length >= 2) {
+        engine.dispatch({ type: "addPath", points: draft, closed: false });
+      }
+      setDraft([]);
+      setCloseHint(null);
+      penBranch.current = null;
+    }
+  }, [snap.tool, draft, engine]);
 
   useEffect(() => {
     if (vecEdit && !snap.selection.includes(vecEdit)) setVecEdit(null);
@@ -688,7 +742,7 @@ export function Canvas({
     // read and a name you notice.
     const canvasLabel = readableLabel(themeLabel, pageFill || canvasBg, 4.5);
     const page = snap.pages[snap.page];
-    // Figma only paints the pixel grid from 400% up: below that it is grey
+    // Pixel grid paints from 400% up: below that it is grey
     // noise rather than something you can align to.
     if (page.pixelGrid && snap.zoom >= 4) {
       ctx.strokeStyle = page.pixelGridColor || grid;
@@ -922,6 +976,48 @@ export function Canvas({
         paintFill(ctx, n, sx, sy, sw, sh);
         ctx.restore();
       }
+      if (n.kind === "vector" && n.vectorNetwork?.regions?.some((r) => r.fill)) {
+        for (const reg of n.vectorNetwork.regions) {
+          if (!reg.fill || isNone(reg.fill)) continue;
+          ctx.save();
+          ctx.fillStyle = cssRgba(reg.fill);
+          ctx.globalAlpha = (n.opacity ?? 1) * (reg.fillOpacity ?? 1);
+          ctx.beginPath();
+          for (const loop of reg.loops) {
+            if (!loop.length) continue;
+            const v0 = n.vectorNetwork.vertices[loop[0]];
+            if (!v0) continue;
+            ctx.moveTo(snap.panX + (x + v0.x) * z, snap.panY + (y + v0.y) * z);
+            for (let i = 0; i < loop.length; i++) {
+              const curIdx = loop[i];
+              const nxtIdx = loop[(i + 1) % loop.length];
+              const curV = n.vectorNetwork.vertices[curIdx];
+              const nxtV = n.vectorNetwork.vertices[nxtIdx];
+              const seg = n.vectorNetwork.segments.find(
+                (s) => (s.start === curIdx && s.end === nxtIdx) || (s.start === nxtIdx && s.end === curIdx),
+              );
+              if (seg && (seg.tangentStart || seg.tangentEnd)) {
+                const isFwd = seg.start === curIdx;
+                const tStart = isFwd ? seg.tangentStart : seg.tangentEnd;
+                const tEnd = isFwd ? seg.tangentEnd : seg.tangentStart;
+                ctx.bezierCurveTo(
+                  snap.panX + (x + curV.x + (tStart?.x || 0)) * z,
+                  snap.panY + (y + curV.y + (tStart?.y || 0)) * z,
+                  snap.panX + (x + nxtV.x + (tEnd?.x || 0)) * z,
+                  snap.panY + (y + nxtV.y + (tEnd?.y || 0)) * z,
+                  snap.panX + (x + nxtV.x) * z,
+                  snap.panY + (y + nxtV.y) * z,
+                );
+              } else {
+                ctx.lineTo(snap.panX + (x + nxtV.x) * z, snap.panY + (y + nxtV.y) * z);
+              }
+            }
+            ctx.closePath();
+          }
+          ctx.fill(reg.windingRule === "EVENODD" ? "evenodd" : "nonzero");
+          ctx.restore();
+        }
+      }
       const noise = (n.effects ?? []).find((e) => e.kind === "noise" && e.visible);
       if (noise) {
         ctx.save();
@@ -954,7 +1050,7 @@ export function Canvas({
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
         ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
         const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
-        // Figma lets the dashes carry their own cap: a dotted line is a 1px dash
+        // Dashes carry their own cap: a dotted line is a 1px dash
         // with round caps, and only the segments take the rounding.
         ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? ctx.lineCap : ctx.lineCap;
         if (dashes.length) ctx.setLineDash(dashes);
@@ -967,6 +1063,11 @@ export function Canvas({
         const pass = (lw: number) => {
           if (lw <= 0) return;
           const w = Math.max(0.5, lw * z);
+          if (n.kind === "vector" && n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+            traceVectorSegments(ctx, n.vectorNetwork, snap.panX + x * z, snap.panY + y * z, z);
+          } else {
+            traceShape();
+          }
           if (n.strokeAlign === "inside") {
             ctx.save();
             ctx.clip();
@@ -1005,42 +1106,45 @@ export function Canvas({
         } else {
           pass(sides[0]);
         }
-        const tipCap =
-          n.strokeCap === "arrow" ||
-          n.strokeCap === "triangle" ||
-          n.strokeCap === "reverse-triangle" ||
-          n.strokeCap === "diamond";
-        const arrowCap = n.kind === "arrow" || ((n.kind === "line" || n.kind === "vector") && !n.closed && tipCap);
-        if (arrowCap) {
+        const isTip = (c?: StrokeCap) =>
+          c === "arrow" || c === "triangle" || c === "reverse-triangle" || c === "diamond";
+        const effEndCap = n.strokeCapEnd ?? (isTip(n.strokeCap) ? n.strokeCap : (n.kind === "arrow" ? "triangle" : "none"));
+        const effStartCap = n.strokeCapStart ?? "none";
+        const hasArrowCap =
+          n.kind === "arrow" ||
+          ((n.kind === "line" || n.kind === "vector") && !n.closed && (isTip(effEndCap) || isTip(effStartCap)));
+        if (hasArrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
-          // Figma puts the tips on both ends of an open path, so each end is
-          // drawn with the unit vector pointing back along its own segment.
-          const ends: { ex: number; ey: number; ux: number; uy: number }[] = [];
+          // Tips are placed on ends of an open path, with individual caps
+          const ends: { ex: number; ey: number; ux: number; uy: number; cap: StrokeCap }[] = [];
           const pts = n.kind === "vector" || n.kind === "line" || n.kind === "arrow" ? (n.path.length ? n.path : shapePoly(n)) : [];
           if (pts.length > 1) {
             // End point (pts[pts.length - 1]): points in the direction the path was traveling
-            const lastA = pts[pts.length - 1];
-            const lastB = pts[pts.length - 2];
-            const dxEnd = (lastA.x - lastB.x) * z;
-            const dyEnd = (lastA.y - lastB.y) * z;
-            const lenEnd = Math.hypot(dxEnd, dyEnd) || 1;
-            ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd });
+            if (isTip(effEndCap)) {
+              const lastA = pts[pts.length - 1];
+              const lastB = pts[pts.length - 2];
+              const dxEnd = (lastA.x - lastB.x) * z;
+              const dyEnd = (lastA.y - lastB.y) * z;
+              const lenEnd = Math.hypot(dxEnd, dyEnd) || 1;
+              ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd, cap: effEndCap });
+            }
 
             // Start point (pts[0]): only if start cap is explicitly configured
-            const hasStartCap = n.strokeCapStart && n.strokeCapStart !== "none";
-            if (hasStartCap) {
+            if (isTip(effStartCap)) {
               const startA = pts[0];
               const startB = pts[1];
               const dxStart = (startA.x - startB.x) * z;
               const dyStart = (startA.y - startB.y) * z;
               const lenStart = Math.hypot(dxStart, dyStart) || 1;
-              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart });
+              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart, cap: effStartCap });
             }
           } else {
-            ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0 });
-            if (n.strokeCapStart && n.strokeCapStart !== "none") {
-              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0 });
+            if (isTip(effEndCap)) {
+              ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0, cap: effEndCap });
+            }
+            if (isTip(effStartCap)) {
+              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0, cap: effStartCap });
             }
           }
           const back = (e: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
@@ -1049,7 +1153,7 @@ export function Canvas({
           });
           for (const e of ends) {
             ctx.beginPath();
-            if (n.strokeCap === "arrow") {
+            if (e.cap === "arrow") {
               // Two 45° lines, the same weight as the path.
               const p1 = back(e, ah * 0.72, 1);
               const p2 = back(e, ah * 0.72, -1);
@@ -1062,13 +1166,13 @@ export function Canvas({
               ctx.stroke();
               continue;
             }
-            if (n.strokeCap === "diamond") {
+            if (e.cap === "diamond") {
               const mid = { x: e.ex - e.ux * ah * 0.8, y: e.ey - e.uy * ah * 0.8 };
               ctx.moveTo(e.ex, e.ey);
               ctx.lineTo(mid.x - e.uy * ah * 0.5, mid.y + e.ux * ah * 0.5);
               ctx.lineTo(e.ex - e.ux * ah * 1.6, e.ey - e.uy * ah * 1.6);
               ctx.lineTo(mid.x + e.uy * ah * 0.5, mid.y - e.ux * ah * 0.5);
-            } else if (n.strokeCap === "reverse-triangle") {
+            } else if (e.cap === "reverse-triangle") {
               // Flipped: the base sits on the end point, the apex points inward.
               ctx.moveTo(e.ex, e.ey);
               ctx.lineTo(e.ex - e.uy * ah * 0.7, e.ey + e.ux * ah * 0.7);
@@ -1323,7 +1427,7 @@ export function Canvas({
 
     // A frame's name sits above its top-left corner at a constant 11px, so it
     // stays the same size as the canvas zooms. Selected or hovered, it takes
-    // the accent colour - Figma's cue that the name belongs to the frame you
+    // the accent colour indicating the name belongs to the frame you
     // are about to act on.
     const labelNames = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
@@ -1419,7 +1523,7 @@ export function Canvas({
         ctx.stroke();
         if (closeHint === i) {
           // The ring says "this click joins here / closes the path", the same
-          // cue Figma puts next to the cursor.
+          // cue placed next to the cursor.
           ctx.beginPath();
           ctx.arc(px, py, 7, 0, Math.PI * 2);
           ctx.lineWidth = 1.5;
@@ -1429,7 +1533,7 @@ export function Canvas({
     }
 
     if (snap.rightTab === "prototype" && snap.showFlows && !snap.presentFrame) {
-      // 1. Render Flow Starting Point Badge ("Flow 1") on starting frame (Figma parity)
+      // 1. Render Flow Starting Point Badge ("Flow 1") on starting frame (parity)
       const flowStartId = snap.pages[snap.page].flowStart;
       if (flowStartId) {
         const startWp = worldPos(root, flowStartId);
@@ -1469,12 +1573,12 @@ export function Canvas({
         }
       }
 
-      // 2. Render all interaction connection noodles with smooth Figma S-curve geometry
+      // 2. Render all interaction connection noodles with smooth S-curve geometry
       walkInteractions(root, 0, 0, (n, nx, ny, destId, _ix, isOverlay) => {
         const dest = worldPos(root, destId);
         if (!dest) return;
 
-        const noodle = computeFigmaNoodle(
+        const noodle = computeConnectorNoodle(
           nx,
           ny,
           n.w,
@@ -1581,12 +1685,12 @@ export function Canvas({
         }
       }
 
-      // 4. Live dragging noodle using computeFigmaNoodle
+      // 4. Live dragging noodle using computeConnectorNoodle
       if (protoDrag) {
         const srcWp = protoDrag.srcId ? worldPos(root, protoDrag.srcId) : null;
         const twp = protoDrag.targetId ? worldPos(root, protoDrag.targetId) : null;
 
-        const noodle = computeFigmaNoodle(
+        const noodle = computeConnectorNoodle(
           srcWp ? srcWp.x : protoDrag.fromX,
           srcWp ? srcWp.y : protoDrag.fromY,
           srcWp ? srcWp.node.w : 0,
@@ -1730,10 +1834,11 @@ export function Canvas({
       const hp = worldPos(root, hoverId);
       if (hp) {
         ctx.save();
-        const hx = snap.panX + hp.x * z;
-        const hy = snap.panY + hp.y * z;
-        const hw = hp.node.w * z;
-        const hh = hp.node.h * z;
+        const hb = nodeVisualBounds(hp);
+        const hx = snap.panX + hb.x * z;
+        const hy = snap.panY + hb.y * z;
+        const hw = hb.w * z;
+        const hh = hb.h * z;
         if (hp.node.rotation) {
           ctx.translate(hx + hw / 2, hy + hh / 2);
           ctx.rotate((hp.node.rotation * Math.PI) / 180);
@@ -1748,20 +1853,21 @@ export function Canvas({
 
     const multiSel = snap.selection.length > 1;
     for (const id of snap.selection) {
-      if (edit?.id === id) continue;
+      if (edit?.id === id || vecEdit === id || (vecEdit && snap.selection.includes(vecEdit))) continue;
       const wp = worldPos(root, id);
       if (!wp) continue;
-      const sx = snap.panX + wp.x * z;
-      const sy = snap.panY + wp.y * z;
-      const sw = wp.node.w * z;
-      const sh = wp.node.h * z;
+      const nb = nodeVisualBounds(wp);
+      const sx = snap.panX + nb.x * z;
+      const sy = snap.panY + nb.y * z;
+      const sw = nb.w * z;
+      const sh = nb.h * z;
       const accent = wp.node.isComponent || wp.node.componentId ? "#a855f7" : BRAND_ACCENT;
       // P0-A contextual chrome: frame/section/group vs shape vs vector vs text
       const kind = wp.node.kind;
       const isFrame = kind === "frame" || kind === "component" || kind === "instance";
       const isVectorLike = kind === "vector" || kind === "boolean" || kind === "star" || kind === "poly";
       const isText = kind === "text";
-      const isLine = kind === "line" || kind === "arrow";
+      const isLine = (kind === "line" || kind === "arrow") && (!wp.node.path.length || wp.node.path.every((p) => !p.ox && !p.oy && !p.ix && !p.iy));
       ctx.save();
       if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
         ctx.translate(sx + sw / 2, sy + sh / 2);
@@ -1780,12 +1886,12 @@ export function Canvas({
       }
       // Contextual handles: frames show full 8, text shows side-only when hug, vector shows diamond corners
       const hsFull = handles(sx, sy, sw, sh);
-      // For text hug, hide corner handles to hint resize behavior; for lines, hide vertical handles
+      // For text hug, hide corner handles to hint resize behavior; for lines, only show end handles
       let hs = hsFull;
       if (isText && wp.node.sizingW === "hug" && wp.node.sizingH === "hug") {
         hs = [hsFull[1], hsFull[3], hsFull[5], hsFull[7]]; // only sides for auto text
       } else if (isLine) {
-        hs = [hsFull[0], hsFull[4]]; // only ends for line
+        hs = [[sx, sy + sh / 2], [sx + sw, sy + sh / 2]]; // only ends for line
       }
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
@@ -1802,27 +1908,19 @@ export function Canvas({
           ctx.fill();
           ctx.stroke();
         } else if (isFrame) {
-          // frame handles: slightly larger with inner dot to signal container
+          // frame handles: clean 7x7 square container affordance
           ctx.fillRect(hx - 3.5, hy - 3.5, 7, 7);
           ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
-          ctx.fillStyle = accent;
-          ctx.fillRect(hx - 1, hy - 1, 2, 2);
-          ctx.fillStyle = "#ffffff";
         } else {
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
       }
-      ctx.beginPath();
-      ctx.moveTo(sx + sw / 2, sy);
-      ctx.lineTo(sx + sw / 2, sy - 16);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(sx + sw / 2, sy - 20, 4, 0, Math.PI * 2);
-      ctx.fillStyle = "#fff";
-      ctx.fill();
-      ctx.stroke();
-      const dim = `${Math.round(wp.node.w)} × ${Math.round(wp.node.h)}`;
+      // Dynamic rotation angle readout badge when rotating
+      const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
+      const dim = isRotating
+        ? `${Math.round(wp.node.rotation ?? 0)}°`
+        : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
       ctx.font = "500 11px Inter, system-ui";
       const tw = ctx.measureText(dim).width;
       const bw = tw + 16;
@@ -1957,7 +2055,7 @@ export function Canvas({
           ctx.stroke();
         }
       }
-      // Corner radius handles. Figma only shows these for a corner that is
+      // Corner radius handles: only show these for a corner that is
       // actually rounded, and draws them as a small bracket hugging the corner.
       // Painting a dot at every corner regardless of radius read as "why is
       // there a dot in my frame", and clamping the offset to half the box could
@@ -2003,7 +2101,7 @@ export function Canvas({
           ctx.lineCap = "butt";
         }
       }
-      // Auto Layout visualisation. Figma paints the padding and gap regions as
+      // Auto Layout visualisation: paints the padding and gap regions as
       // translucent pink bands across the frame, rather than parking four dots
       // on the edges: the bands show the extent, the dots showed only a point.
       if (wp.node.layout) {
@@ -2074,8 +2172,8 @@ export function Canvas({
     }
 
     // Combined bounding box for a multi-selection: one set of handles, one
-    // rotate stem, one size badge — exactly like Figma.
-    if (multiSel) {
+    // rotate zone, one size badge.
+    if (multiSel && !vecEdit) {
       const bb = selectionBounds(root, snap.selection);
       if (bb) {
         const sx = snap.panX + bb.x * z;
@@ -2092,15 +2190,6 @@ export function Canvas({
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
-        ctx.beginPath();
-        ctx.moveTo(sx + sw / 2, sy);
-        ctx.lineTo(sx + sw / 2, sy - 16);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(sx + sw / 2, sy - 20, 4, 0, Math.PI * 2);
-        ctx.fillStyle = "#fff";
-        ctx.fill();
-        ctx.stroke();
         const dim = `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
         ctx.font = "500 11px Inter, system-ui";
         const bw = ctx.measureText(dim).width + 16;
@@ -2189,26 +2278,49 @@ export function Canvas({
           const p = pts[i];
           const px = snap.panX + (wp.x + p.x) * z;
           const py = snap.panY + (wp.y + p.y) * z;
-          if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
-            ctx.beginPath();
-            ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
-            ctx.lineTo(px + (p.ox || 0) * z, py + (p.oy || 0) * z);
-            ctx.stroke();
-            for (const [hx, hy] of [
-              [px + (p.ix || 0) * z, py + (p.iy || 0) * z],
-              [px + (p.ox || 0) * z, py + (p.oy || 0) * z],
-            ] as const) {
-              ctx.fillStyle = "#fff";
+          const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
+
+          // Bézier tangent handles: only show for selected vertices (or when dragging) to keep canvas clean
+          if (isSelected) {
+            ctx.save();
+            ctx.strokeStyle = "rgba(16, 185, 129, 0.75)";
+            ctx.lineWidth = 1;
+            if (p.ix != null && p.iy != null && (p.ix !== 0 || p.iy !== 0)) {
+              const hx = px + p.ix * z;
+              const hy = py + p.iy * z;
               ctx.beginPath();
-              ctx.arc(hx, hy, 3, 0, Math.PI * 2);
+              ctx.moveTo(px, py);
+              ctx.lineTo(hx, hy);
+              ctx.stroke();
+              ctx.fillStyle = "#ffffff";
+              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.lineWidth = 1.25;
+              ctx.beginPath();
+              ctx.arc(hx, hy, 3.5, 0, Math.PI * 2);
               ctx.fill();
               ctx.stroke();
             }
+            if (p.ox != null && p.oy != null && (p.ox !== 0 || p.oy !== 0)) {
+              const hx = px + p.ox * z;
+              const hy = py + p.oy * z;
+              ctx.beginPath();
+              ctx.moveTo(px, py);
+              ctx.lineTo(hx, hy);
+              ctx.stroke();
+              ctx.fillStyle = "#ffffff";
+              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.lineWidth = 1.25;
+              ctx.beginPath();
+              ctx.arc(hx, hy, 3.5, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+            ctx.restore();
           }
+
           const deg = vn ? vertexDegree(vn, i) : 2;
-          const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
           if (deg >= 3) {
-            // Branching node indicator (Figma Vector Network Degree >= 3)
+            // Branching node indicator (Vector Network Degree >= 3)
             ctx.save();
             ctx.fillStyle = isSelected ? BRAND_ACCENT_GLOW : "rgba(16, 185, 129, 0.25)";
             ctx.beginPath();
@@ -2227,20 +2339,77 @@ export function Canvas({
             ctx.stroke();
             ctx.restore();
           } else {
-            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#fff";
+            // Vector anchor point: clean circular anchor point
+            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#ffffff";
             ctx.strokeStyle = isSelected ? "#ffffff" : BRAND_ACCENT;
-            ctx.lineWidth = isSelected ? 1.5 : 1;
+            ctx.lineWidth = isSelected ? 1.5 : 1.25;
             ctx.beginPath();
-            ctx.rect(px - 3.5, py - 3.5, 7, 7);
+            ctx.arc(px, py, 3.5, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
+          }
+        }
+
+        // Segment mid-point hover affordance (insert anchor hint)
+        if (cursorPos && !drag.current) {
+          const local = nodeLocalPoint(cursorPos.x, cursorPos.y, wp.x, wp.y, wp.node);
+          const npts = pts.length;
+          const count = wp.node.closed ? npts : npts - 1;
+          for (let si = 0; si < count; si++) {
+            const p1 = pts[si];
+            const p2 = pts[(si + 1) % npts];
+            const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
+            if (pr.dist < 12 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
+              const hx = snap.panX + (wp.x + pr.x) * z;
+              const hy = snap.panY + (wp.y + pr.y) * z;
+              ctx.save();
+              ctx.fillStyle = BRAND_ACCENT;
+              ctx.strokeStyle = "#ffffff";
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+              ctx.restore();
+              break;
+            }
           }
         }
         ctx.restore();
       }
     }
 
-    if (altMeasure && snap.selection.length === 1 && !drag.current) {
+    const isDevMode = snap.rightTab === "inspect";
+    const shouldMeasure =
+      (altMeasure || (isDevMode && hoverId && hoverId !== snap.selection[0])) &&
+      snap.selection.length === 1 &&
+      !drag.current;
+
+    if (isDevMode && snap.selection.length === 1) {
+      const selWp = worldPos(root, snap.selection[0]);
+      if (selWp && selWp.node.layout?.padding) {
+        const [pl, pr, pt, pb] = selWp.node.layout.padding;
+        if (pl || pr || pt || pb) {
+          const sx = snap.panX + selWp.x * z;
+          const sy = snap.panY + selWp.y * z;
+          const sw = selWp.node.w * z;
+          const sh = selWp.node.h * z;
+          ctx.save();
+          ctx.fillStyle = "rgba(16, 185, 129, 0.08)";
+          ctx.strokeStyle = "rgba(16, 185, 129, 0.4)";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]);
+          if (pt > 0) ctx.fillRect(sx, sy, sw, pt * z);
+          if (pb > 0) ctx.fillRect(sx, sy + sh - pb * z, sw, pb * z);
+          if (pl > 0) ctx.fillRect(sx, sy + pt * z, pl * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          if (pr > 0) ctx.fillRect(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          ctx.strokeRect(sx + pl * z, sy + pt * z, Math.max(0, selWp.node.w - pl - pr) * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          ctx.restore();
+        }
+      }
+    }
+
+    if (shouldMeasure) {
       const A = worldPos(root, snap.selection[0]);
       if (A) {
         ctx.save();
@@ -2426,9 +2595,9 @@ export function Canvas({
   };
 
   /**
-   * Figma-style eraser: on a vector/freehand path it removes the anchors under
+   * Eraser: on a vector/freehand path it removes the anchors under
    * the brush and splits the remainder into separate paths; on any other layer
-   * it falls back to deleting the layer (Figma does the same for non-vectors).
+   * it falls back to deleting the layer.
    */
   const eraseAt = useCallback(
     (wx: number, wy: number) => {
@@ -2439,7 +2608,7 @@ export function Canvas({
       // Vector paths get true partial erasure via erasePath; any other
       // drawable shape (rect, ellipse, line, poly, star, boolean) is first
       // converted to its outline polyline so the brush can split it too —
-      // matching Figma's vector eraser which works on any stroked shape,
+      // eraser works on any stroked shape,
       // not just pen paths. Frames/groups/text fall back to delete.
       const canPartial = (hit.kind === "vector" && hit.path.length) || ["rect", "ellipse", "line", "arrow", "poly", "star", "boolean"].includes(hit.kind);
       if (canPartial) {
@@ -2643,9 +2812,9 @@ export function Canvas({
         const d = Math.hypot(wpt.x - last.x, wpt.y - last.y);
         wpt = { x: last.x + Math.cos(ang) * d, y: last.y + Math.sin(ang) * d };
       }
-      if (draft.length >= 3) {
+      if (draft.length >= 2) {
         const a = draft[0];
-        if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 8 / snap.zoom) {
+        if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 14 / snap.zoom) {
           engine.dispatch({ type: "addPath", points: draft, closed: true });
           setDraft([]);
           setCloseHint(null);
@@ -2692,7 +2861,7 @@ export function Canvas({
       return;
     }
     if (snap.tool === "zoom") {
-      // Sketch's Zoom tool: click to step in, ⌥-click to step out, or drag a
+      // Zoom tool: click to step in, ⌥-click to step out, or drag a
       // region to fit exactly that area. The drag reuses the create marquee so
       // the rubber band looks like every other drag on this canvas.
       drag.current = { mode: "create", zoom: true, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
@@ -2722,20 +2891,29 @@ export function Canvas({
         const bsy = snap.panY + bb.y * z;
         const bsw = bb.w * z;
         const bsh = bb.h * z;
-        if (Math.hypot(px - (bsx + bsw / 2), py - (bsy - 20)) < 8) {
-          engine.dispatch({ type: "begin" });
-          drag.current = {
-            mode: "multiRotate",
-            sx: e.clientX,
-            sy: e.clientY,
-            wx: wpt.x,
-            wy: wpt.y,
-            bounds: bb,
-            origs: multiOrigins(root, snap.selection),
-          };
-          return;
-        }
+        const bcx = bsx + bsw / 2;
+        const bcy = bsy + bsh / 2;
         const hs = handles(bsx, bsy, bsw, bsh);
+        for (let i = 0; i < hs.length; i += 2) {
+          const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
+          if (d >= 6 && d <= 22) {
+            engine.dispatch({ type: "begin" });
+            const startAngle = Math.atan2(e.clientY - bcy, e.clientX - bcx);
+            drag.current = {
+              mode: "multiRotate",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              bounds: bb,
+              origs: multiOrigins(root, snap.selection),
+              startAngle,
+              cx: bcx,
+              cy: bcy,
+            };
+            return;
+          }
+        }
         for (let i = 0; i < hs.length; i++) {
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
             engine.dispatch({ type: "begin" });
@@ -2758,16 +2936,17 @@ export function Canvas({
       const wp = worldPos(root, snap.selection[0]);
       if (wp) {
         const z = snap.zoom;
-        const sx = snap.panX + wp.x * z;
-        const sy = snap.panY + wp.y * z;
+        const nb = nodeVisualBounds(wp);
+        const sx = snap.panX + nb.x * z;
+        const sy = snap.panY + nb.y * z;
         const r = wrap.current!.getBoundingClientRect();
         const rawX = e.clientX - r.left;
         const rawY = e.clientY - r.top;
         let px = rawX;
         let py = rawY;
         if (wp.node.rotation || wp.node.flipH || wp.node.flipV) {
-          const cx = sx + (wp.node.w * z) / 2;
-          const cy = sy + (wp.node.h * z) / 2;
+          const cx = sx + (nb.w * z) / 2;
+          const cy = sy + (nb.h * z) / 2;
           const u = wp.node.rotation ? unrot(px, py, cx, cy, wp.node.rotation) : { x: px, y: py };
           px = wp.node.flipH ? cx - (u.x - cx) : u.x;
           py = wp.node.flipV ? cy - (u.y - cy) : u.y;
@@ -2988,7 +3167,7 @@ export function Canvas({
           const PIN_INDEX = { tl: 0, tr: 1, bl: 2, br: 3 } as const;
           for (const pin of pins) {
             if (Math.hypot(px - (sx + pin.x), py - (sy + pin.y)) <= 7) {
-              // Alt is "this corner only", which Figma refuses on an instance -
+              // Alt is "this corner only", which is refused on an instance -
               // the corners belong to the component. Explain instead of
               // starting a drag that silently rounds all four.
               if (e.altKey && insideInstance(snap.pages[snap.page].root, wp.node.id)) {
@@ -3047,7 +3226,26 @@ export function Canvas({
             }
           }
           const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
-          const meta = e.metaKey || e.ctrlKey || e.altKey;
+          if (vecSubTool === "paint") {
+            const nextFill = wp.node.fillVisible ? (wp.node.fill || "#d9d9d9") : "#10b981";
+            const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path, wp.node.closed);
+            const updatedVn = fillNetworkRegionAtPoint(vn, local.x, local.y, nextFill);
+            engine.dispatch({ type: "patchVectorNetwork", id: wp.node.id, network: updatedVn });
+            engine.dispatch({ type: "patch", id: wp.node.id, patch: { fillVisible: true } });
+            toast("Filled vector region (Paint Bucket)");
+            return;
+          }
+          if (vecSubTool === "shapeBuilder") {
+            if (e.altKey) {
+              engine.dispatch({ type: "shapeBuilder", op: "subtract" });
+              toast("Subtracted shape region (Option-click)");
+            } else {
+              engine.dispatch({ type: "shapeBuilder", op: "merge" });
+              toast("Merged shape region");
+            }
+            return;
+          }
+          const meta = e.metaKey || e.ctrlKey || e.altKey || vecSubTool === "bend";
           if (meta) {
             const npts = pts.length;
             const count = wp.node.closed ? npts : npts - 1;
@@ -3055,7 +3253,7 @@ export function Canvas({
               const p1 = pts[si];
               const p2 = pts[(si + 1) % npts];
               const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
-              if (pr.dist < 12 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
+              if (pr.dist < 14 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
                 engine.dispatch({ type: "begin" });
                 drag.current = { mode: "bend", id: wp.node.id, segIndex: si, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
                 toast("Bending segment (Bend tool)");
@@ -3098,23 +3296,39 @@ export function Canvas({
             return;
           }
         }
-        if (Math.hypot(px - (sx + (wp.node.w * z) / 2), py - (sy - 20)) < 8) {
-          drag.current = {
-            mode: "rotate",
-            sx: e.clientX,
-            sy: e.clientY,
-            wx: wpt.x,
-            wy: wpt.y,
-            orig: { x: wp.x, y: wp.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation },
-            origLocal: { x: wp.node.x, y: wp.node.y },
-            id: wp.node.id,
-          };
-          return;
+        const hs = handles(sx, sy, nb.w * z, nb.h * z);
+        const cx = sx + (nb.w * z) / 2;
+        const cy = sy + (nb.h * z) / 2;
+        // Corner rotation zone: outside any of the 4 corner handles
+        for (let i = 0; i < hs.length; i += 2) {
+          const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
+          if (d >= 6 && d <= 22) {
+            const startAngle = Math.atan2(rawY - cy, rawX - cx);
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "rotate",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              orig: { x: nb.x, y: nb.y, w: nb.w, h: nb.h, rotation: wp.node.rotation || 0 },
+              origLocal: { x: wp.node.x, y: wp.node.y },
+              id: wp.node.id,
+              startAngle,
+              origRotation: wp.node.rotation || 0,
+              cx,
+              cy,
+            };
+            return;
+          }
         }
-        const hs = handles(sx, sy, wp.node.w * z, wp.node.h * z);
+        const isLine = wp.node.kind === "line" || wp.node.kind === "arrow";
+        const isTextHug = wp.node.kind === "text" && wp.node.sizingW === "hug" && wp.node.sizingH === "hug";
         for (let i = 0; i < hs.length; i++) {
+          if (isLine && i !== 3 && i !== 7) continue;
+          if (isTextHug && i % 2 === 0) continue;
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
-            // Figma's scale tool ignores layers nested inside an instance; a
+            // The scale tool ignores layers nested inside an instance; a
             // plain resize is still allowed, because that is an override.
             if (snap.tool === "scale" && insideInstance(root, wp.node.id)) {
               toast("Not scalable · this layer is inside an instance");
@@ -3269,8 +3483,9 @@ export function Canvas({
         const px0 = e.clientX - r0.left;
         const py0 = e.clientY - r0.top;
         const bb = snap.selection.length === 1 ? worldPos(root0, snap.selection[0]) : null;
-        const box = bb
-          ? { x: bb.x, y: bb.y, w: bb.node.w, h: bb.node.h, rot: bb.node.rotation }
+        const b = bb ? nodeVisualBounds(bb) : null;
+        const box = bb && b
+          ? { x: b.x, y: b.y, w: b.w, h: b.h, rot: bb.node.rotation }
           : (() => {
               const b = selectionBounds(root0, snap.selection);
               return b ? { x: b.x, y: b.y, w: b.w, h: b.h, rot: 0 } : null;
@@ -3293,8 +3508,10 @@ export function Canvas({
               next = resizeCursor(i, box.rot);
               break;
             }
-            // Just outside a corner is the rotate zone, as in Figma.
-            if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 18) next = "grab";
+            // Just outside a corner is the rotate zone.
+            if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) <= 22 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) >= 6) {
+              next = ROT_CURSOR;
+            }
           }
           if (!next && bb?.node.layout) {
             const l = bb.node.layout;
@@ -3353,12 +3570,12 @@ export function Canvas({
       const gx = Math.round(wpt.x);
       const gy = Math.round(wpt.y);
       if (!ghost || Math.round(ghost.x) !== gx || Math.round(ghost.y) !== gy) setGhost({ x: gx, y: gy });
-      // Which point would this click join? Figma marks it with a circle, and a
+      // Which point would this click join? Mark it with a circle, and a
       // guess-the-target affordance is how a pen either feels precise or feels
       // like a trap.
       let hint: number | null = null;
       for (let i = 0; i < draft.length; i++) {
-        if (Math.hypot(wpt.x - draft[i].x, wpt.y - draft[i].y) < 8 / snap.zoom) {
+        if (Math.hypot(wpt.x - draft[i].x, wpt.y - draft[i].y) < 14 / snap.zoom) {
           hint = i;
           break;
         }
@@ -3442,7 +3659,7 @@ export function Canvas({
       if (dx || dy) {
         const sel = engine.snapshot().selection;
         // Snap the moved bounding box to nearby geometry. Holding ⌘/Ctrl
-        // bypasses snapping, matching Figma.
+        // bypasses snapping.
         if (!e.metaKey && !e.ctrlKey) {
           const root2 = snap.pages[snap.page].root;
           const bb = selectionBounds(root2, sel);
@@ -3490,20 +3707,26 @@ export function Canvas({
         });
       }
     } else if (d.mode === "multiRotate" && d.bounds && d.origs) {
-      const cx = d.bounds.x + d.bounds.w / 2;
-      const cy = d.bounds.y + d.bounds.h / 2;
-      const b = toWorld(e.clientX, e.clientY);
-      let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
+      const z = snap.zoom;
+      const r = wrap.current?.getBoundingClientRect();
+      const rawX = e.clientX - (r?.left ?? 0);
+      const rawY = e.clientY - (r?.top ?? 0);
+      const cx = d.cx ?? (snap.panX + (d.bounds.x + d.bounds.w / 2) * z);
+      const cy = d.cy ?? (snap.panY + (d.bounds.y + d.bounds.h / 2) * z);
+      const curAngle = Math.atan2(rawY - cy, rawX - cx);
+      let deltaDeg = ((curAngle - (d.startAngle ?? 0)) * 180) / Math.PI;
+      let ang = deltaDeg;
       if (e.shiftKey) ang = Math.round(ang / 15) * 15;
       const rad = (ang * Math.PI) / 180;
       const cos = Math.cos(rad);
       const sin = Math.sin(rad);
-      // Orbit every member around the shared centre and spin it in place.
+      const wcx = d.bounds.x + d.bounds.w / 2;
+      const wcy = d.bounds.y + d.bounds.h / 2;
       for (const o of d.origs) {
-        const ox = o.x + o.w / 2 - cx;
-        const oy = o.y + o.h / 2 - cy;
-        const wx = cx + ox * cos - oy * sin - o.w / 2;
-        const wy = cy + ox * sin + oy * cos - o.h / 2;
+        const ox = o.x + o.w / 2 - wcx;
+        const oy = o.y + o.h / 2 - wcy;
+        const wx = wcx + ox * cos - oy * sin - o.w / 2;
+        const wy = wcy + ox * sin + oy * cos - o.h / 2;
         engine.dispatch({
           type: "resize",
           id: o.id,
@@ -3515,7 +3738,7 @@ export function Canvas({
         engine.dispatch({
           type: "patch",
           id: o.id,
-          patch: { rotation: Math.round(o.rotation + ang) },
+          patch: { rotation: Math.round(((o.rotation || 0) + ang) * 10) / 10 },
         });
       }
     } else if (d.mode === "marquee" && d.id === "erase") {
@@ -3545,7 +3768,7 @@ export function Canvas({
       const shape = node ? { ...node, x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h } : null;
       const local = shape ? nodeLocalPoint(raw.x, raw.y, d.orig.x, d.orig.y, shape) : { x: raw.x - d.orig.x, y: raw.y - d.orig.y };
       const b = shape ? { x: d.orig.x + local.x, y: d.orig.y + local.y } : raw;
-      // Two escape hatches Figma documents on this drag: the Scale tool always
+      // Two escape hatches on this drag: the Scale tool always
       // holds the ratio, and Control releases a ratio that is locked on the layer.
       const forcing = snap.tool === "scale" || !!node?.aspectLocked;
       const lock = e.shiftKey ? true : forcing && !e.ctrlKey;
@@ -3669,17 +3892,25 @@ export function Canvas({
     } else if (d.mode === "rotate" && d.orig && d.id) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (!wp) return;
-      const cx = wp.x + wp.node.w / 2;
-      const cy = wp.y + wp.node.h / 2;
-      const b = toWorld(e.clientX, e.clientY);
-      let ang = (Math.atan2(b.y - cy, b.x - cx) * 180) / Math.PI + 90;
-      if (e.shiftKey) ang = Math.round(ang / 15) * 15;
+      const z = snap.zoom;
+      const r = wrap.current?.getBoundingClientRect();
+      const rawX = e.clientX - (r?.left ?? 0);
+      const rawY = e.clientY - (r?.top ?? 0);
+      const cx = d.cx ?? (snap.panX + (wp.x + wp.node.w / 2) * z);
+      const cy = d.cy ?? (snap.panY + (wp.y + wp.node.h / 2) * z);
+      const curAngle = Math.atan2(rawY - cy, rawX - cx);
+      let deltaDeg = ((curAngle - (d.startAngle ?? 0)) * 180) / Math.PI;
+      let nextRot = (d.origRotation ?? d.orig.rotation ?? 0) + deltaDeg;
+      if (e.shiftKey) nextRot = Math.round(nextRot / 15) * 15;
+      else nextRot = Math.round(nextRot * 10) / 10;
+      while (nextRot > 180) nextRot -= 360;
+      while (nextRot <= -180) nextRot += 360;
       // A moved rotation origin means the box has to slide as it turns, so the
       // pivot is the point that stays put; the spin itself is unchanged.
       const next = rotateAboutOrigin(
         { x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h, rotation: d.orig.rotation },
         wp.node.rotOrigin ?? [0.5, 0.5],
-        Math.round(ang),
+        Math.round(nextRot),
       );
       engine.dispatch({
         type: "patch",
@@ -3713,7 +3944,7 @@ export function Canvas({
         const [pl, pr, pt, pb] = d.origPad;
         const dx = Math.round(wpt.x - d.wx);
         const dy = Math.round(wpt.y - d.wy);
-        // Figma's on-canvas modifiers, from the guide's "From the canvas" table:
+        // On-canvas modifiers:
         // ⌥ sets the padding on the opposite side too, ⌥⇧ sets it on all four,
         // and ⇧ alone drags in big-nudge steps.
         const opp = e.altKey;
@@ -3899,7 +4130,7 @@ export function Canvas({
               },
             ],
           });
-          // Auto-set flow starting point on first connection (Figma parity)
+          // Auto-set flow starting point on first connection (parity)
           const currentPage = snap.pages[snap.page];
           if (!currentPage.flowStart) {
             let startFrame: XNode | null = srcNode.kind === "frame" ? srcNode : findParent(root, srcNode.id);
@@ -4137,7 +4368,7 @@ export function Canvas({
         const id = engine.snapshot().selection[0];
         if (id) setEdit({ id, text: "" });
       }
-      // Figma drops back to the move tool after a shape is committed, so the
+      // Drops back to the move tool after a shape is committed, so the
       // next drag manipulates what you just drew instead of stamping another
       // copy. Slice is the documented exception: it stays armed for repeat cuts.
       if (snap.tool !== "slice") engine.dispatch({ type: "setTool", tool: "select" });
@@ -4212,7 +4443,7 @@ export function Canvas({
       engine.dispatch({ type: "setZoom", zoom: next });
       engine.dispatch({ type: "setPan", x: cx - wx * next, y: cy - wy * next });
     } else if (e.shiftKey) {
-      // ⇧ + wheel scrolls horizontally, as in Figma.
+      // ⇧ + wheel scrolls horizontally.
       const d = normalizeWheelDelta(e.deltaY || e.deltaX, e.deltaMode);
       engine.dispatch({ type: "pan", dx: -d, dy: 0 });
     } else {
@@ -4227,6 +4458,13 @@ export function Canvas({
   };
 
   const onDbl = (e: React.MouseEvent) => {
+    if ((snap.tool === "pen" || snap.tool === "pencil") && draft.length >= 2) {
+      engine.dispatch({ type: "addPath", points: draft, closed: false });
+      setDraft([]);
+      setCloseHint(null);
+      penBranch.current = null;
+      return;
+    }
     const wpt = toWorld(e.clientX, e.clientY);
     /* Double-clicking a bounding-box edge sets that axis's resizing, as the
      * guide's "From the canvas" table has it: hug contents on its own, or Fill
@@ -4262,7 +4500,7 @@ export function Canvas({
       const fill = e.altKey;
       const width = edgeHit.axis === "w";
       if (fill && !findParent(root, edgeHit.id)?.layout) {
-        // Figma only offers Fill container to a child of an auto layout frame:
+        // Fill container is only offered to a child of an auto layout frame:
         // there has to be something for the layer to fill.
         toast("Fill container needs an auto layout parent");
         return;
@@ -4289,7 +4527,7 @@ export function Canvas({
       return;
     }
     // Canvas frame-name inline rename: double-clicking the label above a
-    // frame opens an input there, as in Figma/Sketch.
+    // frame opens an input there.
     let frameLabelHit: XNode | null = null;
     {
       const root = snap.pages[snap.page].root;
@@ -4358,10 +4596,25 @@ export function Canvas({
           engine.dispatch({ type: "patchPath", id: hit.id, path, closed: hit.closed });
         }
       }
-    } else if (hit && (hit.kind === "vector" || hit.kind === "boolean")) {
+    } else if (
+      hit &&
+      (hit.kind === "vector" ||
+        hit.kind === "boolean" ||
+        hit.kind === "rect" ||
+        hit.kind === "ellipse" ||
+        hit.kind === "poly" ||
+        hit.kind === "star" ||
+        hit.kind === "line" ||
+        hit.kind === "arrow")
+    ) {
       engine.dispatch({ type: "select", ids: [hit.id] });
-      if (hit.kind !== "vector") engine.dispatch({ type: "flatten" });
-      setVecEdit(hit.id);
+      if (hit.kind !== "vector") {
+        engine.dispatch({ type: "flatten" });
+        const newId = engine.snapshot().selection[0];
+        setVecEdit(newId);
+      } else {
+        setVecEdit(hit.id);
+      }
     } else if (hit) {
       engine.dispatch({ type: "select", ids: [hit.id] });
     } else if (vecEdit) {
@@ -4413,7 +4666,7 @@ export function Canvas({
     // An imported root carries the coordinates it had in its own file, so
     // placing it at `dx + n.x` puts the artwork wherever the source happened to
     // leave it. What lands on the target is the group's bounding box instead:
-    // its top-left for a drop, its centre for a paste, which is how Figma drops
+    // its top-left for a drop, its centre for a paste, which is standard drop behavior
     // a copy in the middle of the viewport. Several roots keep the arrangement
     // they were copied in rather than stacking on one point.
     const minX = Math.min(...result.nodes.map((n) => n.x));
@@ -4537,7 +4790,7 @@ export function Canvas({
   /* ------------------------------------------------------- system clipboard */
 
   /** The world point under the middle of the viewport. A paste lands there, the
-   *  way Figma's does, so a layer copied from somewhere off-screen still
+   *  so a layer copied from somewhere off-screen still
    *  arrives where the user is looking. */
   const viewCentre = () => {
     const r = wrap.current?.getBoundingClientRect();
@@ -4576,13 +4829,13 @@ export function Canvas({
         return true;
       }
       case "figma": {
-        // The buffer is a whole Figma scene, so it goes through the same reader
-        // as a dropped `.fig` and arrives as editable layers.
-        toast("Pasting from Figma…");
+        // The buffer is an imported scene, so it goes through the same reader
+        // as a dropped archive and arrives as editable layers.
+        toast("Pasting imported scene…");
         try {
-          placeNodes(await importFigContainer(payload.buffer), "the Figma clipboard", target, { centre: true });
+          placeNodes(await importFigContainer(payload.buffer), "the imported clipboard", target, { centre: true });
         } catch (err) {
-          toast(`Could not read the Figma clipboard: ${err instanceof Error ? err.message : "unreadable"}`);
+          toast(`Could not read clipboard data: ${err instanceof Error ? err.message : "unreadable"}`);
         }
         return true;
       }
@@ -4701,7 +4954,7 @@ export function Canvas({
 
   /* A textarea focused in code lands with its caret at position zero, so the
    * first keystroke would be inserted before the copy. Put it after the copy,
-   * which is where clicking into the layer leaves it in Figma. */
+   * which is where clicking into the layer leaves it. */
   useEffect(() => {
     if (!edit) return;
     const el = editRef.current;
@@ -4738,7 +4991,7 @@ export function Canvas({
       transform: wp.node.rotation ? `rotate(${wp.node.rotation}deg)` : undefined,
       transformOrigin: "center center",
       // The overlay is a real textarea, so the wrap style is handed to the
-      // browser's own text-wrap - the same rule Figma applies to its editor.
+      // browser's own text-wrap - the standard editor rule.
       ...((wp.node.textWrap === "balance" || wp.node.textWrap === "pretty") ? { textWrap: wp.node.textWrap } : {}),
       ...(gutter ? { paddingLeft: Math.round(gutter * snap.zoom) } : {}),
     } as CSSProperties;
@@ -4866,7 +5119,7 @@ export function Canvas({
             style={{
               font: "600 11px Inter, system-ui",
               padding: "2px 6px",
-              border: "1px solid #6366f1",
+              border: "1px solid var(--accent, #10b981)",
               borderRadius: 4,
               background: "#ffffff",
               color: "#0f172a",
@@ -4877,7 +5130,7 @@ export function Canvas({
         </div>
       )}
       {padInput && (
-        /* Figma's on-canvas padding entry: one field, floated over the handle it
+        /* On-canvas padding entry: one field, floated over the handle it
            came from. The label says whether it is setting one side, the
            opposite side, or all four. */
         <div className="pad-input" style={{ left: padInput.left, top: padInput.top }}>
@@ -4928,6 +5181,7 @@ export function Canvas({
         }}
       />
       {snap.pages[snap.page].root.children.length === 0 &&
+        !draft.length &&
         snap.tool === "select" &&
         !edit &&
         !snap.presentFrame && (
@@ -5001,6 +5255,303 @@ export function Canvas({
             }}
           >
             <Icon name="close" size={12} />
+          </button>
+        </div>
+      )}
+      {snap.selection.length >= 1 &&
+        !drag.current &&
+        !edit &&
+        !vecEdit &&
+        !snap.presentFrame &&
+        snap.tool === "select" && (() => {
+          const root = snap.pages[snap.page].root;
+          const wp = snap.selection.length === 1 ? worldPos(root, snap.selection[0]) : null;
+          const bb = wp
+            ? nodeVisualBounds(wp)
+            : selectionBounds(root, snap.selection);
+          if (!bb) return null;
+          const node = wp?.node ?? null;
+          const z = snap.zoom;
+          const sw = bb.w * z;
+          const sh = bb.h * z;
+          const sx = snap.panX + bb.x * z;
+          const sy = snap.panY + bb.y * z;
+          const tx = sx + sw / 2 - 140;
+          let ty = sy + sh + 28;
+          if (ty > window.innerHeight - 70) ty = Math.max(12, sy - 44);
+          return (
+            <ContextToolbar
+              x={tx}
+              y={ty}
+              node={node}
+              multi={snap.selection.length > 1}
+              onAutoLayout={() => {
+                if (node?.layout) removeAutoLayout(engine, snap);
+                else addAutoLayout(engine, snap);
+              }}
+              onAlign={(m) => align(engine, snap, m as any)}
+              onGroup={() => engine.dispatch({ type: "group" })}
+              onComponent={() => engine.dispatch({ type: "makeComponent" })}
+              onDuplicate={() => engine.dispatch({ type: "duplicate" })}
+              onDelete={() => engine.dispatch({ type: "delete" })}
+              onFlipH={() => engine.dispatch({ type: "flip", axis: "h" })}
+              onFlipV={() => engine.dispatch({ type: "flip", axis: "v" })}
+            />
+          );
+        })()}
+      {(vecEdit || snap.tool === "pen" || draft.length > 0) && !snap.presentFrame && (
+        <div
+          className="vector-edit-toolbar"
+          style={{
+            position: "absolute",
+            bottom: 32,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#18181b",
+            borderRadius: 24,
+            padding: "4px 8px",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px #27272a",
+            zIndex: 40,
+            userSelect: "none",
+          }}
+        >
+          <button
+            className={`tool-btn ${snap.tool === "select" && vecSubTool === "select" ? "on" : ""}`}
+            style={{
+              background: snap.tool === "select" && vecSubTool === "select" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: snap.tool === "select" && vecSubTool === "select" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              if (draft.length >= 2) {
+                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                setDraft([]);
+                setCloseHint(null);
+                penBranch.current = null;
+              }
+              setVecSubTool("select");
+              engine.dispatch({ type: "setTool", tool: "select" });
+            }}
+            title="Move / Select (V)"
+          >
+            <Icon name="move" size={14} />
+            <span>Select</span>
+          </button>
+          <button
+            className={`tool-btn ${snap.tool === "pen" ? "on" : ""}`}
+            style={{
+              background: snap.tool === "pen" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: snap.tool === "pen" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => engine.dispatch({ type: "setTool", tool: "pen" })}
+            title="Pen (P)"
+          >
+            <Icon name="pen" size={14} />
+            <span>Pen</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "bend" ? "on" : ""}`}
+            style={{
+              background: vecSubTool === "bend" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: vecSubTool === "bend" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              setVecSubTool((t) => (t === "bend" ? "select" : "bend"));
+              toast(vecSubTool === "bend" ? "Select mode" : "Bend tool active (drag segment to curve)");
+            }}
+            title="Bend Tool (⌥)"
+          >
+            <Icon name="bend" size={14} />
+            <span>Bend</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "paint" ? "on" : ""}`}
+            style={{
+              background: vecSubTool === "paint" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: vecSubTool === "paint" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              setVecSubTool((t) => (t === "paint" ? "select" : "paint"));
+              toast(vecSubTool === "paint" ? "Select mode" : "Paint bucket: fill region / face");
+            }}
+            title="Paint Bucket (B)"
+          >
+            <Icon name="paint" size={14} />
+            <span>Paint</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "shapeBuilder" ? "on" : ""}`}
+            style={{
+              background: vecSubTool === "shapeBuilder" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: vecSubTool === "shapeBuilder" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              setVecSubTool((t) => (t === "shapeBuilder" ? "select" : "shapeBuilder"));
+              toast(vecSubTool === "shapeBuilder" ? "Select mode" : "Shape Builder: drag to merge regions, ⌥-click to subtract");
+            }}
+            title="Shape Builder Tool"
+          >
+            <Icon name="shape-builder" size={14} />
+            <span>Shape Builder</span>
+          </button>
+          <button
+            className="tool-btn"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              padding: "6px 8px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+            }}
+            onClick={() => {
+              if (vecEdit) {
+                engine.dispatch({ type: "simplifyPath", id: vecEdit });
+                toast("Simplified path");
+              }
+            }}
+            title="Simplify path"
+          >
+            <Icon name="scissors" size={14} />
+          </button>
+          <button
+            className="tool-btn"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              padding: "6px 8px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+            onClick={() => {
+              if (vecEdit) {
+                engine.dispatch({ type: "vectorCleanup", id: vecEdit });
+                toast("Cleaned up vector (sketch to perfect Bézier)");
+              }
+            }}
+            title="Clean up vector (sketch to perfect Bézier)"
+          >
+            <Icon name="visual-search" size={14} />
+            <span style={{ fontSize: 11 }}>Clean up</span>
+          </button>
+          <button
+            className="tool-btn"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "rgba(255,255,255,0.7)",
+              padding: "6px 8px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+            }}
+            onClick={() => {
+              if (draft.length > 0) {
+                setDraft((d) => d.slice(0, -1));
+                toast("Point deleted");
+              } else if (vecPt.current != null && vecEdit) {
+                const wp = worldPos(snap.pages[snap.page].root, vecEdit);
+                if (wp && wp.node.path.length > 2) {
+                  const newPath = wp.node.path.filter((_, i) => i !== vecPt.current);
+                  engine.dispatch({ type: "patchPath", id: vecEdit, path: newPath, closed: wp.node.closed });
+                  setVecEdit(vecEdit, null, []);
+                  toast("Point deleted");
+                }
+              }
+            }}
+            title="Delete point (⌫)"
+          >
+            <Icon name="eraser" size={14} />
+          </button>
+          <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.15)", margin: "0 4px" }} />
+          <button
+            style={{
+              background: "var(--accent)",
+              border: 0,
+              color: "#ffffff",
+              padding: "5px 14px",
+              borderRadius: 14,
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+            onClick={() => {
+              if (draft.length >= 2) {
+                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                setDraft([]);
+                setCloseHint(null);
+                penBranch.current = null;
+              } else if (draft.length < 2) {
+                setDraft([]);
+                setCloseHint(null);
+                penBranch.current = null;
+              }
+              if (snap.tool === "pen") {
+                engine.dispatch({ type: "setTool", tool: "select" });
+              }
+              setVecEdit(null);
+            }}
+            title="Done (Esc / ↵ / Double-click to finish)"
+          >
+            <Icon name="check" size={13} />
+            Done
           </button>
         </div>
       )}
@@ -5109,21 +5660,24 @@ function selectionBounds(
   for (const id of ids) {
     const wp = worldPos(root, id);
     if (!wp) continue;
-    minX = Math.min(minX, wp.x);
-    minY = Math.min(minY, wp.y);
-    maxX = Math.max(maxX, wp.x + wp.node.w);
-    maxY = Math.max(maxY, wp.y + wp.node.h);
+    const b = nodeVisualBounds(wp);
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w);
+    maxY = Math.max(maxY, b.y + b.h);
   }
   if (!isFinite(minX)) return null;
   return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
 }
 
 /**
- * Figma shows a resize cursor whose direction follows the handle *and* the
+ * Resize cursor direction follows the handle *and* the
  * node's rotation, so a 90deg-rotated box still reads correctly. Handle order is
  * TL,T,TR,R,BR,B,BL,L (see `handles`); each sits 45deg apart, so rotating by the
  * node angle and snapping back to the nearest 45deg step picks the right glyph.
  */
+const ROT_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M21 12a9 9 0 1 1-3.2-6.9l2.2-2.1M20 3v6h-6' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' filter='drop-shadow(0 0 1.5px %23fff)'/%3E%3C/svg%3E\") 12 12, crosshair";
+
 const RESIZE_CURSORS = [
   "nwse-resize", // TL
   "ns-resize", // T
@@ -5353,6 +5907,34 @@ function tracePath(
   }
 }
 
+function traceVectorSegments(
+  ctx: CanvasRenderingContext2D,
+  vn: VectorNetwork,
+  ox: number,
+  oy: number,
+  z: number,
+) {
+  ctx.beginPath();
+  for (const seg of vn.segments) {
+    const v0 = vn.vertices[seg.start];
+    const v1 = vn.vertices[seg.end];
+    if (!v0 || !v1) continue;
+    ctx.moveTo(ox + v0.x * z, oy + v0.y * z);
+    if (seg.tangentStart || seg.tangentEnd) {
+      ctx.bezierCurveTo(
+        ox + (v0.x + (seg.tangentStart?.x || 0)) * z,
+        oy + (v0.y + (seg.tangentStart?.y || 0)) * z,
+        ox + (v1.x + (seg.tangentEnd?.x || 0)) * z,
+        oy + (v1.y + (seg.tangentEnd?.y || 0)) * z,
+        ox + v1.x * z,
+        oy + v1.y * z,
+      );
+    } else {
+      ctx.lineTo(ox + v1.x * z, oy + v1.y * z);
+    }
+  }
+}
+
 function traceVectorNetwork(
   ctx: CanvasRenderingContext2D,
   vn: VectorNetwork,
@@ -5466,7 +6048,7 @@ function paintText(
     const gutter = marker ? widthOfLine(`${marker} `) : 0;
     const avail = wrap ? sw - gutter - indent : 1e6;
     let wrapped = wrapLines(ctx, para || " ", avail > 0 ? avail : 1e6, ls);
-    // Figma's wrap style only has something to say when the layer wraps: an
+    // Wrap style only has something to say when the layer wraps: an
     // auto-width layer breaks a line exactly where Return was pressed.
     if (wrap && (n.textWrap === "balance" || n.textWrap === "pretty") && sw > 0)
       wrapped = balanceLines(wrapped, avail, widthOfLine, n.textWrap);
@@ -5620,7 +6202,7 @@ function findClickedNoodle(
     if (hit) return;
     const dest = worldPos(root, destId);
     if (!dest) return;
-    const noodle = computeFigmaNoodle(nx, ny, n.w, n.h, dest.x, dest.y, dest.node.w, dest.node.h);
+    const noodle = computeConnectorNoodle(nx, ny, n.w, n.h, dest.x, dest.y, dest.node.w, dest.node.h);
     for (let step = 0; step <= 16; step++) {
       const t = step / 16;
       const u = 1 - t;

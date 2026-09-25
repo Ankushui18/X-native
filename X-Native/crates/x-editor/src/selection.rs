@@ -27,7 +27,7 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                     let (dx, dy) = ((local.x - rx) / rx, (local.y - ry) / ry);
                     dx * dx + dy * dy <= 1.0
                 }
-                // Figma's arc is a FILLED region — the wedge through the
+                // the arc is a FILLED region — the wedge through the
                 // centre, or the ring its ratio leaves — so its own area
                 // answers the click and both the gap and the ring's hole pass
                 // through to whatever is underneath, like an ellipse with a
@@ -53,7 +53,7 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                         in_arc && r <= 1.0 + slop && r >= ratio - slop
                     }
                 }
-                // Figma's polygon and star are closed outlines: the shape's
+                // the polygon and star are closed outlines: the shape's
                 // own ink answers the click — a click in the corner of the
                 // triangle's box is NOT on the triangle — and the stroke's
                 // slop rides on the boundary.
@@ -93,9 +93,9 @@ pub fn hit_test(root: &Node, point: Point) -> Option<String> {
                     }
                 }
                 // Plain Groups have no paintable body (no fill/stroke of their
-                // own in Figma's model), so clicks pass through empty group
+                // own in the model), so clicks pass through empty group
                 // area to whatever is beneath. Frames, master Components, and
-                // Instances DO have a real fill/stroke — like Figma, clicking
+                // Instances DO have a real fill/stroke — like , clicking
                 // their body OR their stroke/border must select and let the
                 // user drag the container itself, not just its children.
                 NodeKind::Group => false,
@@ -170,11 +170,11 @@ fn near_path(path: &[PathCmd], p: Point) -> f64 {
 }
 
 /// All node ids whose world AABB is selected by the marquee `rect`. The root
-/// page/canvas is excluded (it can't be marquee-selected, like Figma), and a
+/// page/canvas is excluded (it can't be marquee-selected, like ), and a
 /// locked node is skipped; a Group answers like any other layer.
-/// `contained`: Figma's Alt-drag mode — only nodes FULLY inside the rect are
+/// `contained`: the Alt-drag mode — only nodes FULLY inside the rect are
 /// selected (default is overlap/intersection).
-/// `deep`: Figma's ⌘/Ctrl-drag mode. Without it only the page's TOP-LEVEL
+/// `deep`: the ⌘/Ctrl-drag mode. Without it only the page's TOP-LEVEL
 /// objects answer — a marquee over a frame picks the frame, never the layers
 /// nested inside it — and with it the walk keeps descending, which is the one
 /// thing the ⌘/Ctrl drag adds to a plain marquee.
@@ -192,7 +192,7 @@ pub fn hit_test_rect(root: &Node, rect: Rect, contained: bool, deep: bool) -> Ve
         }
         let world = parent * node.transform.matrix(node.w, node.h);
         // A Group has bounds like any other layer, so it answers a marquee —
-        // Figma selects a group that way. It is a *click* that falls through a
+        //  selects a group that way. It is a *click* that falls through a
         // group's empty area (see `hit_test`, where a Group has no body).
         if !node.locked {
             let b = bounds(world, node.w, node.h);
@@ -224,7 +224,7 @@ pub fn hit_test_rect(root: &Node, rect: Rect, contained: bool, deep: bool) -> Ve
 /// (Ctrl/Cmd+click) or double-click drills into nested children.
 /// Maps a (deep) hit id to its top-level ancestor's id.
 /// The nearest ancestor of `id` — or `id` itself — that is an instance. Used
-/// by the *select inside* gesture: Figma lets a layer inside an instance be
+/// by the *select inside* gesture:  lets a layer inside an instance be
 /// selected and edited, so a hit has to be attributed to the instance it
 /// belongs to.
 pub fn instance_ancestor(root: &Node, id: &str) -> Option<String> {

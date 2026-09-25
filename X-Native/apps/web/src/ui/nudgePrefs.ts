@@ -1,12 +1,12 @@
 /**
- * Figma's Preferences → "Nudge amount…": the two distances the arrow keys move
+ * Preferences → "Nudge amount…": the two distances the arrow keys move
  * a layer by. Small nudge is 1 and big nudge is 10 out of the box, both in
  * resolution-independent points - the same unit this app's design pixels are -
  * and both are settable, which is the whole feature: nudging by a spacing token
  * (8, 12, 16) is the common case, and being stuck at 1/10 means holding the
  * arrow key down and counting.
  *
- * App-wide, not per file, and it outlives a reload, which is where Figma keeps
+ * App-wide, not per file, and it outlives a reload, which is where preferences keep
  * it too: it is a preference about your hands, not about the document.
  */
 
@@ -17,7 +17,7 @@ export interface NudgePrefs {
 
 export const DEFAULT_NUDGE: NudgePrefs = { small: 1, big: 10 };
 
-/** Figma's own bounds. A nudge of 0 would make the arrow keys do nothing, and
+/** Safe bounds. A nudge of 0 would make the arrow keys do nothing, and
  *  past 10000 a single press throws the layer off any page. */
 export const NUDGE_MIN = 0.01;
 export const NUDGE_MAX = 10000;

@@ -1,5 +1,5 @@
 //! Import IR — the common intermediate representation every importer
-//! targets (review: "don't let Sketch → Node, SVG → Node, Figma → Node
+//! targets (review: "don't let  → Node, SVG → Node,  → Node
 //! each develop completely different semantics").
 //!
 //! Pipeline:
@@ -84,21 +84,21 @@ pub struct ImportNode {
     /// ride the same vocabulary as fills.
     pub stroke: Option<(Paint, f64)>,
     /// Stroke geometry options for the primary stroke. Keeping these in the
-    /// shared IR prevents SVG/Figma importers from silently reverting caps,
+    /// shared IR prevents SVG/ importers from silently reverting caps,
     /// joins, and dashes to the renderer defaults.
     pub stroke_options: Option<StrokeOptions>,
-    /// Any strokes beyond the first (Figma/Sketch both support stacking
+    /// Any strokes beyond the first (/ both support stacking
     /// multiple stroke paints on one layer). Same width convention as
     /// `stroke`; importers that don't support multi-stroke just leave
     /// this empty and nothing changes for them.
     pub extra_strokes: Vec<(Paint, f64)>,
     /// Layer effects (shadows/blurs). Empty = none, never guessed.
     pub effects: Vec<Effect>,
-    /// Auto-layout (Figma "layoutMode" / Sketch resizing stacks). None =
+    /// Auto-layout ( "layoutMode" /  resizing stacks). None =
     /// source has no auto-layout on this node — only meaningful on
     /// `ImportKind::Frame`; lower() ignores it for any other kind.
     pub layout: Option<AutoLayout>,
-    /// Resize constraints (Figma `constraints` / Sketch resizing rules).
+    /// Resize constraints ( `constraints` /  resizing rules).
     /// None = source specified nothing -> lower() keeps the Left/Top
     /// default; importers only set it when the source is explicit.
     pub pin: Option<(x_core::HPin, x_core::VPin)>,

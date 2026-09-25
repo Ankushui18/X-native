@@ -1,6 +1,6 @@
 //! CPU raster export (PNG / JPG): RenderTree -> tiny-skia Pixmap -> bytes.
 //!
-//! Headless, deterministic, no GPU. This is the backend for Figma's "Export"
+//! Headless, deterministic, no GPU. This is the backend for the "Export"
 //! surface — it reuses the same `RenderCommand` IR the GPU path and the PDF
 //! sink consume, so raster export cannot drift from the canvas.
 //!
@@ -973,7 +973,7 @@ mod tests {
         );
     }
 
-    /// Figma's **canvas stacking** (help 31289464393751) on the pixels: in a
+    /// the **canvas stacking** (help 31289464393751) on the pixels: in a
     /// stack of overlapping layers the LAST one is on top by default, and
     /// *First on top* puts the first one there instead. The setting changes the
     /// canvas only — the layer list is the same either way.
@@ -1094,7 +1094,7 @@ mod tests {
         };
 
         // A name sits LABEL_OFFSET_Y + LABEL_FONT_SIZE above its frame
-        // (OpenPencil / Figma UI3 11px gutter label), inside the gutter
+        // (OpenPencil /  UI3 11px gutter label), inside the gutter
         // band; the page's top edge is where the page name used to be
         // painted instead.
         check(ink(0, 14, 400, 32), false, "above the page");
@@ -1102,7 +1102,7 @@ mod tests {
         check(ink(40, 54, 180, 72), true, "frame name");
         check(ink(40, 104, 80, 122), false, "nested frame");
         check(ink(240, 54, 340, 72), true, "section name");
-        // Figma paints a section's name as a chip in the section's own colour,
+        //  paints a section's name as a chip in the section's own colour,
         // sized to the name. This is that, in pixels — and it is asked by COLOUR,
         // not by "any ink": with no font manager attached the sink paints a grey
         // placeholder box as wide as the label's `max_width` (≈229 on white),

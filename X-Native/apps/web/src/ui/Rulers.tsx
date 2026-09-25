@@ -1,12 +1,12 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Figma-style rulers along the top and left edges of the viewport.
+ * Rulers along the top and left edges of the viewport.
  *
  * Drawn on their own canvas so ticks stay crisp at any DPR and redrawing them
  * never touches the document render. Tick spacing steps through a 1/2/5
  * sequence so labels stay roughly 80px apart at every zoom level, and the
- * current selection is highlighted the way Figma shades the selected range.
+ * current selection is highlighted along the selected range.
  */
 
 const SIZE = 20;
@@ -55,10 +55,10 @@ export function Rulers({
     ctx.clearRect(0, 0, width, height);
 
     const dark = theme === "dark";
-    const bg = dark ? "#181922" : "#ffffff";
-    const line = dark ? "#333647" : "#e5e5e5";
-    const text = dark ? "#94a3b8" : "#8c8c8c";
-    const accent = "#6366f1";
+    const bg = dark ? "#171c22" : "#ffffff";
+    const line = dark ? "rgba(255, 255, 255, 0.08)" : "#e5e5e5";
+    const text = dark ? "rgba(241, 245, 243, 0.56)" : "#8c8c8c";
+    const accent = "#10b981";
 
     // Rails
     ctx.fillStyle = bg;
@@ -67,7 +67,7 @@ export function Rulers({
 
     // Highlight the selected range
     if (selection) {
-      ctx.fillStyle = dark ? "rgba(99,102,241,.25)" : "rgba(99,102,241,.18)";
+      ctx.fillStyle = dark ? "rgba(16,185,129,.22)" : "rgba(14,159,110,.16)";
       const sx = panX + selection.x * zoom;
       const sy = panY + selection.y * zoom;
       ctx.fillRect(sx, 0, selection.w * zoom, SIZE);
@@ -105,7 +105,7 @@ export function Rulers({
       if (major) ctx.fillText(String(Math.round(v)), sx + 3, SIZE - 8);
     }
 
-    // Vertical ruler — labels rotated, matching Figma.
+    // Vertical ruler — labels rotated.
     const wy0 = (SIZE - panY) / zoom;
     const wy1 = (height - panY) / zoom;
     for (let v = Math.floor(wy0 / minor) * minor; v <= wy1; v += minor) {

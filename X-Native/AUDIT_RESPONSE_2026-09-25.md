@@ -69,11 +69,39 @@ Same typography/surfaces/controls/navigation/spacing/iconography/states/dialogs.
 
 ## 5. What this commit adds
 
-- **Contextual selection chrome** as above — first step of P0-A. Next: hover dash for frames, multi-select group chrome, `ParentSelected` outline (already group shortcut), keyboard-focus guard.
+- **P0-A Selection architecture & handles**:
+  - Removed fixed lollipop stems from single selection and multi-selection.
+  - Frame handles are clean 7x7 squares (container affordance) with no inner dots.
+  - Line / Arrow displays only the 2 actual endpoint handles instead of 8 bounding box handles.
+  - Text hug mode displays side handles.
+  - Corner rotation: hovering outside any of the 4 corner handles displays the curved rotation cursor; dragging rotates smoothly around pivot with Shift snapping to 15° increments.
+  - Multi-selection corner rotation rotates all selected layers around combined selection center.
+  - Dynamic rotation visual feedback: displays rotation angle badge (`15°`) and pivot crosshair during rotation.
+  - Canvas selection ≠ keyboard focus guard: typing inside any field, input, or popover does not trigger canvas shortcuts or deselect layers.
+- **P0-B Contextual Inspector architecture**:
+  - Text layers display the Typography section prominently at the top above Position.
+  - Multi-stroke layers render individual weights, alignments, opacities, and visibility.
+  - Effects use compact row + popover editor.
+  - Phantom controls guarded (all exposed properties are applied in renderer).
+- **P0-C & P0-D x-ui Component layer & interaction states**:
+  - Implemented full component system in `x-ui.tsx`: `XButton` (primary/secondary/ghost/danger/icon, sm/md/lg), `XInput`, `XNumericInput` (scrubbable drag on label + math expression eval via `evalField`), `XSelect`, `XSegmentedControl`, `XPopover`, `PropertyField`, `XSection`, `XDialog`, `ContextToolbar`, `XTabs`.
+  - Added comprehensive CSS styling for `x-ui` in `styles.css`.
+  - Added floating `ContextToolbar` on canvas for quick Auto Layout, Align, Group, Component, Flip, Duplicate, and Delete actions.
+- **P0-E Dashboard ↔ Editor consistency**:
+  - Unified Graphite & Emerald aesthetic, elevations (`--elev-raised`, `--elev-floating`, `--elev-modal`), and semantic typography (`T_CONTROL`, `T_LABEL`, `T_BODY`, `T_SECTION`).
+- **Brand Decoupling & Independent Visual Identity (Graphite & Signal Emerald)**:
+  - Eliminated all competitor trademark names and comparative claims from user-facing UI, tooltips, hints, toasts, and code export menus.
+  - Renamed Dev Mode export option to "Layer JSON" with clean normalized representation.
+  - Removed trademarked competitor SVG marks from `icons.tsx`.
+  - Rebranded accent palette across the entire application to X-Native's distinctive Graphite & Signal Emerald (`#0e9f6e` / `#10b981`):
+    - Canvas selection bounding boxes, corner/edge handles, rotation angle badges, and flow starting points.
+    - Rulers selection range indicators, highlights, and backdrop.
+    - Minimap document viewport frame, fill tints, and canvas backing.
+    - Chrome tokens, comment pins, interactive focus rings, and action accents.
 
 ## 6. Verification plan
 
-- Code audit: selection chrome, inspector sections, x-ui tokens → components.
+- Code audit: selection chrome, inspector sections, x-ui tokens → components, brand decoupling audit.
 - Runtime verification required: mouse interactions (handle drag, rotation snap 15°, center-origin `⌥`, vector node insert `⌘`/bend `⌥`, frame double-click rename, eraser brush), keyboard (Cmd/Ctrl click deep select, `⌘K` palette), viewport collision for menus.
 
 ---

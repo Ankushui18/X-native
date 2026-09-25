@@ -124,7 +124,7 @@ pub fn alignment_guides(root: &Node, moving_id: &str, tol: f64) -> Vec<(bool, f6
     guides
 }
 
-/// Figma-style magnetic snap during move: given the moving node's would-be
+/// standard magnetic snap during move: given the moving node's would-be
 /// AABB, returns (dx, dy) corrections that snap edges/centers to other
 /// nodes' edges/centers within `tol`. Zero when nothing is close.
 pub fn snap_delta(root: &Node, moving_id: &str, tol: f64) -> (f64, f64) {

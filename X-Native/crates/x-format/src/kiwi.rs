@@ -1,4 +1,4 @@
-//! Kiwi: the schema-based binary format that Figma's `.fig` files encode
+//! Kiwi: the schema-based binary format that the `.fig` files encode
 //! with (see `figbinary.rs`). Decodes the *self-describing* schema embedded
 //! in the file, then decodes messages against it into `json::V` values, so
 //! every downstream importer consumes one vocabulary.

@@ -38,7 +38,7 @@ use x_native::{
 /// labelled object — on the canvas the root is the PAGE, and its name
 /// belongs in the pages list, not painted across the artboard. The
 /// document's `/golden/label` command is gone; `/golden/row/label` stays,
-/// because the auto-layout row is a page-level frame and Figma does name
+/// because the auto-layout row is a page-level frame and  does name
 /// those. The text-layer clip is accounted for in the current pinned shape
 /// below. Nothing else moved: no geometry, no paint.
 ///

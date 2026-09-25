@@ -26,7 +26,7 @@ pub fn kind_label(n: &Node) -> &'static str {
     }
 }
 
-/// Indented tree listing, Figma-CLI style: `[i] [KIND] "name" (id)`.
+/// Indented tree listing, -CLI style: `[i] [KIND] "name" (id)`.
 pub fn tree_lines(doc: &Document, max_depth: Option<usize>) -> Vec<String> {
     let mut out = Vec::new();
     for (pi, p) in doc.pages.iter().enumerate() {

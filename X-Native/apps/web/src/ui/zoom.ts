@@ -15,13 +15,13 @@ function viewport(): { w: number; h: number; x: number; y: number } {
 }
 
 /** Change the zoom while keeping the middle of the canvas still, which is what
- *  Figma's zoom-in/zoom-out shortcuts and its percentage menu do. */
+ *  zoom-in/zoom-out shortcuts and percentage menu do. */
 export function zoomAboutCentre(engine: Engine, zoom: number) {
   const vp = viewport();
   engine.dispatch({ type: "setZoom", zoom, anchorX: vp.w / 2, anchorY: vp.h / 2 });
 }
 
-/** Fit the page (or the selection) into the viewport, Figma's ⇧1 / 2.
+/** Fit the page (or the selection) into the viewport, ⇧1 / 2.
  *
  * The pan is expressed in canvas-local coordinates because the canvas element
  * is offset by the panels; using window coordinates here puts the content
@@ -30,7 +30,7 @@ export function zoomAboutCentre(engine: Engine, zoom: number) {
 export function zoomTo(engine: Engine, mode: "fit" | "selection", padding = 0.9) {
   const s = engine.snapshot();
   const root = s.pages[s.page].root;
-  // ⇧2 with nothing selected does nothing at all in Figma - it must not fall
+  // ⇧2 with nothing selected does nothing at all - it must not fall
   // back to fitting the page, or the shortcut becomes a second ⇧1.
   if (mode === "selection" && !s.selection.length) return;
   const nodes =
@@ -53,7 +53,7 @@ export function zoomTo(engine: Engine, mode: "fit" | "selection", padding = 0.9)
   const bw = Math.max(1, maxX - minX);
   const bh = Math.max(1, maxY - minY);
   const vp = viewport();
-  // Never zoom past 100% to fit — Figma stops at real size, and users read a
+  // Never zoom past 100% to fit — stop at real size, and users read a
   // blown-up "fit" as a bug.
   const z = clampZoom(Math.min(1, Math.min(vp.w / bw, vp.h / bh) * padding));
   const el = document.querySelector(".canvas-wrap") as HTMLElement | null;
@@ -80,7 +80,7 @@ export function zoomAtPoint(engine: Engine, next: number, cx: number, cy: number
 }
 
 /** Pan so the selection sits in the middle of the viewport, zoom unchanged
- *  (Sketch's ⌘3 "Center selection in the Canvas"). */
+ *  (⌘3 "Center selection in the Canvas"). */
 export function zoomCenter(engine: Engine) {
   const snap = engine.snapshot();
   const bb = boundsOf(snap, snap.selection);
@@ -95,7 +95,7 @@ export function zoomCenter(engine: Engine) {
   });
 }
 
-/** Zoom so a world-space rect exactly fills the viewport — Sketch's drag-the-
+/** Zoom so a world-space rect exactly fills the viewport — drag-the-
  *  Zoom-tool-over-an-area gesture. */
 export function zoomToRect(engine: Engine, rect: { x: number; y: number; w: number; h: number }) {
   const vp = viewport();

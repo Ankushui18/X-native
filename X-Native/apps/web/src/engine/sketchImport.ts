@@ -1,5 +1,5 @@
 /**
- * Sketch (.sketch) import.
+ * .sketch format import.
  *
  * A .sketch file is a ZIP of JSON: `document.json` lists page references and
  * each `pages/<id>.json` holds a layer tree. That means it can be opened in
@@ -28,7 +28,7 @@ const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 const num = (v: unknown, d = 0): number => (typeof v === "number" && Number.isFinite(v) ? v : d);
 
-/** Sketch stores colour channels as 0..1 floats. */
+/** Format stores colour channels as 0..1 floats. */
 function sketchColor(v: unknown): string | null {
   const c = obj(v);
   if (!c) return null;
@@ -38,7 +38,7 @@ function sketchColor(v: unknown): string | null {
   return a >= 0.999 ? hex : `${hex}${Math.round(a * 255).toString(16).padStart(2, "0")}`;
 }
 
-/** First enabled fill or gradient; Sketch keeps disabled entries in the array. */
+/** First enabled fill or gradient; keeps disabled entries in the array. */
 function sketchFillInfo(layer: J): {
   fill: string | null;
   fillType?: FillType;
@@ -137,7 +137,7 @@ function sketchEffects(layer: J): Effect[] {
   return effects;
 }
 
-/** `"{1, 2}"` -> [1, 2]; Sketch encodes points as strings. */
+/** `"{1, 2}"` -> [1, 2]; Format encodes points as strings. */
 function parsePoint(v: unknown): { x: number; y: number } | null {
   const s = str(v);
   if (!s) return null;
@@ -172,12 +172,12 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
   if (!pagePaths.length) {
     pagePaths = zip.names().filter((n) => /^pages\/.+\.json$/.test(n));
   }
-  if (!pagePaths.length) throw new Error("no pages in this Sketch file");
+  if (!pagePaths.length) throw new Error("no pages in this file");
 
   // Only the first page is imported: the engine has its own page model and
-  // silently merging several Sketch pages into one canvas would overlap them.
+  // silently merging several pages into one canvas would overlap them.
   const page = obj(await zip.readJson(pagePaths[0]));
-  if (!page) throw new Error("unreadable Sketch page");
+  if (!page) throw new Error("unreadable archive page");
 
   const walk = (layer: J, ox: number, oy: number) => {
     if (layer.isVisible === false) return;
@@ -191,7 +191,7 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
     const style = obj(layer.style);
     const ctx = obj(style?.contextSettings);
     const opacity = Math.max(0, Math.min(1, num(ctx?.opacity, 1)));
-    // Sketch stores rotation counter-clockwise; the engine uses clockwise.
+    // Format stores rotation counter-clockwise; the engine uses clockwise.
     const rotation = -num(layer.rotation);
     const fillInfo = sketchFillInfo(layer);
     const border = firstBorder(layer);
@@ -296,7 +296,7 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
         const pts = arr(layer.points)
           .map((p) => parsePoint(obj(p)?.point))
           .filter((p): p is { x: number; y: number } => !!p)
-          // Sketch normalises path points to the layer's 0..1 box.
+          // Format normalises path points to the layer's 0..1 box.
           .map((p) => ({ x: p.x * w, y: p.y * h }));
         if (pts.length < 2) {
           skipped++;
@@ -341,7 +341,7 @@ export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
     if (lo) walk(lo, 0, 0);
   }
 
-  if (!nodes.length) throw new Error("no importable layers in this Sketch file");
+  if (!nodes.length) throw new Error("no importable layers in this file");
 
   // Artboards sit at arbitrary canvas coordinates; normalise to the origin so
   // the import lands where it was dropped rather than far off-screen.

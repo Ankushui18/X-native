@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 /// Auto Layout v2: gap/padding VARIABLES, PER-SIDE padding, cross-axis
 /// alignment, space-between, independent main/cross HUG, flex
-/// grow/shrink/basis (Figma "fill container"), ABSOLUTE out-of-flow
+/// grow/shrink/basis ( "fill container"), ABSOLUTE out-of-flow
 /// children, baseline alignment, multi-line WRAP and min/max constraints.
 ///
 /// Unified from two parallel tracks: the v2 solver (wrap/grow/basis/
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// padding + cross_sizing model. Padding is `[left, right, top, bottom]`;
 /// main-axis start/end and cross-axis start/end are picked per direction.
 ///
-/// CSS Flexbox parity (Figma Jul-2026): inside strokes included in layout,
+/// CSS Flexbox parity ( Jul-2026): inside strokes included in layout,
 /// border-box fill-container distribution, auto-gap never overlaps, padding
 /// minimum enforced on fixed frames.
 pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
@@ -65,7 +65,7 @@ pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
     }
 
     if let Some(g) = &layout.grid {
-        // CSS-grid mode (Figma Grid): the stack solver is bypassed; the
+        // CSS-grid mode ( Grid): the stack solver is bypassed; the
         // min/max clamp below still applies to the frame's own axes.
         crate::grid::apply_grid_layout(node, &layout, g);
     } else if layout.wrap == AutoLayoutWrap::Wrap {
@@ -74,12 +74,12 @@ pub fn apply_auto_layout(node: &mut Node, vars: &Variables) {
         layout_flow(node, &layout, gap, eff_padding);
     }
 
-    // Min/max dimensions clamp the frame's own axes. Figma: "Minimum and
+    // Min/max dimensions clamp the frame's own axes. : "Minimum and
     // maximum dimensions is an additional setting that can be used at the
     // same time as other resizing properties" (help 360040451373), so this is
     // not a hug-only rule — a Fixed frame is bounded the same way. A maximum
     // can never cut into the padding, and the minimum wins when the two
-    // cross, since that is the setting Figma reads last.
+    // cross, since that is the setting  reads last.
     if let Some(mx) = layout.max_width {
         node.w = node.w.min(mx.max(min_w));
     }
@@ -120,13 +120,13 @@ fn cross_pad(horizontal: bool, pad: Padding) -> (f64, f64) {
 }
 
 /// Single row (horizontal) / column (vertical) flow — the classic solver,
-/// now with flex grow/shrink/basis (Figma "fill container" + overflow shrink).
+/// now with flex grow/shrink/basis ( "fill container" + overflow shrink).
 fn layout_flow(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) {
     let horizontal = layout.direction == LayoutDirection::Horizontal;
     let (m0, m1) = main_pad(horizontal, pad);
     let (c0, c1) = cross_pad(horizontal, pad);
     let hug_cross = layout.cross() == Sizing::Hug;
-    // Absolute children are removed from the flow (Figma ABSOLUTE): they keep
+    // Absolute children are removed from the flow ( ABSOLUTE): they keep
     // their manual transform and are ignored for sizing/gap/hug.
     let flow: Vec<usize> = node
         .children
@@ -173,7 +173,7 @@ fn layout_flow(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) {
         let available = container_main - m0 - m1 - (n as f64 - 1.0) * gap;
         if available > content_main {
             // grow: distribute leftover among children with grow > 0.
-            // CSS Flexbox parity (Figma Jul-2026): border-box model —
+            // CSS Flexbox parity ( Jul-2026): border-box model —
             // children with thicker inside strokes take more total space
             // so their content areas match their siblings'.
             let grow_total: f64 = flow
@@ -318,14 +318,14 @@ fn layout_flow(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) {
 /// Multi-line wrap: children flow along the main axis until they would
 /// exceed the available extent, then wrap to a new line. Lines are stacked
 /// along the cross axis with `gap` between them; `align` aligns each item
-/// within its own line (Figma's default `alignContent = start`). Hug frames
+/// within its own line (the default `alignContent = start`). Hug frames
 /// wrap at `max_width`/`max_height` (if set) and then hug to the widest line.
 fn layout_wrapped(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) {
     let horizontal = layout.direction == LayoutDirection::Horizontal;
     let (m0, m1) = main_pad(horizontal, pad);
     let (c0, c1) = cross_pad(horizontal, pad);
     let hug_cross = layout.cross() == Sizing::Hug;
-    // Absolute children are removed from the flow (Figma ABSOLUTE).
+    // Absolute children are removed from the flow ( ABSOLUTE).
     let flow: Vec<usize> = node
         .children
         .iter()
@@ -352,7 +352,7 @@ fn layout_wrapped(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) 
         return;
     }
 
-    // flex-basis overrides the node's own main-axis size (Figma "fill"/basis).
+    // flex-basis overrides the node's own main-axis size ( "fill"/basis).
     let mains: Vec<f64> = flow
         .iter()
         .map(|&i| {
@@ -414,8 +414,8 @@ fn layout_wrapped(node: &mut Node, layout: &AutoLayout, gap: f64, pad: Padding) 
         .map(|r| r.iter().map(|&i| mains[i]).sum())
         .collect();
     // Per-line flex-grow (Fixed frames): "fill container" fills the remaining
-    // width of its own line, exactly like Figma's fill in wrap layouts.
-    // CSS Flexbox parity (Figma Jul-2026): border-box model — distribute
+    // width of its own line, exactly like the fill in wrap layouts.
+    // CSS Flexbox parity ( Jul-2026): border-box model — distribute
     // by content area so children with thicker strokes get more total space.
     let mut final_main: Vec<f64> = mains.clone();
     if layout.sizing == Sizing::Fixed && layout.distribute == Distribute::Packed {
@@ -581,7 +581,7 @@ fn to_cross_align(a: Alignment) -> CrossAlign {
 /// Baseline offset of a child: distance from its top edge to its first text
 /// baseline. Uses the explicit `node.baseline` when the text pipeline supplied
 /// one; otherwise falls back to a geometry heuristic (text ≈ 0.72·h·0.8 ascent
-/// at the node-height convention; non-text = bottom edge, per Figma).
+/// at the node-height convention; non-text = bottom edge, per ).
 fn child_baseline(child: &Node) -> f64 {
     if let Some(b) = child.baseline {
         return b;
@@ -626,7 +626,7 @@ pub fn apply_layout_recursive(node: &mut Node, vars: &Variables) {
 /// The order a container's children are PAINTED in — indices into
 /// `node.children`, bottom-most first (the painter's algorithm).
 ///
-/// Figma's **canvas stacking** (help 31289464393751): "When multiple layers
+/// the **canvas stacking** (help 31289464393751): "When multiple layers
 /// have negative spacing creating a stack, the last object … will be on top by
 /// default. You can change the visual order of the stack as seen on the
 /// canvas" — *First on top* paints the first child last, so it lands on top.

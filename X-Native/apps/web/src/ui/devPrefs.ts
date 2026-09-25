@@ -6,21 +6,32 @@
  * language and px/rem, while the menu copied hand-built CSS in pixels. A
  * developer who set the panel to SwiftUI + rem and then used the menu got a
  * different answer for the same layer — so the answer lives here instead, and
- * outlives a reload, which is what Figma's Inspect settings do too.
+ * outlives a reload.
  */
-export type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma" | "tokens";
+export type DevFormat =
+  | "css"
+  | "react"
+  | "tailwind"
+  | "swiftui"
+  | "compose"
+  | "flutter"
+  | "svg"
+  | "tokens"
+  | "layerJson"
+  | "figma";
 export type DevUnit = "px" | "rem";
 
-/** Order matters: it is the order of Figma's language dropdown. */
+/** Supported languages. */
 export const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
   { id: "css", label: "CSS", lang: "css" },
+  { id: "react", label: "React (TSX)", lang: "typescript" },
   { id: "tailwind", label: "Tailwind", lang: "html" },
   { id: "swiftui", label: "SwiftUI", lang: "swift" },
   { id: "compose", label: "Compose", lang: "kotlin" },
   { id: "flutter", label: "Flutter", lang: "dart" },
   { id: "svg", label: "SVG", lang: "xml" },
-  { id: "figma", label: "Layer JSON", lang: "json" },
   { id: "tokens", label: "Design Tokens", lang: "json" },
+  { id: "layerJson", label: "Layer Spec", lang: "json" },
 ];
 
 export const devLangLabel = (id: DevFormat): string => DEV_LANGS.find((l) => l.id === id)?.label ?? "CSS";

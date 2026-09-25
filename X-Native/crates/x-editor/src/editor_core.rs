@@ -60,7 +60,7 @@ fn parent_of(n: &Node, id: &str) -> Option<String> {
     None
 }
 
-/// Does a subtree carry a Section anywhere? Figma's rule is about the
+/// Does a subtree carry a Section anywhere? the rule is about the
 /// container itself: "Sections ... cannot be contained within frames or
 /// groups", and a frame cannot be given one through the back door either.
 fn has_section(n: &Node) -> bool {
@@ -129,7 +129,7 @@ pub struct Editor {
     pub edit_serial: u64,
     pub root: Node,
     pub selection: Vec<String>,
-    /// Figma: a layer *inside* an instance is selectable, and editing one of
+    /// : a layer *inside* an instance is selectable, and editing one of
     /// its properties stores an override on the instance instead of touching
     /// the master. `(instance id, layer id inside it)`; `None` = not inside.
     pub instance_scope: Option<(String, String)>,
@@ -145,11 +145,11 @@ pub struct Editor {
     text_edit_mode: Option<TextEditState>,
     /// Phase P0: corner drag state
     corner_drag_state: Option<CornerDragState>,
-    /// Eraser tool state (Figma-like eraser + image support)
+    /// Eraser tool state (standard eraser + image support)
     pub erase_stroke: Option<EraserStroke>,
     /// Tool state flags
     pub tool_state: ToolState,
-    /// Vector edit mode state (Figma parity)
+    /// Vector edit mode state ( parity)
     pub vector_edit_active: bool,
     pub vector_edit_node: Option<String>,
     pub vector_edit_selected_points: Vec<usize>,
@@ -201,10 +201,10 @@ fn remap_ids(node: &mut Node, rename: &mut impl FnMut(&str) -> String, out: &mut
 }
 
 impl Editor {
-    /// Rename a layer's DISPLAY NAME (Figma parity). The node's `id` — the
+    /// Rename a layer's DISPLAY NAME ( parity). The node's `id` — the
     /// identity every reference points at (prototype destinations, instance
     /// overrides, render keys) — is left untouched, so renaming can never
-    /// break a link. Names may duplicate (Figma allows duplicate layer
+    /// break a link. Names may duplicate ( allows duplicate layer
     /// names); only empty and no-op renames are refused.
     pub fn rename_node(&mut self, id: &str, new_name: &str) -> bool {
         let new_name = new_name.trim();
@@ -315,7 +315,7 @@ impl Editor {
     }
 
     // -- inside an instance -------------------------------------------------
-    /// Figma's *select inside*: double-clicking inside an instance selects the
+    /// the *select inside*: double-clicking inside an instance selects the
     /// layer under the cursor **inside it**, and every property change from
     /// then on is stored as the instance's override (help 360039150733: *"you
     /// can change the properties of any layer within an instance"*). The
@@ -330,7 +330,7 @@ impl Editor {
         Some(layer)
     }
 
-    /// Leave the instance: Figma's Esc selects the instance itself again.
+    /// Leave the instance: the Esc selects the instance itself again.
     /// Returns true when there was a scope to leave.
     pub fn exit_instance(&mut self) -> bool {
         match self.instance_scope.take() {
@@ -411,9 +411,9 @@ impl Editor {
     }
 
     /// A write aimed at a layer inside an instance never edits the master
-    /// (Figma keeps the master and every other instance untouched). Returns
+    /// ( keeps the master and every other instance untouched). Returns
     /// true when the caller must stop: either the write became an override, or
-    /// `v` is `None` — meaning that property is one Figma does not let an
+    /// `v` is `None` — meaning that property is one  does not let an
     /// instance override, so the write is refused rather than misdirected.
     fn scope_gate(&mut self, id: &str, v: Option<x_core::OverrideValue>) -> bool {
         if !self.scope_owns(id) {
@@ -454,15 +454,15 @@ impl Editor {
             }
         }
     }
-    /// Figma's plain marquee: the page's top-level objects only.
+    /// the plain marquee: the page's top-level objects only.
     pub fn marquee(&mut self, rect: Rect) {
         self.selection = hit_test_rect(&self.root, rect, false, false);
     }
-    /// Figma's ⌘/Ctrl-drag marquee: the nested layers answer too.
+    /// the ⌘/Ctrl-drag marquee: the nested layers answer too.
     pub fn marquee_deep(&mut self, rect: Rect) {
         self.selection = hit_test_rect(&self.root, rect, false, true);
     }
-    /// Figma Alt-drag marquee: select only fully-contained nodes.
+    ///  Alt-drag marquee: select only fully-contained nodes.
     pub fn marquee_contained(&mut self, rect: Rect) {
         self.selection = hit_test_rect(&self.root, rect, true, false);
     }
@@ -495,7 +495,7 @@ impl Editor {
         if dx == 0.0 && dy == 0.0 {
             return;
         }
-        // Figma's list of what an instance does NOT let you override starts
+        // the list of what an instance does NOT let you override starts
         // with position: a layer inside an instance does not move.
         if self.scope_gate(id, None) {
             return;
@@ -578,9 +578,9 @@ impl Editor {
         }
     }
 
-    /// Figma's *Use as mask* (`⌘⌥M`; help 360040450253): the bottom-most
+    /// the *Use as mask* (`⌘⌥M`; help 360040450253): the bottom-most
     /// selected layer becomes the mask for the layers above it. With several
-    /// layers selected Figma wraps them in the mask object it creates — a
+    /// layers selected  wraps them in the mask object it creates — a
     /// group carrying the mask — and that group becomes the selection; a
     /// single layer just flips its own flag. Asking again on a selection that
     /// is all masks clears them, so one gesture is the toggle.
@@ -653,7 +653,7 @@ impl Editor {
     }
 
     /// The layer the Mask section speaks for: a selected mask, or the mask at
-    /// the bottom of a selected mask object — Figma selects the object it just
+    /// the bottom of a selected mask object —  selects the object it just
     /// created, and its Mask section still drives that mask's type.
     pub fn mask_section_target(&self, id: &str) -> Option<String> {
         let n = find(&self.root, id)?;
@@ -666,7 +666,7 @@ impl Editor {
             .map(|c| c.id.clone())
     }
 
-    /// Figma's **Mask** section (help 360040450253): the type the mask is
+    /// the **Mask** section (help 360040450253): the type the mask is
     /// applied by. The section speaks for the whole selection, so every
     /// selected mask takes the choice.
     pub fn set_mask_type(&mut self, kind: MaskType) -> bool {
@@ -687,7 +687,7 @@ impl Editor {
         done
     }
 
-    /// Figma's **List style** (help 360040449773): the selected text layers
+    /// the **List style** (help 360040449773): the selected text layers
     /// take the style — the shaper then reserves a marker column and draws
     /// the bullet or the counter in it. Layers that are not text are left
     /// alone, and a write that changes nothing is not an entry.
@@ -764,7 +764,7 @@ impl Editor {
         }
     }
 
-    /// Resize a node the way the canvas does (Figma's Constraints): the node
+    /// Resize a node the way the canvas does (the Constraints): the node
     /// takes the new size and the layers inside it answer their pins — in the
     /// SAME undo entry, so one Ctrl+Z puts the whole picture back.
     pub fn resize_with_constraints(&mut self, id: &str, w: f64, h: f64) -> bool {
@@ -786,7 +786,7 @@ impl Editor {
         self.push_cmds(cmds);
         true
     }
-    /// Figma's rotation field (`360039956914`): the angle applies to *every*
+    /// the rotation field (`360039956914`): the angle applies to *every*
     /// selected layer, and what is stored follows the panel's convention —
     /// `(-180, 180]`, counting back down past 180 in the direction you came
     /// from. One undo entry for the whole selection.
@@ -816,7 +816,7 @@ impl Editor {
         true
     }
 
-    /// Figma's canvas rotate: every selected layer turns about `pivot` by
+    /// the canvas rotate: every selected layer turns about `pivot` by
     /// `delta` radians. `base` is the selection as it stood when the gesture
     /// began (`id → x, y, rotation`), so a live drag can ask for the *total*
     /// delta on every move — the last move wins instead of compounding, and the
@@ -824,7 +824,7 @@ impl Editor {
     ///
     /// The pivot is `(x + origin_x·w, y + origin_y·h)` for a layer whose own
     /// origin the user moved, and the selection's centre otherwise — which is
-    /// Figma's rule: *"Figma uses the horizontal and vertical center of the
+    /// the rule: *" uses the horizontal and vertical center of the
     /// current selection as the point of rotation by default. You can change an
     /// object's rotation origin so that it will rotate around a different
     /// point."*
@@ -888,7 +888,7 @@ impl Editor {
         }
     }
     /// Set a node's corner radius: uniform `radius` + optional per-corner
-    /// overrides (None = uniform mode). Figma's radius applies to rectangles
+    /// overrides (None = uniform mode). the radius applies to rectangles
     /// AND frames (help 360050986854); a frame has no uniform field of its own,
     /// so the command resolves its uniform value into four equal corners.
     /// Undoable.
@@ -929,7 +929,7 @@ impl Editor {
         }
     }
 
-    /// ONE corner's radius — Figma's **Independent corners**. The uniform value
+    /// ONE corner's radius — the **Independent corners**. The uniform value
     /// a rect keeps in its kind is left alone, so putting the corners back to
     /// uniform returns the radius the layer had before.
     pub fn set_corner_radius(&mut self, id: &str, corner: usize, r: f64) -> bool {
@@ -949,7 +949,7 @@ impl Editor {
         self.set_corners(id, base, Some(radii))
     }
 
-    /// Corner smoothing — Figma's *Corner smoothing* slider, 0–1 here and 0–100%
+    /// Corner smoothing — the *Corner smoothing* slider, 0–1 here and 0–100%
     /// on screen. Only the whole shape carries it, so one write is one entry.
     pub fn set_corner_smoothing(&mut self, id: &str, v: f64) -> bool {
         let Some(n) = find(&self.root, id) else {
@@ -1014,7 +1014,7 @@ impl Editor {
         }
     }
 
-    /// Replace the picture of an image layer. Figma's *Place image* with an
+    /// Replace the picture of an image layer. the *Place image* with an
     /// image layer selected swaps the file rather than painting a fill over
     /// it, and the crop and fit mode stay: they describe how the layer shows
     /// a picture, not which one (help 360040675194).
@@ -1034,7 +1034,7 @@ impl Editor {
         self.replace_node(id, after)
     }
 
-    /// Set an image layer's fill mode (Figma's Fill mode menu). One entry.
+    /// Set an image layer's fill mode (the Fill mode menu). One entry.
     pub fn set_image_fit(&mut self, id: &str, fit: ImageFit) -> bool {
         let Some(n) = find(&self.root, id) else {
             return false;
@@ -1074,7 +1074,7 @@ impl Editor {
         self.replace_node(id, after)
     }
 
-    /// Figma's **Resize to fit** (help 360040675194): the layer becomes the
+    /// the **Resize to fit** (help 360040675194): the layer becomes the
     /// size of the whole picture, uncropped. Box, focal point and zoom in ONE
     /// entry, because they only mean anything together.
     pub fn fit_image_to_picture(&mut self, id: &str, iw: f64, ih: f64) -> bool {
@@ -1182,8 +1182,8 @@ impl Editor {
             }
         })
     }
-    /// Toggle one effect off/on (Figma's per-effect eye). The effect keeps its
-    /// settings; it just stops painting — which is Figma's own reason for the
+    /// Toggle one effect off/on (the per-effect eye). The effect keeps its
+    /// settings; it just stops painting — which is the own reason for the
     /// control: *"you can toggle the visibility of individual effects"*.
     pub fn set_effect_layer_visible(&mut self, id: &str, index: usize, visible: bool) -> bool {
         if effect_at(&self.root, id, index).is_none() {
@@ -1196,7 +1196,7 @@ impl Editor {
         })
     }
 
-    /// Switch an effect to another type (Figma's per-row dropdown). The new
+    /// Switch an effect to another type (the per-row dropdown). The new
     /// effect starts from that type's own defaults; the layer keeps its
     /// visibility and blend, which belong to the row rather than the effect.
     pub fn set_effect_kind(&mut self, id: &str, index: usize, kind: EffectKind) -> bool {
@@ -1236,7 +1236,7 @@ impl Editor {
         })
     }
 
-    /// One effect's blend mode (Figma: *"Apply a blend mode to an effect"* for
+    /// One effect's blend mode (: *"Apply a blend mode to an effect"* for
     /// inner shadow, drop shadow and noise). `Pass through` is refused here —
     /// it cannot be applied to an effect.
     pub fn set_effect_layer_blend(&mut self, id: &str, index: usize, blend: BlendKind) -> bool {
@@ -1251,7 +1251,7 @@ impl Editor {
     }
 
     /// Duplicate an effect in place (`⌘D` on a selected effect copies its
-    /// settings — Figma's *"duplicate the effect"*).
+    /// settings — the *"duplicate the effect"*).
     pub fn duplicate_effect_layer(&mut self, id: &str, index: usize) -> bool {
         if effect_at(&self.root, id, index).is_none() {
             return false;
@@ -1263,7 +1263,7 @@ impl Editor {
         })
     }
 
-    /// The whole layer's blend mode: Figma's **Apply blend mode** in the
+    /// The whole layer's blend mode: the **Apply blend mode** in the
     /// Appearance section, where `Pass through` IS allowed (it is the default
     /// for layers).
     pub fn set_layer_blend(&mut self, id: &str, blend: BlendKind) -> bool {
@@ -1277,7 +1277,7 @@ impl Editor {
         true
     }
 
-    /// One fill's or stroke's blend mode (Figma: *"Open the color picker in
+    /// One fill's or stroke's blend mode (: *"Open the color picker in
     /// the Fill or Stroke sections … then click Apply blend mode"*). `Pass
     /// through` is refused: it cannot be applied to a paint.
     pub fn set_paint_layer_blend(
@@ -1418,7 +1418,7 @@ impl Editor {
     /// Apply a rich-text style patch to a CHAR range within a Text node
     /// (undoable). The patch merges over the range's current effective
     /// style (last-run-wins, same rule as the renderer), then overlapping
-    /// runs are clipped around the range and it is overlaid (Figma's
+    /// runs are clipped around the range and it is overlaid (the
     /// style-override semantics).
     pub fn apply_run_style(&mut self, id: &str, start: usize, end: usize, patch: TextRun) -> bool {
         if start >= end {
@@ -1499,7 +1499,7 @@ impl Editor {
 
     /// Set a child's auto-layout constraints (align_self / grow / shrink /
     /// basis / absolute / fixed / sticky), then re-solve the parent frame —
-    /// one undo step (Figma's constraint edits re-flow immediately).
+    /// one undo step (the constraint edits re-flow immediately).
     pub fn set_child_constraints(
         &mut self,
         id: &str,
@@ -1556,7 +1556,7 @@ impl Editor {
     /// Phase 2.3 (Scale tool): scale a node AND its whole subtree
     /// uniformly — sizes, child offsets, strokes, corner radii, text, effects
     /// and auto layout. One undoable ReplaceNode. The anchor is the node's own
-    /// origin, so a node scales IN PLACE (Figma's numeric scale).
+    /// origin, so a node scales IN PLACE (the numeric scale).
     pub fn scale_node(&mut self, id: &str, factor: f64) -> bool {
         let Some(n) = find(&self.root, id) else {
             return false;
@@ -1565,7 +1565,7 @@ impl Editor {
         self.scale_nodes_about(&[(id.to_string(), ax, ay)], factor)
     }
 
-    /// Figma's Scale tool (K): scale every listed node — and its subtree — by
+    /// the Scale tool (K): scale every listed node — and its subtree — by
     /// `factor` about `(ax, ay)`, a point of that node's PARENT space (the
     /// space `transform.x/y` live in). The anchor is the fixed point of the
     /// mapping, which is what pins the corner you are not dragging: grab the
@@ -1576,7 +1576,7 @@ impl Editor {
     /// Every `ReplaceNode` goes into ONE undo step, so scaling a ten-layer
     /// selection is a single Ctrl+Z.
     ///
-    /// What travels with the size is Figma's list, not just w/h: child
+    /// What travels with the size is the list, not just w/h: child
     /// offsets, stroke weight, dashes, corner radius, text size and leading,
     /// the distances inside effects, and auto-layout padding/gap.
     pub fn scale_nodes_about(&mut self, parts: &[(String, f64, f64)], factor: f64) -> bool {
@@ -1721,7 +1721,7 @@ impl Editor {
             let Some(n) = find(&self.root, id) else {
                 continue;
             };
-            // Figma: "You can scale any object, with the exception of locked
+            // : "You can scale any object, with the exception of locked
             // layers and layers nested inside a component instance." A locked
             // layer refuses every gesture, so it is skipped here too.
             if n.locked {
@@ -1788,7 +1788,7 @@ impl Editor {
         true
     }
 
-    /// Figma's per-frame **Show name** switch: whether the canvas paints this
+    /// the per-frame **Show name** switch: whether the canvas paints this
     /// frame's name label. Undoable, like every other layer property.
     pub fn set_show_name(&mut self, id: &str, show: bool) -> bool {
         let Some(n) = find(&self.root, id) else {
@@ -1803,7 +1803,7 @@ impl Editor {
     }
 
     /// Set one layer's **scroll position** inside its scrolling frame —
-    /// Figma's Prototype-tab "Scroll behavior → Position" (Scroll with parent
+    /// the Prototype-tab "Scroll behavior → Position" (Scroll with parent
     /// / Fixed / Sticky). One undoable ReplaceNode, like every other layer
     /// property; the flags it writes are the ones the renderer already honours.
     pub fn set_scroll_position(&mut self, id: &str, pos: x_core::ScrollPosition) -> bool {
@@ -1961,7 +1961,7 @@ impl Editor {
         }
     }
     /// Move one step forward in z-order (swap with the next-higher
-    /// sibling) — Figma's plain ⌘] "Bring Forward", distinct from the
+    /// sibling) — the plain ⌘] "Bring Forward", distinct from the
     /// full jump-to-front above.
     pub fn bring_forward(&mut self, id: &str) {
         if let Some(p) = find_parent_mut(&mut self.root, id) {
@@ -1978,7 +1978,7 @@ impl Editor {
         }
     }
     /// Move one step backward in z-order (swap with the next-lower
-    /// sibling) — Figma's plain ⌘[ "Send Backward".
+    /// sibling) — the plain ⌘[ "Send Backward".
     pub fn send_backward(&mut self, id: &str) {
         if let Some(p) = find_parent_mut(&mut self.root, id) {
             if let Some(from) = p.children.iter().position(|c| c.id == id) {
@@ -2036,7 +2036,7 @@ impl Editor {
 
     /// Wrap the current selection in a labelled Section container.
     ///
-    /// Figma's own rule stands behind the two paths here: "Sections in Figma
+    /// the own rule stands behind the two paths here: "Sections in 
     /// Design are a top-level element on the canvas by default. Sections can
     /// contain all layer types, including other sections, but cannot be
     /// contained within frames or groups." A selection that already lives on
@@ -2182,7 +2182,7 @@ impl Editor {
         true
     }
 
-    /// Figma's "Add objects to a section": "You can also click and drag a
+    /// the "Add objects to a section": "You can also click and drag a
     /// section over the objects you want to add to it." Every SIBLING layer
     /// the section completely covers — section, frame, shape or text — joins
     /// it, keeping its place on the canvas. This is the one rule behind both
@@ -2245,7 +2245,7 @@ impl Editor {
         n
     }
 
-    /// Figma's second delete — "To delete a section without deleting its
+    /// the second delete — "To delete a section without deleting its
     /// contents", Command+Delete on a Mac and Control+Backspace on Windows:
     /// the container goes, its children stay, promoted to the container's
     /// parent with their place on the canvas kept. Plain layers, containers
@@ -2314,7 +2314,7 @@ impl Editor {
         promoted
     }
 
-    /// Figma "Frame selection" (⌥⌘G): wrap the current selection in a new
+    ///  "Frame selection" (⌥⌘G): wrap the current selection in a new
     /// Frame sized to the members' collective AABB. Works with a single node
     /// (unlike group, which needs 2+). Snapshot-undo, like group.
     pub fn frame_selection(&mut self, frame_id: &str) {
@@ -2357,7 +2357,7 @@ impl Editor {
         }
     }
 
-    /// Figma Ctrl+Shift+G: dissolve a group/frame, re-parenting children to
+    ///  Ctrl+Shift+G: dissolve a group/frame, re-parenting children to
     /// the grandparent at the group's spot with positions preserved.
     pub fn ungroup(&mut self, id: &str) -> bool {
         let Some(g) = find(&self.root, id) else {
@@ -2397,7 +2397,7 @@ impl Editor {
         true
     }
 
-    /// Figma Ctrl+A: select all top-level children of the page (or of the
+    ///  Ctrl+A: select all top-level children of the page (or of the
     /// selected frame if one frame is selected).
     pub fn select_all(&mut self) {
         let scope = if self.selection.len() == 1 {
@@ -2449,7 +2449,7 @@ impl Editor {
 
     /// Select-inside: replace each selected container (group / frame /
     /// section / component / instance) with its children — one level
-    /// deep, Figma's deep-select. Returns the new selection size.
+    /// deep, the deep-select. Returns the new selection size.
     pub fn select_inside(&mut self) -> usize {
         let mut out = vec![];
         for id in self.selection.clone() {
@@ -2474,7 +2474,7 @@ impl Editor {
         n
     }
 
-    /// Figma-style Tidy Up: rearrange the selected siblings (or the
+    /// standard Tidy Up: rearrange the selected siblings (or the
     /// children of one selected container) into a near-square grid with
     /// uniform gaps, sizes preserved. One undo step.
     /// Returns (moved, cols, rows).
@@ -2553,7 +2553,7 @@ impl Editor {
         Some((moved, cols, rows))
     }
 
-    /// Undoable constraint-pin change (Figma constraints panel).
+    /// Undoable constraint-pin change ( constraints panel).
     pub fn set_pin(&mut self, id: &str, h: x_core::HPin, v: x_core::VPin) {
         if let Some(n) = find(&self.root, id) {
             let before = Box::new(n.clone());
@@ -2713,7 +2713,7 @@ impl Editor {
         true
     }
 
-    /// Reset an instance's overrides (Figma "reset overrides"). Slot
+    /// Reset an instance's overrides ( "reset overrides"). Slot
     /// content is kept. Undoable.
     pub fn reset_instance_overrides(&mut self, id: &str) -> bool {
         let Some(n) = find(&self.root, id) else {
@@ -2727,7 +2727,7 @@ impl Editor {
         self.replace_node(id, after)
     }
 
-    /// The instance's change list — Figma's More-actions menu *"only lists
+    /// The instance's change list — the More-actions menu *"only lists
     /// properties that have changes applied"* (help 360039150733).
     pub fn instance_changes(&self, id: &str) -> Vec<x_core::InstanceChange> {
         match find(&self.root, id) {
@@ -2738,7 +2738,7 @@ impl Editor {
         }
     }
 
-    /// Reset ONE change on an instance: Figma's *"Reset > Reset [property]"*.
+    /// Reset ONE change on an instance: the *"Reset > Reset [property]"*.
     /// Undoable; false when that layer had no override to reset.
     pub fn reset_one_override(&mut self, id: &str, target: &str) -> bool {
         let Some(n) = find(&self.root, id) else {
@@ -2754,7 +2754,7 @@ impl Editor {
         self.replace_node(id, after)
     }
 
-    /// Reset the changes on ONE LAYER of an instance: Figma's *"select a
+    /// Reset the changes on ONE LAYER of an instance: the *"select a
     /// specific layer to view changes for that layer only"* then *"Reset all
     /// changes"*. Returns how many overrides went; undoable when any did.
     pub fn reset_layer_overrides(&mut self, id: &str, layer: &str) -> usize {
@@ -2772,7 +2772,7 @@ impl Editor {
         changed
     }
 
-    /// Figma's **push changes to main component** (help 360039150733): the
+    /// the **push changes to main component** (help 360039150733): the
     /// instance's overrides are written into its master, so the change lands
     /// on every other instance of that component. Undoable; returns how many
     /// master layers changed, 0 when the master is not in this document.
@@ -2824,7 +2824,7 @@ impl Editor {
         if nodes.is_empty() {
             return false;
         }
-        // Figma's rule, enforced where the tree is written rather than in each
+        // the rule, enforced where the tree is written rather than in each
         // caller: a section is a top-level element and "cannot be contained
         // within frames or groups". The page is a frame in this model, so the
         // canvas itself is exempt BY IDENTITY, not by kind.
@@ -2918,7 +2918,7 @@ impl Editor {
     /// Phase 5.2: turn the current selection into a Component definition.
     /// The selected nodes become children of a hidden master (placed at the
     /// document root), and the selection is replaced in-place by an Instance
-    /// of it — same flow as Figma's "create component". One undo step
+    /// of it — same flow as the "create component". One undo step
     /// (snapshot-based, like group).
     pub fn make_component(&mut self, name: &str) -> bool {
         if self.selection.is_empty() {
@@ -3103,7 +3103,7 @@ impl Editor {
         }
     }
 
-    /// Detach an instance into a plain group (undoable, Figma Ctrl+Alt+B).
+    /// Detach an instance into a plain group (undoable,  Ctrl+Alt+B).
     pub fn detach_selected_instance(&mut self, vars: &Variables) -> bool {
         let Some(id) = self.selection.first().cloned() else {
             return false;
@@ -3152,7 +3152,7 @@ impl Editor {
         v
     }
 
-    /// Rename a component master (Figma rename). Updates the master's
+    /// Rename a component master ( rename). Updates the master's
     /// `Component { name }` AND its node id (`comp-{name}`), then rewrites
     /// every instance that references the old name, including `swap:`
     /// instance-swap overrides. Undoable. Refuses empty / unchanged / colliding
@@ -3261,7 +3261,7 @@ impl Editor {
     }
 
     /// Combine the selected components into one variant set. The set is a
-    /// **frame holding the masters** — which is what makes Figma's rule "a set
+    /// **frame holding the masters** — which is what makes the rule "a set
     /// can contain only components" true by construction. A frame that already
     /// holds nothing but the selection becomes the set; otherwise a new frame
     /// is built around them. Each master is renamed to `{set}/{variant}` (the
@@ -3308,7 +3308,7 @@ impl Editor {
 
         // --- the container: an existing frame, or a new one around them
         // A container that already holds nothing but the selection becomes the
-        // set. The page itself is not a container in that sense — Figma never
+        // set. The page itself is not a container in that sense —  never
         // turns the canvas into a set — so loose masters get a frame of their
         // own even when the page holds nothing else.
         let page_id = self.root.id.clone();
@@ -3384,7 +3384,7 @@ impl Editor {
         done
     }
 
-    /// Component properties defined on a component master (Figma component
+    /// Component properties defined on a component master ( component
     /// properties). Empty for non-component names.
     pub fn component_props(&self, component_name: &str) -> Vec<ComponentProp> {
         fn find_master<'a>(n: &'a Node, name: &str) -> Option<&'a Node> {
@@ -3652,7 +3652,7 @@ impl Editor {
 
     /// World (x, y) of the first clipboard root — used to compute the
     /// "paste over selection" offset so the copy lands exactly on the
-    /// selected object's position (Figma).
+    /// selected object's position ().
     pub fn clipboard_origin(&self) -> Option<(f64, f64)> {
         self.clipboard
             .first()
@@ -3685,7 +3685,7 @@ impl Editor {
         self.paste_into_each(&[(parent_id.to_string(), offset)])
     }
 
-    /// Multi-replace (Sketch 2026.2 "Paste and Replace" across a multi
+    /// Multi-replace (standard "Paste and Replace" across a multi
     /// selection): delete the current selection, then paste one clipboard
     /// copy into each captured `(parent, offset)` slot — a single undo
     /// step, so one ⌘Z restores every replaced layer at once.
@@ -3752,7 +3752,7 @@ impl Editor {
         new_root_ids
     }
 
-    /// Multi-paste (Sketch 2026.2): paste the clipboard into EVERY target
+    /// Multi-paste (standard): paste the clipboard into EVERY target
     /// in one undoable step. Each target is `(parent id, offset)`; every
     /// copy gets fresh ids exactly like [`Editor::paste`].
     pub fn paste_into_each(&mut self, targets: &[(String, (f64, f64))]) -> Vec<String> {
@@ -3925,7 +3925,7 @@ impl Editor {
 }
 
 // ---------------------------------------------------------------------------
-// Vector edit mode (Figma: Enter / double-click a vector layer to edit points)
+// Vector edit mode (: Enter / double-click a vector layer to edit points)
 //
 // The mode is three fields on `Editor` — `vector_edit_active`,
 // `vector_edit_node`, `vector_edit_selected_points`. Everything that CHANGES a
@@ -4051,7 +4051,7 @@ fn take_node(root: &mut Node, id: &str) -> Option<Node> {
 impl Editor {
     /// Enter vector edit mode on a vector node. Refuses anything that is not a
     /// `Vector` node — a frame or a rect has no anchors to edit — and always
-    /// starts with no anchors selected, matching Figma (entering node edit mode
+    /// starts with no anchors selected, matching  (entering node edit mode
     /// selects nothing until you click or marquee).
     pub fn enter_vector_edit_mode(&mut self, node_id: &str) -> bool {
         let Some(node) = find(&self.root, node_id) else {
@@ -4106,7 +4106,7 @@ impl Editor {
         true
     }
 
-    /// Deselect every anchor (Figma: click empty canvas inside node edit mode).
+    /// Deselect every anchor (: click empty canvas inside node edit mode).
     pub fn deselect_vector_points(&mut self) {
         self.vector_edit_selected_points.clear();
     }
@@ -4124,11 +4124,11 @@ impl Editor {
 }
 
 // ---------------------------------------------------------------------------
-// Stroke caps (Figma: the two cap dropdowns in the Stroke panel)
+// Stroke caps (: the two cap dropdowns in the Stroke panel)
 // ---------------------------------------------------------------------------
 
 impl Editor {
-    /// Set the cap on the START of a path (Figma's per-end cap dropdowns: an
+    /// Set the cap on the START of a path (the per-end cap dropdowns: an
     /// arrow at one end and nothing at the other is the common case).
     ///
     /// A node with no stroke layers yet gets one seeded from its simple `stroke`,
@@ -4180,7 +4180,7 @@ impl Editor {
 }
 
 // ---------------------------------------------------------------------------
-// Node-level vector operations the app dispatches (Figma: Object / Edit object)
+// Node-level vector operations the app dispatches (: Object / Edit object)
 //
 // Thin, honest wrappers. The geometry lives in `vector_edit` (path rewrites) and
 // `booleans` (outline stroke, flatten), both of which go through the command log;
@@ -4189,7 +4189,7 @@ impl Editor {
 // ---------------------------------------------------------------------------
 
 impl Editor {
-    /// Outline Stroke (Figma: ⌥⌘O on a stroked shape): replace the node with its
+    /// Outline Stroke (: ⌥⌘O on a stroked shape): replace the node with its
     /// stroke's outline as a filled vector path. Delegates to
     /// [`Editor::outline_stroke_node`], the id-addressable entry point that the
     /// canvas menu and vector edit mode share.
@@ -4231,7 +4231,7 @@ fn shape_signature(n: &Node) -> Sig {
     )
 }
 
-// Layer management methods (Figma parity)
+// Layer management methods ( parity)
 
 impl Editor {
     /// Get all selectable node IDs in the document
@@ -4247,7 +4247,7 @@ impl Editor {
         ids
     }
 
-    /// Figma's "matching objects": the SAME layer — by name and by its place in
+    /// the "matching objects": the SAME layer — by name and by its place in
     /// the structure — as it exists in the other frames and groups of the same
     /// scope. "Matching objects are identical layers that exist across more than
     /// one frame or group", and identity is a name, not a size: a search bar that
@@ -4255,7 +4255,7 @@ impl Editor {
     /// count and dimensions, which matched any two same-sized frames and missed
     /// the matching layer in a frame that had been resized.)
     ///
-    /// Scope follows Figma as well: a layer inside a **Section** only matches
+    /// Scope follows  as well: a layer inside a **Section** only matches
     /// layers in that section ("Objects with sections can only match with other
     /// objects in that section"), otherwise it matches across the page's
     /// top-level frames and groups. The template itself is included, so the
@@ -4300,7 +4300,7 @@ impl Editor {
         }
         chain.reverse(); // root .. template
         if chain.len() < 3 {
-            // a top-level layer: Figma asks for "an object inside a frame or
+            // a top-level layer:  asks for "an object inside a frame or
             // group", and a page's own objects have nothing to match across
             return vec![template];
         }
@@ -4315,7 +4315,7 @@ impl Editor {
                 section = Some(*node);
             }
         }
-        // Figma's precondition, verbatim: "Select an object inside a frame or
+        // the precondition, verbatim: "Select an object inside a frame or
         // group." A page's top-level layer, or a frame sitting directly in a
         // Section, has no container to be matched across, and an empty relative
         // path would otherwise make every container a "match".

@@ -14,7 +14,7 @@ pub enum LegacyStyle {
     Paint {
         fill: Paint,
     },
-    /// A text style. Carries `TextStyleData` — the same property set Figma's
+    /// A text style. Carries `TextStyleData` — the same property set the
     /// text styles carry — so a style can hold line height, letter spacing,
     /// paragraph spacing/indent, case, decoration, lists and wrap instead of
     /// the four numbers this variant used to squeeze into.
@@ -66,7 +66,7 @@ pub fn detach_style(n: &mut Node, kind_key: &str) -> bool {
 
 /// Detach a TEXT style from a node: the layer keeps the typography it renders
 /// today but loses its `style:text` link, so later edits to the style stop
-/// reaching it (Figma's "Detach style"). Returns false when it was not linked.
+/// reaching it (the "Detach style"). Returns false when it was not linked.
 ///
 /// Snapshot-first: the values a text style writes live in the very bindings
 /// [`TextStyleData::clear_from_node`] drops, so clearing without re-applying
@@ -328,7 +328,7 @@ impl Document {
     // -------------------------------------------------- text style registry
     //
     // The registry is `styles`; these are the create / update / detach /
-    // propagate operations Figma's "Create and apply text styles" describes.
+    // propagate operations the "Create and apply text styles" describes.
     // A node stays LINKED through its `style:text` binding (see `bind_style`),
     // so updating a definition and re-running `resolve_styles` over the page
     // trees moves every consumer — "edits to a style update all the layers
@@ -355,7 +355,7 @@ impl Document {
     }
 
     /// Create a text style. Names are unique across ALL style kinds (as in
-    /// Figma), so an existing paint or effect style blocks the name too.
+    /// ), so an existing paint or effect style blocks the name too.
     pub fn add_text_style(&mut self, name: &str, data: TextStyleData) -> Result<(), String> {
         let name = name.trim();
         if name.is_empty() {

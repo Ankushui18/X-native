@@ -20,6 +20,8 @@ import { Icon } from "./ui/icons";
 import { RightPanel, copyLayerCode, copyPng } from "./ui/inspector";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
+import { ZenHUD } from "./ui/ZenHUD";
+import { RadialMenu } from "./ui/RadialMenu";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
 import { saveDoc } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
@@ -156,6 +158,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   const [rightW, setRightW] = useState(240);
   const [minUi, setMinUi] = useState(false);
   const [hideUi, setHideUi] = useState(false);
+  const [zenMode, setZenMode] = useState(false);
+  const [radialMenu, setRadialMenu] = useState<{ x: number; y: number } | null>(null);
   const [actions, setActions] = useState(false);
   const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
@@ -206,7 +210,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, [engine, fileId]);
 
-  // Figma's View > Property labels. It is a stylesheet concern rather than a
+  // View > Property labels. It is a stylesheet concern rather than a
   // prop: the right sidebar is built from a hundred small field components and
   // threading a boolean through all of them would touch every one of them for
   // what is a single text-versus-icon decision.
@@ -243,7 +247,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, []);
 
-  // Opening a file shows the whole page - Figma's default for a file you have
+  // Opening a file shows the whole page - default view for a file you have
   // not seen before - rather than whatever viewport the last session left in
   // the document. A link that names a layer fits that layer instead, so this
   // stands down when one is present.
@@ -300,7 +304,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         return false;
       }
       if (at !== s.page) engine.dispatch({ type: "setPage", index: at });
-      // Sketch's handoff is a view anyone can inspect without touching the file;
+      // Handoff is a view anyone can inspect without touching the file;
       // the closest thing we have is opening such a link already in Dev Mode.
       engine.dispatch({ type: "setRightTab", tab: "inspect" });
       engine.dispatch({ type: "select", ids: [id] });
@@ -366,24 +370,67 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return true;
   };
   useEffect(() => {
-    const on = () => setHideUi((v) => !v);
+    let mousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const trackMouse = (e: MouseEvent) => {
+      mousePos = { x: e.clientX, y: e.clientY };
+    };
+
+    const on = () => {
+      setHideUi((v) => {
+        const next = !v;
+        if (!next) setZenMode(false);
+        return next;
+      });
+    };
+    const onZen = () => {
+      setZenMode((v) => {
+        const next = !v;
+        setHideUi(next);
+        toastMsg(next ? "Zen Mode active · Press Z or ⌘\\ to exit" : "Exited Zen Mode");
+        return next;
+      });
+    };
+    const onRadial = () => setRadialMenu(mousePos);
     const onMin = () => setMinUi((v) => !v);
     const onExport = () => setExportOpen(true);
     const onNudge = () => setNudgeOpen(true);
     const onFind = () => setFindOpen((v) => !v);
+
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+      if (e.key === "z" || e.key === "Z") {
+        if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+          onZen();
+        }
+      }
+      if (e.key === "q" || e.key === "Q" || e.key === "`") {
+        if (!e.metaKey && !e.ctrlKey && !e.altKey && !snap.vecEdit) {
+          onRadial();
+        }
+      }
+    };
+
+    window.addEventListener("mousemove", trackMouse);
+    window.addEventListener("keydown", handleKey);
     window.addEventListener("x-native-hide-ui", on);
+    window.addEventListener("x-native-zen-mode", onZen);
+    window.addEventListener("x-native-radial-menu", onRadial);
     window.addEventListener("x-native-minimize-ui", onMin);
     window.addEventListener("x-native-export-dialog", onExport);
     window.addEventListener("x-native-nudge-dialog", onNudge);
     window.addEventListener("x-native-find", onFind);
     return () => {
+      window.removeEventListener("mousemove", trackMouse);
+      window.removeEventListener("keydown", handleKey);
       window.removeEventListener("x-native-hide-ui", on);
+      window.removeEventListener("x-native-zen-mode", onZen);
+      window.removeEventListener("x-native-radial-menu", onRadial);
       window.removeEventListener("x-native-minimize-ui", onMin);
       window.removeEventListener("x-native-export-dialog", onExport);
       window.removeEventListener("x-native-nudge-dialog", onNudge);
       window.removeEventListener("x-native-find", onFind);
     };
-  }, []);
+  }, [snap.vecEdit]);
 
   const share = () => {
     const page = snap.pages[snap.page];
@@ -463,7 +510,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
       />
       <div className="canvas-col">
         {minUi && !hideUi && !snap.presentFrame && (
-          // Figma keeps the file name and a way out of the minimized state on
+          // Keeps the file name and a way out of the minimized state on
           // screen; ours lives at the top of the left panel, which is hidden
           // here, so the same two controls float in its place.
           <div className="min-chip">
@@ -485,6 +532,24 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
             runnerRef.current = runner;
           }}
         />
+        {zenMode && (
+          <ZenHUD
+            engine={engine}
+            snap={snap}
+            onExit={() => {
+              setZenMode(false);
+              setHideUi(false);
+            }}
+          />
+        )}
+        {radialMenu && (
+          <RadialMenu
+            engine={engine}
+            x={radialMenu.x}
+            y={radialMenu.y}
+            onClose={() => setRadialMenu(null)}
+          />
+        )}
         {snap.presentFrame ? (
           <PresentationPlayer
             engine={engine}

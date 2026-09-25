@@ -248,7 +248,7 @@ impl Editor {
         };
         let from = ((n.w, n.h), (n.transform.x, n.transform.y));
         let to = ((plan.w, plan.h), (plan.x, plan.y));
-        // Figma answers a frame resize with its children's constraints, so the
+        //  answers a frame resize with its children's constraints, so the
         // pinned layers move/stretch in the SAME undo entry as the frame.
         let kids = if constrains_children(n) && (plan.w != n.w || plan.h != n.h) {
             n.children.clone()

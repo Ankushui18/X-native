@@ -1,7 +1,7 @@
 /**
  * Tiny toast bus.
  *
- * Figma confirms actions whose result is off-screen or irreversible-looking
+ * Toast confirms actions whose result is off-screen or irreversible-looking
  * ("Copied to clipboard", "5 layers deleted"). Previously the only toast in the
  * app was "Link copied", so every other action completed in silence. This lets
  * any module raise one without threading callbacks through the tree.

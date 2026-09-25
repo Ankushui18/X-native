@@ -6,7 +6,7 @@ use x_render::{RenderCommand, RenderTree};
 /// The plan for one slice: the page content inside the slice's world bounds,
 /// re-origined to (0, 0) with the slice's own size as the canvas. The slice
 /// layer itself contributes no commands — it is a region, and an empty slice
-/// still exports its size (a transparent image), which is what Figma does.
+/// still exports its size (a transparent image), which is what  does.
 fn prepare_slice_export(
     root: &Node,
     id: &str,
@@ -45,7 +45,7 @@ pub fn prepare_export(
 ) -> Result<ExportPlan, String> {
     // A SLICE is an export REGION, not a layer: the node draws nothing itself,
     // so a selected slice exports the flattened canvas content inside its
-    // bounds (Figma: "anything that overlaps the slice will be exported").
+    // bounds (: "anything that overlaps the slice will be exported").
     // One slice per export — this app writes one file per invocation, so a
     // selection that mixes a slice with other layers is refused rather than
     // silently exporting part of it.
@@ -68,7 +68,7 @@ pub fn prepare_export(
         None => x_render::build_render_tree(root, vars),
     };
     // A FRAME's name is canvas chrome (like the canvas grid): it helps identify
-    // layers while editing but is never part of the exported artwork — Figma
+    // layers while editing but is never part of the exported artwork — 
     // exports frame names out of the output too. Stripping here (before
     // outlining) keeps label glyph outlines out of BOTH the export content and
     // the computed bounds, in one place, for every export format (PNG / SVG /

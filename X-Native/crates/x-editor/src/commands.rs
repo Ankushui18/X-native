@@ -116,7 +116,7 @@ pub enum Command {
         indices: Vec<usize>,
         group_id: String,
     },
-    /// Figma "Frame selection" (⌥⌘G / ⌘⇧A): wrap the selection (1+ nodes) in
+    ///  "Frame selection" (⌥⌘G / ⌘⇧A): wrap the selection (1+ nodes) in
     /// a Frame sized to the members' collective AABB, white-filled.
     FrameSelection {
         parent_id: String,
@@ -295,7 +295,7 @@ pub(crate) fn apply(root: &mut Node, cmd: &Command) -> bool {
             to_parent,
             index,
         } => {
-            // Figma's rule: a section is a top-level element on the canvas and
+            // the rule: a section is a top-level element on the canvas and
             // "cannot be contained within frames or groups" — a drop into one
             // bounces rather than quietly nesting it.
             if find(root, id)
@@ -422,7 +422,7 @@ fn wrap_selection(
         .fold(f64::NEG_INFINITY, f64::max);
     let mut c = match kind {
         WrapKind::Frame => {
-            // Figma frames default to a white fill.
+            //  frames default to a white fill.
             let mut f = Node::frame(container_id, x1 - x0, y1 - y0);
             f.fill = Paint::Solid(Color::WHITE);
             f

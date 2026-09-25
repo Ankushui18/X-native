@@ -134,7 +134,7 @@ pub struct SurfaceSpec {
     pub id: SurfaceId,
     pub screen: ScreenId,
     pub kind: SurfaceKind,
-    /// The name it shows, or `""` when it shows none. OpenPencil / Figma
+    /// The name it shows, or `""` when it shows none. OpenPencil / 
     /// naming — the test rejects the old STRUCTURE / COMPOSE vocabulary.
     pub label: &'static str,
     /// It owns property rows, so those rows snap to the control-height scale.
@@ -561,7 +561,7 @@ pub const OFF_STANDARD_SURFACES: usize = 3;
 pub const SILENT_EMPTY_STATES: usize = 6;
 
 /// Labels a surface must never show: the old X-Native STRUCTURE / COMPOSE
-/// vocabulary that OpenPencil / Figma UI3 replaced.
+/// vocabulary that OpenPencil /  UI3 replaced.
 pub const BANNED_LABELS: &[&str] = &[
     "structure",
     "library",
@@ -632,7 +632,7 @@ mod tests {
         }
     }
 
-    /// Right-dock tabs match Figma / OpenPencil: Design / Prototype / Inspect / UX.
+    /// Right-dock tabs match  / OpenPencil: Design / Prototype / Inspect / UX.
     /// Left dock is Layers / Assets / Tokens.
     #[test]
     fn surface_labels_use_openpencil_naming() {

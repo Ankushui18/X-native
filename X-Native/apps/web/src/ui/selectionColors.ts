@@ -3,11 +3,11 @@ import { find } from "../engine/memory";
 import { plural, toast } from "./toast";
 
 /**
- * Selection colors, borrowed from Sketch's Inspector: a summary of every colour
+ * Selection colors: a summary of every colour
  * inside the current selection, grouped by what it paints and sorted by how
- * often it appears. Sketch lets you hover a swatch to highlight matching layers
+ * often it appears. Hovering a swatch highlights matching layers
  * and click it to recolor them all; here a click *selects* everything on the
- * page painted with that colour (Figma's "Select all with same fill"), which is
+ * page painted with that colour ("Select all with same fill"), which is
  * the step you actually take before recoloring, and it needs no bespoke canvas
  * highlight pass to stay fast on big documents.
  */
@@ -20,7 +20,7 @@ export interface ColorUsage {
   count: number;
   ids: string[];
   /** The fill opacity shared by every use of this colour, or null when the
-   *  selection is mixed - Figma's field shows nothing until it can show one value. */
+   *  selection is mixed - the field shows nothing until it can show one value. */
   opacity: number | null;
 }
 
@@ -32,7 +32,7 @@ function norm(value: string | undefined): string | null {
 }
 
 /**
- * The colours a single paint contributes. Figma's Selection colors skips image
+ * The colours a single paint contributes. Selection colors skips image
  * and pattern fills, and shows gradients by the colours in their ramp, because
  * those are the pixels that are actually on the canvas; a leftover `color`
  * string on an image fill would otherwise be listed as if it painted.
@@ -57,7 +57,7 @@ export function colorUsage(node: XNode): ColorUsage[] {
   return colorUsageAll([node]);
 }
 
-/** Figma's row lists the colours of the *selection*, not of one layer: every
+/** The row lists the colours of the *selection*, not of one layer: every
  *  selected layer contributes, and a colour used by two of them is still one
  *  row. Passing several nodes is what makes a multi-select read correctly. */
 export function colorUsageAll(nodes: XNode[]): ColorUsage[] {
@@ -142,7 +142,7 @@ export function selectByColor(engine: Engine, snap: Snapshot, usage: ColorUsage,
 
 /**
  * Set the opacity of every paint that carries this colour, in one undo step -
- * Figma's percentage field on a Selection colors row. It writes the layers the
+ * The percentage field on a Selection colors row. It writes the layers the
  * row was built from (the selection), not every layer on the page: silently
  * repainting something the designer never picked is worse than a narrower tool.
  * A gradient is included as a whole, because the row lists the colours it

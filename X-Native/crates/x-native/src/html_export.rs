@@ -6,7 +6,7 @@
 //! - children of auto-layout frames drop `left/top/position:absolute` and
 //!   flow as real flex items (the container block already carries
 //!   `display: flex` + gap/padding/alignment), so pages reflow like
-//!   Figma's auto-layout instead of being piles of coordinates;
+//!   the auto-layout instead of being piles of coordinates;
 //! - `asset://` paint references become relative files under `assets/`,
 //!   optionally re-compressed/downscaled through the render crate's
 //!   export optimizer (`x_render::optimize_png`).

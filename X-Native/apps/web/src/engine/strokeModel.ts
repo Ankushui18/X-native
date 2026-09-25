@@ -5,7 +5,7 @@ import type { StrokeSides, XNode } from "./types";
  * so they can be tested and reused by the panel, the SVG writer and Dev Mode.
  */
 
-/** Figma's Individual strokes picker, in the order its fields appear. */
+/** Individual strokes picker, in the order its fields appear. */
 export const SIDES: { id: StrokeSides; label: string }[] = [
   { id: "all", label: "All sides" },
   { id: "top", label: "Top" },
@@ -62,13 +62,13 @@ export function sideCones(x: number, y: number, w: number, h: number): [number, 
   ];
 }
 
-/** Figma only allows individual strokes on rectangles, frames, components and instances. */
+/** Only allows individual strokes on rectangles, frames, components and instances. */
 export function sidesSupported(kind: XNode["kind"]): boolean {
   return kind === "rect" || kind === "frame" || kind === "component" || kind === "instance";
 }
 
 /**
- * Figma's "Dashes" field: `dash, gap, dash, gap…`. Any odd-length list repeats,
+ * "Dashes" field: `dash, gap, dash, gap…`. Any odd-length list repeats,
  * which is what makes `4 2 1` a usable pattern. Returns null for input that
  * cannot be a pattern, so the caller can refuse it instead of clearing the dash.
  */
@@ -101,7 +101,7 @@ export function dashArray(
 }
 
 /**
- * Figma's "Miter angle": any join sharper than the angle is bevelled. The
+ * "Miter angle": any join sharper than the angle is bevelled. The
  * canvas asks for the ratio between the miter's length and the stroke width,
  * which for an angle θ is 1 / sin(θ / 2) - so 180° bevels everything (that is
  * the bevel join) and 0° never does (the miter join).

@@ -1,6 +1,6 @@
 /**
  * The four auto layout actions, from "Toggle on auto layout in designs"
- * (Figma help 5731482952599), in one place because every surface that offers
+ * in one place because every surface that offers
  * them has to agree:
  *
  * - the keyboard: `⇧A` add, `⌥⇧A` remove, `⌃⇧A` suggest
@@ -14,7 +14,7 @@
  * need to say something to the person doing it:
  *
  * - "Auto layout is only supported on frames. If you have one or more layers
- *   selected, Figma will create an auto layout frame around them." A frame gets
+ *   selected, an auto layout frame wraps them." A frame gets
  *   the layout; a group is converted; anything else is wrapped.
  * - "Auto layout cannot be removed from component instances. You will need to
  *   detach the instance from the component to make these edits, or update the

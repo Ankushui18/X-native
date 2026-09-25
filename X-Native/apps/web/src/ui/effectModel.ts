@@ -3,10 +3,10 @@ import { parseHex } from "./color";
 
 /**
  * How many of each effect a single layer may carry, and how rows are reordered.
- * Figma's Effects section is a stack like the fill stack: order decides what
+ * Effects section is a stack like the fill stack: order decides what
  * paints over what, so the rows have to be movable.
  */
-/** Figma's per-layer effect budget. */
+/** Per-layer effect budget. */
 export const EFFECT_LIMITS: Partial<Record<EffectKind, number>> = {
   "drop-shadow": 8,
   "inner-shadow": 8,
@@ -28,7 +28,7 @@ export function canAddEffect(effects: readonly Effect[], kind: EffectKind): bool
 }
 
 /**
- * Move an effect to another slot, as Figma does when its row is dragged. The
+ * Move an effect to another slot, when its row is dragged. The
  * row lands where it was dropped rather than swapping, matching the fill stack.
  */
 export function moveEffect<T>(list: readonly T[], from: number, to: number): T[] {
@@ -54,7 +54,7 @@ export function limitMessage(kind: EffectKind, limit: number): string {
 }
 
 /**
- * Which effects carry a blend mode. Figma's blend-mode article names exactly
+ * Which effects carry a blend mode. Blend-mode compatibility names exactly
  * three of them - inner shadows, drop shadows and noise - and "Pass through",
  * which the same article says cannot be applied to a fill or an effect, is
  * therefore not in the menu either.
@@ -64,8 +64,8 @@ export function effectCanBlend(kind: EffectKind): boolean {
 }
 
 /**
- * "Show behind transparent areas" is a drop-shadow setting: Figma's article
- * says inner shadows don't support it, and the other kinds have no shadow at
+ * "Show behind transparent areas" is a drop-shadow setting:
+ * inner shadows don't support it, and the other kinds have no shadow at
  * all to show through anything.
  */
 export function effectCanShowBehind(kind: EffectKind): boolean {
@@ -74,7 +74,7 @@ export function effectCanShowBehind(kind: EffectKind): boolean {
 
 /**
  * Whether the layer has anything transparent for a shadow to show through,
- * which is what Figma asks for before it will show one. The article's list:
+ * compatible effects list:
  * fills all under 100% opacity, a stroke with no fill, a fill or stroke that
  * blends with something other than Normal, or a centre or outside stroke under
  * 100% opacity. A layer that fails all four is fully opaque, so the checkbox

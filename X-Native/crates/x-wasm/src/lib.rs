@@ -37,12 +37,12 @@ fn envelope(result: Result<String, String>) -> String {
     }
 }
 
-/// Import a Figma `.fig` archive and return it as `.x` JSON.
+/// Import a  `.fig` archive and return it as `.x` JSON.
 pub fn import_fig_to_x(bytes: &[u8]) -> String {
     envelope(figbinary::import_fig_bytes(bytes).map(|d| save_x(&d)))
 }
 
-/// Import a Sketch archive and return it as `.x` JSON.
+/// Import a  archive and return it as `.x` JSON.
 pub fn import_sketch_to_x(bytes: &[u8]) -> String {
     envelope(sketch::import_sketch(bytes).map(|d| save_x(&d)))
 }

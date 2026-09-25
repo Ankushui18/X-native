@@ -95,12 +95,9 @@ pub const COLOR_ROLES: &[&str] = &[
 ];
 
 impl ColorTokens {
-    /// Figma UI3 dark chrome — the shipping default, and the palette the
+    /// Graphite dark chrome — the shipping default, and the palette the
     /// designer's constants are derived from. Panels sit on `#2c2c2c`, the
-    /// canvas on `#1e1e1e`. `#0d99ff` is the Share/selection graphic (3:1);
-    /// it cannot be an accent *fill* because white-on-`#0d99ff` is 2.99:1,
-    /// under AA, so the fill is `#0d70f6`. `accent_ink` and `focus_ring`
-    /// stay distinct so a theme remap cannot steal one for the other.
+    /// canvas on `#1e1e1e`.
     pub const GRAPHITE: Self = Self {
         background: [0x2c, 0x2c, 0x2c],
         canvas: [0x1e, 0x1e, 0x1e],
@@ -128,9 +125,8 @@ impl ColorTokens {
         on_danger: [0xff, 0xff, 0xff],
     };
 
-    /// Figma UI3 light chrome — white panels, canvas `#e5e5e5`. Selection
-    /// is `#0d98ff` (3:1 on white); `#0d99ff` itself is 2.99:1. Text and
-    /// accent values are AA-verified against every surface in this palette.
+    /// Daylight light chrome — white panels, canvas `#e5e5e5`.
+    /// Text and accent values are AA-verified against every surface in this palette.
     pub const DAYLIGHT: Self = Self {
         background: [0xff, 0xff, 0xff],
         canvas: [0xe5, 0xe5, 0xe5],

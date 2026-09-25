@@ -1,9 +1,9 @@
 /**
- * Snapping + smart alignment guides — the interaction that defines how Figma
+ * Snapping + smart alignment guides — the interaction that defines how modern editors
  * *feels* when you move something.
  *
  * Ported in spirit from `crates/x-editor/src/snapping.rs` (`alignment_guides`,
- * `snap_delta`), extended with Figma behaviours the Rust side does not model:
+ * `snap_delta`), extended with behaviours:
  * equal-spacing distribution guides and gap measurements.
  *
  * Everything works in **page/world coordinates**. The caller converts the
@@ -27,7 +27,7 @@ export interface Guide {
   at: number;
   from: number;
   to: number;
-  /** Center-alignment guides render dashed in Figma. */
+  /** Center-alignment guides render dashed. */
   center?: boolean;
 }
 
@@ -68,7 +68,7 @@ export function snapCandidates(root: XNode, skip: Set<string>): Box[] {
     const y = py + n.y;
     const drop = skipped || skip.has(n.id);
     if (!drop && n !== root && n.visible) out.push({ id: n.id, x, y, w: n.w, h: n.h });
-    // Rotated nodes snap on their axis-aligned bounds, which is what Figma does.
+    // Rotated nodes snap on their axis-aligned bounds, which is standard snapping behavior.
     for (const c of n.children) visit(c, x, y, drop);
   };
   visit(root, 0, 0, false);
@@ -95,7 +95,7 @@ function span(b: Box, axis: "x" | "y"): [number, number] {
  *
  * Returns the delta to apply *on top of* the raw drag delta, plus the guides
  * and gap badges to render. Edge-to-edge alignment wins over center alignment
- * at equal distance, matching Figma.
+ * at equal distance.
  */
 export function snapMove(
   moving: Box,
@@ -160,7 +160,7 @@ export function snapMove(
 }
 
 /**
- * Figma's equal-spacing detection: when the gap to a neighbour on one side
+ * Equal-spacing detection: when the gap to a neighbour on one side
  * matches the gap on the other side (within tolerance), show both distances.
  * Only considers boxes that actually overlap on the cross axis.
  */

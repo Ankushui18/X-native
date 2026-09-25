@@ -8,9 +8,9 @@
  *   nothing to read. `text/html` carries the layers twice over — once as this
  *   app's own base64 payload (full fidelity, including everything the SVG
  *   exporter cannot express) and once as plain SVG, which is what a browser, a
- *   deck or Figma itself will actually render. `text/plain` carries the words.
- * - **In** (`parseClipboard`): the paste ladder. Figma writes its scene as a
- *   base64 `fig-kiwi` buffer in `data-buffer`, so a real Figma copy decodes
+ *   deck or third-party viewer will render. `text/plain` carries the words.
+ * - **In** (`parseClipboard`): the paste ladder. The clipboard carries scene data as a
+ *   base64 `fig-kiwi` buffer in `data-buffer`, so an imported copy decodes
  *   through the same importer as a dropped `.fig` file and arrives as editable
  *   layers rather than a flat picture. Below that: our own payload, raw SVG,
  *   files (a screenshot, an image, a `.fig`/`.svg`/`.sketch` from the Finder)
@@ -18,7 +18,7 @@
  *
  * Everything here is DOM-light on purpose: the parsers take a structural
  * `ClipboardSource` rather than a `DataTransfer`, so the parity tests can feed
- * them a recorded Figma clipboard without a browser.
+ * them recorded clipboard data.
  */
 
 import type { XNode } from "./types";
@@ -81,7 +81,7 @@ const fromUtf8 = (b: Uint8Array) => new TextDecoder().decode(b);
 
 /* ------------------------------------------------------- this app's payload */
 
-/** The attribute this app stamps into `text/html`. Figma's trick — a base64
+/** The attribute this app stamps into `text/html`. a base64
  *  string on an otherwise empty element — is reused deliberately: custom MIME
  *  types do not survive the trip through the OS clipboard on every platform,
  *  and HTML does. */
@@ -130,7 +130,7 @@ export function nativeClipFromHtml(html: string): XNode[] | null {
 }
 
 /** What a copy of `nodes` says when it is pasted somewhere that only reads
- *  text: the words inside the layers, which is what Figma writes. A copy of
+ *  text: the words inside the layers, which standard clipboards write. A copy of
  *  shapes has no words, so it falls back to the layer names. */
 export function clipPlainText(nodes: XNode[]): string {
   const words: string[] = [];
@@ -142,9 +142,9 @@ export function clipPlainText(nodes: XNode[]): string {
   return (words.length ? words : nodes.map((n) => n.name)).join("\n");
 }
 
-/* ------------------------------------------------------------ Figma's payload */
+/* ------------------------------------------------------------ Binary scene payload */
 
-/** The JSON Figma base64s into `data-metadata`. */
+/** The JSON encoded into `data-metadata`. */
 export interface FigClipMeta {
   fileKey?: string;
   pasteID?: number;
@@ -160,7 +160,7 @@ function attrOf(html: string, name: string): string | null {
   return m[1] ?? m[2] ?? "";
 }
 
-/** Figma delimits both of its clipboard strings with HTML comments inside the
+/** Delimits both clipboard strings with HTML comments inside the
  *  attribute value — `<!--(figma)BASE64(/figma)-->` — so the delimiters come
  *  back with the value and have to be cut off before decoding. */
 function unwrapFig(raw: string, tag: string): string {
@@ -181,7 +181,7 @@ function figString(html: string, attr: string, tag: string): string | null {
   for (const c of candidates) {
     if (!c) continue;
     const b64 = c.replace(/[^A-Za-z0-9+/=]/g, "");
-    // A scene buffer is never short: Figma's own empty frame is ~26 KB of
+    // A scene buffer is never short: an empty frame is ~26 KB of
     // base64. Refusing the short ones keeps a stray attribute from being
     // mistaken for a design.
     if (b64.length >= 64) return b64;
@@ -189,8 +189,8 @@ function figString(html: string, attr: string, tag: string): string | null {
   return null;
 }
 
-/** The scene buffer Figma copied, decoded, plus its metadata. Null when the
- *  fragment carries no Figma markers — which is the common case, and the reason
+/** The imported scene buffer, decoded, plus its metadata. Null when the
+ *  fragment carries no binary scene markers — which is the common case, and the reason
  *  the paste ladder can ask every rung in turn. */
 export function figmaClipFromHtml(html: string): { buffer: Uint8Array; meta: FigClipMeta | null } | null {
   const buffer = figString(html, "data-buffer", "figma");
@@ -295,7 +295,7 @@ function writeClipboardLegacy(w: ClipWrite): void {
 /** The modifiers that went with the last ⌘V.
  *
  * A `ClipboardEvent` carries no keyboard state — it is not a `KeyboardEvent` —
- * yet ⇧⌘V has to mean "paste in place" exactly as it does in Figma. The
+ * yet ⇧⌘V has to mean "paste in place" matching standard behavior. The
  * keydown handler therefore records the shift key here a moment before the
  * browser fires the paste event, and the paste handler reads it back. Module
  * scope because the two handlers live in different components: the key binding
@@ -339,13 +339,13 @@ export interface ClipboardSource {
 export type ClipPayload =
   /** A copy made by this app, in any tab or document: full-fidelity layers. */
   | { kind: "native"; nodes: XNode[] }
-  /** A copy made by Figma: a base64 `fig-kiwi` scene buffer. */
+  /** A binary copy: a base64 `fig-kiwi` scene buffer. */
   | { kind: "figma"; buffer: Uint8Array; meta: FigClipMeta | null }
   /** SVG markup, from a code editor or another design tool. */
   | { kind: "svg"; text: string }
   /** Files off the OS clipboard: a screenshot, an image, a design file. */
   | { kind: "files"; files: File[] }
-  /** Words. Figma turns these into a text layer, and so do we. */
+  /** Words: turn these into a text layer, and so do we. */
   | { kind: "text"; text: string }
   | { kind: "none" };
 
@@ -354,7 +354,7 @@ const looksLikeSvg = (s: string) => /<svg[\s>]/i.test(s);
 /**
  * Decide what is on the clipboard, in the order that keeps the most specific
  * reading first: a file the user copied beats markup, our own payload beats
- * Figma's (ours round-trips properties SVG cannot carry), Figma's beats the SVG
+ * the binary payload (ours round-trips properties SVG cannot carry), binary beats the SVG
  * a browser may have synthesised alongside it, and plain text is the last rung
  * before "nothing useful".
  */

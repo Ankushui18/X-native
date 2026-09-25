@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
     "test": "vite-node src/engine/__tests__/parity.test.mjs",
+    "bench": "vite-node src/engine/__tests__/benchmark.mjs",
     "test:e2e": "node e2e/behaviour.mjs"
   },
   "dependencies": {

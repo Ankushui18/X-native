@@ -1,9 +1,9 @@
-//! Minimal ZIP reader for external-format importers (.sketch).
+//! Minimal ZIP reader for external-format importers (.).
 //!
 //! Reads the end-of-central-directory record, walks the central directory,
 //! and extracts entries. Supports method 0 (stored) and method 8 (deflate,
 //! via miniz_oxide — already in the workspace tree through `png`). That
-//! covers every .sketch file in practice: Sketch writes deflate entries.
+//! covers every . file in practice:  writes deflate entries.
 //!
 //! Not supported (returns Err, never panics): zip64, encryption, data
 //! descriptors without sizes in the central directory, multi-disk.
@@ -22,7 +22,7 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 /// Deterministic, standards-compliant stored-entry ZIP writer used by the
-/// Sketch exporter. Checksums are written in both headers so packages also
+///  exporter. Checksums are written in both headers so packages also
 /// open in strict ZIP readers, not only in our tolerant importer.
 pub(crate) fn write_stored(files: &[(String, Vec<u8>)]) -> Vec<u8> {
     let mut out = Vec::new();

@@ -1,5 +1,5 @@
 //! Import conformance — the SAME semantic assertions across every
-//! importer (review: "don't let Sketch → Node, SVG → Node, Figma → Node
+//! importer (review: "don't let  → Node, SVG → Node,  → Node
 //! each develop completely different semantics").
 //!
 //! Every importer produces a fixture containing the same logical scene —

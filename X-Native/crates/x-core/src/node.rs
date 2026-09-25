@@ -175,10 +175,10 @@ fn smooth(pts: &[(f64, f64)], passes: usize) -> Vec<(f64, f64)> {
     cur
 }
 
-/// A brush mark (Figma Draw's brush tool): the freehand centreline widened into
+/// A brush mark ( Draw's brush tool): the freehand centreline widened into
 /// a CLOSED outline, so the stroke is a filled vector rather than a line.
 ///
-/// Figma's brush is a *style* applied along the path — a stretch brush
+/// the brush is a *style* applied along the path — a stretch brush
 /// elongates a source shape down the length of the stroke — and the two things
 /// our renderer can do with a path are stroke it and fill it. The style is
 /// therefore the outline itself: a width that tapers toward the ends, and a
@@ -250,7 +250,7 @@ pub fn brush_outline(
     out
 }
 
-/// The Line tool's geometry: one straight segment from `a` to `b`. Figma's
+/// The Line tool's geometry: one straight segment from `a` to `b`. the
 /// line is "lines in any direction" — a stroked path, so a horizontal line's
 /// box is 0 units high rather than a shape's minimum.
 pub fn line_path(a: (f64, f64), b: (f64, f64)) -> Vec<PathCmd> {
@@ -265,7 +265,7 @@ pub const ARROW_HEAD_MIN: f64 = 12.0;
 pub const ARROW_HEAD_HALF: f64 = 0.4;
 
 /// The Arrow tool's geometry: the same segment, closed by the solid head
-/// Figma's arrow ends in. The head is a triangle at `b` — `weight * 4` long,
+/// the arrow ends in. The head is a triangle at `b` — `weight * 4` long,
 /// never shorter than 12 units — and the shaft stops at the head's base so its
 /// cap cannot peek past the tip. A degenerate drag is just a line.
 pub fn arrow_path(a: (f64, f64), b: (f64, f64), weight: f64) -> Vec<PathCmd> {
@@ -432,29 +432,29 @@ pub enum NodeKind {
         radius: f64,
     },
     Ellipse,
-    /// Figma-style Section: a labelled container frame. The label is the
+    /// standard Section: a labelled container frame. The label is the
     /// node's `name`, drawn as a header by the renderer. Children render
     /// inside; behaves like a Frame for hit-testing/marquee/ungroup.
     Section,
-    /// Figma's arc properties on an ellipse: the sweep runs from `start` to
+    /// the arc properties on an ellipse: the sweep runs from `start` to
     /// `end` degrees (y-down space, 0 = east, clockwise when `end > start`,
     /// and the other way when it is smaller) and `ratio` is the fraction of
     /// the radius the middle is cut back to — 0 is a solid wedge through the
     /// centre, 0.85 a thin ring. Equal angles are the full ellipse. All three
     /// are appearance, not size: the layer's box does not move when they
-    /// change (Figma: "the shape's bounding box stayed the same size to
+    /// change (: "the shape's bounding box stayed the same size to
     /// preserve space in case we wanted to change the arc again").
     Arc {
         start: f64,
         end: f64,
         ratio: f64,
     },
-    /// Figma's Polygon: "an enclosed shape that is made up of any number of
+    /// the Polygon: "an enclosed shape that is made up of any number of
     /// straight lines", three of them by default.
     Poly {
         sides: usize,
     },
-    /// Figma's Star: `points` outer vertices with the inner ones at `ratio` of
+    /// the Star: `points` outer vertices with the inner ones at `ratio` of
     /// the radius between them, so five points read as "ten sides".
     Star {
         points: usize,
@@ -478,7 +478,7 @@ pub enum NodeKind {
     Instance {
         component: String,
     },
-    /// Figma slice: an export region. Renders nothing itself (no fill, no
+    ///  slice: an export region. Renders nothing itself (no fill, no
     /// stroke, no effects); exporting it captures the flattened canvas
     /// content inside its bounds. Slices are leaf nodes.
     Slice,
@@ -490,7 +490,7 @@ pub struct PrototypeAction {
     pub transition_ms: u32,
 }
 
-/// Per-node export preset (Figma's Export panel): a format/scale/quality/
+/// Per-node export preset (the Export panel): a format/scale/quality/
 /// suffix tuple. `Node.export_settings` is a list of these.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportSettings {
@@ -511,13 +511,13 @@ impl Default for ExportSettings {
     }
 }
 
-/// Figma's mask **type** — the Mask section's dropdown (help
+/// the mask **type** — the Mask section's dropdown (help
 /// 360040450253; plugin API `MaskType`). A mask keys the masked result on the
 /// mask layer itself: Alpha on its opacity, Vector on its fill/stroke
 /// outlines (translucency ignored), Luminance on its brightness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MaskType {
-    /// *"the opacity of the mask … higher opacity reveals more"* — Figma's
+    /// *"the opacity of the mask … higher opacity reveals more"* — the
     /// default.
     #[default]
     Alpha,
@@ -584,7 +584,7 @@ impl MaskType {
 }
 
 /// Relative luminance of a solid colour — the Rec. 709 weights on its sRGB
-/// channels, the figure Figma's own docs call "luminance".
+/// channels, the figure the own docs call "luminance".
 fn luminance(c: &Color) -> f32 {
     let [r, g, b, _] = c.components;
     (0.2126 * r + 0.7152 * g + 0.0722 * b).clamp(0.0, 1.0)
@@ -595,9 +595,9 @@ pub struct Node {
     /// Stable identity: the key every reference (prototype destinations,
     /// instance overrides, render keys, selection) points at. Never changes
     /// once a node exists — renaming a layer edits `name` instead, so
-    /// references survive (Figma parity).
+    /// references survive ( parity).
     pub id: String,
-    /// User-facing display name. Independent of `id` (Figma separates name
+    /// User-facing display name. Independent of `id` ( separates name
     /// from identity); defaults to `id` for nodes created programmatically.
     pub name: String,
     pub kind: NodeKind,
@@ -618,7 +618,7 @@ pub struct Node {
     pub visible: bool,
     /// Phase 2: editor lock (excluded from hit testing).
     pub locked: bool,
-    /// Figma's per-frame **Show name** switch: whether the canvas paints this
+    /// the per-frame **Show name** switch: whether the canvas paints this
     /// frame's name label in the gutter above it. The naming RULES (only a
     /// page's outermost frames, none inside a frame, Sections always) decide
     /// where a name may appear; this decides whether it does. `true` is the
@@ -628,7 +628,7 @@ pub struct Node {
     pub overrides: HashMap<String, String>,
     /// Phase 4.7: per-corner radii [tl, tr, br, bl]; overrides Rect's uniform radius.
     pub corner_radii: Option<[f64; 4]>,
-    /// Corner smoothing (0.0–1.0): Figma's "squircle" corner rounding.
+    /// Corner smoothing (0.0–1.0): the "squircle" corner rounding.
     /// 0.0 = standard circular corner (default), 0.6–0.8 = iOS-style
     /// continuous corner (superellipse). Higher values produce smoother
     /// transitions between straight edges and curved corners.
@@ -652,7 +652,7 @@ pub struct Node {
     /// Masks: when true, this node clips its FOLLOWING SIBLINGS inside
     /// the same parent (mask semantics semantics, simplified).
     pub is_mask: bool,
-    /// Which of Figma's mask types this layer is when `is_mask` is set — the
+    /// Which of the mask types this layer is when `is_mask` is set — the
     /// Mask section's dropdown.
     pub mask_type: MaskType,
     /// P1: variable bindings — property -> variable name.
@@ -670,25 +670,25 @@ pub struct Node {
     /// baseline). Populated by the text pipeline from real font metrics;
     /// `None` falls back to a geometry heuristic in the auto-layout solver.
     pub baseline: Option<f64>,
-    /// Component properties (Figma component properties) — meaningful only on
+    /// Component properties ( component properties) — meaningful only on
     /// Component masters; instances expose them as editable controls.
     pub props: Vec<ComponentProp>,
-    /// Per-node export settings (Figma's Export panel): a list of
+    /// Per-node export settings (the Export panel): a list of
     /// format/scale/suffix presets. Exporting the node writes one file per
     /// entry. Empty means "no explicit exports" (the quick-format buttons
     /// still work). Most useful on slices, but any node may carry them.
     pub export_settings: Vec<ExportSettings>,
-    /// Prototyping interactions (trigger → action). Rich Figma-parity model;
+    /// Prototyping interactions (trigger → action). Rich -parity model;
     /// the legacy `prototype` field above is kept only for old `.x` docs and
     /// is treated as an `OnClick → Navigate` interaction during playback.
     pub interactions: Vec<Interaction>,
-    /// Flow starting point (Figma "starting frame" of a prototype flow).
+    /// Flow starting point ( "starting frame" of a prototype flow).
     pub is_starting_point: bool,
     /// Clip/scroll behavior for a frame's overflowing content.
     pub overflow: Overflow,
     /// Current scroll offset (page px) for a scrollable frame.
     pub scroll: (f64, f64),
-    /// Layout grid guides (Figma "layout grid"): visual column/row/grid
+    /// Layout grid guides ( "layout grid"): visual column/row/grid
     /// overlays on a frame — guides, NOT auto layout. A frame may stack
     /// several (e.g. columns + rows). Meaningful only on Frame nodes.
     pub layout_grids: Vec<LayoutGridDef>,
@@ -716,18 +716,18 @@ pub struct Node {
 }
 
 /// The scroll range of a frame: how far its content reaches past its own box,
-/// per axis, never negative. Figma's prototype scrolling moves the content
+/// per axis, never negative. the prototype scrolling moves the content
 /// inside the frame by up to this much before it stops
 /// ([Prototype scroll and overflow behavior], help article 360039818734).
 ///
 /// `fixed` and `sticky` children are excluded: they do not scroll with the
-/// content ("Figma will move it above the other layers … it's not possible to
+/// content (" will move it above the other layers … it's not possible to
 /// position scrolling objects above fixed layers"). Rotation is not modelled —
 /// a child contributes its box in the frame's own space — and only content
 /// reaching past the RIGHT / BOTTOM edge adds range, which is the long-page
 /// case scrolling exists for.
 ///
-/// [Prototype scroll and overflow behavior]: https://help.figma.com/hc/en-us/articles/360039818734
+/// [Prototype scroll and overflow behavior]: https://help..com/hc/en-us/articles/360039818734
 pub fn scroll_extent(frame: &Node) -> (f64, f64) {
     let mut mx = 0.0f64;
     let mut my = 0.0f64;
@@ -811,7 +811,7 @@ impl Node {
     }
 
     /// This node's paragraph wrap strategy (the "tw" binding; Text nodes).
-    /// Line-height MODE bindings (Figma): `lhm`="px" with `lhpx` (absolute
+    /// Line-height MODE bindings (): `lhm`="px" with `lhpx` (absolute
     /// line box in px) or `lhm`="pct" with `lhp` (percent of font size).
     /// Absent -> the legacy `lh` multiplier (default 1.2 = Auto).
     /// Returns (mode, raw value): 0 = multiplier, 1 = px, 2 = percent.
@@ -852,7 +852,7 @@ impl Node {
     }
 }
 
-/// Paragraph wrap strategy (Figma Aug-2026 text wrap). `Auto` is the
+/// Paragraph wrap strategy ( Aug-2026 text wrap). `Auto` is the
 /// classic greedy first-fit; `Balance` evens line lengths per paragraph
 /// (CSS `text-wrap: balance`); `Pretty` balances AND avoids a lone word
 /// stranded on the last line (widows). Rides the node as the "tw"
@@ -1049,7 +1049,7 @@ impl ListStyle {
             _ => Self::None,
         }
     }
-    /// Figma's words for the three rows of the list-style picker
+    /// the words for the three rows of the list-style picker
     /// (help 360040449773): *"Selecting the No list property … removes any
     /// current list styling"*.
     pub fn label(self) -> &'static str {
@@ -1059,7 +1059,7 @@ impl ListStyle {
             Self::Numbered => "Numbered",
         }
     }
-    /// The three rows, in Figma's order: none, bulleted, numbered.
+    /// The three rows, in the order: none, bulleted, numbered.
     pub fn all() -> [ListStyle; 3] {
         [Self::None, Self::Bulleted, Self::Numbered]
     }
@@ -1072,10 +1072,10 @@ impl ListStyle {
 pub const LIST_MARKER_GAP: f64 = 16.0;
 
 /// The marker a list ITEM carries, `item` counting from 1 (the same
-/// 1-based counter Figma shows): a bullet for a bulleted list, the counter
+/// 1-based counter  shows): a bullet for a bulleted list, the counter
 /// for a numbered one — *"numbered list counters rotate between numbers,
 /// alphabetical characters, and roman numerals with each indentation"* is
-/// Figma's deeper nesting, one level of numbering here — and nothing at all
+/// the deeper nesting, one level of numbering here — and nothing at all
 /// for a plain paragraph.
 pub fn list_marker(style: ListStyle, item: usize) -> Option<String> {
     match style {
@@ -1408,7 +1408,7 @@ pub fn resolve_text_parts(text: &str, runs: &[TextRun]) -> Vec<TextPart> {
 }
 
 impl Node {
-    /// Dev-Mode annotation (Figma: notes on a layer for developers). Rides
+    /// Dev-Mode annotation (: notes on a layer for developers). Rides
     /// the bindings map under the reserved `note` key so it round-trips
     /// `.x` without a schema bump.
     pub fn note(&self) -> Option<&str> {
@@ -1545,7 +1545,7 @@ impl Node {
         n.stroke.width = 1.0;
         n
     }
-    /// Shape constructors mirror their Figma counterparts; the arc's own
+    /// Shape constructors mirror their  counterparts; the arc's own
     /// properties — where it starts, how far it sweeps and how much of the
     /// middle is cut away — are intrinsic to it, so the arity is what it is.
     #[allow(clippy::too_many_arguments)]
@@ -1607,7 +1607,7 @@ impl Node {
         )
     }
     pub fn line(id: &str, x: f64, y: f64, w: f64, h: f64, color: Color) -> Self {
-        // Figma-like: 1px stroke, no fill — thin, clean line
+        // standard: 1px stroke, no fill — thin, clean line
         Self::base(
             id,
             NodeKind::Line,
@@ -1620,7 +1620,7 @@ impl Node {
         .stroke(Stroke::solid(color, 1.0))
     }
     pub fn text(id: &str, x: f64, y: f64, w: f64, h: f64, text: &str) -> Self {
-        // Figma-like: dark fill for text on white frames; no stroke outline
+        // standard: dark fill for text on white frames; no stroke outline
         let mut n = Self::base(
             id,
             NodeKind::Text { text: text.into() },
@@ -1784,7 +1784,7 @@ impl Node {
                 .collect()
         }
     }
-    /// CSS Flexbox parity (Figma Jul-2026): the effective inside-stroke
+    /// CSS Flexbox parity ( Jul-2026): the effective inside-stroke
     /// width for layout purposes. Returns the maximum width among visible
     /// inside-aligned stroke layers (inside strokes reduce the content
     /// area like CSS `border` in border-box model). Outside and center
@@ -1819,7 +1819,7 @@ impl Node {
         self.is_mask = v;
         self
     }
-    /// Figma's Mask section: the type this mask is applied by.
+    /// the Mask section: the type this mask is applied by.
     pub fn mask_type(mut self, t: MaskType) -> Self {
         self.mask_type = t;
         self
@@ -1867,12 +1867,12 @@ impl Node {
         self.z_index = Some(z);
         self
     }
-    /// Absolute-position this child inside its auto-layout parent (Figma ABSOLUTE).
+    /// Absolute-position this child inside its auto-layout parent ( ABSOLUTE).
     pub fn absolute(mut self) -> Self {
         self.constraints.is_absolute = true;
         self
     }
-    /// Fixed positioning: ignores the parent's scroll offset (Figma FIXED).
+    /// Fixed positioning: ignores the parent's scroll offset ( FIXED).
     pub fn fixed(mut self) -> Self {
         self.constraints.fixed = true;
         self
@@ -2332,7 +2332,7 @@ mod line_tests {
 
     #[test]
     fn a_horizontal_line_is_a_box_with_no_height() {
-        // Figma's own line layer: the box is the segment, H and all.
+        // the own line layer: the box is the segment, H and all.
         let (a, b) = span();
         assert_eq!(path_bounds(&line_path(a, b)), (0.0, 40.0, 100.0, 0.0));
     }
@@ -2496,7 +2496,7 @@ mod layout_grid_tests {
         assert_eq!(same[0].len, 1);
     }
 
-    /// Figma's list styles (help 360040449773): three rows in their order,
+    /// the list styles (help 360040449773): three rows in their order,
     /// a bullet for the unordered list, a 1-based counter for the ordered
     /// one, and nothing for a plain paragraph.
     #[test]

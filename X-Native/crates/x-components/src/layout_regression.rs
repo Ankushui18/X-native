@@ -441,7 +441,7 @@ fn independent_cross_axis_sizing() {
     );
 }
 
-// --------------------------------------------------- CSS Flexbox parity (Figma Jul-2026)
+// --------------------------------------------------- CSS Flexbox parity ( Jul-2026)
 
 /// Inside strokes add to effective padding — hug frame accounts for stroke
 /// width in its minimum size.
@@ -690,7 +690,7 @@ fn auto_gap_no_overlap_when_children_exceed_container() {
 
 // ------------------------------------------------- min/max + canvas stacking
 
-/// Figma's min/max dimensions are an ADDITIONAL setting — "Minimum and maximum
+/// the min/max dimensions are an ADDITIONAL setting — "Minimum and maximum
 /// dimensions is an additional setting that can be used at the same time as
 /// other resizing properties" (help 360040451373) — so they clamp the frame's
 /// own axes whatever the resizing choice is, and the padding floor survives a
@@ -754,7 +754,7 @@ fn min_and_max_dimensions_clamp_either_sizing() {
     assert_eq!(tall.h, 90.0, "the minimum wins when the two cross");
 }
 
-/// Figma's **canvas stacking** (help 31289464393751): "the order of layers in
+/// the **canvas stacking** (help 31289464393751): "the order of layers in
 /// the layers panel stays the same. Canvas stacking is solely a visual change
 /// that happens on the canvas." `paint_order` is that rule, and it is the one
 /// owner — the viewer and the hit test both walk it.

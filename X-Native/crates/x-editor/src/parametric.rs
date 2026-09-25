@@ -59,7 +59,7 @@ pub fn bound_var<'a>(n: &'a Node, prop: &str) -> Option<&'a str> {
 }
 
 /// Clamp corner radii to what the box can actually show. A 40px radius on a
-/// 30px-tall rectangle is nonsense geometry; Figma clamps, so we clamp.
+/// 30px-tall rectangle is nonsense geometry;  clamps, so we clamp.
 pub fn clamp_radii(n: &mut Node) {
     let limit = (n.w.min(n.h) / 2.0).max(0.0);
     if let NodeKind::Rect { radius } = &mut n.kind {

@@ -702,7 +702,7 @@ fn svg_node(
         }
         _ => {}
     }
-    // children with Figma mask semantics: a mask child clips FOLLOWING siblings
+    // children with  mask semantics: a mask child clips FOLLOWING siblings
     let mut open_masks = 0usize;
     for c in &n.children {
         if c.is_mask && c.visible {

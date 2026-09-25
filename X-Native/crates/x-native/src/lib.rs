@@ -130,7 +130,7 @@ pub fn svg_text_outliner(
 }
 
 /// TEXT-TO-VECTOR glue: outline a Text node's glyphs into ONE editable vector
-/// path — Figma's "Outline text" (⌥⌘O), which turns type into geometry you can
+/// path — the "Outline text" (⌥⌘O), which turns type into geometry you can
 /// node-edit, boolean and offset.
 ///
 /// This lives in the facade for the same dependency-direction reason as

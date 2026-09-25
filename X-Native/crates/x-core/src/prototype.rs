@@ -1,4 +1,4 @@
-//! Prototyping model (Figma parity): interactions with triggers and actions,
+//! Prototyping model ( parity): interactions with triggers and actions,
 //! overlays, flow starting points, and animation presets.
 //!
 //! A node carries zero or more [`Interaction`]s. Each pairs a [`Trigger`]
@@ -10,7 +10,7 @@ use crate::Node;
 
 /// When an interaction fires.
 ///
-/// The press trio mirrors Figma: `OnPress` is "while pressing" (fires on
+/// The press trio mirrors : `OnPress` is "while pressing" (fires on
 /// pointer-down, and the player reverts its navigate/overlay effect on
 /// release); `MouseUp` fires once on release with no revert (pair it with
 /// a press that opens a menu to replicate drop-down navigation).
@@ -27,24 +27,24 @@ pub enum Trigger {
     MouseEnter,
     MouseLeave,
     MouseUp,
-    /// Figma's *Mouse down / Touch press*: the press itself, permanent and
+    /// the *Mouse down / Touch press*: the press itself, permanent and
     /// one-way — unlike [`Trigger::OnPress`], which reverts when the press
-    /// ends. Figma documents the split (plugin API: "MOUSE_ENTER, MOUSE_LEAVE,
+    /// ends.  documents the split (plugin API: "MOUSE_ENTER, MOUSE_LEAVE,
     /// MOUSE_UP and MOUSE_DOWN are permanent, one-way navigation") and lists
     /// it in the Prototype panel beside Mouse up (help 360040315773).
     MouseDown,
-    /// Prototype-player key press (Figma "key" gamepad/keyboard trigger).
+    /// Prototype-player key press ( "key" gamepad/keyboard trigger).
     /// `key` is a single character ("a", "1") or a named key ("Enter",
     /// "Space", "Escape").
     KeyDown {
         key: String,
     },
-    /// Triggered when a video reaches a specific time (Figma parity).
+    /// Triggered when a video reaches a specific time ( parity).
     WhenVideoHits {
         /// Time in seconds
         time: f32,
     },
-    /// Triggered when a video ends playback (Figma parity).
+    /// Triggered when a video ends playback ( parity).
     WhenVideoEnds,
 }
 
@@ -65,7 +65,7 @@ impl Trigger {
             Trigger::WhenVideoEnds => "video-end",
         }
     }
-    /// The trigger's name in the Prototype panel — ONE owner, in Figma's own
+    /// The trigger's name in the Prototype panel — ONE owner, in the own
     /// words. The set is what help 360040315773 prints for the trigger
     /// control: *On click / On tap*, *While hovering*, *While pressing*,
     /// *Mouse enter*, *Mouse leave*, *Mouse down / Touch press*, *Mouse up /
@@ -94,7 +94,7 @@ impl Trigger {
         }
     }
 
-    /// Every trigger the panel offers, in the menu's order: Figma's list
+    /// Every trigger the panel offers, in the menu's order: the list
     /// (help 360040315773) with its default, *On click*, moved to the front.
     /// ONE table — the menu paints it, a press writes `row`'s entry, and the
     /// delay/key/video entries carry the value the row starts from.
@@ -149,7 +149,7 @@ pub enum Action {
     SwapOverlay { overlay: String },
     /// Dismiss the topmost open overlay.
     CloseOverlay,
-    /// Open an external URL in the browser (Figma "open link"): leaves
+    /// Open an external URL in the browser ( "open link"): leaves
     /// the prototype. Players surface the URL in the fire effect and
     /// change nothing else; hosts do the opening.
     OpenLink { url: String },
@@ -158,13 +158,13 @@ pub enum Action {
     /// Navigate back to the previous frame (presentation history).
     Back,
     /// Prototype logic: assign `value` (evaluated against the current
-    /// variables) to the variable `name` (Figma "set variable").
+    /// variables) to the variable `name` ( "set variable").
     SetVar { name: String, value: Expr },
-    /// Prototype logic: switch the active variable mode (Figma "change to",
+    /// Prototype logic: switch the active variable mode ( "change to",
     /// e.g. light -> dark theming).
     SetMode { mode: String },
     /// Prototype logic: run `then` when `cond` holds, else `els`
-    /// (Figma conditional prototyping). Branches may nest further `Cond`s.
+    /// ( conditional prototyping). Branches may nest further `Cond`s.
     Cond {
         cond: Condition,
         then: Box<Action>,
@@ -297,7 +297,7 @@ pub enum Direction {
     Bottom,
 }
 
-/// Easing function for animations (Figma parity).
+/// Easing function for animations ( parity).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Easing {
     /// Linear interpolation (no easing)
@@ -380,7 +380,7 @@ impl Direction {
     }
 }
 
-/// Transition animation preset (Figma's interaction animation list).
+/// Transition animation preset (the interaction animation list).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Animation {
     Instant,
@@ -452,7 +452,7 @@ impl Animation {
 
 // ------------------------------------------------------ prototype logic
 //
-// Figma parity: variables in prototypes + conditional prototyping. A tiny
+//  parity: variables in prototypes + conditional prototyping. A tiny
 // expression language over the document's variables drives `SetVar` values
 // and `Cond` conditions. Evaluation is total: unknown variables, type
 // mismatches, and division by zero degrade to sane defaults instead of
@@ -466,7 +466,7 @@ pub enum Value {
     Bool(bool),
 }
 
-/// Tiny expression language for prototype logic (Figma's "adjust variable"
+/// Tiny expression language for prototype logic (the "adjust variable"
 /// math, plus string concatenation for text variables).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -956,24 +956,24 @@ fn run_action_depth(action: &Action, vars: &mut crate::Variables, depth: u32) ->
 pub struct Interaction {
     pub trigger: Trigger,
     pub action: Action,
-    /// Multiple actions: Figma supports running several actions in sequence
+    /// Multiple actions:  supports running several actions in sequence
     /// from a single trigger (e.g., navigate + set variable + play sound).
     /// When non-empty, these take precedence over `action`. Empty by
     /// default for backward compatibility with single-action interactions.
     pub actions: Vec<Action>,
     pub transition_ms: u32,
     pub animation: Animation,
-    /// Easing function for the animation (Figma parity).
+    /// Easing function for the animation ( parity).
     pub easing: Easing,
-    /// Whether to reset object properties when navigating (Figma parity).
+    /// Whether to reset object properties when navigating ( parity).
     /// If true, object states (scroll position, form inputs, etc.) are
     /// reset when this interaction fires.
     pub reset_on_navigate: bool,
-    /// Figma's **Animate matching layers** tick, in the interaction's own
+    /// the **Animate matching layers** tick, in the interaction's own
     /// animation section (help 360039818874). On: the two screens' layers are
     /// matched by name *and* hierarchy, the matches smart-animate their
     /// differences, and everything else takes [`Interaction::animation`]. Off
-    /// by default, the way Figma's box starts.
+    /// by default, the way the box starts.
     pub animate_matching_layers: bool,
 }
 
@@ -999,9 +999,9 @@ pub struct LayerPlan {
     pub transition: LayerTransition,
 }
 
-/// Figma's matching rule, in one place: two layers match when their **names**
+/// the matching rule, in one place: two layers match when their **names**
 /// and their **hierarchy** — the chain of ancestor names from the screen, which
-/// is how Figma writes it — are equal ([help 360039818874](https://help.figma.com/hc/en-us/articles/360039818874)).
+/// is how  writes it — are equal ([help 360039818874](https://help..com/hc/en-us/articles/360039818874)).
 ///
 /// The decisions this returns are the article's four cases:
 ///
@@ -1073,7 +1073,7 @@ impl Interaction {
         }
     }
 
-    /// Create an interaction with multiple actions (Figma parity).
+    /// Create an interaction with multiple actions ( parity).
     pub fn with_actions(
         trigger: Trigger,
         actions: Vec<Action>,
@@ -1093,7 +1093,7 @@ impl Interaction {
         }
     }
 
-    /// Create an interaction with full customization (Figma parity).
+    /// Create an interaction with full customization ( parity).
     pub fn custom(
         trigger: Trigger,
         action: Action,
@@ -1272,13 +1272,13 @@ mod tests {
         assert!(effective_interactions(&n3).is_empty());
     }
 
-    /// Figma's trigger control is a dropdown whose entries are its own words
+    /// the trigger control is a dropdown whose entries are its own words
     /// (help 360040315773); the panel reads them from `label`, one owner for
     /// both. This pins the list, the order the menu shows it in, and the rule
     /// that the short form never carries a parameter.
     #[test]
-    fn the_trigger_words_are_figmas_and_the_menu_lists_every_one() {
-        let figma = [
+    fn the_trigger_words_are_standard_and_the_menu_lists_every_one() {
+        let expected = [
             "On click",
             "On drag",
             "While hovering",
@@ -1293,7 +1293,7 @@ mod tests {
             "When video ends",
         ];
         let words: Vec<&str> = Trigger::all().iter().map(|t| t.label()).collect();
-        assert_eq!(words, figma.to_vec());
+        assert_eq!(words, expected.to_vec());
         for (k, t) in Trigger::all().iter().enumerate() {
             assert_eq!(t.row(), k, "{} sits on its own menu row", t.label());
         }
@@ -1538,7 +1538,7 @@ mod tests {
         assert_eq!(vars.numbers["page"], 10.0); // cap hit before the SetVar
     }
 
-    /// "Animate matching layers" is Figma's rule about which layers of the
+    /// "Animate matching layers" is the rule about which layers of the
     /// destination screen animate on their own (help 360039818874): name plus
     /// hierarchy decides, matched fixed layers hold, new layers dissolve in.
     #[test]
@@ -1575,7 +1575,7 @@ mod tests {
             .child(fresh);
 
         // document order, parents before their children: [card, title, new,
-        // new-title, pinned, ghost, fresh] — Figma's four cases among them
+        // new-title, pinned, ghost, fresh] — the four cases among them
         let plan = matching_layers(&from, &to);
         assert_eq!(plan.len(), 7, "every destination layer is planned");
         assert_eq!(plan[0].to, "card-to", "document order, parents first");

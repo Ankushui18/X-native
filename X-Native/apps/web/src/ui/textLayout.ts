@@ -160,7 +160,7 @@ export function measureCtx(): CanvasRenderingContext2D | null {
 /**
  * The box a text layer should have on the axes set to hug.
  *
- * Figma re-fits immediately when a resizing mode is chosen, not on the next
+ * The layout re-fits immediately when a resizing mode is chosen, not on the next
  * keystroke, so the sizing flags and the geometry always travel in the same
  * patch. Pass the node with its *target* sizing to size it as it is about to
  * wrap; the padding matches what the editor commits with.

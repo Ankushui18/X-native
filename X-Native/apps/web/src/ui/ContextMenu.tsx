@@ -145,7 +145,7 @@ export function ContextMenu({
   );
 }
 
-/** The rows Figma puts above every canvas menu: pick one layer out of the stack
+/** Canvas context menu rows: pick one layer out of the stack
  *  under the cursor, then the "everything that matches" commands. */
 function selectItems(under: XNode[]): MenuItem[] {
   const out: MenuItem[] = [];
@@ -186,7 +186,7 @@ export function canvasMenu(
       ...selectItems(under),
       { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
       { kind: "action", id: "selectAll", label: "Select all", shortcut: "⌘A", icon: "rect" },
-      // Figma's docs: right-clicking an empty canvas is the second way to get
+      // Right-clicking an empty canvas is the second way to get
       // to the UI-state commands, for people who never look at the menu bar.
       { kind: "sep" },
       { kind: "action", id: "minimizeUi", label: "Minimize UI", shortcut: "⇧⌘\\", icon: "minimize" },
@@ -201,7 +201,7 @@ export function canvasMenu(
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
     { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
     {
-      // Figma groups these under "Copy/paste as", and the language list is the
+      // Grouped under "Copy/paste as", and the language list is the
       // inspect panel's own, so the menu and the panel answer in one voice.
       kind: "sub",
       label: "Copy/paste as",
@@ -253,16 +253,19 @@ export function canvasMenu(
       icon: "rect",
       items: [
         { kind: "action", id: "union", label: "Union selection", shortcut: "⌥⇧U" },
-        { kind: "action", id: "subtract", label: "Subtract", shortcut: "⌥⇧S" },
-        { kind: "action", id: "intersect", label: "Intersect", shortcut: "⌥⇧I" },
-        { kind: "action", id: "exclude", label: "Exclude", shortcut: "⌥⇧E" },
-        { kind: "action", id: "flatten", label: "Flatten" },
+        { kind: "action", id: "subtract", label: "Subtract selection", shortcut: "⌥⇧S" },
+        { kind: "action", id: "intersect", label: "Intersect selection", shortcut: "⌥⇧I" },
+        { kind: "action", id: "exclude", label: "Exclude selection", shortcut: "⌥⇧E" },
+        { kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" },
       ],
     });
   }
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
-  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O" });
+  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⌥⌘O" });
+  items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
+  items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });
+  items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths" });
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" });
   items.push({ kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye-off" });
@@ -272,13 +275,13 @@ export function canvasMenu(
 }
 
 /**
- * The auto layout entries Figma puts on a layer's context menu, from "Toggle on
+ * The auto layout entries on a layer's context menu, from "Toggle on
  * auto layout in designs": Add auto layout (when there is none), Remove auto
  * layout (when there is), and - either way - More layout options ▸ Suggest auto
  * layout, Remove all auto layout.
  *
  * The article lists these under a frame's right-click menu, and the same items
- * make sense on a plain layer because that is where "Figma will create an auto
+ * make sense on a plain layer because that is where an auto
  * layout frame around them" happens.
  */
 function layoutMenuItems(hasLayout: boolean): MenuItem[] {
@@ -385,7 +388,7 @@ export function runMenu(
       // A menu click gives the browser no keystroke to turn into a `paste`
       // event, so the canvas is asked to read the system clipboard through the
       // async API instead — the same ladder ⌘V rides, which is what lets a copy
-      // from Figma land from the right-click menu too. That listener falls back
+      // from imported clipboard data land from the right-click menu too. That listener falls back
       // to the in-app clipboard when the read is refused, so the menu keeps
       // working with nothing but a local copy on it.
       window.dispatchEvent(
@@ -511,6 +514,25 @@ export function runMenu(
       break;
     case "outlineStroke":
       engine.dispatch({ type: "outlineStroke" });
+      break;
+    case "offsetPath": {
+      const distStr = window.prompt("Offset vector path distance (+ to expand, - to contract):", "8");
+      if (distStr !== null) {
+        const d = parseFloat(distStr);
+        if (!isNaN(d) && d !== 0) {
+          engine.dispatch({ type: "offsetPath", distance: d });
+          toast(`Offset vector path ${d > 0 ? "+" : ""}${d}px`);
+        }
+      }
+      break;
+    }
+    case "simplifyPath":
+      engine.dispatch({ type: "simplifyPath" });
+      toast("Simplified vector path");
+      break;
+    case "convertTextToVector":
+      engine.dispatch({ type: "convertTextToVector" });
+      toast("Converted text to vector paths");
       break;
     case "useAsMask": {
       const s = engine.snapshot();

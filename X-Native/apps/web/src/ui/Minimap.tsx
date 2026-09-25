@@ -104,7 +104,7 @@ export function Minimap({
     // Without a canvas-coloured backdrop the document's white frames are
     // invisible against the white panel — the thumbnail read as a few dark
     // bars floating in space.
-    ctx.fillStyle = dark ? "#1e1e1e" : "#e5e5e5";
+    ctx.fillStyle = dark ? "#171c22" : "#eef1f4";
     ctx.fillRect(0, 0, W, H);
     const { boxes, bounds } = collect(root);
     // Fit the union of the document and the current viewport, not the document
@@ -133,10 +133,10 @@ export function Minimap({
     const vy = oy + (-panY / zoom) * scale;
     const vw = (viewW / zoom) * scale;
     const vh = (viewH / zoom) * scale;
-    ctx.strokeStyle = dark ? "#ffffff" : "#6366f1";
+    ctx.strokeStyle = dark ? "#10b981" : "#0e9f6e";
     ctx.lineWidth = 1;
     ctx.strokeRect(Math.round(vx) + 0.5, Math.round(vy) + 0.5, Math.round(vw), Math.round(vh));
-    ctx.fillStyle = dark ? "rgba(255,255,255,.10)" : "rgba(99,102,241,.14)";
+    ctx.fillStyle = dark ? "rgba(16, 185, 129, 0.20)" : "rgba(14, 159, 110, 0.16)";
     ctx.fillRect(vx, vy, vw, vh);
   }, [root, zoom, panX, panY, viewW, viewH, theme]);
 

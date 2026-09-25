@@ -35,6 +35,7 @@ import type {
   GridPattern,
   XNode,
 } from "../engine/types";
+import type { Modifier } from "../engine/modifierStack";
 import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
 import { evalField, hasExpression } from "./fieldExpr";
@@ -64,7 +65,7 @@ import {
   unionBox,
   type ScaleAnchor,
 } from "./scaleModel";
-import { pathToVectorNetwork, vectorNetworkToSvgPath, vertexDegree, simplifyPath, smoothPath } from "../engine/geometry";
+import { vectorNetworkToSvgPath, smoothPath } from "../engine/geometry";
 import {
   SPACING_MODES,
   alignKey,
@@ -105,7 +106,7 @@ import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
 import { PropertyField, XPopover } from "./x-ui";
 
-/** Sketch only shows "Round to Pixel" when rounding can actually do something. */
+/** "Round to Pixel" is only shown when rounding can actually do something. */
 function isFractional(n: XNode) {
   return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
 }
@@ -223,7 +224,7 @@ export function RightPanel({
 }
 
 /**
- * Figma's File ▸ Export… and Sketch's ⌘⇧E "Export Assets": one sheet listing
+ * File ▸ Export… (⌘⇧E): one sheet listing
  * everything on the page that can be exported, each row with its own format and
  * scale, checkboxes to pick which ones to write. Thumbnails focus the layer so
  * a long list stays navigable.
@@ -338,7 +339,7 @@ function ExportAssetsDialog({
                   src={thumbs[n.id]}
                   alt=""
                   onClick={(e) => {
-                    // The thumbnail is Figma's shortcut to the layer itself.
+                    // The thumbnail is a shortcut to the layer itself.
                     e.preventDefault();
                     engine.dispatch({ type: "select", ids: [n.id] });
                     zoomTo(engine, "selection");
@@ -449,7 +450,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   return (
     <>
       {tool !== "frame" && (
-        // Figma uses the empty right panel to teach rather than leaving it
+        // The empty right panel shows hints rather than leaving it
         // blank; with nothing selected the only controls are page-level, so
         // say what the panel will show once something is picked.
         <div className="empty-state">
@@ -529,7 +530,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
           opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
           visible={!!snap.pages[snap.page].pixelGrid}
-          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#6366f1"]}
+          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#10b981"]}
           onChange={(pixelGridColor) =>
             engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
           }
@@ -920,7 +921,7 @@ function Prototype({
 }
 
 /**
- * CSS for the layer. `unit` is Figma's Dev Mode setting — the numbers are
+ * CSS for the layer. `unit` is the Dev Mode setting — the numbers are
  * the same, only the unit they are written in changes.
  */
 function generateCss(n: XNode, unit: DevUnit = "px"): string {
@@ -946,7 +947,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
     const sides = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
     if (sides.some((w) => w !== sides[0])) {
-      // Figma exports individual strokes as per-side borders; a side with no
+      // Individual strokes export as per-side borders; a side with no
       // weight still needs a style, or the corner mitre disappears.
       rules.push(`border-width: ${sides.map((w) => devLen(w, unit)).join(" ")};`);
       rules.push(`border-style: ${sides.map((w) => (w > 0 ? "solid" : "none")).join(" ")};`);
@@ -1106,6 +1107,88 @@ function generateCompose(n: XNode): string {
 }`;
 }
 
+function generateReact(n: XNode, unit: DevUnit = "px"): string {
+  const componentName = (n.name.replace(/[^a-zA-Z0-9]/g, "") || "Component")
+    .replace(/^[a-z]/, (c) => c.toUpperCase());
+
+  if (n.kind === "text") {
+    const textStyle: Record<string, string | number> = {
+      fontFamily: `"${n.fontFamily}", sans-serif`,
+      fontSize: unit === "rem" ? `${Math.round((n.fontSize / 16) * 100) / 100}rem` : `${n.fontSize}px`,
+      fontWeight: n.fontWeight,
+      color: n.fillVisible !== false && n.fill ? n.fill : "#000000",
+    };
+    if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
+    if (n.letterSpacing) textStyle.letterSpacing = `${n.letterSpacing}px`;
+    if (n.textAlign && n.textAlign !== "left") textStyle.textAlign = n.textAlign;
+
+    const styleEntries = Object.entries(textStyle)
+      .map(([k, v]) => `    ${k}: ${typeof v === "number" ? v : `"${v}"`},`)
+      .join("\n");
+
+    return `import React from "react";\n\nexport const ${componentName}: React.FC = () => {\n  return (\n    <span\n      style={{\n${styleEntries}\n      }}\n    >\n      {${JSON.stringify(n.text || n.name)}}\n    </span>\n  );\n};`;
+  }
+
+  const styles: Record<string, string | number> = {};
+  if (n.sizingW === "fill") styles.width = '"100%"';
+  else styles.width = unit === "rem" ? `"${Math.round((n.w / 16) * 100) / 100}rem"` : Math.round(n.w);
+
+  if (n.sizingH === "fill") styles.height = '"100%"';
+  else styles.height = unit === "rem" ? `"${Math.round((n.h / 16) * 100) / 100}rem"` : Math.round(n.h);
+
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      styles.borderRadius = `"${n.cornerRadii[0]}px ${n.cornerRadii[1]}px ${n.cornerRadii[3]}px ${n.cornerRadii[2]}px"`;
+    } else {
+      styles.borderRadius = unit === "rem" ? `"${Math.round((n.cornerRadii[0] / 16) * 100) / 100}rem"` : n.cornerRadii[0];
+    }
+  }
+
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    styles.backgroundColor = `"${n.fill}"`;
+  }
+
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    styles.border = `"${n.strokeWidth}px solid ${n.strokePaint}"`;
+  }
+
+  if (n.opacity < 1) {
+    styles.opacity = Math.round(n.opacity * 100) / 100;
+  }
+
+  if (n.layout) {
+    styles.display = '"flex"';
+    styles.flexDirection = n.layout.direction === "horizontal" ? '"row"' : '"column"';
+    if (n.layout.gap) styles.gap = unit === "rem" ? `"${Math.round((n.layout.gap / 16) * 100) / 100}rem"` : n.layout.gap;
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl || pr || pt || pb) {
+      styles.padding = `"${pt}px ${pr}px ${pb}px ${pl}px"`;
+    }
+    if (n.layout.align === "center") styles.alignItems = '"center"';
+    else if (n.layout.align === "max") styles.alignItems = '"flex-end"';
+    else if (n.layout.align === "baseline") styles.alignItems = '"baseline"';
+
+    if (n.layout.justify === "center") styles.justifyContent = '"center"';
+    else if (n.layout.justify === "between") styles.justifyContent = '"space-between"';
+    else if (n.layout.justify === "max") styles.justifyContent = '"flex-end"';
+
+    if (n.layout.wrap) styles.flexWrap = '"wrap"';
+  }
+
+  if (n.effects?.length) {
+    const shadows = n.effects
+      .filter((e) => e.visible && (e.kind === "drop-shadow" || e.kind === "inner-shadow"))
+      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${e.x}px ${e.y}px ${e.blur}px ${e.spread}px ${e.color}`);
+    if (shadows.length) styles.boxShadow = `"${shadows.join(", ")}"`;
+  }
+
+  const formattedStyles = Object.entries(styles)
+    .map(([k, v]) => `    ${k}: ${v},`)
+    .join("\n");
+
+  return `import React from "react";\n\nexport const ${componentName}: React.FC = () => {\n  return (\n    <div\n      style={{\n${formattedStyles}\n      }}\n    >\n      {/* Child elements */}\n    </div>\n  );\n};`;
+}
+
 function generateFlutter(n: XNode): string {
   const hex = (n.fill || "#000000").replace("#", "").padEnd(6, "0");
   return `Container(
@@ -1147,8 +1230,8 @@ function generateSvg(n: XNode): string {
 </svg>`;
 }
 
-function generateFigmaJson(n: XNode): string {
-  const hexToFigmaColor = (hex: string) => {
+function generateLayerJson(n: XNode): string {
+  const hexToNormalizedRgb = (hex: string) => {
     const clean = hex.replace("#", "");
     const r = parseInt(clean.slice(0, 2) || "0", 16) / 255;
     const g = parseInt(clean.slice(2, 4) || "0", 16) / 255;
@@ -1178,7 +1261,7 @@ function generateFigmaJson(n: XNode): string {
           type: "SOLID",
           visible: true,
           opacity: n.fillOpacity,
-          color: hexToFigmaColor(n.fill),
+          color: hexToNormalizedRgb(n.fill),
         }]
       : [],
     strokes: n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)
@@ -1186,7 +1269,7 @@ function generateFigmaJson(n: XNode): string {
           type: "SOLID",
           visible: true,
           opacity: n.strokeOpacity,
-          color: hexToFigmaColor(n.strokePaint),
+          color: hexToNormalizedRgb(n.strokePaint),
         }]
       : [],
     strokeWeight: n.strokeWidth,
@@ -1229,25 +1312,88 @@ function generateFigmaJson(n: XNode): string {
 
 function BoxModelDiagram({ n }: { n: XNode }) {
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  const borderW = n.strokeVisible && n.strokeWidth > 0 ? n.strokeWidth : 0;
+  const contentW = Math.max(0, Math.round(n.w - pl - pr));
+  const contentH = Math.max(0, Math.round(n.h - pt - pb));
+
+  const copyVal = (text: string, label: string) => {
+    copyText(text);
+    toast(`Copied ${label}: ${text}`);
+  };
+
   return (
-    <div className="box-model-diagram">
-      {/* Only auto-layout frames have padding; showing 0 0 0 0 elsewhere reads
-          as a fact when it is an absence. */}
-      {n.layout && <div className="bm-padding-label">padding: {pt} {pr} {pb} {pl}</div>}
-      <div className="bm-outer">
-        <div className="bm-pad-box">
-          <div className="bm-inner">
-            <span className="bm-dims">{Math.round(n.w)} × {Math.round(n.h)}</span>
-            {n.cornerRadii[0] > 0 && <span className="bm-radius">r:{n.cornerRadii[0]}</span>}
+    <div className="box-model-diagram-v2" aria-label="Box Model Inspector">
+      <div
+        className="bm-layer bm-margin"
+        title="Position / Offset (Click to copy)"
+        onClick={() => copyVal(`/* x: ${Math.round(n.x)}px, y: ${Math.round(n.y)}px */`, "position")}
+      >
+        <span className="bm-tag">OFFSET / MARGIN</span>
+        <div className="bm-pos-top">{Math.round(n.y)}</div>
+        <div className="bm-mid-row">
+          <div className="bm-pos-left">{Math.round(n.x)}</div>
+
+          <div
+            className="bm-layer bm-border"
+            title="Border (Click to copy)"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (borderW > 0) copyVal(`border: ${borderW}px solid ${n.strokePaint};`, "border");
+              else copyVal("border: none;", "border");
+            }}
+          >
+            <span className="bm-tag">BORDER {borderW > 0 ? `${borderW}px` : "0"}</span>
+            <div className="bm-pos-top">{borderW}</div>
+            <div className="bm-mid-row">
+              <div className="bm-pos-left">{borderW}</div>
+
+              <div
+                className="bm-layer bm-padding"
+                title="Padding (Click to copy)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyVal(`padding: ${pt}px ${pr}px ${pb}px ${pl}px;`, "padding");
+                }}
+              >
+                <span className="bm-tag">PADDING</span>
+                <div className="bm-pos-top">{pt}</div>
+                <div className="bm-mid-row">
+                  <div className="bm-pos-left">{pl}</div>
+
+                  <div
+                    className="bm-content-box"
+                    title="Content dimensions (Click to copy)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyVal(`width: ${contentW}px; height: ${contentH}px;`, "content size");
+                    }}
+                  >
+                    <span className="bm-content-dims">
+                      {contentW} × {contentH}
+                    </span>
+                    {n.cornerRadii[0] > 0 && <span className="bm-radius-badge">r:{n.cornerRadii[0]}</span>}
+                  </div>
+
+                  <div className="bm-pos-right">{pr}</div>
+                </div>
+                <div className="bm-pos-bottom">{pb}</div>
+              </div>
+
+              <div className="bm-pos-right">{borderW}</div>
+            </div>
+            <div className="bm-pos-bottom">{borderW}</div>
           </div>
+
+          <div className="bm-pos-right">{n.layout?.gap ? `gap: ${n.layout.gap}` : "—"}</div>
         </div>
+        <div className="bm-pos-bottom">—</div>
       </div>
     </div>
   );
 }
 
 /**
- * Dev Mode. Figma's inspect panel is the reference for behaviour: a Code|List
+ * Dev Mode inspect panel: a Code|List
  * toggle over the layer properties, a language picker with a units setting,
  * click any value to copy it, then component info, assets, prototype
  * interactions and annotations. The styling is ours.
@@ -1257,7 +1403,7 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   // Language and units are app-wide Dev Mode preferences (see devPrefs.ts) rather
   // than panel state: that is what lets the right-click menu and the ⌥⇧C chord
   // copy exactly what this panel shows, and it is why the choice outlives a
-  // reload, as Figma's Inspect settings do.
+  // reload.
   const { format, unit } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
   const setFormat = (f: DevFormat) => setDevPrefs({ format: f });
   const setUnit = (u: DevUnit) => setDevPrefs({ unit: u });
@@ -1291,7 +1437,7 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   return (
     <>
       <div style={{ margin: "0 12px 10px", padding: "10px 12px", borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#1bcb55", boxShadow: "0 0 0 4px rgba(27,203,85,0.18)", flexShrink: 0 }} />
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#10b981", boxShadow: "0 0 0 4px rgba(16,185,129,0.20)", flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>Ready for development</div>
           <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
@@ -1379,8 +1525,8 @@ type TokenRow = { group: string; name: string; value: string; color?: string };
 
 /**
  * The file's colour and number tokens, offered as CSS custom properties or as a
- * JSON token file. Figma puts styles and variables in the properties panel when
- * nothing is selected; Sketch's handoff exports the same values as CSS or JSON.
+ * JSON token file. Styles and variables sit in the properties panel when
+ * nothing is selected.
  * A developer who has just inspected one layer usually wants the whole palette,
  * and until now had to read it off the Assets tab one row at a time.
  */
@@ -1419,6 +1565,25 @@ function DevTokens({ snap }: { snap: Snapshot }) {
     null,
     2,
   );
+  const styleDict = JSON.stringify(
+    Object.fromEntries(
+      [...byGroup.entries()].map(([g, list]) => [
+        kebab(g) || "tokens",
+        Object.fromEntries(
+          list.map((r) => [
+            kebab(r.name),
+            {
+              $value: r.value,
+              $type: r.color ? "color" : "dimension",
+              $description: `${g} · ${r.name}`,
+            },
+          ]),
+        ),
+      ]),
+    ),
+    null,
+    2,
+  );
 
   const copy = (text: string, what: string) => {
     copyText(text);
@@ -1436,6 +1601,9 @@ function DevTokens({ snap }: { snap: Snapshot }) {
         <button className="mini" title="Copy as a JSON token file" onClick={() => copy(json, "JSON")}>
           JSON
         </button>
+        <button className="mini" title="Copy as Style Dictionary (W3C DTCG)" onClick={() => copy(styleDict, "Style Dictionary")}>
+          DTCG
+        </button>
         <button
           className="mini"
           title="Download tokens.json"
@@ -1445,6 +1613,16 @@ function DevTokens({ snap }: { snap: Snapshot }) {
           }}
         >
           <Icon name="export" size={12} />
+        </button>
+        <button
+          className="mini"
+          title="Download style-dictionary.json"
+          onClick={() => {
+            downloadBlob(new Blob([styleDict], { type: "application/json" }), "style-dictionary.json");
+            toast("Downloaded style-dictionary.json (W3C DTCG)");
+          }}
+        >
+          DTCG ↓
         </button>
       </div>
       <p className="dev-tokens-note">
@@ -1510,6 +1688,8 @@ function generateDesignTokens(n: XNode): string {
 
 function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
   switch (format) {
+    case "react":
+      return generateReact(n, unit);
     case "tailwind":
       return generateTailwind(n);
     case "swiftui":
@@ -1520,16 +1700,17 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
       return generateFlutter(n);
     case "svg":
       return generateSvg(n);
-    case "figma":
-      return generateFigmaJson(n);
     case "tokens":
       return generateDesignTokens(n);
+    case "layerJson":
+    case "figma":
+      return generateLayerJson(n);
     default:
       return generateCss(n, unit);
   }
 }
 
-/** Language dropdown with the units setting underneath, as in Figma. */
+/** Language dropdown with the units setting underneath. */
 function DevLangMenu({
   format,
   setFormat,
@@ -1611,7 +1792,7 @@ function DevLangMenu({
   );
 }
 
-/** Figma's List view: property rows whose values copy on click. */
+/** List view: property rows whose values copy on click. */
 function DevList({ n, snap, unit }: { n: XNode; snap: Snapshot; unit: DevUnit }) {
   const rows = devProperties(n, snap, unit);
   const groups: { title: string; items: DevProp[] }[] = [];
@@ -1747,7 +1928,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     if (n.listStyle && n.listStyle !== "none") L("List", n.listStyle, "Typography");
     if (n.paragraphIndent) L("Paragraph indent", devLen(n.paragraphIndent, unit), "Typography");
   }
-  // Figma's "view applied styles": only paints are named here, matching the
+  // View applied styles: only paints are named here, matching the
   // two style slots the engine actually has.
   for (const [label, id] of [
     ["Fill style", n.fillStyle],
@@ -1767,7 +1948,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   return out;
 }
 
-/** Figma shows a typographic sample instead of the box model for text layers. */
+/** Typographic sample instead of the box model for text layers. */
 function TypeSpecimen({ n }: { n: XNode }) {
   return (
     <div className="dev-type">
@@ -1915,7 +2096,7 @@ function DevAssets({ n, engine }: { n: XNode; engine: Engine }) {
   );
 }
 
-/** Prototype interactions on the layer — Figma lists them with a jump. */
+/** Prototype interactions on the layer, listed with a jump target. */
 function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
   const list = n.interactions ?? [];
   if (!list.length) return null;
@@ -1957,7 +2138,7 @@ function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: 
 }
 
 /**
- * Annotations. Figma lets a note pin a property so the value travels with the
+ * Annotations: a note can pin a property so the value travels with the
  * callout; here the + menu writes the property text into the note, which keeps
  * the model a single string (and the canvas marker unchanged).
  */
@@ -2102,6 +2283,11 @@ function Design({
   snap: Snapshot;
 }) {
   const [typeOpen, setTypeOpen] = useState(false);
+  const [offsetDist, setOffsetDist] = useState(8);
+  const [offsetJoin, setOffsetJoin] = useState<"round" | "miter">("round");
+  const [showOffsetControls, setShowOffsetControls] = useState(false);
+  const [simplifyTol, setSimplifyTol] = useState(4);
+  const [showSimplifyControls, setShowSimplifyControls] = useState(false);
   /** Which fill row the pointer picked up, and the row it is over. Only fills
    *  are reorderable: the base fill is the bottom of the stack by definition, so
    *  the rows above it are the ones a designer moves around. */
@@ -2111,7 +2297,7 @@ function Design({
     // System local fonts via the Local Font Access API (Chrome/Edge). The spec
     // calls it `queryLocalFonts()` and it is permission-gated. When available
     // we enumerate once and merge the families into the dropdown so every font
-    // installed on the machine shows up exactly as in Figma/Sketch's Type menu.
+    // installed on the machine shows up in the font menu.
     async function load() {
       try {
         const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
@@ -2138,8 +2324,8 @@ function Design({
   const [padOpen, setPadOpen] = useState(false);
   const [conOpen, setConOpen] = useState(false);
   const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
-  // An instance inherits its corners; Figma rejects individual radii there.
-  /* Figma locks a handful of properties on a layer that lives inside an
+  // An instance inherits its corners; individual radii are rejected there.
+  /* Locks a handful of properties on a layer that lives inside an
    * instance: individual corner radii here, and the aspect-ratio lock and the
    * Scale tool below. All three ask the same question, so they share one
    * answer. */
@@ -2151,7 +2337,7 @@ function Design({
   const autoGap = n.layout ? isAutoGap(n.layout) : false;
   const wrapOn = n.layout ? wraps(n.layout) : false;
   const resolved = n.layout ? effectiveSizing(n.layout, n, n.children) : null;
-  /* Figma: "the parent frame will no longer hug contents and become Fixed for
+  /* The parent frame will no longer hug contents and become Fixed for
    * the axis" - so the resizing menu shows Fixed, and says why. */
   /* The two fields ask by *dimension*, not by axis. A vertical flow's main axis
    * is its height, so asking for "main" in the W field would show - and edit -
@@ -2199,7 +2385,7 @@ function Design({
   const [more, setMore] = useState<{ x: number; y: number } | null>(null);
   const multi = snap.selection.length > 1;
   const [scaleAnchor, setScaleAnchor] = useState<ScaleAnchor>("mc");
-  /* Figma keeps min and max behind the resizing menu: "Add min/max width and
+  /* Min and max width/height options behind the resizing menu: "Add min/max width and
    * height" puts the four fields in the panel, "Remove min and max" takes them
    * away again, and a layer that has none shows none. Tracked per layer, so the
    * fields come back only for the layer that asked for them. */
@@ -2220,7 +2406,7 @@ function Design({
       toast("Nothing to scale · the selection is empty or locked");
       return;
     }
-    // Figma scales "any object, with the exception of locked layers and layers
+    // Scales any object, with the exception of locked layers and layers
     // nested inside a component instance" - scaling children of an instance
     // would multiply overrides the instance does not own.
     const nested = picked.filter((m) => insideInstance(root, m.id));
@@ -2304,7 +2490,7 @@ function Design({
           ? "Rectangle"
           : n.kind[0].toUpperCase() + n.kind.slice(1);
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
-  /* Figma re-fits a text layer the moment a resizing mode is chosen, and after
+  /* Re-fits a text layer the moment a resizing mode is chosen, and after
    * any type metric that changes how much room the copy needs. The flags and
    * the box have to travel in the same patch: sizing alone leaves a stale box
    * up to the next keystroke. */
@@ -2337,7 +2523,7 @@ function Design({
   const hasAutoLayoutParent = !!parent?.layout;
   const gridParent = parent?.layout?.direction === "grid";
   /* First press turns the base stroke on; after that each press stacks another
-     stroke on top, the way Figma's Stroke "+" behaves. Shared by the header "+"
+     stroke on top, the way Stroke "+" behaves. Shared by the header "+"
      and the empty-state row so both paths do exactly the same thing. */
   const addStroke = () => {
     openSection("stroke");
@@ -2353,6 +2539,288 @@ function Design({
     patch({
       strokes: [...(n.strokes ?? []), { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
     });
+  };
+
+  const renderTypographySection = () => {
+    if (n.kind !== "text") return null;
+    return (
+      <>
+        <Section
+          id="typography"
+          title="Typography"
+          actions={
+            <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
+              <Icon name="type-settings" size={14} />
+            </button>
+          }
+        >
+          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+            <div className="field">
+              <select
+                value={n.fontFamily}
+                onChange={(e) =>
+                  patchType({ fontFamily: e.target.value })
+                }
+              >
+                {(() => {
+                  const base = [
+                    "Inter",
+                    "Roboto",
+                    "SF Pro",
+                    "Geist",
+                    "Space Grotesk",
+                    "Plus Jakarta Sans",
+                    "Poppins",
+                    "Outfit",
+                    "Fira Code",
+                    "JetBrains Mono",
+                    "system-ui",
+                  ];
+                  const merged = (() => {
+                    const seen = new Set(base.map((b) => b.toLowerCase()));
+                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
+                    const list = [...base];
+                    if (extra.length) {
+                      list.push("— System fonts —");
+                      list.push(...extra);
+                    }
+                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
+                    return list;
+                  })();
+                  return merged.map((f) =>
+                    f.startsWith("—") ? (
+                      <option key={f} disabled>
+                        {f}
+                      </option>
+                    ) : (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ),
+                  );
+                })()}
+              </select>
+              {localFonts.length === 0 && (
+                <button
+                  type="button"
+                  className="link muted"
+                  style={{ fontSize: 11, marginTop: 4 }}
+                  onClick={async () => {
+                    try {
+                      const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+                      if (!q) {
+                        toast("Local fonts not supported in this browser");
+                        return;
+                      }
+                      const list: { family: string }[] = await q.call(window);
+                      const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
+                        a.localeCompare(b),
+                      );
+                      setLocalFonts(families.slice(0, 400));
+                      toast(`Loaded ${families.length} system fonts`);
+                    } catch {
+                      toast("Could not load system fonts");
+                    }
+                  }}
+                >
+                  Load system fonts
+                </button>
+              )}
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <select
+                  value={n.fontWeight}
+                  onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
+                >
+                  <option value={100}>Thin (100)</option>
+                  <option value={200}>Extra Light (200)</option>
+                  <option value={300}>Light (300)</option>
+                  <option value={400}>Regular (400)</option>
+                  <option value={500}>Medium (500)</option>
+                  <option value={600}>Semi Bold (600)</option>
+                  <option value={700}>Bold (700)</option>
+                  <option value={800}>Extra Bold (800)</option>
+                  <option value={900}>Black (900)</option>
+                </select>
+              </div>
+              <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
+              <Field
+                label={n.lineHeight ? "↑" : "Auto"}
+                value={n.lineHeight || n.fontSize * 1.2}
+                onLabelClick={() => num("lineHeight", 0)}
+                onChange={(v) => num("lineHeight", v)}
+              />
+              <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
+            </div>
+            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
+              <Tooltip label="Auto width" shortcut="">
+                <button
+                  className={n.sizingW === "hug" ? "on" : ""}
+                  onClick={() => setSizing("hug", "hug")}
+                >
+                  <Icon name="text-auto-width" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Auto height" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
+                  onClick={() => setSizing("fixed", "hug")}
+                >
+                  <Icon name="text-auto-height" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Fixed size" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
+                  onClick={() => setSizing("fixed", "fixed")}
+                >
+                  <Icon name="text-fixed" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
+                </button>
+              </Tooltip>
+            </div>
+            <div className="seg icons">
+              {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
+                <button
+                  key={a}
+                  className={n.textAlign === a ? "on" : ""}
+                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
+                >
+                  <Icon name={`align-text-${a}`} size={14} />
+                </button>
+              ))}
+            </div>
+            <div className="seg icons">
+              {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
+                <button
+                  key={a}
+                  className={n.textAlignVertical === a ? "on" : ""}
+                  onClick={() =>
+                    engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
+                  }
+                >
+                  <Icon name={`valign-${a}`} size={14} />
+                </button>
+              ))}
+            </div>
+          </div>
+          {typeOpen && (
+            <div className="type-pop">
+              <h4>Type settings</h4>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <button
+                    className={n.textDecoration === "underline" ? "on" : ""}
+                    onClick={() =>
+                      engine.dispatch({
+                        type: "patch",
+                        id: n.id,
+                        patch: {
+                          textDecoration: n.textDecoration === "underline" ? "none" : "underline",
+                        },
+                      })
+                    }
+                  >
+                    <Icon name="underline" />
+                  </button>
+                  <button
+                    className={n.textDecoration === "strikethrough" ? "on" : ""}
+                    onClick={() =>
+                      engine.dispatch({
+                        type: "patch",
+                        id: n.id,
+                        patch: {
+                          textDecoration:
+                            n.textDecoration === "strikethrough" ? "none" : "strikethrough",
+                        },
+                      })
+                    }
+                  >
+                    <Icon name="strike" />
+                  </button>
+                  <select
+                    aria-label="Letter case"
+                    value={n.textCase}
+                    onChange={(e) => patchType({ textCase: e.target.value as XNode["textCase"] })}
+                  >
+                    <option value="none">Aa</option>
+                    <option value="upper">AA</option>
+                    <option value="lower">aa</option>
+                    <option value="title">Title Case</option>
+                    <option value="small-caps">Small caps</option>
+                  </select>
+                </div>
+              </div>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={n.truncate}
+                  onChange={(e) =>
+                    patchType({ truncate: e.target.checked })
+                  }
+                />
+                Truncate text
+              </label>
+              {n.truncate && (
+                <div className="insp-pad">
+                  <Field
+                    label="L"
+                    value={n.maxLines}
+                    onChange={(v) =>
+                      patchType({ maxLines: v })
+                    }
+                  />
+                </div>
+              )}
+              <div className="insp-pad">
+                <Field
+                  label="¶"
+                  value={n.paragraphSpacing}
+                  onChange={(v) => num("paragraphSpacing", v)}
+                  aria="Space after each paragraph"
+                />
+                <Field
+                  label="⇥"
+                  value={n.paragraphIndent}
+                  onChange={(v) =>
+                    patchType({ paragraphIndent: v })
+                  }
+                  aria="First-line indent of each paragraph"
+                />
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Wrap style"
+                    title="Wrap style - how a fixed-width paragraph breaks its lines"
+                    value={n.textWrap}
+                    onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
+                  >
+                    <option value="auto">Wrap: Off</option>
+                    <option value="balance">Wrap: Balance</option>
+                    <option value="pretty">Wrap: Pretty</option>
+                  </select>
+                  <select
+                    aria-label="List"
+                    title="List - markers hang in the gutter beside the paragraph"
+                    value={n.listStyle}
+                    onChange={(e) => patchType({ listStyle: e.target.value as XNode["listStyle"] })}
+                  >
+                    <option value="none">No list</option>
+                    <option value="bulleted">Bulleted</option>
+                    <option value="numbered">Numbered</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+        </Section>
+        <div className="hr" />
+      </>
+    );
   };
   return (
     <>
@@ -2451,6 +2919,9 @@ function Design({
         </>
       )}
 
+      {/* Typography prominently placed at top for text layers (Audit P0-B) */}
+      {renderTypographySection()}
+
       <Section
         id="position"
         title="Position"
@@ -2540,8 +3011,8 @@ function Design({
       <div className="hr" />
       <Section id="layout" title="Layout" actions={
         <div style={{ display: "flex", gap: 2 }}>
-          {/* Figma's two ways in: add an auto layout frame with the defaults, or
-              let Figma work the values out from how the objects already sit. */}
+          {/* Two ways in: add an auto layout frame with the defaults, or
+              work the values out from how the objects already sit. */}
           {!n.layout && (
             <button
               className="plus"
@@ -2598,7 +3069,7 @@ function Design({
           >
             <Icon name="layout-grid" />
           </button>
-          {/* Figma: "When you have the horizontal selected, Wrap becomes
+          {/* When horizontal is selected, Wrap becomes
               available." A vertical flow has no wrap to offer, so the button is
               shown disabled and says why rather than silently doing nothing. */}
           <button
@@ -2655,7 +3126,7 @@ function Design({
           />
           <button
             className={`icon-btn${n.aspectLocked ? " on" : ""}`}
-            // Figma: the aspect ratio of a child layer of an instance "can be
+            // The aspect ratio of a child layer of an instance "can be
             // adjusted from their respective main components".
             disabled={inInstance}
             title={
@@ -2836,44 +3307,75 @@ function Design({
           )}
         </div>
       </div>
-      {(n.kind === "vector" || n.path.length > 0) && (
+      {(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
         <div className="insp-pad" style={{ marginTop: 2 }}>
-          <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 8 }}>
+          <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 10 }}>
+            {/* Header */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong style={{ fontSize: 11 }}>Vector Network</strong>
+              <strong style={{ fontSize: 11, letterSpacing: "0.02em" }}>Vector</strong>
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 {snap.vecEdit === n.id ? (
                   <button
                     className="export-run"
-                    style={{ padding: "2px 8px", fontSize: 10, background: "var(--accent)", color: "#fff" }}
+                    style={{ padding: "2px 10px", fontSize: 10, background: "var(--accent)", color: "#fff", borderRadius: 12, fontWeight: 600 }}
                     onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
-                    title="Exit vector edit mode (Esc / ⌘↵)"
+                    title="Done editing path (Esc / ↵)"
                   >
                     Done
                   </button>
                 ) : (
                   <button
                     className="export-run"
-                    style={{ padding: "2px 8px", fontSize: 10 }}
+                    style={{ padding: "2px 10px", fontSize: 10, borderRadius: 12 }}
                     onClick={() => engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 })}
                     title="Enter vector edit mode (↵)"
                   >
                     Edit Path
                   </button>
                 )}
-                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--accent)", color: "#fff", borderRadius: 10 }}>
-                  Evan Wallace Graph
+                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--bg-subtle)", color: "var(--dim)", borderRadius: 10, border: "1px solid var(--border)" }}>
+                  Native Graph
                 </span>
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 10, color: "var(--dim)" }}>
-              <div>Vertices: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.vertices.length ?? n.path.length}</strong></div>
-              <div>Segments: <strong style={{ color: "var(--text)" }}>{n.vectorNetwork?.segments.length ?? (n.path.length > 1 ? n.path.length - (n.closed ? 0 : 1) : 0)}</strong></div>
-              <div>Branching (≥3): <strong style={{ color: "var(--text)" }}>{n.vectorNetwork ? n.vectorNetwork.vertices.filter((_, i) => vertexDegree(n.vectorNetwork!, i) >= 3).length : 0}</strong></div>
-              <div>Closed: <strong style={{ color: "var(--text)" }}>{n.closed ? "Yes" : "No"}</strong></div>
+
+            {/* Alignment Row for Vector Points */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: 10, color: "var(--dim)" }}>Alignment</div>
+              <div style={{ display: "flex", gap: 2, background: "var(--bg-subtle)", padding: 2, borderRadius: 6, border: "1px solid var(--border)" }}>
+                {[
+                  { id: "left", label: "Align left", icon: "align-left" },
+                  { id: "center", label: "Align horizontal centers", icon: "align-center" },
+                  { id: "right", label: "Align right", icon: "align-right" },
+                  { id: "top", label: "Align top", icon: "align-top" },
+                  { id: "middle", label: "Align vertical centers", icon: "align-middle" },
+                  { id: "bottom", label: "Align bottom", icon: "align-bottom" },
+                ].map((a) => (
+                  <button
+                    key={a.id}
+                    style={{
+                      flex: 1,
+                      height: 24,
+                      background: "transparent",
+                      border: 0,
+                      color: "inherit",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                    onClick={() => engine.dispatch({ type: "vectorAlign", alignment: a.id as any })}
+                    title={a.label}
+                  >
+                    <Icon name={a.icon} size={13} />
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {snap.vecEdit === n.id && (() => {
+            {/* Position & Active Vertex */}
+            {(() => {
               const activePtIdx =
                 snap.vecPoint !== null &&
                 snap.vecPoint !== undefined &&
@@ -2882,68 +3384,119 @@ function Design({
                   ? snap.vecPoint
                   : (n.path.length > 0 ? 0 : null);
               const pt = activePtIdx !== null ? n.path[activePtIdx] : null;
-              if (activePtIdx === null || !pt) return null;
+              if (!pt || activePtIdx === null) return null;
+
               return (
-                <div style={{ padding: 8, background: "var(--bg-subtle)", borderRadius: 6, border: "1px solid var(--border)", display: "grid", gap: 6 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: 11, fontWeight: 600 }}>Vertex #{activePtIdx + 1}</span>
-                    <span style={{ fontSize: 10, color: "var(--dim)" }}>({Math.round(pt.x)}, {Math.round(pt.y)})</span>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 10, color: "var(--dim)" }}>Position</span>
+                      <span style={{ fontSize: 9, color: "var(--dim)" }}>Vertex #{activePtIdx + 1}</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                      <div className="prop-row" style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 6px" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)", width: 10 }}>X</span>
+                        <input
+                          type="number"
+                          value={Math.round(pt.x)}
+                          style={{ width: "100%", background: "transparent", border: 0, color: "inherit", fontSize: 11 }}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const newPath = [...n.path];
+                            newPath[activePtIdx] = { ...newPath[activePtIdx], x: val };
+                            engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                          }}
+                        />
+                      </div>
+                      <div className="prop-row" style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 6px" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)", width: 10 }}>Y</span>
+                        <input
+                          type="number"
+                          value={Math.round(pt.y)}
+                          style={{ width: "100%", background: "transparent", border: 0, color: "inherit", fontSize: 11 }}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            const newPath = [...n.path];
+                            newPath[activePtIdx] = { ...newPath[activePtIdx], y: val };
+                            engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                          }}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Point Radius</span>
+
+                  {/* Mirroring */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Mirroring</span>
+                    <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
+                      <button
+                        className={pt.mirrorMode === "none" || !pt.mirrorMode ? "on" : ""}
+                        title="No mirroring (sharp corner / independent handles)"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "none" })}
+                      >
+                        No mirror
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angleAndLength" ? "on" : ""}
+                        title="Mirror angle and length (symmetric handles)"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angleAndLength" })}
+                      >
+                        Angle & len
+                      </button>
+                      <button
+                        className={pt.mirrorMode === "angle" ? "on" : ""}
+                        title="Mirror angle only (asymmetric lengths)"
+                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angle" })}
+                      >
+                        Angle only
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Corner radius with slider */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 10, color: "var(--dim)" }}>Corner radius</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={pt.cornerRadius ?? 0}
+                        style={{ width: 44, padding: "1px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit", textAlign: "right" }}
+                        onChange={(e) => {
+                          const r = Math.max(0, parseFloat(e.target.value) || 0);
+                          engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
+                        }}
+                      />
+                    </div>
                     <input
-                      type="number"
+                      type="range"
                       min={0}
+                      max={60}
                       value={pt.cornerRadius ?? 0}
-                      style={{ width: 64, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                      style={{ width: "100%", height: 4, accentColor: "var(--accent)", cursor: "pointer" }}
                       onChange={(e) => {
                         const r = parseFloat(e.target.value) || 0;
                         engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
                       }}
                     />
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Vertex Mirror Mode</span>
-                    <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
-                      <button
-                        className={pt.mirrorMode === "none" || !pt.mirrorMode ? "on" : ""}
-                        title="Independent handles / Sharp corner"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "none" })}
-                      >
-                        Corner
-                      </button>
-                      <button
-                        className={pt.mirrorMode === "angle" ? "on" : ""}
-                        title="Mirror angle only, independent length"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angle" })}
-                      >
-                        Angle
-                      </button>
-                      <button
-                        className={pt.mirrorMode === "angleAndLength" ? "on" : ""}
-                        title="Symmetric mirror angle & length"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angleAndLength" })}
-                      >
-                        Mirror
-                      </button>
-                    </div>
-                  </div>
                 </div>
               );
             })()}
 
-            <div style={{ display: "flex", gap: 6 }}>
+            {/* Quick Actions */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
               <button
-                className="export-run"
-                style={{ flex: 1, padding: "4px 8px", fontSize: 10 }}
+                className={`export-run ${showSimplifyControls ? "on" : ""}`}
+                style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
-                  const vn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
-                  const svgD = vectorNetworkToSvgPath(vn);
-                  copyText(svgD);
-                  toast("Copied SVG Path");
+                  setShowSimplifyControls((v) => !v);
+                  setShowOffsetControls(false);
                 }}
+                title="Reduce redundant anchor points with tolerance control"
               >
-                Copy SVG Path
+                Simplify…
               </button>
               <button
                 className="export-run"
@@ -2953,56 +3506,140 @@ function Design({
                   engine.dispatch({ type: "patchPath", id: n.id, path: smoothed, closed: n.closed });
                   toast("Smoothed vector handles");
                 }}
+                title="Smooth bezier curves"
               >
                 Smooth
+              </button>
+              <button
+                className={`export-run ${showOffsetControls ? "on" : ""}`}
+                style={{ padding: "4px 8px", fontSize: 10 }}
+                onClick={() => {
+                  setShowOffsetControls((v) => !v);
+                  setShowSimplifyControls(false);
+                }}
+                title="Expand or contract outline path with offset distance"
+              >
+                Offset Path…
               </button>
               <button
                 className="export-run"
                 style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
-                  const simplified = simplifyPath(n.path, 1.5);
-                  engine.dispatch({ type: "patchPath", id: n.id, path: simplified, closed: n.closed });
-                  toast("Simplified vector path");
+                  engine.dispatch({ type: "outlineStroke", id: n.id });
+                  toast("Outlined stroke");
                 }}
+                title="Convert stroke to vector path (⌥⌘O)"
               >
-                Simplify
+                Outline Stroke
               </button>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-              <div style={{ fontSize: 10, color: "var(--dim)" }}>Global Symmetry:</div>
-              <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
+
+            {/* Inline Simplify Controls */}
+            {showSimplifyControls && (
+              <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--input)", borderRadius: 6, display: "grid", gap: 6, fontSize: 11 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 500 }}>Simplify Path</span>
+                  <button
+                    onClick={() => setShowSimplifyControls(false)}
+                    style={{ background: "transparent", border: 0, color: "var(--dim)", cursor: "pointer", fontSize: 13 }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Tolerance:</span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="20"
+                    step="0.5"
+                    value={simplifyTol}
+                    onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
+                    style={{ flex: 1, accentColor: "var(--accent)" }}
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={simplifyTol}
+                    onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
+                    style={{ width: 44, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
+                  />
+                </div>
                 <button
-                  title="Symmetric angle and length"
+                  style={{ background: "var(--accent)", color: "#ffffff", border: 0, borderRadius: 4, padding: "4px 8px", fontWeight: 600, fontSize: 11, cursor: "pointer", marginTop: 2 }}
                   onClick={() => {
-                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angleAndLength" as const }));
-                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                    toast("Handles: Mirrored (Angle & Length)");
+                    engine.dispatch({ type: "simplifyPath", id: n.id, tolerance: simplifyTol });
+                    toast(`Simplified path with tolerance ${simplifyTol}`);
+                    setShowSimplifyControls(false);
                   }}
                 >
-                  Mirrored
-                </button>
-                <button
-                  title="Mirror angle only, independent length"
-                  onClick={() => {
-                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "angle" as const }));
-                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                    toast("Handles: Asymmetric Angle");
-                  }}
-                >
-                  Asymmetric
-                </button>
-                <button
-                  title="Independent angle and length (sharp corner)"
-                  onClick={() => {
-                    const newPath = n.path.map((p) => ({ ...p, mirrorMode: "none" as const }));
-                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                    toast("Handles: Corner (Independent)");
-                  }}
-                >
-                  Corner
+                  Apply Simplify
                 </button>
               </div>
-            </div>
+            )}
+
+            {/* Inline Offset Controls */}
+            {showOffsetControls && (
+              <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--input)", borderRadius: 6, display: "grid", gap: 6, fontSize: 11 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 500 }}>Offset Vector Path</span>
+                  <button
+                    onClick={() => setShowOffsetControls(false)}
+                    style={{ background: "transparent", border: 0, color: "var(--dim)", cursor: "pointer", fontSize: 13 }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Distance:</span>
+                  <input
+                    type="range"
+                    min="-40"
+                    max="40"
+                    step="1"
+                    value={offsetDist}
+                    onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
+                    style={{ flex: 1, accentColor: "var(--accent)" }}
+                  />
+                  <input
+                    type="number"
+                    value={offsetDist}
+                    onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
+                    style={{ width: 44, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
+                  />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Join:</span>
+                  <div className="segmented" style={{ flex: 1 }}>
+                    <button
+                      className={offsetJoin === "round" ? "on" : ""}
+                      onClick={() => setOffsetJoin("round")}
+                      style={{ fontSize: 10, padding: "2px 6px" }}
+                    >
+                      Round
+                    </button>
+                    <button
+                      className={offsetJoin === "miter" ? "on" : ""}
+                      onClick={() => setOffsetJoin("miter")}
+                      style={{ fontSize: 10, padding: "2px 6px" }}
+                    >
+                      Square
+                    </button>
+                  </div>
+                </div>
+                <button
+                  style={{ background: "var(--accent)", color: "#ffffff", border: 0, borderRadius: 4, padding: "4px 8px", fontWeight: 600, fontSize: 11, cursor: "pointer", marginTop: 2 }}
+                  onClick={() => {
+                    engine.dispatch({ type: "offsetPath", id: n.id, distance: offsetDist, join: offsetJoin });
+                    toast(`Offset path by ${offsetDist > 0 ? "+" : ""}${offsetDist}px`);
+                    setShowOffsetControls(false);
+                  }}
+                >
+                  Apply Offset
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3333,7 +3970,7 @@ function Design({
                 ))}
               </div>
             ) : (
-              // Figma's panel keeps the padding as a horizontal and a vertical
+              // Padding is kept as a horizontal and a vertical
               // value by default - "Padding controls in the right panel are
               // separated into vertical (top and bottom) and horizontal (left
               // and right) by default" - and reads Mixed when the two sides of
@@ -3596,7 +4233,7 @@ function Design({
         )}
         {cornersOpen ? (
           <div className="grid2">
-            {/* Figma will not let an instance carry its own corner radii; they
+            {/* An instance cannot carry its own corner radii; they
                 come from the component. The fields say so instead of no-op'ing. */}
             {(["TL", "TR", "BL", "BR"] as const).map((lab, i) => (
               <Field
@@ -3647,7 +4284,7 @@ function Design({
             <Icon name="independent" size={14} />
           </button>
         )}
-        {/* Figma puts smoothing in the corner details panel: one value for the
+        {/* Corner smoothing in the corner details panel: one value for the
             whole shape, a slider, and an iOS preset at 60%. */}
         <div className="smooth-row">
           <input
@@ -3695,7 +4332,7 @@ function Design({
           onClick={() => {
             openSection("fill");
             // First press turns the base fill back on; after that each press
-            // stacks another fill on top, the way Figma's Fill "+" behaves.
+            // stacks another fill on top, the way Fill "+" behaves.
             if (isNone(n.fill) && !n.fillVisible) {
               engine.dispatch({
                 type: "patch",
@@ -3719,7 +4356,7 @@ function Design({
           <Icon name="plus" size={14} />
         </button>
       }>
-      {/* Figma lists a fill stack top-most first, and the base fill is the
+      {/* Fill stack is listed top-most first, and the base fill is the
           bottom of the stack, so it sits last in the list. */}
       {(n.fills ?? [])
         .map((p, i) => ({ p, i }))
@@ -3912,7 +4549,7 @@ function Design({
               value={n.strokeWidth}
               onChange={(strokeWidth) => {
                 // In Custom mode the four fields carry the weight, so typing a
-                // new one sets all four, as Figma does.
+                // new one sets all four.
                 if ((n.strokeSides ?? "all") === "custom") patch({ strokeWidth, strokeSideW: [strokeWidth, strokeWidth, strokeWidth, strokeWidth] });
                 else patch({ strokeWidth });
               }}
@@ -3942,7 +4579,7 @@ function Design({
                     aria-pressed={(n.strokeSides ?? "all") === side.id}
                     onClick={() => {
                       if (side.id === "custom") {
-                        // Figma seeds the four fields with the current weight.
+                        // Seeds the four fields with the current weight.
                         const w = n.strokeWidth;
                         patch({ strokeSides: "custom", strokeSideW: [w, w, w, w] });
                       } else {
@@ -3996,7 +4633,7 @@ function Design({
                             ? "Diamond tip"
                             : `Cap ${c}`
                 }
-                onClick={() => patch({ strokeCap: c })}
+                onClick={() => patch({ strokeCap: c, strokeCapEnd: c })}
               >
                 <Icon name={c === "arrow" ? "arrow" : c === "triangle" ? "poly" : `cap-${c}`} size={14} />
               </button>
@@ -4024,6 +4661,61 @@ function Design({
             <Icon name="dash" size={14} />
           </button>
           </div>
+          {((n.kind === "line" || n.kind === "arrow" || n.kind === "vector") && !n.closed) && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 4 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <span style={{ fontSize: 9, color: "var(--dim)" }}>Start point</span>
+                <select
+                  value={n.strokeCapStart ?? "none"}
+                  style={{
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    color: "inherit",
+                    fontSize: 11,
+                    padding: "2px 4px",
+                    height: 24,
+                  }}
+                  onChange={(e) => patch({ strokeCapStart: e.target.value as StrokeCap })}
+                >
+                  <option value="none">None</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                  <option value="arrow">Line arrow</option>
+                  <option value="triangle">Triangle arrow</option>
+                  <option value="reverse-triangle">Reverse triangle</option>
+                  <option value="diamond">Diamond arrow</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <span style={{ fontSize: 9, color: "var(--dim)" }}>End point</span>
+                <select
+                  value={n.strokeCapEnd ?? n.strokeCap}
+                  style={{
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    color: "inherit",
+                    fontSize: 11,
+                    padding: "2px 4px",
+                    height: 24,
+                  }}
+                  onChange={(e) => {
+                    const cap = e.target.value as StrokeCap;
+                    patch({ strokeCapEnd: cap, strokeCap: cap });
+                  }}
+                >
+                  <option value="none">None</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                  <option value="arrow">Line arrow</option>
+                  <option value="triangle">Triangle arrow</option>
+                  <option value="reverse-triangle">Reverse triangle</option>
+                  <option value="diamond">Diamond arrow</option>
+                </select>
+              </div>
+            </div>
+          )}
           {strokeMore && (
             <div className="adv-stroke">
               <div className="grid2">
@@ -4053,7 +4745,7 @@ function Design({
               </div>
               <Field
                 label="miter"
-                hint="Figma's miter angle: joins sharper than this bevel"
+                hint="Miter angle: joins sharper than this angle will bevel"
                 value={n.strokeMiterAngle ?? 0}
                 onChange={(v) => patch({ strokeMiterAngle: Math.max(0, Math.min(180, v)) })}
               />
@@ -4178,287 +4870,10 @@ function Design({
         </>
       )}
 
-      {n.kind === "text" && (
-        <>
-          <div className="hr" />
-          <Section
-            id="typography"
-            title="Typography"
-            actions={
-              <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
-                <Icon name="type-settings" size={14} />
-              </button>
-            }
-          >
-          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-            <div className="field">
-              <select
-                value={n.fontFamily}
-                onChange={(e) =>
-                  patchType({ fontFamily: e.target.value })
-                }
-              >
-                {(() => {
-                  const base = [
-                    "Inter",
-                    "Roboto",
-                    "SF Pro",
-                    "Geist",
-                    "Space Grotesk",
-                    "Plus Jakarta Sans",
-                    "Poppins",
-                    "Outfit",
-                    "Fira Code",
-                    "JetBrains Mono",
-                    "system-ui",
-                  ];
-                  const merged = (() => {
-                    const seen = new Set(base.map((b) => b.toLowerCase()));
-                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
-                    const list = [...base];
-                    if (extra.length) {
-                      list.push("— System fonts —");
-                      list.push(...extra);
-                    }
-                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
-                    return list;
-                  })();
-                  return merged.map((f) =>
-                    f.startsWith("—") ? (
-                      <option key={f} disabled>
-                        {f}
-                      </option>
-                    ) : (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ),
-                  );
-                })()}
-              </select>
-              {localFonts.length === 0 && (
-                <button
-                  type="button"
-                  className="link muted"
-                  style={{ fontSize: 11, marginTop: 4 }}
-                  onClick={async () => {
-                    try {
-                      const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
-                      if (!q) {
-                        toast("Local fonts not supported in this browser");
-                        return;
-                      }
-                      const list: { family: string }[] = await q.call(window);
-                      const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
-                        a.localeCompare(b),
-                      );
-                      setLocalFonts(families.slice(0, 400));
-                      toast(`Loaded ${families.length} system fonts`);
-                    } catch {
-                      toast("Could not load system fonts");
-                    }
-                  }}
-                >
-                  Load system fonts
-                </button>
-              )}
-            </div>
-            <div className="grid2">
-              <div className="field">
-                <select
-                  value={n.fontWeight}
-                  onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
-                >
-                  <option value={100}>Thin (100)</option>
-                  <option value={200}>Extra Light (200)</option>
-                  <option value={300}>Light (300)</option>
-                  <option value={400}>Regular (400)</option>
-                  <option value={500}>Medium (500)</option>
-                  <option value={600}>Semi Bold (600)</option>
-                  <option value={700}>Bold (700)</option>
-                  <option value={800}>Extra Bold (800)</option>
-                  <option value={900}>Black (900)</option>
-                </select>
-              </div>
-              <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
-              <Field
-                label={n.lineHeight ? "↑" : "Auto"}
-                value={n.lineHeight || n.fontSize * 1.2}
-                onLabelClick={() => num("lineHeight", 0)}
-                onChange={(v) => num("lineHeight", v)}
-              />
-              <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
-            </div>
-            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
-              <Tooltip label="Auto width" shortcut="">
-                <button
-                  className={n.sizingW === "hug" ? "on" : ""}
-                  onClick={() => setSizing("hug", "hug")}
-                >
-                  <Icon name="text-auto-width" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
-                </button>
-              </Tooltip>
-              <Tooltip label="Auto height" shortcut="">
-                <button
-                  className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
-                  onClick={() => setSizing("fixed", "hug")}
-                >
-                  <Icon name="text-auto-height" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
-                </button>
-              </Tooltip>
-              <Tooltip label="Fixed size" shortcut="">
-                <button
-                  className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
-                  onClick={() => setSizing("fixed", "fixed")}
-                >
-                  <Icon name="text-fixed" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
-                </button>
-              </Tooltip>
-            </div>
-            <div className="seg icons">
-              {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlign === a ? "on" : ""}
-                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
-                >
-                  <Icon name={`align-text-${a}`} size={14} />
-                </button>
-              ))}
-            </div>
-            <div className="seg icons">
-              {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlignVertical === a ? "on" : ""}
-                  onClick={() =>
-                    engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
-                  }
-                >
-                  <Icon name={`valign-${a}`} size={14} />
-                </button>
-              ))}
-            </div>
-          </div>
-          {typeOpen && (
-            <div className="type-pop">
-              <h4>Type settings</h4>
-              <div className="dir-row">
-                <div className="seg icons">
-                  <button
-                    className={n.textDecoration === "underline" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration: n.textDecoration === "underline" ? "none" : "underline",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="underline" />
-                  </button>
-                  <button
-                    className={n.textDecoration === "strikethrough" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration:
-                            n.textDecoration === "strikethrough" ? "none" : "strikethrough",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="strike" />
-                  </button>
-                  <select
-                    aria-label="Letter case"
-                    value={n.textCase}
-                    onChange={(e) => patchType({ textCase: e.target.value as XNode["textCase"] })}
-                  >
-                    <option value="none">Aa</option>
-                    <option value="upper">AA</option>
-                    <option value="lower">aa</option>
-                    <option value="title">Title Case</option>
-                    <option value="small-caps">Small caps</option>
-                  </select>
-                </div>
-              </div>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={n.truncate}
-                  onChange={(e) =>
-                    patchType({ truncate: e.target.checked })
-                  }
-                />
-                Truncate text
-              </label>
-              {n.truncate && (
-                <div className="insp-pad">
-                  <Field
-                    label="L"
-                    value={n.maxLines}
-                    onChange={(v) =>
-                      patchType({ maxLines: v })
-                    }
-                  />
-                </div>
-              )}
-              <div className="insp-pad">
-                <Field
-                  label="¶"
-                  value={n.paragraphSpacing}
-                  onChange={(v) => num("paragraphSpacing", v)}
-                  aria="Space after each paragraph"
-                />
-                <Field
-                  label="⇥"
-                  value={n.paragraphIndent}
-                  onChange={(v) =>
-                    patchType({ paragraphIndent: v })
-                  }
-                  aria="First-line indent of each paragraph"
-                />
-              </div>
-              <div className="dir-row">
-                <div className="seg icons">
-                  <select
-                    aria-label="Wrap style"
-                    title="Wrap style - how a fixed-width paragraph breaks its lines"
-                    value={n.textWrap}
-                    onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
-                  >
-                    <option value="auto">Wrap: Off</option>
-                    <option value="balance">Wrap: Balance</option>
-                    <option value="pretty">Wrap: Pretty</option>
-                  </select>
-                  <select
-                    aria-label="List"
-                    title="List - markers hang in the gutter beside the paragraph"
-                    value={n.listStyle}
-                    onChange={(e) => patchType({ listStyle: e.target.value as XNode["listStyle"] })}
-                  >
-                    <option value="none">No list</option>
-                    <option value="bulleted">Bulleted</option>
-                    <option value="numbered">Numbered</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          )}
-          </Section>
-        </>
-      )}
-
       <div className="hr" />
       <Effects n={n} engine={engine} />
+      <ModifiersSection n={n} engine={engine} />
+      <ExpressionsSection n={n} engine={engine} />
       <SelectionColors
         n={n}
         nodes={snap.selection
@@ -4473,11 +4888,11 @@ function Design({
 }
 
 /**
- * Sketch's "Selection colors", widened to every selection instead of only
+ * "Selection colors", widened to every selection instead of only
  * multi-select, and walking the whole subtree so a frame reports the colours
  * inside it. Two click targets per row, one per app: the swatch opens the
- * picker and recolors every layer sharing that colour (Sketch's
- * click-to-update-all, one undo step), the hex selects them (Figma's "Select
+ * picker and recolors every layer sharing that colour (
+ * click-to-update-all, one undo step), the hex selects them ("Select
  * all with same fill").
  */
 function SelectionColors({
@@ -4494,7 +4909,7 @@ function SelectionColors({
   // The selected layers, not the page: a row is a claim about the selection.
   const usage = colorUsageAll(nodes.length ? nodes : [n]);
   const [picking, setPicking] = useState<{ key: string; rect: DOMRect } | null>(null);
-  // Sketch shows the section for any selection, single colour included — the
+  // Show the section for any selection, single colour included — the
   // count and the select-all affordance are the point, not the list length.
   if (!usage.length) return null;
   const root = snap.pages[snap.page].root;
@@ -4602,7 +5017,7 @@ function SelectionColors({
  * One effect's controls, shown in a popover anchored to its row.
  *
  * Inline these cost ~148px each — three shadows pushed the inspector 314px past
- * its viewport (measured). Figma keeps the list scannable and puts the detail
+ * its viewport (measured). Keeps the list scannable and puts the detail
  * behind a click, which is what this does: the row stays one line, the editing
  * surface opens next to it.
  */
@@ -4760,7 +5175,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   ];
   const effects = n.effects ?? [];
   // One layer takes eight drop shadows, eight inner shadows, one blur of each
-  // kind, two noise rows and a single glass or texture - Figma's budget, and
+  // kind, two noise rows and a single glass or texture, and
   // the menu says so instead of silently piling on more.
   const room = (kind: EffectKind) => canAddEffect(effects, kind);
   const addKind = (kind: EffectKind) => {
@@ -4932,11 +5347,281 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   );
 }
 
+function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
+  const [open, setOpen] = useState(false);
+  const modifiers = n.modifiers ?? [];
+
+  const addModifier = (type: Modifier["type"]) => {
+    openSection("modifiers");
+    let mod: Modifier;
+    if (type === "roundedCorners") {
+      mod = { type: "roundedCorners", radius: 8 };
+    } else if (type === "offset") {
+      mod = { type: "offset", distance: 10, join: "miter" };
+    } else if (type === "simplify") {
+      mod = { type: "simplify", tolerance: 1.0 };
+    } else if (type === "stroke") {
+      mod = { type: "stroke", width: 4, join: "miter", cap: "none" };
+    } else {
+      mod = { type: "roundedCorners", radius: 8 };
+    }
+    engine.dispatch({ type: "applyModifier", id: n.id, modifier: mod });
+    setOpen(false);
+  };
+
+  const removeModifier = (index: number) => {
+    engine.dispatch({ type: "removeModifier", id: n.id, index });
+  };
+
+  const updateModifier = (index: number, patch: Partial<Modifier>) => {
+    const next = modifiers.map((m, i) => (i === index ? ({ ...m, ...patch } as Modifier) : m));
+    engine.dispatch({ type: "patch", id: n.id, patch: { modifiers: next } });
+  };
+
+  return (
+    <>
+      <Section
+        id="modifiers"
+        title={`Modifiers · ${modifiers.length}`}
+        defaultOpen={modifiers.length > 0}
+        actions={
+          <div style={{ position: "relative", display: "flex" }}>
+            <button
+              className="plus"
+              title="Add non-destructive procedural modifier"
+              onClick={() => {
+                if (!modifiers.length) openSection("modifiers");
+                setOpen((v) => !v);
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            {open && (
+              <div
+                className="type-menu"
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: 28,
+                  left: "auto",
+                  width: 170,
+                  zIndex: 200,
+                }}
+              >
+                <button onClick={() => addModifier("roundedCorners")}>
+                  Rounded corners
+                </button>
+                <button onClick={() => addModifier("offset")}>
+                  Offset path
+                </button>
+                <button onClick={() => addModifier("simplify")}>
+                  Simplify path
+                </button>
+                <button onClick={() => addModifier("stroke")}>
+                  Stroke outline
+                </button>
+              </div>
+            )}
+          </div>
+        }
+      >
+        {!modifiers.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No modifiers</span>
+              <div className="empty-add-menu">
+                <button onClick={() => addModifier("roundedCorners")}>Corners</button>
+                <button onClick={() => addModifier("offset")}>Offset</button>
+                <button onClick={() => addModifier("simplify")}>Simplify</button>
+                <button onClick={() => addModifier("stroke")}>Stroke</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {modifiers.map((m, i) => (
+          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
+              <button
+                className="mini"
+                title={m.enabled === false ? "Enable modifier" : "Disable modifier"}
+                onClick={() => updateModifier(i, { enabled: m.enabled === false ? true : false })}
+                style={{ opacity: m.enabled === false ? 0.35 : 1 }}
+              >
+                <Icon name={m.enabled === false ? "eye-off" : "eye"} size={13} />
+              </button>
+              <span style={{ flex: 1, fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {m.type === "roundedCorners"
+                  ? "Rounded Corners"
+                  : m.type === "offset"
+                  ? "Offset Path"
+                  : m.type === "simplify"
+                  ? "Simplify Path"
+                  : m.type === "stroke"
+                  ? "Stroke Outline"
+                  : m.type}
+              </span>
+              {m.type === "roundedCorners" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.radius}
+                  onChange={(e) => updateModifier(i, { radius: parseFloat(e.target.value) || 0 })}
+                />
+              )}
+              {m.type === "offset" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.distance}
+                  onChange={(e) => updateModifier(i, { distance: parseFloat(e.target.value) || 0 })}
+                />
+              )}
+              {m.type === "simplify" && (
+                <input
+                  type="number"
+                  step="0.5"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.tolerance}
+                  onChange={(e) => updateModifier(i, { tolerance: parseFloat(e.target.value) || 0.1 })}
+                />
+              )}
+              {m.type === "stroke" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.width}
+                  onChange={(e) => updateModifier(i, { width: parseFloat(e.target.value) || 1 })}
+                />
+              )}
+              <button
+                className="mini minus"
+                title="Remove modifier"
+                onClick={() => removeModifier(i)}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Section>
+    </>
+  );
+}
+
+function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
+  const [propSelect, setPropSelect] = useState<string>("w");
+  const expressions = n.expressions ?? {};
+  const entries = Object.entries(expressions);
+
+  const addExpr = () => {
+    openSection("expressions");
+    if (!propSelect) return;
+    engine.dispatch({
+      type: "setExpression",
+      id: n.id,
+      property: propSelect,
+      expression: propSelect === "w" ? "parent.w * 0.5" : propSelect === "h" ? "parent.h * 0.5" : "0",
+    });
+  };
+
+  const removeExpr = (prop: string) => {
+    engine.dispatch({ type: "removeExpression", id: n.id, property: prop });
+  };
+
+  const updateExpr = (prop: string, expr: string) => {
+    engine.dispatch({ type: "setExpression", id: n.id, property: prop, expression: expr });
+  };
+
+  return (
+    <>
+      <Section
+        id="expressions"
+        title={`Expressions · ${entries.length}`}
+        defaultOpen={entries.length > 0}
+        actions={
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <select
+              style={{
+                background: "var(--input-bg)",
+                border: "1px solid var(--border)",
+                color: "var(--fg)",
+                fontSize: 11,
+                borderRadius: 3,
+                padding: "2px 4px",
+              }}
+              value={propSelect}
+              onChange={(e) => setPropSelect(e.target.value)}
+            >
+              <option value="w">W</option>
+              <option value="h">H</option>
+              <option value="x">X</option>
+              <option value="y">Y</option>
+              <option value="rotation">Rot</option>
+              <option value="fillOpacity">Opacity</option>
+            </select>
+            <button
+              className="plus"
+              title="Bind property expression"
+              onClick={addExpr}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+        }
+      >
+        {!entries.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No expressions bound</span>
+              <div className="empty-add-menu">
+                <button onClick={() => { setPropSelect("w"); addExpr(); }}>ƒ(w)</button>
+                <button onClick={() => { setPropSelect("h"); addExpr(); }}>ƒ(h)</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {entries.map(([prop, expr]) => (
+          <div className="insp-pad" key={prop} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
+              <span style={{ fontWeight: 600, fontSize: 11, color: "var(--accent, #10b981)", minWidth: 28 }}>
+                ƒ({prop})
+              </span>
+              <input
+                type="text"
+                style={{
+                  flex: 1,
+                  background: "var(--input-bg)",
+                  border: "1px solid var(--border)",
+                  color: "var(--fg)",
+                  borderRadius: 3,
+                  padding: "2px 6px",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono, monospace)",
+                }}
+                value={expr}
+                onChange={(e) => updateExpr(prop, e.target.value)}
+                placeholder="e.g. parent.w * 0.5 + 20"
+              />
+              <button
+                className="mini minus"
+                title="Remove expression"
+                onClick={() => removeExpr(prop)}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Section>
+    </>
+  );
+}
+
 /**
  * The grid flow's own panel: the picker, the automatic-positioning switch and
  * the two track lists.
  *
- * Figma's article: "you can choose the desired number of rows and columns by
+ * "Choose the desired number of rows and columns by
  * clicking on the grid picker in the right sidebar. Enter a value in the Number
  * of columns and Number of rows fields, or use the interactive selector." The
  * picker here is that selector - a small grid of squares, click one to set the
@@ -4944,7 +5629,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
  * their contents.
  */
 /** What the Number of rows field's `Auto` stands for: not a count but a rule,
- *  the one Figma calls Auto - rows appear as the objects need them. */
+ *  Auto mode - rows appear as the objects need them. */
 const AUTO_ROWS = 0;
 
 /**
@@ -5140,7 +5825,7 @@ function GridPanel({
 /**
  * The alignment box.
  *
- * Figma's article: "Select the box and use arrow keys to switch between the
+ * "Select the box and use arrow keys to switch between the
  * different alignment settings. Select the box and press W/A/S/D to set
  * alignment to the edge of the frame" - so the box takes focus, arrows step the
  * position along an axis, the letters jump to an edge, `B` toggles baseline
@@ -5213,7 +5898,7 @@ function Nine({
 }
 
 /**
- * Figma's custom dash syntax: one text field holding `dash, gap, dash, gap…`.
+ * Custom dash syntax: one text field holding `dash, gap, dash, gap…`.
  * Anything that is not a list of non-negative numbers is refused and the field
  * snaps back to what the layer actually has, rather than clearing the dashes.
  */
@@ -5266,7 +5951,7 @@ function DashPatternField({
 /**
  * A padding field.
  *
- * Figma: "To set uniform padding or to use CSS shorthand, hold ⌘ Command or
+ * "To set uniform padding or to use CSS shorthand, hold ⌘ Command or
  * Control and click into any padding field... entering 1,2,3,4 sets the top,
  * right, bottom, and left to 1, 2, 3, and 4 respectively." So a plain click
  * commits one number, and a ⌘/Ctrl click turns the same field into a shorthand
@@ -5384,7 +6069,7 @@ function Field({
   /** Accessible name for icon-only fields, which otherwise expose no label
    *  at all to assistive tech or to keyboard users reading focus. */
   aria?: string;
-  /** Figma shows "Mixed" instead of a number when the selection - or, for
+  /** Shows "Mixed" instead of a number when the selection - or, for
    *  corner radii, the four corners - disagrees. Typing still applies. */
   mixed?: string;
   /** Words this field also accepts, each standing for a number: a grid's
@@ -5399,7 +6084,7 @@ function Field({
   useEffect(() => {
     if (!focused.current) setDraft(mixed ?? fmt(value));
   }, [value, mixed]);
-  // Figma reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
+  // Reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
   // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
   // commit evaluates, so typing `12/` mid-expression does not move the layer.
   const commit = () => {
@@ -5519,7 +6204,7 @@ function Constraints({
 const SCALES = SCALE_PRESETS;
 
 /* Every format's optional settings live behind one "Export settings" button, as
-   in Figma, and the list is built from the capability table rather than written
+   and the list is built from the capability table rather than written
    out per format - so a control cannot appear for something the exporter does
    not do. */
 function hasSettings(format: ExportFormat): boolean {
@@ -5535,7 +6220,7 @@ function hasSettings(format: ExportFormat): boolean {
   );
 }
 
-/** The settings Figma shows for whatever format the row is set to. */
+/** Export format settings for the current row format. */
 function ExportSettings({
   preset,
   onChange,
@@ -5602,7 +6287,7 @@ function ExportSettings({
   );
 }
 
-/** Figma's scale field: type `2x`, `500w` or `300h`, or click for the presets. */
+/** Scale field: type `2x`, `500w` or `300h`, or click for the presets. */
 function ScaleField({
   preset,
   locked,
@@ -5698,7 +6383,7 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
         {presets.map((p, i) => (
           <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
             <div className="export-row">
-              {/* Figma previews the export before you download it — the thumbnail
+              {/* Preview the export before download — the thumbnail
                   is the real render (SVG source, so it scales with the preset). */}
               <button
                 className={`export-thumb${preview[i] ? " on" : ""}`}
@@ -5733,11 +6418,9 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
               >
                 {p.format}
               </button>
-              {/* Figma's scale field takes a multiplier or a size with a unit:
-                  `2x`, `500w`, `300h`. A vector format is pinned at 1x, because
-                  "Figma only supports exports for SVGs at 1x" - and the same
-                  for PDFs - so the field shows 1x rather than quietly ignoring
-                  what you type. */}
+              {/* The scale field takes a multiplier or a size with a unit:
+                  `2x`, `500w`, `300h`. Vector formats are pinned at 1x,
+                  so the field shows 1x rather than quietly ignoring what you type. */}
               <ScaleField
                 preset={p}
                 locked={FORMAT_CAPS[p.format].oneToOne}
@@ -5971,7 +6654,7 @@ function readSections(): Record<string, boolean> {
 
 /** Ask a section to reveal itself. Adding a fill/stroke/export while its
  *  section is collapsed used to write state the user could not see, which read
- *  as "Export does nothing". Figma expands and scrolls to the new row. */
+ *  as "Export does nothing". Expands and scrolls to the new row. */
 export function openSection(id: string) {
   window.dispatchEvent(new CustomEvent("x-native-open-section", { detail: id }));
 }
@@ -6222,7 +6905,7 @@ function ColorRow({
 /**
  * What a paint is actually drawn over, for the contrast check: the nearest
  * ancestor with a visible solid fill, falling back to the white paper the
- * canvas sits on. Figma resolves the background the same way and always treats
+ * canvas sits on. Resolves the background the same way and always treats
  * the selected layer as the foreground.
  */
 function fillBackground(root: XNode, n: XNode): string {
@@ -6236,7 +6919,7 @@ function fillBackground(root: XNode, n: XNode): string {
   return "#ffffff";
 }
 
-/** WCAG's large-text exemption, in Figma's terms: 24px, or 19px and bold. */
+/** WCAG large-text exemption: 24px, or 19px and bold. */
 function isLargeText(n: XNode): boolean {
   return n.kind === "text" && (n.fontSize >= 24 || (n.fontSize >= 19 && n.fontWeight >= 700));
 }
@@ -6251,10 +6934,10 @@ function setDir(engine: Engine, snap: Snapshot, n: XNode, direction: "horizontal
   setFlow(engine, snap, n.id, direction);
 }
 
-/** Human labels + Figma's shortcuts for the align row. */
+/** Human labels and shortcuts for the align row. */
 /** Zoom control + view options.
  *
- *  Figma keeps this in one place: the top-right of the right sidebar shows the
+ *  The top-right of the right sidebar shows the
  *  current percentage, the field itself takes typed input, and the caret opens
  *  the zoom presets and the canvas view toggles. The previous button cycled
  *  100%→50%→100% and could never reach 200%.
@@ -6502,7 +7185,7 @@ export function align(
     if (!n || !p || p === root) return;
     // Children of an auto-layout frame are positioned by the layout engine, so a
     // raw `move` is recomputed away on the next pass and the button looks dead.
-    // Figma instead retargets the alignment onto the parent's layout axes, which
+    // Retargets the alignment onto the parent's layout axes, which
     // is the only thing that can actually move the child. Mirror that.
     if (p.layout?.direction === "grid") {
       // "Within a grid auto layout frame, a child object can be aligned to its

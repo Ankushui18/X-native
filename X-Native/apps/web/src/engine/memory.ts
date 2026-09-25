@@ -39,7 +39,10 @@ import {
 } from "./layout";
 import {
   booleanPath,
-  outlineStroke as outlineStrokePath,
+  outlineStrokeNetwork,
+  offsetPath,
+  simplifyPath,
+  vectorCleanup,
   shapePoly,
   transformedPoly,
   addVectorBranch,
@@ -47,7 +50,24 @@ import {
   vectorNetworkToPath,
   bendSegment,
   insertPointOnPath,
+  pathBounds,
+  normalizeVectorNode,
+  samplePathPoints,
 } from "./geometry";
+import { convertTextToVectorPaths } from "./textVector";
+import {
+  type Transaction,
+  type Operation,
+  TransactionStream,
+  invertOperation,
+} from "./transaction";
+import {
+  evaluateModifierStack,
+} from "./modifierStack";
+import {
+  evaluateExpression,
+  DependencyGraph,
+} from "./expressions";
 
 let seq = 1;
 export const uid = (p: string) => `${p}_${seq++}`;
@@ -207,7 +227,7 @@ function findInstanceRoot(root: XNode, id: string): XNode | null {
 }
 
 /**
- * True when the layer is an instance or sits inside one. Figma refuses a small
+ * True when the layer is an instance or sits inside one. An instance refuses a small
  * set of edits there - the geometry belongs to the component, so per-corner
  * radii in particular can only be set on the master.
  */
@@ -312,7 +332,7 @@ function applyLayout(n: XNode, gesture = false) {
   }
   const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
   const horiz = l.direction === "horizontal";
-  // Figma offers Wrap on a horizontal flow only, so a vertical frame that still
+  // Wrap is offered on a horizontal flow only, so a vertical frame that still
   // carries the flag lays out as a plain stack rather than wrapping.
   const doesWrap = wraps(l);
   const gap = typeof l.gap === "number" ? l.gap : 0;
@@ -561,7 +581,7 @@ export function demoPage(): Page {
     fill: "#0d1220",
   });
   const doneDesc = node("text", "DoneDesc", 24, 125, 342, 60, {
-    text: "Navigated via organic Figma S-curve noodle. Click ← Back or press Esc to return.",
+    text: "Navigated via organic S-curve interaction connector. Click ← Back or press Esc to return.",
     fontSize: 14,
     fill: "#64748b",
   });
@@ -645,7 +665,7 @@ export function demoPage(): Page {
   };
 }
 
-/** An empty page, the way a new Figma file opens: one invisible root frame
+/** An empty page, the default new page layout: one invisible root frame
  *  that holds the top-level layers and no content of its own. */
 export function blankPage(name = "Page 1"): Page {
   return {
@@ -776,7 +796,7 @@ function clipBounds(nodes: XNode[]): { minX: number; minY: number; cx: number; c
  * document. The system clipboard is what makes the same ⌘V work in another tab,
  * another file, or another program — and it carries two readings of the same
  * layers: this app's base64 payload (everything, including the properties no
- * vector format expresses) and an SVG (what a browser, a deck or Figma renders).
+ * vector format expresses) and an SVG (what standard renderers render).
  * Images go as asset refs, not inline data URLs, so copying a photograph does
  * not write megabytes of base64 into the clipboard.
  *
@@ -817,7 +837,7 @@ export class MemoryEngine implements Engine {
   private gesture = false;
   /** Last history-pushing command type and its timestamp, used to coalesce
    *  rapid repeats of the same command (e.g. holding an arrow key) into a
-   *  single undo step, as Figma does. */
+   *  single undo step. */
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
   private copiedProps: Partial<XNode> | null = null;
@@ -927,6 +947,180 @@ export class MemoryEngine implements Engine {
     return () => this.listeners.delete(fn);
   }
 
+  private transactionStream = new TransactionStream();
+
+  public getTransactionStream(): TransactionStream {
+    return this.transactionStream;
+  }
+
+  public dispatchTransaction(tx: Transaction): void {
+    const executedOps: Operation[] = [];
+    try {
+      for (const op of tx.operations) {
+        this.executeOperation(op);
+        executedOps.push(op);
+      }
+      this.transactionStream.push(tx);
+    } catch (err) {
+      for (let i = executedOps.length - 1; i >= 0; i--) {
+        try {
+          this.executeOperation(invertOperation(executedOps[i]));
+        } catch (rollbackErr) {
+          console.error("Critical rollback error:", rollbackErr);
+        }
+      }
+      throw err;
+    }
+    this.relayout();
+    this.snapCache = this.build();
+    this.listeners.forEach((f) => f());
+  }
+
+  private executeOperation(op: Operation): void {
+    const s = this.state;
+    switch (op.type) {
+      case "setProperty": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        (n as any)[op.property] = op.newValue;
+        this.publishMaster(n);
+        break;
+      }
+      case "insertNode": {
+        const parent = find(this.root(), op.parentId);
+        if (!parent) throw new Error(`Parent node ${op.parentId} not found`);
+        const idx = op.index !== undefined ? Math.min(op.index, parent.children.length) : parent.children.length;
+        parent.children.splice(idx, 0, clone(op.node));
+        break;
+      }
+      case "removeNode": {
+        const parent = find(this.root(), op.parentId);
+        if (!parent) throw new Error(`Parent node ${op.parentId} not found`);
+        const idx = parent.children.findIndex((c) => c.id === op.nodeId);
+        if (idx >= 0) parent.children.splice(idx, 1);
+        break;
+      }
+      case "moveNode": {
+        const oldParent = find(this.root(), op.oldParentId);
+        const newParent = find(this.root(), op.newParentId);
+        if (!oldParent || !newParent) throw new Error("Parent node not found for moveNode");
+        const idx = oldParent.children.findIndex((c) => c.id === op.nodeId);
+        if (idx < 0) throw new Error(`Node ${op.nodeId} not found in oldParent`);
+        const [target] = oldParent.children.splice(idx, 1);
+        const newIdx = Math.min(op.newIndex, newParent.children.length);
+        newParent.children.splice(newIdx, 0, target);
+        break;
+      }
+      case "setVariable": {
+        const idx = s.variables.findIndex((v) => v.id === op.variableId);
+        if (idx >= 0) {
+          s.variables[idx].value = op.newValue;
+        } else {
+          s.variables.push({
+            id: op.variableId,
+            name: op.variableId,
+            collection: "Brand",
+            type: typeof op.newValue === "number" ? "number" : typeof op.newValue === "boolean" ? "boolean" : "string",
+            value: op.newValue,
+          });
+        }
+        break;
+      }
+      case "setVectorNetwork": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        n.vectorNetwork = clone(op.newNetwork);
+        const converted = vectorNetworkToPath(n.vectorNetwork);
+        n.path = converted.path;
+        n.closed = converted.closed;
+        break;
+      }
+      case "applyModifier": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        if (!n.modifiers) n.modifiers = [];
+        const idx = op.index !== undefined ? op.index : n.modifiers.length;
+        n.modifiers.splice(idx, 0, clone(op.modifier));
+        this.evaluateNodeModifiers(n);
+        break;
+      }
+      case "removeModifier": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        if (n.modifiers && op.index < n.modifiers.length) {
+          n.modifiers.splice(op.index, 1);
+          this.evaluateNodeModifiers(n);
+        }
+        break;
+      }
+      case "setExpression": {
+        const n = find(this.root(), op.targetId);
+        if (!n) throw new Error(`Target node ${op.targetId} not found`);
+        if (!n.expressions) n.expressions = {};
+        n.expressions[op.property] = op.newExpr;
+        break;
+      }
+    }
+  }
+
+  private evaluateNodeModifiers(n: XNode) {
+    if (!n.modifiers || n.modifiers.length === 0) return;
+    const baseInput = {
+      path: n.path && n.path.length > 0 ? n.path : shapePoly(n),
+      closed: n.closed !== false,
+      vectorNetwork: n.vectorNetwork,
+    };
+    const evaluated = evaluateModifierStack(baseInput, n.modifiers);
+    n.path = evaluated.path;
+    n.closed = evaluated.closed;
+    if (evaluated.vectorNetwork) n.vectorNetwork = evaluated.vectorNetwork;
+    if (evaluated.bounds.w > 0 && evaluated.bounds.h > 0) {
+      n.w = Math.round(evaluated.bounds.w);
+      n.h = Math.round(evaluated.bounds.h);
+    }
+  }
+
+  private evaluateExpressionsInTree(root: XNode) {
+    const varMap: Record<string, any> = {};
+    for (const v of this.state.variables) {
+      varMap[v.name] = v.value;
+      varMap[v.id] = v.value;
+    }
+    const graph = new DependencyGraph();
+
+    const evaluateNode = (node: XNode, parent: XNode | null) => {
+      if (node.expressions) {
+        for (const [prop, expr] of Object.entries(node.expressions)) {
+          if (!expr) continue;
+          const targetKey = `${node.id}.${prop}`;
+          const res = evaluateExpression(
+            expr,
+            {
+              vars: varMap,
+              self: node as any,
+              parent: parent as any,
+              getNode: (id: string) => find(this.root(), id),
+            },
+            graph,
+            targetKey,
+          );
+          if (res.error) {
+            console.warn(`Expression error on ${targetKey}: ${res.error}`);
+          } else if (typeof res.value === "number" && !isNaN(res.value)) {
+            (node as any)[prop] = res.value;
+          } else if (typeof res.value === "string" || typeof res.value === "boolean") {
+            (node as any)[prop] = res.value;
+          }
+        }
+      }
+      for (const ch of node.children) {
+        evaluateNode(ch, node);
+      }
+    };
+
+    evaluateNode(root, null);
+  }
+
   dispatch(cmd: Command): void {
     if (cmd.type === "begin") {
       this.undo.push(clone(this.state));
@@ -963,7 +1157,7 @@ export class MemoryEngine implements Engine {
       "toggleFlows",
       "toggleMinimap",
       // Comments are annotations layered over the design, not part of it.
-      // Figma keeps them off the design undo stack entirely: ⌘Z after posting
+      // Keep them off the design undo stack entirely: ⌘Z after posting
       // a comment reverts your last *design* edit, it does not delete the note.
       "toggleComments",
       "openComment",
@@ -1029,7 +1223,7 @@ export class MemoryEngine implements Engine {
    * The index a new object takes in `parent`'s children, so that a grid places
    * it in the cell it was aimed at rather than at the end of the flow.
    *
-   * Figma: "when you add a cell object to the grid, Figma will try to place it
+   * "When you add a cell object to the grid, it will place it
    * between the cell objects - in layer order - nearest your cursor." Anything
    * else - a frame with no layout, a linear flow, automatic positioning off -
    * appends, which is where it always went.
@@ -1051,8 +1245,8 @@ export class MemoryEngine implements Engine {
   /**
    * Put an auto layout frame around what was selected.
    *
-   * Figma's note: "Auto layout is only supported on frames. If you have one or
-   * more layers selected, Figma will create an auto layout frame around them."
+   * "Auto layout is only supported on frames. If you have one or
+   * more layers selected, an auto layout frame wraps them."
    * A group is not wrapped but converted - it is already a container, and
    * pressing ⇧A on one has always turned it into a frame.
    *
@@ -1102,6 +1296,7 @@ export class MemoryEngine implements Engine {
   }
 
   private relayout() {
+    this.evaluateExpressionsInTree(this.root());
     // Fill cascades through nesting: a parent's pass resizes a nested auto
     // layout frame, and that frame's own layout then has to run again at its new
     // size - which is the whole point of the nesting article ("when you resize
@@ -1142,7 +1337,7 @@ export class MemoryEngine implements Engine {
       viewLayoutGuides: this.state.viewLayoutGuides,
       propertyLabels: this.state.propertyLabels,
       openComment: this.state.openComment,
-      // View options live in the tab, not in the file: Figma's article is
+      // View options live in the tab, not in the file:
       // explicit that zoom (and the menu beside it) applies to the current tab
       // only, so none of these are written into the document.
       presentFrame: this.state.presentFrame,
@@ -1373,7 +1568,7 @@ export class MemoryEngine implements Engine {
         const into = parent ?? this.root();
         const spot = this.gridSpotFor(into, cmd.x, cmd.y);
         into.children.splice(spot?.index ?? into.children.length, 0, n);
-        // "Figma will try to place it between the cell objects - in layer order
+        // "Place it between the cell objects - in layer order
         // - nearest your cursor", so the cell that was clicked is the one it
         // takes. The rest of the flow arranges itself around it.
         if (spot) {
@@ -1447,7 +1642,7 @@ export class MemoryEngine implements Engine {
             if (askedW !== oldW) n.sizingW = "fixed";
             if (askedH !== oldH) n.sizingH = "fixed";
           }
-          // Figma: "Any manual adjustments you make will set the layer to Fixed
+          // "Any manual adjustments you make will set the layer to Fixed
           // on the relevant axis" - so a typed width or a dragged edge turns a
           // hug into Fixed. An auto layout frame keeps its resizing in two
           // places, the layout's own pair and the layer's resizing menu, and the
@@ -1572,7 +1767,7 @@ export class MemoryEngine implements Engine {
             copy.isComponent = false;
             copy.componentId = masterId;
           }
-          // Figma puts the duplicate directly above the one it came from, and
+          // Put the duplicate directly above the one it came from, and
           // "the new frames will fill the subsequent cells" - so a copy of an
           // object that was placed on purpose is not itself placed.
           copy.gridPinned = false;
@@ -1591,7 +1786,7 @@ export class MemoryEngine implements Engine {
           // A hand-typed name pins the layer name; automatic naming stops.
           if (cmd.patch.name !== undefined) n.nameLocked = true;
           // Editing a bound colour by hand detaches it from its style, as in
-          // Figma — the alternative is silently diverging from the style, or
+          // Standard behavior — the alternative is silently diverging from the style, or
           // silently reverting the user's edit. Re-binding is explicit.
           if (cmd.patch.fill !== undefined && cmd.patch.fillStyle === undefined && n.fillStyle) {
             delete n.fillStyle;
@@ -1599,7 +1794,7 @@ export class MemoryEngine implements Engine {
           if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
           }
-          // Figma's text rule: a text layer cannot hold a max height and a max
+          // Text rule: a text layer cannot hold a max height and a max
           // line count at once - setting either clears the other - so the pair
           // is resolved here rather than in whichever panel did the writing.
           const patch = n.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
@@ -1610,7 +1805,7 @@ export class MemoryEngine implements Engine {
           }
           if (patch.aspectLocked === false) patch.aspectRatio = undefined;
           Object.assign(n, patch);
-          // Text layers follow their content until renamed, as in Figma.
+          // Text layers follow their content until renamed.
           if (n.kind === "text" && patch.text !== undefined && !n.nameLocked) {
             const first = (patch.text || "").split("\n")[0].trim();
             n.name = first ? first.slice(0, 60) : "Text";
@@ -2026,6 +2221,8 @@ export class MemoryEngine implements Engine {
             g.path = baked.path;
             g.closed = true;
             g.kind = "boolean";
+            if (baked.network) g.vectorNetwork = baked.network;
+            else g.vectorNetwork = pathToVectorNetwork(baked.path, true);
           }
         }
         break;
@@ -2038,7 +2235,7 @@ export class MemoryEngine implements Engine {
         const style: SharedStyle = { id: uid("style"), name: cmd.name.trim() || "Style", kind: "paint", color };
         s.styles.push(style);
         // Bind every selected node, so "create from selection" works on a
-        // multi-selection the way Figma does.
+        // multi-selection cleanly.
         for (const n of nodes) {
           if (cmd.kind === "fill") {
             n.fillStyle = style.id;
@@ -2260,6 +2457,7 @@ export class MemoryEngine implements Engine {
           strokePaint: "#1e1e1e",
           strokeVisible: true,
           strokeWidth: s.tool === "brush" ? 8 : cmd.closed ? 1 : 2,
+          vectorNetwork: pathToVectorNetwork(path, cmd.closed),
         });
         this.root().children.push(n);
         s.selection = [n.id];
@@ -2273,12 +2471,9 @@ export class MemoryEngine implements Engine {
         if (cmd.closed != null) n.closed = cmd.closed;
         n.kind = "vector";
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
-        const xs = n.path.map((pt) => pt.x);
-        const ys = n.path.map((pt) => pt.y);
-        if (xs.length) {
-          n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
-          n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
-        }
+        const pb = pathBounds(n.path, n.closed);
+        n.w = pb.w;
+        n.h = pb.h;
         break;
       }
       case "patchVectorNetwork": {
@@ -2347,6 +2542,9 @@ export class MemoryEngine implements Engine {
         if (!n || n.locked || n.path.length < 2) break;
         n.path = bendSegment(n.path, cmd.segIndex, n.closed, cmd.dragX, cmd.dragY);
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        const pb = pathBounds(n.path, n.closed);
+        n.w = pb.w;
+        n.h = pb.h;
         break;
       }
       case "insertPointOnPath": {
@@ -2379,22 +2577,152 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "setVecEdit": {
+        if (s.vecEdit && (cmd.id == null || cmd.id !== s.vecEdit)) {
+          const prev = find(this.root(), s.vecEdit);
+          if (prev) normalizeVectorNode(prev);
+        }
         s.vecEdit = cmd.id;
         s.vecPoint = cmd.pointIndex ?? null;
         s.vecPoints = cmd.pointIndices ?? (cmd.pointIndex != null ? [cmd.pointIndex] : []);
         break;
       }
       case "flatten": {
+        if (s.selection.length > 1) {
+          const selectedNodes = s.selection
+            .map((id) => find(this.root(), id))
+            .filter((n): n is XNode => !!n);
+          if (selectedNodes.length >= 2) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            const worldItems: { node: XNode; wp: { x: number; y: number } }[] = [];
+            for (const sn of selectedNodes) {
+              const wp = worldPos(this.root(), sn.id);
+              if (!wp) continue;
+              worldItems.push({ node: sn, wp });
+              minX = Math.min(minX, wp.x);
+              minY = Math.min(minY, wp.y);
+              maxX = Math.max(maxX, wp.x + sn.w);
+              maxY = Math.max(maxY, wp.y + sn.h);
+            }
+
+            if (isFinite(minX)) {
+              const mergedVertices: any[] = [];
+              const mergedSegments: any[] = [];
+              const mergedLoops: number[][] = [];
+              const mergedPath: PathPoint[] = [];
+
+              let dominantFill = "#d9d9d9";
+              let dominantStroke = "#000000";
+              let dominantStrokeWidth = 0;
+
+              for (const item of worldItems) {
+                const { node: n, wp } = item;
+                if (n.fill && n.fillVisible !== false) dominantFill = n.fill;
+                if (n.strokePaint && n.strokeVisible && n.strokeWidth > 0) {
+                  dominantStroke = n.strokePaint;
+                  dominantStrokeWidth = n.strokeWidth;
+                }
+
+                let vn: any = null;
+                if (n.kind === "text") {
+                  const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
+                  vn = res.network;
+                } else if (n.kind === "boolean" && n.children.length) {
+                  const baked = booleanPath(
+                    n.booleanOp || "union",
+                    n.children.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
+                  );
+                  if (baked?.network) vn = baked.network;
+                  else if (baked?.path) vn = pathToVectorNetwork(baked.path, true);
+                } else if (n.vectorNetwork && n.vectorNetwork.vertices.length) {
+                  vn = n.vectorNetwork;
+                } else {
+                  const poly = n.path.length ? n.path : shapePoly(n);
+                  vn = pathToVectorNetwork(poly, n.closed || (n.kind !== "line" && n.kind !== "arrow"));
+                }
+
+                if (vn && vn.vertices.length) {
+                  const offsetStart = mergedVertices.length;
+                  const dx = wp.x - minX;
+                  const dy = wp.y - minY;
+
+                  for (const v of vn.vertices) {
+                    mergedVertices.push({
+                      x: v.x + dx,
+                      y: v.y + dy,
+                      strokeCap: v.strokeCap,
+                      strokeJoin: v.strokeJoin,
+                      cornerRadius: v.cornerRadius,
+                    });
+                    mergedPath.push({ x: v.x + dx, y: v.y + dy, cornerRadius: v.cornerRadius });
+                  }
+
+                  for (const seg of vn.segments) {
+                    mergedSegments.push({
+                      start: offsetStart + seg.start,
+                      end: offsetStart + seg.end,
+                      tangentStart: seg.tangentStart ? { ...seg.tangentStart } : undefined,
+                      tangentEnd: seg.tangentEnd ? { ...seg.tangentEnd } : undefined,
+                    });
+                  }
+
+                  if (vn.regions) {
+                    for (const reg of vn.regions) {
+                      for (const loop of reg.loops) {
+                        mergedLoops.push(loop.map((i: number) => offsetStart + i));
+                      }
+                    }
+                  }
+                }
+              }
+
+              const combinedW = Math.max(1, maxX - minX);
+              const combinedH = Math.max(1, maxY - minY);
+              const flatNode = node("vector", "Flattened Vector", minX, minY, combinedW, combinedH, {
+                path: mergedPath,
+                vectorNetwork: {
+                  vertices: mergedVertices,
+                  segments: mergedSegments,
+                  regions: mergedLoops.length ? [{ windingRule: "EVENODD", loops: mergedLoops }] : undefined,
+                },
+                closed: true,
+                fill: dominantFill,
+                fillVisible: true,
+                strokePaint: dominantStroke,
+                strokeWidth: dominantStrokeWidth,
+                strokeVisible: dominantStrokeWidth > 0,
+              });
+
+              const firstId = selectedNodes[0].id;
+              const container = findParent(this.root(), firstId) || this.root();
+              const firstIdx = container.children.findIndex((c) => c.id === firstId);
+              const selSet = new Set(s.selection);
+              container.children = container.children.filter((c) => !selSet.has(c.id));
+              container.children.splice(Math.max(0, firstIdx), 0, flatNode);
+              s.selection = [flatNode.id];
+              break;
+            }
+          }
+        }
+
         const id = s.selection[0];
         const n = id ? find(this.root(), id) : null;
         if (!n) break;
-        if (n.kind === "boolean" && n.children.length) {
+        if (n.kind === "text") {
+          const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
+          n.kind = "vector";
+          n.path = res.path;
+          n.vectorNetwork = res.network;
+          n.closed = true;
+          n.w = res.w;
+          n.h = res.h;
+        } else if (n.kind === "boolean" && n.children.length) {
           const baked = booleanPath(
             n.booleanOp || "union",
             n.children.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
           );
           if (baked) {
             n.path = baked.path;
+            n.vectorNetwork = baked.network || pathToVectorNetwork(baked.path, true);
             n.closed = true;
             n.kind = "vector";
             n.children = [];
@@ -2404,25 +2732,161 @@ export class MemoryEngine implements Engine {
             n.w = baked.w;
             n.h = baked.h;
           }
+        } else if (n.kind === "group" && n.children.length) {
+          const childPaths: PathPoint[] = [];
+          for (const c of n.children) {
+            const poly = c.path.length ? c.path : shapePoly(c);
+            childPaths.push(...poly.map((p) => ({ x: p.x + c.x, y: p.y + c.y })));
+          }
+          n.path = childPaths;
+          n.vectorNetwork = pathToVectorNetwork(childPaths, true);
+          n.kind = "vector";
+          n.children = [];
         } else if (!n.path.length) {
           n.path = shapePoly(n);
+          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed || (n.kind !== "line" && n.kind !== "arrow"));
           n.closed = n.kind !== "line" && n.kind !== "arrow";
           n.kind = "vector";
         }
         break;
       }
       case "outlineStroke": {
-        const id = s.selection[0];
-        const n = id ? find(this.root(), id) : null;
-        if (!n || n.strokeWidth <= 0) break;
-        const src = n.path.length ? n.path : shapePoly(n);
-        n.path = outlineStrokePath(src, n.strokeWidth, n.closed || n.kind !== "line");
+        const targetIds = cmd.id ? [cmd.id] : [...s.selection];
+        for (const id of targetIds) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          if (n.kind === "text") {
+            const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
+            n.kind = "vector";
+            n.path = res.path;
+            n.vectorNetwork = res.network;
+            n.closed = true;
+            n.w = res.w;
+            n.h = res.h;
+            continue;
+          }
+          if (n.strokeWidth <= 0 && n.kind !== "line" && n.kind !== "arrow") continue;
+          const sw = n.strokeWidth > 0 ? n.strokeWidth : 1;
+          const src = n.path.length ? n.path : shapePoly(n);
+          const isClosed = n.closed || (n.kind !== "line" && n.kind !== "arrow");
+          const out = outlineStrokeNetwork(src, sw, isClosed, n.strokeCap || "round", n.strokeJoin || "round");
+          n.path = out.path;
+          n.vectorNetwork = out.network;
+          n.kind = "vector";
+          n.closed = true;
+          n.fill = n.strokePaint || "#000000";
+          n.fillVisible = true;
+          n.fillOpacity = n.strokeOpacity ?? 1;
+          n.strokeWidth = 0;
+          n.strokeVisible = false;
+        }
+        break;
+      }
+      case "offsetPath": {
+        const targetIds = cmd.id ? [cmd.id] : [...s.selection];
+        for (const id of targetIds) {
+          const n = find(this.root(), id);
+          if (!n) continue;
+          const src = n.path.length ? n.path : shapePoly(n);
+          n.path = offsetPath(src, cmd.distance, n.closed || (n.kind !== "line" && n.kind !== "arrow"), cmd.join || "round");
+          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+          n.kind = "vector";
+        }
+        break;
+      }
+      case "simplifyPath": {
+        const targetId = cmd.id || s.vecEdit || s.selection[0];
+        const n = targetId ? find(this.root(), targetId) : null;
+        if (!n || !n.path.length) break;
+        const tol = cmd.tolerance ?? 1.5;
+        n.path = simplifyPath(n.path, tol);
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        break;
+      }
+      case "vectorCleanup": {
+        const targetId = cmd.id || s.vecEdit || s.selection[0];
+        const n = targetId ? find(this.root(), targetId) : null;
+        if (!n || !n.path.length) break;
+        n.path = vectorCleanup(n.path, n.closed);
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        normalizeVectorNode(n);
+        break;
+      }
+      case "convertTextToVector": {
+        const targetId = cmd.id || s.selection[0];
+        const n = targetId ? find(this.root(), targetId) : null;
+        if (!n || n.kind !== "text") break;
+        const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
         n.kind = "vector";
+        n.path = res.path;
+        n.vectorNetwork = res.network;
         n.closed = true;
-        n.fill = n.strokePaint;
-        n.fillVisible = true;
-        n.strokeWidth = 0;
-        n.strokeVisible = false;
+        n.w = res.w;
+        n.h = res.h;
+        break;
+      }
+      case "shapeBuilder": {
+        if (s.selection.length < 2) break;
+        const [idA, idB] = s.selection;
+        const na = find(this.root(), idA);
+        const nb = find(this.root(), idB);
+        if (!na || !nb) break;
+        const polyA = na.path.length ? na.path : shapePoly(na);
+        const polyB = nb.path.length ? nb.path : shapePoly(nb);
+        const baked = booleanPath(
+          cmd.op === "merge" ? "union" : "subtract",
+          [
+            { poly: polyA, ox: na.x, oy: na.y },
+            { poly: polyB, ox: nb.x, oy: nb.y },
+          ],
+        );
+        if (baked) {
+          na.kind = "vector";
+          na.path = baked.path;
+          na.vectorNetwork = baked.network || pathToVectorNetwork(baked.path, true);
+          na.x = baked.x;
+          na.y = baked.y;
+          na.w = baked.w;
+          na.h = baked.h;
+          na.closed = true;
+          const parentB = findParent(this.root(), idB) || this.root();
+          parentB.children = parentB.children.filter((c) => c.id !== idB);
+          s.selection = [idA];
+        }
+        break;
+      }
+      case "vectorAlign": {
+        const vecId = s.vecEdit || s.selection[0];
+        const n = vecId ? find(this.root(), vecId) : null;
+        if (!n || !n.path.length) break;
+        const ptIndices = s.vecPoints && s.vecPoints.length > 0
+          ? s.vecPoints
+          : (s.vecPoint !== null && s.vecPoint !== undefined ? [s.vecPoint] : n.path.map((_, i) => i));
+        if (ptIndices.length < 2) break;
+
+        const selPts = ptIndices.map((i) => n.path[i]).filter(Boolean);
+        const xs = selPts.map((p) => p.x);
+        const ys = selPts.map((p) => p.y);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs);
+        const midX = (minX + maxX) / 2;
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys);
+        const midY = (minY + maxY) / 2;
+
+        for (const idx of ptIndices) {
+          const pt = n.path[idx];
+          if (!pt) continue;
+          switch (cmd.alignment) {
+            case "left": pt.x = minX; break;
+            case "center": pt.x = midX; break;
+            case "right": pt.x = maxX; break;
+            case "top": pt.y = minY; break;
+            case "middle": pt.y = midY; break;
+            case "bottom": pt.y = maxY; break;
+          }
+        }
+        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         break;
       }
       case "addVariant": {
@@ -2623,6 +3087,43 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      case "commitTransaction":
+        this.dispatchTransaction(cmd.transaction);
+        break;
+      case "applyModifier": {
+        const n = find(this.root(), cmd.id);
+        if (n) {
+          if (!n.modifiers) n.modifiers = [];
+          n.modifiers.push(clone(cmd.modifier));
+          this.evaluateNodeModifiers(n);
+        }
+        break;
+      }
+      case "removeModifier": {
+        const n = find(this.root(), cmd.id);
+        if (n && n.modifiers && cmd.index < n.modifiers.length) {
+          n.modifiers.splice(cmd.index, 1);
+          this.evaluateNodeModifiers(n);
+        }
+        break;
+      }
+      case "setExpression": {
+        const n = find(this.root(), cmd.id);
+        if (n) {
+          if (!n.expressions) n.expressions = {};
+          n.expressions[cmd.property] = cmd.expression;
+          this.evaluateExpressionsInTree(this.root());
+        }
+        break;
+      }
+      case "removeExpression": {
+        const n = find(this.root(), cmd.id);
+        if (n && n.expressions) {
+          delete n.expressions[cmd.property];
+          this.evaluateExpressionsInTree(this.root());
+        }
+        break;
+      }
     }
   }
 
@@ -2746,7 +3247,7 @@ function syncInstances(pages: Page[], master: XNode) {
 }
 
 /**
- * Is Figma's "snap to pixel grid" (View menu / Shift+Cmd+') switched on for this
+ * Is "snap to pixel grid" (View menu / Shift+Cmd+') switched on for this
  * page? It is a *drawing* behaviour — objects are rounded to whole pixels as
  * they are created, moved and resized — and is separate from the pixel-grid
  * *overlay*, which is only a ruler-grade guide drawn above 400% zoom. The two
@@ -2758,7 +3259,7 @@ function snapOn(s: { pages: Page[]; page: number }, index: number): boolean {
 }
 
 /**
- * Figma's default name for a new layer: the kind, then the lowest number that
+ * Default name for a new layer: the kind, then the lowest number that
  * is not already taken in the page. "Frame" for every frame - which is what
  * this used to do - makes the Layers list and the names on the canvas
  * indistinguishable the moment there are two of them.
@@ -2771,7 +3272,7 @@ function freshLabel(root: XNode, k: NodeKind): string {
     for (const c of n.children) walk(c);
   };
   walk(root);
-  // Always numbered, even the first: Figma's first frame is "Frame 1", not
+  // Always numbered, even the first: first frame is "Frame 1", not
   // "Frame", so a document's names never change shape as it grows.
   for (let i = 1; i < 10_000; i++) {
     const candidate = `${base} ${i}`;
@@ -2955,8 +3456,9 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
     return segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <= Math.max(12, n.strokeWidth / 2 + 4);
   }
   if (n.kind === "vector" || n.kind === "boolean") {
-    const poly = n.path.length ? n.path : shapePoly(n);
+    const rawPoly = n.path.length ? n.path : shapePoly(n);
     const isClosed = n.closed || (n.vectorNetwork?.regions?.length ?? 0) > 0;
+    const poly = samplePathPoints(rawPoly, isClosed);
     if (isClosed) {
       if (n.fillVisible !== false && !n.fill.startsWith("#00000000") && n.fill !== "#00000000") {
         if (polygonHit(poly as any, px, py)) return true;
@@ -3175,7 +3677,7 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
     spread: kind === "texture" ? 4 : 0,
     visible: true,
     blend: "Normal",
-    // Figma's checkbox starts unchecked, and only a drop shadow has one.
+    // Checkbox starts unchecked, and only a drop shadow has one.
     ...(kind === "drop-shadow" ? { showBehind: false } : {}),
   };
 }

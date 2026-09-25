@@ -1,9 +1,9 @@
 /**
  * Kiwi binary decoder.
  *
- * Kiwi is the self-describing wire format Figma uses inside `.fig`: every file
+ * Kiwi is the self-describing wire format used inside `.fig`: every file
  * carries its own schema, so the decoder needs no baked-in field dictionary
- * and keeps working as Figma's format evolves.
+ * and keeps working as schema evolves.
  *
  * Ported from `crates/x-format/src/kiwi.rs`, which is unreachable from the web
  * app (no wasm bridge is buildable in this environment). Decode only — writing

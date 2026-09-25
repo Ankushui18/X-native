@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) server surface — JSON-RPC 2.0 over stdio.
 //!
-//! Figma's Dev Mode exposes an MCP server; X-Native's equivalent is the
+//! the Dev Mode exposes an MCP server; X-Native's equivalent is the
 //! `x_native mcp [file.x]` CLI mode: an AI agent (or any scripting client)
 //! speaks newline-delimited JSON-RPC on stdin/stdout and can list pages,
 //! inspect nodes, generate code (CSS/SwiftUI/Compose/XML), read design

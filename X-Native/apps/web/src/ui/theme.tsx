@@ -8,7 +8,7 @@ import {
   type ThemePref,
 } from "./themeModel";
 
-/** Figma Preferences → Theme: Light, Dark or System. */
+/** Preferences → Theme: Light, Dark or System. */
 export { THEME_OPTIONS, themeLabel } from "./themeModel";
 export type { Theme, ThemePref } from "./themeModel";
 

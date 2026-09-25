@@ -257,7 +257,7 @@ fn box_style(node: &Node, parent_layout: Option<&AutoLayout>) -> Vec<String> {
         abs!();
         return s;
     };
-    // Figma ABSOLUTE children keep their canvas coordinates
+    //  ABSOLUTE children keep their canvas coordinates
     if node.constraints.is_absolute {
         abs!();
         return s;

@@ -100,7 +100,7 @@ pub fn set_override(node: &mut Node, target: &str, value: OverrideValue) {
     let tag = override_kind_tag(&value);
     // Preserve the legacy `target` key for the first property on a layer;
     // additional properties use a namespaced key so old `.x` readers and
-    // Figma's multi-property instances can coexist.
+    // the multi-property instances can coexist.
     let key = node
         .overrides
         .iter()

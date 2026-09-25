@@ -663,7 +663,7 @@ pub enum Align {
     Left,
     Center,
     Right,
-    /// Figma Justify: first word on the left edge, last on the right,
+    ///  Justify: first word on the left edge, last on the right,
     /// extra space distributed across word gaps. The last line of a
     /// paragraph stays Left (CSS `text-align: justify`).
     Justify,
@@ -707,7 +707,7 @@ pub fn small_caps_segments(span_text: &str, size: f64) -> Vec<(String, f64)> {
 pub struct TextBlockStyle {
     pub max_width: f64,
     pub line_height: f64, // multiplier over font natural height (1.0 = natural)
-    /// Line-height MODE the multiplier came from (Figma): 0 = legacy auto,
+    /// Line-height MODE the multiplier came from (): 0 = legacy auto,
     /// 1 = px, 2 = %. Auto keeps the r1-r3 softened-ascent first baseline;
     /// explicit modes position it with the CSS half-leading model so a
     /// 44px box on 18px type centers its content area in the line box.
@@ -739,7 +739,7 @@ pub struct TextBlockStyle {
     pub paragraph_indent: f64,
     /// underline / strikethrough, drawn once per line across its width
     pub decoration: x_core::TextDecoration,
-    /// Figma's list style (help 360040449773): a bullet or a counter in a
+    /// the list style (help 360040449773): a bullet or a counter in a
     /// `LIST_MARKER_GAP`-wide column before the text, which is itself
     /// indented by that column. `None` = an ordinary paragraph.
     pub list: x_core::ListStyle,
@@ -781,7 +781,7 @@ pub struct OutlineGlyph {
 /// canvas encoder (encode_rich_text) and the SVG/PDF exporters all
 /// consume it, so text placement is pixel-identical across all three
 /// sinks by construction. Returns (glyphs, total_height).
-/// Figma "Truncate text": the last visible line ends in an ellipsis, and
+///  "Truncate text": the last visible line ends in an ellipsis, and
 /// characters are peeled from its end until the ellipsis fits the wrap width.
 fn apply_truncate_ellipsis(
     shaper: &mut Shaper,
@@ -868,7 +868,7 @@ pub fn glyph_outlines(
     } else {
         spans
     };
-    // Figma's list styles (help 360040449773) take a marker column off
+    // the list styles (help 360040449773) take a marker column off
     // the wrap width: the text is indented by it and the marker is drawn
     // in it, so a list wraps exactly as the same text without one and a
     // `ListStyle::None` block is byte-identical to history.
@@ -879,7 +879,7 @@ pub fn glyph_outlines(
     };
     let avail = (style.max_width - list_indent).max(8.0);
     let mut lines = layout_lines_wrapped(&mut shaper, &spans, default_font, avail, style.wrap);
-    // Figma Truncate text (help 360039956634): cap the line count and put
+    //  Truncate text (help 360039956634): cap the line count and put
     // an ellipsis on the last visible line when anything was dropped.
     if let Some(cap) = style.max_lines {
         let dropped = lines.len() > cap;
@@ -1027,7 +1027,7 @@ pub fn glyph_outlines(
         }
         y += lh;
         // paragraph spacing separates paragraphs — it never pads the block
-        // after the final line (Figma/CSS-collapsed semantics)
+        // after the final line (/CSS-collapsed semantics)
         if line.para_end && li + 1 < lines.len() {
             y += style.paragraph_spacing;
         }
@@ -1822,7 +1822,7 @@ mod tests {
         assert!((xr - xl - (400.0 - w)).abs() < 0.5, "right offset {xr}");
     }
 
-    /// Figma Justify: a wrapped middle line stretches so the last word
+    ///  Justify: a wrapped middle line stretches so the last word
     /// meets the right edge; the last line of the paragraph stays left.
     #[test]
     fn justify_stretches_wrapped_lines() {
@@ -1880,7 +1880,7 @@ mod tests {
         );
     }
 
-    /// Figma Truncate text: the last visible line ends with an ellipsis.
+    ///  Truncate text: the last visible line ends with an ellipsis.
     #[test]
     fn max_lines_adds_ellipsis_when_truncated() {
         let m = fonts();
@@ -1986,7 +1986,7 @@ mod tests {
         );
     }
 
-    /// Figma's lists (help 360040449773): every list item's text is indented
+    /// the lists (help 360040449773): every list item's text is indented
     /// by the marker column, the bullet or the 1-based counter is drawn in
     /// it, and the block's height does not move. A `ListStyle::None` block is
     /// the plain layout, byte for byte.

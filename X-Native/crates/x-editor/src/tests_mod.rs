@@ -255,7 +255,7 @@ mod tests {
         assert!(!e.set_overflow("nope", Overflow::Clip));
     }
 
-    /// Figma's Prototype-tab scroll settings, at the engine boundary: the
+    /// the Prototype-tab scroll settings, at the engine boundary: the
     /// **Position** menu (Scroll with parent / Fixed / Sticky) is a document
     /// edit and goes on the undo stack, while the preview's own scroll offset
     /// is view state — the player writes it and gives it back, and no undo
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(hit_test(&d, Point::new(500.0, 500.0)), None);
     }
 
-    /// Figma's **canvas stacking** (help 31289464393751) changes the canvas
+    /// the **canvas stacking** (help 31289464393751) changes the canvas
     /// only: in a *First on top* auto-layout frame the first child paints last,
     /// so that is the layer a click finds — the hit test walks the same
     /// `paint_order` the viewer paints.
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn hit_test_answers_on_a_polygons_and_stars_ink() {
-        // Figma's Polygon and Star are outlines that fill a box whose shape
+        // the Polygon and Star are outlines that fill a box whose shape
         // does not follow them (the page: "the blue bounding box around the
         // shape is below the bottom of the shape"). A click in the corner of
         // that box is NOT on the shape — the shape's own ink answers, like
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn hit_test_reaches_a_thin_lines_ink() {
-        // Figma's Line: a horizontal segment in a hairline box. What the tool
+        // the Line: a horizontal segment in a hairline box. What the tool
         // lands is stroked, never filled, so the click is answered by the
         // distance to the ink — the box alone would only answer on its edge.
         // A FILLED path keeps the box test, which is what the pencil's and
@@ -424,7 +424,7 @@ mod tests {
     }
 
     /// A page with two top-level frames that each hold the same two layers —
-    /// the shape Figma's "matching objects" is about (a search bar, a title).
+    /// the shape the "matching objects" is about (a search bar, a title).
     fn two_frames(extra: Node) -> Node {
         let layer = |id: &str, name: &str| {
             let mut n = Node::rect(id, 10.0, 20.0, 80.0, 40.0, Color::WHITE);
@@ -444,7 +444,7 @@ mod tests {
             .child(extra)
     }
 
-    /// Figma's Select matching layers: the same layer in the page's other frames
+    /// the Select matching layers: the same layer in the page's other frames
     /// and groups — matched by name and place, not by size.
     #[test]
     fn select_matching_finds_the_same_layer_and_never_crosses_a_section() {
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn a_group_answers_a_marquee_like_any_other_layer() {
-        // A Group has bounds, so a marquee selects it (Figma); only a *click*
+        // A Group has bounds, so a marquee selects it (); only a *click*
         // passes through a group's empty area to what is beneath.
         let mark = Node::rect("k", 0.0, 0.0, 30.0, 30.0, Color::WHITE);
         let group = Node::group("g", 100.0, 100.0).child(mark);
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn set_text_clamps_rich_runs_to_new_length() {
-        // editing text CLAMPS rich-run char ranges (Figma semantics): a run
+        // editing text CLAMPS rich-run char ranges ( semantics): a run
         // that still fits survives, one pushed out of range is dropped
         let mut t = Node::text("t", 0.0, 200.0, 100.0, 20.0, "OLD TEXT");
         t.text_runs = vec![
@@ -655,7 +655,7 @@ mod tests {
         assert!(matches!(&find(&e.root, "t").unwrap().kind, NodeKind::Text{text} if text=="OLD"));
     }
 
-    /// Figma's canvas rotate: every selected layer turns with the gesture, the
+    /// the canvas rotate: every selected layer turns with the gesture, the
     /// whole gesture is ONE undo entry (the app merges the moves on release),
     /// and the default pivot is the selection's centre.
     #[test]
@@ -709,7 +709,7 @@ mod tests {
     }
 
     /// A layer whose own rotation origin the user moved turns about *that*
-    /// point, and the panel's field takes Figma's angle range for the whole
+    /// point, and the panel's field takes the angle range for the whole
     /// selection at once.
     #[test]
     fn a_layers_own_origin_is_the_pivot_of_its_rotation() {
@@ -733,7 +733,7 @@ mod tests {
         );
         assert!((n.transform.rotation - 30f64.to_radians()).abs() < 1e-9);
 
-        // the field: 195° is stored as -165° (Figma's own example), on every
+        // the field: 195° is stored as -165° (the own example), on every
         // selected layer, as one entry
         e.selection = vec!["a".into(), "b".into()];
         let depth = e.undo_depth();
@@ -860,7 +860,7 @@ mod tests {
         // click order is not z-order: `a` sits UNDER `b`
         e.selection = vec!["b".into(), "a".into()];
         assert_eq!(e.use_as_mask("m1"), Some(true));
-        let m = find(&e.root, "m1").expect("Figma's mask object (help 360040450253)");
+        let m = find(&e.root, "m1").expect("Mask object");
         assert_eq!(
             m.children.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
             vec!["a", "b"],
@@ -888,7 +888,7 @@ mod tests {
         assert_eq!(
             e.mask_type_of_selection(),
             Some(MaskType::Alpha),
-            "Figma's default is Alpha"
+            "Default is Alpha"
         );
         // the Mask section's dropdown, and a non-mask takes no type
         assert!(e.set_mask_type(MaskType::Vector));
@@ -1111,7 +1111,7 @@ mod tests {
         assert_eq!(e.root.children.len(), 3, "a, b and the untouched ellipse c");
     }
 
-    /// Sections are canvas elements: "Sections in Figma Design are a
+    /// Sections are canvas elements: "Sections in  Design are a
     /// top-level element on the canvas by default. Sections can contain all
     /// layer types, including other sections, but cannot be contained within
     /// frames or groups." Wrapping a selection that lives inside a frame
@@ -1203,7 +1203,7 @@ mod tests {
         assert!(find(&e.root, "sec1").unwrap().children.is_empty());
     }
 
-    /// Figma's second delete — ⌘⌫ on a Mac, Ctrl+Backspace on Windows: "To
+    /// the second delete — ⌘⌫ on a Mac, Ctrl+Backspace on Windows: "To
     /// delete a section without deleting its contents". The container goes,
     /// its layers stay on the canvas where they were drawn.
     #[test]
@@ -1247,7 +1247,7 @@ mod tests {
         assert_eq!((f.w, f.h), (290.0, 50.0));
         assert_eq!(f.children[0].transform.x, 0.0); // members re-based
         assert_eq!(f.children[1].transform.x, 190.0); // b re-based to 200-10
-                                                      // Figma frames default to white fill
+                                                      //  frames default to white fill
         assert!(matches!(f.fill, Paint::Solid(c) if c == Color::WHITE));
         // selection collapses onto the new frame
         assert_eq!(e.selection, vec!["f1".to_string()]);
@@ -1684,7 +1684,7 @@ mod tests {
     fn rename_node_changes_name_not_id_and_preserves_references() {
         // "b" carries a prototype link that navigates to "a". Renaming "a"
         // must change ONLY its display name — the id (and every reference
-        // pointing at it) stays intact (Figma parity).
+        // pointing at it) stays intact ( parity).
         let mut e = Editor::new(
             Node::frame("page", 800.0, 600.0)
                 .child(Node::rect(
@@ -1713,7 +1713,7 @@ mod tests {
         // undo restores the name (and only the name)
         assert!(e.undo());
         assert_eq!(find(&e.root, "a").unwrap().name, "a");
-        // duplicate names are allowed (Figma), unlike the old id-rename path
+        // duplicate names are allowed (), unlike the old id-rename path
         assert!(e.rename_node("b", "Renamed A"));
         assert_eq!(find(&e.root, "b").unwrap().name, "Renamed A");
         // refusals: empty + no-op + unknown id
@@ -2250,7 +2250,7 @@ mod tests {
 
     #[test]
     fn scale_tool_takes_text_effects_and_layout_with_it() {
-        // Figma's Scale tool (K) is not a resize: stroke weight, corner
+        // the Scale tool (K) is not a resize: stroke weight, corner
         // radius, font size, effect distances and auto-layout spacing all
         // travel with the box. This is that whole list, on one node.
         let mut inner = Node::rect("r", 10.0, 20.0, 30.0, 40.0, Color::WHITE).radius(8.0);
@@ -2322,7 +2322,7 @@ mod tests {
     fn scale_about_an_anchor_pins_it_and_is_one_undo_step() {
         // The anchor is the FIXED POINT: scaling a node about its own
         // top-left corner must leave that corner exactly where it was, which
-        // is what makes Figma's corner drag feel like it grows from the
+        // is what makes the corner drag feel like it grows from the
         // opposite handle.
         let mut e = Editor::new(doc());
         assert!(e.scale_nodes_about(&[("a".into(), 10.0, 10.0)], 2.0));
@@ -2346,7 +2346,7 @@ mod tests {
             (100.0, 5.0, 50.0, 25.0)
         );
         assert_eq!(e.undo_depth(), depth + 1, "one gesture, one undo step");
-        // Figma's exception, from the Scale tool article: a LOCKED layer is
+        // the exception, from the Scale tool article: a LOCKED layer is
         // not scaled. Lock "b" and repeat: only "a" moves.
         e.undo();
         e.set_locked("b", true);
@@ -2689,7 +2689,7 @@ mod tests {
         assert_eq!(n.overrides.len(), 1, "reset undone");
     }
 
-    /// Figma's instance More-actions menu (help 360039150733) at the engine
+    /// the instance More-actions menu (help 360039150733) at the engine
     /// layer: the change list, a one-property reset, and **push changes to
     /// main component** — each one command-log step, so ⌘Z takes it back.
     #[test]
@@ -2773,7 +2773,7 @@ mod tests {
     }
 
     /// A Button master with a label and an icon, and one instance of it — the
-    /// fixture Figma's *select inside* behaves on.
+    /// fixture the *select inside* behaves on.
     fn scoped_fixture() -> Editor {
         let master = Node::component("def", "Button", 120.0, 44.0)
             .child(Node::text("lbl", 12.0, 12.0, 80.0, 20.0, "Click me"))
@@ -2789,7 +2789,7 @@ mod tests {
         Editor::new(Node::frame("r", 500.0, 500.0).child(master).child(inst))
     }
 
-    /// Figma (help 360041488473): the Effects section is a **list** — add a
+    ///  (help 360041488473): the Effects section is a **list** — add a
     /// type, switch a row's type, hide it, edit its settings, duplicate it,
     /// reorder it, remove it — and every write is one undo entry.
     #[test]
@@ -2922,7 +2922,7 @@ mod tests {
         );
     }
 
-    /// Figma (help 360040667874): *"Pass through cannot be applied to fills or
+    ///  (help 360040667874): *"Pass through cannot be applied to fills or
     /// effects"*, and it IS allowed on a layer, where it is also the default.
     #[test]
     fn pass_through_is_a_layer_mode_only() {
@@ -2959,7 +2959,7 @@ mod tests {
         Editor::new(Node::frame("r", 600.0, 400.0).child(a).child(b).child(inst))
     }
 
-    /// Figma (help 360056440594): a set is a frame that contains **only**
+    ///  (help 360056440594): a set is a frame that contains **only**
     /// components, and combining puts the variants inside one.
     #[test]
     fn combining_two_masters_builds_a_set_frame_that_holds_them() {
@@ -3013,7 +3013,7 @@ mod tests {
         );
     }
 
-    /// A frame that already holds nothing but the selection IS the set — Figma
+    /// A frame that already holds nothing but the selection IS the set — 
     /// reuses it rather than nesting a second frame.
     #[test]
     fn a_frame_holding_only_the_selection_becomes_the_set() {
@@ -3086,7 +3086,7 @@ mod tests {
         );
     }
 
-    /// Figma (help 360039150733): *"you can change the properties of any layer
+    ///  (help 360039150733): *"you can change the properties of any layer
     /// within an instance"* — double-clicking inside an instance selects the
     /// layer under the cursor, which for this engine is the master layer the
     /// override will name.
@@ -3181,7 +3181,7 @@ mod tests {
 
     /// One layer carries **one** override at a time: the engine stores a single
     /// encoded value per layer (the shape the `.x` files carry), so a second
-    /// property written on the same layer replaces the first. Figma keeps the
+    /// property written on the same layer replaces the first.  keeps the
     /// two side by side and lists both; this is the model's known limit, pinned
     /// so it cannot change silently.
     #[test]
@@ -3207,7 +3207,7 @@ mod tests {
         assert!(!resolved.visible);
     }
 
-    /// Figma's list of what an instance does NOT let you override starts with
+    /// the list of what an instance does NOT let you override starts with
     /// position and constraints: a layer inside an instance does not move.
     #[test]
     fn position_is_not_overridable_inside_an_instance() {

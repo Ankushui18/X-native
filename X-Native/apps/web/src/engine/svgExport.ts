@@ -112,14 +112,14 @@ function loopPoints(n: XNode, loop: number[]): string {
 
 const round = (v: number) => Math.round(v * 1000) / 1000;
 
-/** The dash list as SVG wants it: Figma's custom pattern wins over the pair. */
+/** The dash list as SVG wants it: custom pattern wins over the pair. */
 export function svgDash(n: XNode): string {
   if (n.strokeDashPattern?.length) return n.strokeDashPattern.join(" ");
   if (n.strokeDash > 0) return `${n.strokeDash} ${n.strokeGap || n.strokeDash}`;
   return "none";
 }
 
-/** A gradient's stops: the ramp when the layer has one, otherwise Figma's
+/** A gradient's stops: the ramp when the layer has one, otherwise default
  *  legacy two-colour pair. A three-stop ramp used to export as two. */
 function stopsOf(n: XNode, fallbackB: string): { color: string; opacity: number; offset: number }[] {
   const ramp = n.gradientStops ?? [];
@@ -163,7 +163,7 @@ function gradientDefs(n: XNode, id: string): { def: string; paint: string } | nu
   return null;
 }
 
-/** SVG filters for the effect stack. Figma's shadow radius is a CSS-style blur
+/** SVG filters for the effect stack. shadow radius is a CSS-style blur
  *  radius, so the Gaussian's standard deviation is half of it - the same
  *  relationship the canvas painter has. */
 function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[] } {
@@ -357,7 +357,7 @@ export function svgNode(n: XNode, top = false): string {
   const fx = effectFilters(n, id);
   defs.push(...fx.defs);
   const filter = fx.filters.length ? ` filter="${fx.filters.join(" ")}"` : "";
-  // The layer turns about its own rotation origin, which Figma's ⌥-drag can
+  // The layer turns about its own rotation origin, which ⌥-drag can
   // move; rotating about the centre regardless had exported a different pose.
   const [ox, oy] = n.rotOrigin ?? [0.5, 0.5];
   const transform = [
@@ -420,13 +420,13 @@ export interface SvgPreset {
   format: string;
   scale: number | string;
   suffix: string;
-  /** "Include id attribute": Figma writes an id from the layer's name so a
+  /** "Include id attribute": writes an id from the layer's name so a
    *  stylesheet or a script can reach the element. */
   includeId?: boolean;
 }
 
 /**
- * The id for a layer, when the export asks for one. Figma bases it on the name
+ * The id for a layer, when the export asks for one. bases it on the name
  * in the Layers panel, tidied into something an `id` selector accepts - a name
  * like "Card / Header" would otherwise end the attribute early and produce
  * markup no parser can read.
@@ -450,7 +450,7 @@ export function exportSvg(n: XNode, p: SvgPreset) {
  * Several layers as one `<svg>`, at 1x, with their relative positions intact.
  *
  * This is the clipboard's vector flavour: what a browser, a slide deck or
- * Figma itself renders when this app's ⌘C is pasted somewhere that does not
+ * SVG renders when ⌘C is pasted somewhere that does not
  * understand our own payload. `exportSvg` is per-layer and starts its viewBox at
  * the layer's own origin, so a multi-selection needs the bounding box of all of
  * them instead — each root keeps its offset and the viewBox starts at the

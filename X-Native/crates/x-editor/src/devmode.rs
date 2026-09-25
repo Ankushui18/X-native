@@ -56,15 +56,15 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
         "  width: {}px;\n  height: {}px;\n",
         node.w, node.h
     ));
-    // Dev-Mode annotation (Figma: developer notes)
+    // Dev-Mode annotation (: developer notes)
     if let Some(code) = node.bindings.get("code") {
         css.push_str(&format!("  /* code connect: {code} */\n"));
     }
     if let Some(note) = node.note() {
         css.push_str(&format!("  /* note: {} */\n", note));
     }
-    // auto layout -> flex (Figma auto layout IS flexbox);
-    // grid mode (Figma Grid) -> CSS grid
+    // auto layout -> flex ( auto layout IS flexbox);
+    // grid mode ( Grid) -> CSS grid
     if let NodeKind::Frame { layout: Some(al) } = &node.kind {
         if let Some(g) = &al.grid {
             css.push_str(&format!(
@@ -184,7 +184,7 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
             css.push_str(&format!("  max-height: {}px;\n", mh));
         }
     }
-    // resize pins (Sketch resizing constraints / Figma constraints), when
+    // resize pins ( resizing constraints /  constraints), when
     // they differ from the left/top default — the inspect panel's hint
     if (node.pin.0, node.pin.1) != (HPin::Left, VPin::Top) {
         css.push_str(&format!(
@@ -249,17 +249,17 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
         } else if radius > 0.0 {
             css.push_str(&format!("  border-radius: {radius}px;\n"));
         }
-        // Figma squircle corner smoothing (0.0–1.0).
+        // Corner smoothing (0.0–1.0).
         // CSS has no native squircle; use SVG clip-path or border-image
         // for production. We emit a comment for developer awareness.
         if node.corner_smoothing > 0.0 {
             css.push_str(&format!(
-                "  /* corner-smoothing: {:.2} (Figma squircle) */\n",
+                "  /* corner-smoothing: {:.2} (squircle) */\n",
                 node.corner_smoothing
             ));
         }
     }
-    // CSS Flexbox parity (Figma Jul-2026): inside strokes → CSS `border`
+    // CSS Flexbox parity ( Jul-2026): inside strokes → CSS `border`
     // (included in layout by default), outside/center strokes → CSS
     // `outline` (excluded from layout, like outline vs border in CSS).
     if node.stroke.width > 0.0 {
@@ -323,7 +323,7 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
         if let Some(ls) = ls {
             css.push_str(&format!("  letter-spacing: {ls}px;\n"));
         }
-        // paragraph wrap strategy (Figma Aug-2026 text wrap)
+        // paragraph wrap strategy ( Aug-2026 text wrap)
         if node.text_wrap() != x_core::TextWrap::Auto {
             css.push_str(&format!("  text-wrap: {};\n", node.text_wrap().to_str()));
         }
@@ -1001,7 +1001,7 @@ pub fn node_tokens(node: &Node, vars: &Variables) -> Vec<(String, String)> {
             out.push((label.into(), v.clone()));
         }
     }
-    // named style bindings (Figma styles)
+    // named style bindings ( styles)
     for (key, label) in x_core::STYLE_BINDING_KEYS {
         if let Some(name) = node.bindings.get(key) {
             out.push((format!("{label} style"), name.clone()));
@@ -1017,7 +1017,7 @@ pub fn node_tokens(node: &Node, vars: &Variables) -> Vec<(String, String)> {
 }
 
 /// Inspect-mode measurements: a node's size/position plus its distance to the
-/// four edges of its parent (Figma's red "padding" lines).
+/// four edges of its parent (the red "padding" lines).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Measurements {
     pub w: f64,
@@ -1051,10 +1051,10 @@ pub fn node_measurements(root: &Node, id: &str) -> Option<Measurements> {
     })
 }
 
-/// Gap between two nodes' world AABBs (Figma's hovered-node measurement).
+/// Gap between two nodes' world AABBs (the hovered-node measurement).
 /// Positive = separated by that many px on that axis; negative = overlap depth.
 /// `nested` is populated when one AABB fully contains the other (a node inside
-/// its frame) — Figma then shows edge-to-edge insets instead of a disjoint gap.
+/// its frame) —  then shows edge-to-edge insets instead of a disjoint gap.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Gap {
     pub horizontal: f64,
