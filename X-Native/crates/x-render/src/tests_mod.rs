@@ -1022,7 +1022,7 @@ mod outline_view_tests {
         assert_eq!(stripped.children[0].transform.x, 10.0);
         assert_eq!(stripped.children[0].children[0].id, "inner");
         // Image and Text paint themselves and would swallow the stroke:
-        // they become the plain box they own (the named delta: 
+        // they become the plain box they own (the named delta:
         // outlines the glyphs, we outline the text layer's box)
         assert!(
             matches!(

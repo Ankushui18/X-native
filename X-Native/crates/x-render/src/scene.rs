@@ -78,7 +78,7 @@ pub const OUTLINE_COLOR: Color = Color::WHITE;
 /// [`OUTLINE_COLOR`] at `width` — the app passes `1.0 / zoom`, so the line
 /// stays ≈1 screen pixel at any zoom. Image and Text nodes paint themselves
 /// (a bitmap, glyphs) and would swallow the stroke, so they become plain
-/// `Rect { radius: 0.0 }` — the layer's own box (the named delta: 
+/// `Rect { radius: 0.0 }` — the layer's own box (the named delta:
 /// outlines the glyphs). Children are stripped recursively, so an instance
 /// resolves from the stripped registry — the master's children in the copy —
 /// and nothing in the original document moves. A render mode, not a document

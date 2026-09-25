@@ -1118,7 +1118,7 @@ pub fn build_render_tree_of(root: &Node, id: &str, vars: &Variables) -> Option<R
 /// Build a render tree for a Slice: the flattened canvas content inside the
 /// slice's world bounds, re-origined to (0,0). Returns the tree plus the
 /// slice's (w, h) as the export canvas size. The whole page is lowered (so
-/// content from every layer that overlaps the region is captured, 
+/// content from every layer that overlaps the region is captured,
 /// style), then every command is shifted by the slice's world offset and
 /// clipped to the slice rect at the origin. `id` must resolve to a Slice node.
 pub fn build_render_tree_slice(

@@ -754,7 +754,7 @@ pub(crate) mod planar_tests {
         let loop_dir: Vec<usize> = if reversed {
             vec![o, o + 3, o + 2, o + 1]
         } else {
-            vec![o + 0, o + 1, o + 2, o + 3]
+            vec![o, o + 1, o + 2, o + 3]
         };
         for (i, v) in loop_dir.iter().enumerate() {
             let w = loop_dir[(i + 1) % 4];

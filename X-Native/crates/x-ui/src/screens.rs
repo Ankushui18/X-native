@@ -134,7 +134,7 @@ pub struct SurfaceSpec {
     pub id: SurfaceId,
     pub screen: ScreenId,
     pub kind: SurfaceKind,
-    /// The name it shows, or `""` when it shows none. OpenPencil / 
+    /// The name it shows, or `""` when it shows none. OpenPencil /
     /// naming — the test rejects the old STRUCTURE / COMPOSE vocabulary.
     pub label: &'static str,
     /// It owns property rows, so those rows snap to the control-height scale.
