@@ -2,8 +2,10 @@ import type { GradientStop, XNode } from "./types";
 import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
 import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
-/** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB). */
-function mixHex(a: string, b: string, t: number): string {
+/** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB).
+ *  Exported so the gradient editor inserts new stops in the same colour the
+ *  ramp actually shows at that point. */
+export function mixHex(a: string, b: string, t: number): string {
   const A = parseHex(a);
   const B = parseHex(b);
   const u = Math.max(0, Math.min(1, t));
@@ -76,13 +78,57 @@ function stopsOf(n: XNode): GradientStop[] {
  * Each adjacent pair is subdivided and interpolated in OKLab, which keeps
  * mid-tones from going grey the way canvas' native sRGB interpolation does.
  */
-/** Compress a ramp into 0..0.5 and mirror it into 0.5..1 for conic sweeps. */
-function conicStops(stops: GradientStop[]): GradientStop[] {
-  const fwd = stops.map((s) => ({ color: s.color, position: s.position / 2 }));
-  const back = [...stops]
-    .reverse()
-    .map((s) => ({ color: s.color, position: 1 - s.position / 2 }));
-  return [...fwd, ...back];
+function isGradientType(t: string): boolean {
+  return t === "linear" || t === "radial" || t === "angular" || t === "diamond";
+}
+
+/** Which gradient the canvas handles grab, if any. */
+export interface GradTarget {
+  /** Index into `fills`, or -1 for the base fill. */
+  index: number;
+  gx: number;
+  gy: number;
+  hx: number;
+  hy: number;
+  /** Endpoint colours for the handle dots. */
+  from: string;
+  to: string;
+}
+
+/**
+ * The topmost visible gradient fill — extra paints over the base — so the
+ * handles always match the ramp on screen. A hidden base gradient yields no
+ * handles even when its type is still set.
+ */
+export function gradTarget(n: XNode): GradTarget | null {
+  const fills = n.fills ?? [];
+  for (let i = fills.length - 1; i >= 0; i--) {
+    const p = fills[i];
+    if (p.visible === false || !isGradientType(p.type)) continue;
+    const st = p.stops && p.stops.length >= 2 ? [...p.stops].sort((a, b) => a.position - b.position) : null;
+    return {
+      index: i,
+      // An extra without explicit geometry inherits the base handles in
+      // render (see paintFill), so the handles show — and write — the same.
+      gx: p.gx ?? n.fillGX ?? 0.5,
+      gy: p.gy ?? n.fillGY ?? 0,
+      hx: p.hx ?? n.fillHX ?? 0.5,
+      hy: p.hy ?? n.fillHY ?? 1,
+      from: st ? st[0].color : p.color,
+      to: st ? st[st.length - 1].color : n.fillB || "#ffffff",
+    };
+  }
+  if (n.fillVisible === false || !n.fill || isNone(n.fill) || !isGradientType(n.fillType)) return null;
+  const stops = stopsOf(n);
+  return {
+    index: -1,
+    gx: n.fillGX ?? 0.5,
+    gy: n.fillGY ?? 0,
+    hx: n.fillHX ?? 0.5,
+    hy: n.fillHY ?? 1,
+    from: stops[0].color,
+    to: stops[stops.length - 1].color,
+  };
 }
 
 function ramp(g: CanvasGradient, stops: GradientStop[]) {
@@ -130,9 +176,13 @@ export function fillStyle(
     return g;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
-    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
+    // Conic angles run clockwise from the top while atan2 runs from the east,
+    // so the handle direction needs a quarter turn to land the sweep origin
+    // where the handle points. The ramp sweeps the full circle unmirrored —
+    // first and last stops meet at the origin with Figma's authentic seam.
+    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw) + Math.PI / 2;
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    ramp(g, conicStops(stops));
+    ramp(g, stops);
     return g;
   }
   return cssRgba(a);
@@ -196,17 +246,17 @@ function paintOnePaint(
     return;
   }
   if (n.fillType === "radial") {
+    // Circular, like Figma: the handle sets centre and radius, never an
+    // ellipse — a wide frame gets a clipped circle, not a stretched oval.
     ctx.save();
     ctx.clip();
     const cx = sx + gx * sw;
     const cy = sy + gy * sh;
-    const rn = Math.hypot(hx - gx, hy - gy) || 0.5;
-    ctx.translate(cx, cy);
-    ctx.scale(Math.max(0.001, sw * rn), Math.max(0.001, sh * rn));
-    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    const r = Math.hypot((hx - gx) * sw, (hy - gy) * sh) || Math.max(sw, sh) / 2;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     ramp(g, stops);
     ctx.fillStyle = g;
-    ctx.fillRect(-2, -2, 4, 4);
+    ctx.fillRect(sx, sy, sw, sh);
     ctx.restore();
     return;
   }
@@ -222,11 +272,11 @@ function paintOnePaint(
     return;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
-    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
+    // Same quarter-turn as fillStyle: the sweep origin tracks the handle.
+    // No mirroring — the seam where the ramp wraps is authentic Figma.
+    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw) + Math.PI / 2;
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    // A cone wraps, so mirror the ramp back to the first colour at t=1 to
-    // avoid a hard seam at the sweep origin.
-    ramp(g, conicStops(stops));
+    ramp(g, stops);
     ctx.fillStyle = g;
     ctx.fill(fillRule);
     return;

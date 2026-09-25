@@ -39,7 +39,7 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
 import { clampZoom, normalizeWheelDelta, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
@@ -163,6 +163,8 @@ type Drag =
       point?: number;
       segIndex?: number;
       handle?: "in" | "out" | "g" | "h";
+      /** Gradient-handle drag: which `fills` index the handles grabbed, -1 for the base fill. */
+      gindex?: number;
       padEdge?: "top" | "right" | "bottom" | "left";
       forcedSide?: "right" | "bottom" | "left" | "top";
       /** ⌥ at the padding handle: the opposite side follows. ⌥⇧: all four. */
@@ -2207,24 +2209,24 @@ export function Canvas({
       ctx.fillText(dim, bx + bw / 2, by + bh / 2);
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
-      const ft = wp.node.fillType;
-      if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
-        const ax = sx + (wp.node.fillGX ?? 0.5) * sw;
-        const ay = sy + (wp.node.fillGY ?? 0) * sh;
-        const bx = sx + (wp.node.fillHX ?? 0.5) * sw;
-        const by = sy + (wp.node.fillHY ?? 1) * sh;
+      const gt = gradTarget(wp.node);
+      if (gt) {
+        const ax = sx + gt.gx * sw;
+        const ay = sy + gt.gy * sh;
+        const bx = sx + gt.hx * sw;
+        const by = sy + gt.hy * sh;
         ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
         ctx.stroke();
-        ctx.fillStyle = wp.node.fill;
+        ctx.fillStyle = gt.from;
         ctx.beginPath();
         ctx.arc(ax, ay, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        ctx.fillStyle = wp.node.fillB || "#ffffff";
+        ctx.fillStyle = gt.to;
         ctx.beginPath();
         ctx.arc(bx, by, 6, 0, Math.PI * 2);
         ctx.fill();
@@ -3290,7 +3292,6 @@ export function Canvas({
           px = wp.node.flipH ? cx - (u.x - cx) : u.x;
           py = wp.node.flipV ? cy - (u.y - cy) : u.y;
         }
-        const ft = wp.node.fillType;
         if (snap.rightTab === "prototype") {
           // Flow starting point badge click
           const flowStartId = snap.pages[snap.page].flowStart;
@@ -3341,19 +3342,20 @@ export function Canvas({
             }
           }
         }
-        if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
-          const ax = sx + (wp.node.fillGX ?? 0.5) * wp.node.w * z;
-          const ay = sy + (wp.node.fillGY ?? 0) * wp.node.h * z;
-          const bx = sx + (wp.node.fillHX ?? 0.5) * wp.node.w * z;
-          const by = sy + (wp.node.fillHY ?? 1) * wp.node.h * z;
+        const gt = gradTarget(wp.node);
+        if (gt) {
+          const ax = sx + gt.gx * wp.node.w * z;
+          const ay = sy + gt.gy * wp.node.h * z;
+          const bx = sx + gt.hx * wp.node.w * z;
+          const by = sy + gt.hy * wp.node.h * z;
           if (Math.hypot(px - ax, py - ay) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "g" };
+            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "g", gindex: gt.index };
             return;
           }
           if (Math.hypot(px - bx, py - by) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "h" };
+            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "h", gindex: gt.index };
             return;
           }
         }
@@ -4168,8 +4170,23 @@ export function Canvas({
         const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
         const lx = local.x / Math.max(1, wp.node.w);
         const ly = local.y / Math.max(1, wp.node.h);
-        if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: lx, fillGY: ly } });
-        else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: lx, fillHY: ly } });
+        const gi = d.gindex ?? -1;
+        if (gi < 0) {
+          if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: lx, fillGY: ly } });
+          else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: lx, fillHY: ly } });
+        } else {
+          // The handles grabbed a stacked fill: write its own geometry. The
+          // first drag also pins down inherited base geometry explicitly, at
+          // the values the handles already showed, so nothing jumps.
+          const fills = [...(wp.node.fills ?? [])];
+          const p = fills[gi];
+          if (!p) return;
+          fills[gi] =
+            d.handle === "g"
+              ? { ...p, gx: lx, gy: ly, hx: p.hx ?? wp.node.fillHX ?? 0.5, hy: p.hy ?? wp.node.fillHY ?? 1 }
+              : { ...p, hx: lx, hy: ly, gx: p.gx ?? wp.node.fillGX ?? 0.5, gy: p.gy ?? wp.node.fillGY ?? 0 };
+          engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
+        }
       }
     } else if (d.mode === "vec" && d.id != null && d.point != null) {
       const wpt = toWorld(e.clientX, e.clientY);

@@ -16,8 +16,8 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 6 | Selection system (type-aware matrix) | ✅ done | S-001–S-005 (7 tests) |
 | 7 | Transform / resize / rotate | ✅ done | T-001–T-005 (8 tests) + 1 known deviation |
 | 8 | Canvas navigation (pan/zoom/guides/minimap) | ✅ done | N-001–N-002 (6 tests) |
-| 9 | Grid / guides / rulers | … | |
-| 10 | Fill / color / gradient | … | |
+| 9 | Grid / guides / rulers | ✅ done | G-000–G-007 (19 tests) |
+| 10 | Fill / color / gradient | ✅ done | P-001–P-010 (19 tests) |
 | 11 | Strokes (+ variable) | … | |
 | 12 | Effects / shadows / blur | … | |
 | 13 | Images (place/crop/mask/export) | … | |
@@ -268,3 +268,64 @@ products (no guide-arrow-move either side — not a gap).
 - Blue ruler highlight tracking the selected guide: same, cosmetic only.
 - Ruler pixel numbering origin at canvas 0,0 with pan/zoom: existing rulers
   verified visually unchanged; numbering audit is rendering, not behavior.
+
+## §10 Fill / color / gradient — evidence & fixes (2026-09-26)
+
+Figma refs: "Guide to fills" (5 types; + adds solid; per-fill opacity/eye/
+drag-reorder/minus), "Update fills using the color picker" (palette, hue +
+opacity sliders, eyedropper, blend, contrast, RGB/HEX/CSS/HSL/HSB, file
+colors), "Use gradients" (4 types, 2 default stops, drag/click-+/select+Delete,
+Flip, Rotate), widget `GradientPaint` docs (handle semantics), plus a tutorial
+confirming the default linear runs top→bottom. After: full suite green
+(934 + 64 + 46 + 63 + 49 + 92 + 19 + 19 new fill checks).
+
+### Fixed (shipped in the §10 fills commit on this branch)
+
+- P-001 — Angular gradients mirrored the ramp (red→blue→red reflected sweep).
+  Figma sweeps the full circle with an authentic seam. Fix: ramp runs
+  unmirrored in both render paths.
+- P-002 — Angular sweep origin sat 90° off the handle (conic 0 = top, atan2
+  0 = east). Fix: quarter-turn so the origin tracks the end handle.
+- P-003 — Radials rendered elliptical via context scaling; Figma's are
+  circles. Fix: plain circular radius from handle distance in pixels.
+- P-004 — Canvas handles only targeted the base fill, and showed for hidden
+  or removed gradients. Fix: `gradTarget` aims at the topmost visible
+  gradient (extras over base); first drag pins inherited geometry explicitly
+  so nothing jumps; hidden/none gradients yield no handles.
+- P-005 — The stacked-fill picker dropped blend + gradient geometry, so
+  Rotate and blend mode were silently dead on extra fills. Fix: kept.
+- P-006 — Base-fill minus only hid (row lingered eye-off, + stacked over a
+  hidden base). Fix: true removal via the none+hidden pair the stroke row
+  already used; + re-adds the default fill.
+- P-007 — Delete/Backspace ignored the selected gradient stop. Fix: removes
+  it (never while typing, never below two stops).
+- P-008 — Click-inserted stops copied the left stop's colour instead of the
+  ramp's. Fix: OKLab-interpolated `mixHex`, exported from paint so the
+  insert matches the rendered ramp exactly.
+- P-009 — Dragging one of two same-colour stops lost selection (matched by
+  colour). Fix: identity tracking.
+- P-010 — Image type offered for stacked fills led nowhere (choice dropped,
+  solid rendered). Fix: excluded from extras until §13 wires it.
+
+### Verified parity (traced, no fix needed)
+
+Solid + 4 gradients + image types; + adds solid white on the stack /
+#D9D9D9 re-added base; per-fill opacity field, eye, minus, grip reorder (+
+bonus step buttons); swatch opens anchored picker; hex/RGB/HSL/HSB/CSS
+models; SV + hue + opacity drags, all coalesced to one undo step; eyedropper
+in-picker (I), global (I / Ctrl+C) with pixel sampling + layer fallback;
+per-fill blend in picker and render; contrast check with auto-fix; default
+linear top→bottom; fresh second stop white; Reverse + 90° Rotate; stop drag,
+bar-click insert, double-click remove, 2-stop floor; on-canvas handle line +
+dots with begin/end single-undo drags; Selection Colors section; text fill
+colours the glyphs; default-shape emerald kept deliberately (product
+identity, not Figma grey).
+
+### Deferred / out of scope
+
+- Pattern and Video fills: no X-Native equivalent — OUT OF SCOPE.
+- Variable bindings on gradient stops: §19 (variables) owns bindings.
+- Stroke picker offers gradient/image types it cannot apply: §11 (strokes).
+- Gradient CSS/SVG export: §25 (import/export); codegen has no gradient path.
+- Angular default origin kept south: no Figma evidence for south vs east;
+  the handle-tracking fix is what the audit could prove.

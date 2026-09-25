@@ -33,6 +33,7 @@ import {
   type ImageFit,
 } from "./color";
 import { rememberImage } from "../engine/assets";
+import { mixHex } from "../engine/paint";
 import { armPopover } from "./popoverGuard";
 
 export interface FillValue {
@@ -75,6 +76,7 @@ export function FillPicker({
   anchor,
   background,
   largeText,
+  noImage,
   onChange,
   onClose,
 }: {
@@ -82,6 +84,9 @@ export function FillPicker({
   value: FillValue;
   recents: string[];
   anchor: DOMRect;
+  /** Stacked fills cannot hold images yet (§13 owns that), so the type menu
+   *  offers no dead Image option for them. */
+  noImage?: boolean;
   /** What the colour is painted over, resolved from the layer's own ancestry so
    *  the check means something on the canvas rather than only against white. */
   background?: string;
@@ -137,6 +142,28 @@ export function FillPicker({
         e.preventDefault();
         armEyedrop((c) => applyRgb(...hexToRgb(c)));
       }
+      // Delete (or Backspace) drops the selected gradient stop, like Figma —
+      // but never while typing in a field, and never below two stops.
+      if ((e.key === "Delete" || e.key === "Backspace") && !typing) {
+        const isGrad =
+          value.type === "linear" ||
+          value.type === "radial" ||
+          value.type === "angular" ||
+          value.type === "diamond";
+        const ramp = rampOf(value);
+        if (isGrad && ramp.length > 2) {
+          e.preventDefault();
+          const i = Math.min(stopIdx, ramp.length - 1);
+          const next = ramp.filter((_, k) => k !== i);
+          onChange({
+            ...value,
+            stops: next,
+            color: next[0].color,
+            second: next[next.length - 1].color,
+          });
+          setStopIdx(Math.max(0, i - 1));
+        }
+      }
     };
     window.addEventListener("mousedown", on);
     window.addEventListener("keydown", key);
@@ -147,7 +174,7 @@ export function FillPicker({
       window.removeEventListener("keydown", key);
       disarm();
     };
-  }, [onClose, value]);
+  }, [onClose, value, stopIdx]);
 
   const applyRgb = (rr: number, gg: number, bb: number, next?: Partial<FillValue>) => {
     const color = toHex(rr, gg, bb);
@@ -403,7 +430,7 @@ export function FillPicker({
         </button>
         {typeOpen && (
           <div className="type-menu">
-            {FILL_TYPES.map((t) => (
+            {FILL_TYPES.filter((t) => !noImage || t.id !== "image").map((t) => (
               <button
                 key={t.id}
                 className={value.type === t.id ? "on" : ""}
@@ -759,9 +786,11 @@ function GradientStops({
     const move = (ev: PointerEvent) => {
       const r = el.getBoundingClientRect();
       const t = Math.max(0, Math.min(1, (ev.clientX - r.left) / Math.max(1, r.width)));
-      const next = stops.map((s) => (s === id ? { ...s, position: t } : s));
-      const sorted = commit(next);
-      onSelect(sorted.findIndex((s) => s.color === id.color && s.position === t));
+      // Track the dragged stop by identity: matching on colour breaks when
+      // two stops share one (a fade holds the same colour twice).
+      const moved = { ...id, position: t };
+      const sorted = commit(stops.map((s) => (s === id ? moved : s)));
+      onSelect(sorted.indexOf(moved));
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -778,14 +807,20 @@ function GradientStops({
         ref={bar}
         style={{ background: css }}
         onPointerDown={(e) => {
-          // Clicking the bar inserts a stop sampled from the ramp at that point.
+          // Clicking the bar inserts a stop in the ramp's colour at that
+          // point — interpolated with the same OKLab mix the renderer uses,
+          // so the ramp looks identical after the insert.
           const r = e.currentTarget.getBoundingClientRect();
           const t = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
           let after = stops.findIndex((s) => s.position > t);
           if (after < 0) after = stops.length;
-          const before = Math.max(0, after - 1);
-          const sorted = commit([...stops, { color: stops[before].color, position: t }]);
-          onSelect(sorted.findIndex((s) => s.position === t));
+          const lo = stops[Math.max(0, after - 1)];
+          const hi = stops[Math.min(after, stops.length - 1)];
+          const span = hi.position - lo.position;
+          const color = mixHex(lo.color, hi.color, span > 0 ? (t - lo.position) / span : 0);
+          const fresh = { color, position: t };
+          const sorted = commit([...stops, fresh]);
+          onSelect(sorted.indexOf(fresh));
         }}
       >
         {stops.map((s, i) => (

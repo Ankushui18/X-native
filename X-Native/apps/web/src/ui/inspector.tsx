@@ -5340,6 +5340,7 @@ function Design({
               hx={p.hx}
               hy={p.hy}
               blend={p.blend}
+              noImage
               recents={collectColors(snap.pages[snap.page].root)}
               background={fillBackground(snap.pages[snap.page].root, n)}
               largeText={isLargeText(n)}
@@ -5368,6 +5369,11 @@ function Design({
                   type: patch.fillType,
                   color: patch.fill,
                   stops: patch.gradientStops,
+                  blend: patch.fillBlend,
+                  gx: patch.fillGX,
+                  gy: patch.fillGY,
+                  hx: patch.fillHX,
+                  hy: patch.fillHY,
                 });
               }}
             />
@@ -5416,10 +5422,14 @@ function Design({
             }
             onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })}
             onRemove={() =>
+              // Minus removes the base fill outright (same none+hidden pair
+              // the stroke row uses), leaving the section empty; Fill "+"
+              // then re-adds the default fill instead of stacking over a
+              // hidden one.
               engine.dispatch({
                 type: "patch",
                 id: n.id,
-                patch: { fillVisible: false },
+                patch: { fill: "#00000000", fillVisible: false },
               })
             }
             onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
@@ -7932,6 +7942,7 @@ function ColorRow({
   recents = [],
   background,
   largeText,
+  noImage,
   onChange,
   onOpacity,
   onVisible,
@@ -7965,6 +7976,7 @@ function ColorRow({
   /** Passed to the picker's contrast check: what this paint is actually over. */
   background?: string;
   largeText?: boolean;
+  noImage?: boolean;
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
   onVisible?: (v: boolean) => void;
@@ -8079,6 +8091,7 @@ function ColorRow({
           anchor={anchor}
           background={background}
           largeText={largeText}
+          noImage={noImage}
           onChange={(v) => {
             if (onValueChange) {
               onValueChange(v);
