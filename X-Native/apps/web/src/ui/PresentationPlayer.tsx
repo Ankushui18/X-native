@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import type { Engine, Interaction, ProtoDevice, Snapshot, XNode } from "../engine/types";
 import { find, worldPos } from "../engine/memory";
+import { evaluateExpression } from "../engine/expressions";
 import { Icon, rowIconSize } from "./icons";
 import { DEVICE_GROUPS, DeviceShell, deviceBox, deviceFor } from "./devices";
 
@@ -218,6 +219,17 @@ export function PresentationPlayer({
       const v = snap.variables?.find((varItem) => varItem.id === ix.variableId);
       if (v) {
         let nextVal = ix.variableValue !== undefined ? ix.variableValue : v.value;
+        if (typeof nextVal === "string" && nextVal.startsWith("=")) {
+          const varMap: Record<string, any> = {};
+          snap.variables?.forEach((item) => {
+            varMap[item.name] = item.value;
+            varMap[item.id] = item.value;
+          });
+          const res = evaluateExpression(nextVal.slice(1), { vars: varMap });
+          if (!res.error && res.value !== undefined) {
+            nextVal = res.value;
+          }
+        }
         if (ix.variableOp === "increment" && typeof v.value === "number") nextVal = v.value + 1;
         else if (ix.variableOp === "decrement" && typeof v.value === "number") nextVal = v.value - 1;
         else if (ix.variableOp === "toggle") nextVal = !v.value;
