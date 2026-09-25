@@ -790,7 +790,7 @@ export async function inspectFigFile(buf: ArrayBuffer, fileName = "document.fig"
 
   const prelude = new TextDecoder().decode(canvas.subarray(0, 8));
   if (canvas.length < 12 || !prelude.startsWith("fig-")) {
-    throw new Error('Not a valid Figma binary file (missing "fig-" prelude)');
+    throw new Error('Not a valid binary archive (missing "fig-" prelude)');
   }
 
   const view = new DataView(canvas.buffer, canvas.byteOffset, canvas.byteLength);

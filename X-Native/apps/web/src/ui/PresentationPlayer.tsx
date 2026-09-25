@@ -652,7 +652,7 @@ export function PresentationPlayer({
         {/* Live Form Inputs Toggle */}
         <button
           onClick={() => engine.dispatch({ type: "togglePrototypeLiveInputs" })}
-          title="Toggle live editable inputs (I) - Better than Figma!"
+          title="Toggle live editable inputs (I)"
           style={{
             background: liveInputsActive ? "rgba(16, 185, 129, 0.25)" : "transparent",
             border: 0,

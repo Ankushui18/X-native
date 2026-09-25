@@ -67,10 +67,10 @@ const ERASER_PX = 10;
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
 
-/** X-Native signature brand accents (electric cyber indigo). */
-const BRAND_ACCENT = "#6366f1";
-const BRAND_ACCENT_WASH = "rgba(99, 102, 241, 0.14)";
-const BRAND_ACCENT_GLOW = "rgba(99, 102, 241, 0.35)";
+/** X-Native signature brand accents (Graphite & Signal Emerald). */
+const BRAND_ACCENT = "#10b981";
+const BRAND_ACCENT_WASH = "rgba(16, 185, 129, 0.14)";
+const BRAND_ACCENT_GLOW = "rgba(16, 185, 129, 0.35)";
 
 const CREATE: Tool[] = [
   "frame",
@@ -4616,13 +4616,13 @@ export function Canvas({
         return true;
       }
       case "figma": {
-        // The buffer is a whole Figma scene, so it goes through the same reader
-        // as a dropped `.fig` and arrives as editable layers.
-        toast("Pasting from Figma…");
+        // The buffer is an imported scene, so it goes through the same reader
+        // as a dropped archive and arrives as editable layers.
+        toast("Pasting imported scene…");
         try {
-          placeNodes(await importFigContainer(payload.buffer), "the Figma clipboard", target, { centre: true });
+          placeNodes(await importFigContainer(payload.buffer), "the imported clipboard", target, { centre: true });
         } catch (err) {
-          toast(`Could not read the Figma clipboard: ${err instanceof Error ? err.message : "unreadable"}`);
+          toast(`Could not read clipboard data: ${err instanceof Error ? err.message : "unreadable"}`);
         }
         return true;
       }
@@ -4906,7 +4906,7 @@ export function Canvas({
             style={{
               font: "600 11px Inter, system-ui",
               padding: "2px 6px",
-              border: "1px solid #6366f1",
+              border: "1px solid var(--accent, #10b981)",
               borderRadius: 4,
               background: "#ffffff",
               color: "#0f172a",

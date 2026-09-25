@@ -1731,7 +1731,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [addingVar, setAddingVar] = useState(false);
   const [varName, setVarName] = useState("token-1");
   const [varType, setVarType] = useState<VariableItem["type"]>("color");
-  const [varVal, setVarVal] = useState("#0d99ff");
+  const [varVal, setVarVal] = useState("#10b981");
   const colors = Array.from(new Set(collectColors(snap.pages[snap.page].root)));
   const sel = snap.selection[0];
   const selNode = sel ? findNode(snap.pages[snap.page].root, sel)?.node : null;
@@ -1846,7 +1846,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                   onChange={(e) => {
                     const t = e.target.value as VariableItem["type"];
                     setVarType(t);
-                    if (t === "color") setVarVal("#0d99ff");
+                    if (t === "color") setVarVal("#10b981");
                     else if (t === "number") setVarVal("16");
                     else if (t === "boolean") setVarVal("true");
                     else setVarVal("text");

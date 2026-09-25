@@ -243,16 +243,6 @@ export function Icon({
           <path d="M3 3.5h10a1.5 1.5 0 011.5 1.5v5a1.5 1.5 0 01-1.5 1.5H7.5L3.5 14v-2.5H3A1.5 1.5 0 011.5 10V5A1.5 1.5 0 013 3.5z" strokeWidth={1.25} />
         </svg>
       );
-    case "figma":
-      return (
-        <svg width={size} height={size} viewBox="0 0 38 57" fill="none">
-          <path d="M19 28.5A9.5 9.5 0 1 1 28.5 19 9.5 9.5 0 0 1 19 28.5z" fill="#1abcfe" />
-          <path d="M0 47.5A9.5 9.5 0 0 1 9.5 38H19v9.5A9.5 9.5 0 0 1 9.5 57 9.5 9.5 0 0 1 0 47.5z" fill="#0acf83" />
-          <path d="M19 0v19h9.5a9.5 9.5 0 1 0 0-19z" fill="#ff7262" />
-          <path d="M0 9.5A9.5 9.5 0 0 0 9.5 19H19V0H9.5A9.5 9.5 0 0 0 0 9.5z" fill="#f24e1e" />
-          <path d="M0 28.5A9.5 9.5 0 0 0 9.5 38H19V19H9.5A9.5 9.5 0 0 0 0 28.5z" fill="#a259ff" />
-        </svg>
-      );
 
     // -------------------------------------------------------------------------
     // Components, Variants & Instances

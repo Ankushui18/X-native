@@ -21,7 +21,7 @@ use crate::design_system::{ColorTokens, COLOR_ROLES};
 /// The shipped UI themes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeId {
-    /// Dark Figma UI3 chrome — the product default.
+    /// Dark Graphite chrome — the product default.
     Graphite,
     /// Light theme for daylight work and screen sharing.
     Daylight,

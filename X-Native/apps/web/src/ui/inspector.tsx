@@ -529,7 +529,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
           opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
           visible={!!snap.pages[snap.page].pixelGrid}
-          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#6366f1"]}
+          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#10b981"]}
           onChange={(pixelGridColor) =>
             engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
           }
@@ -1147,8 +1147,8 @@ function generateSvg(n: XNode): string {
 </svg>`;
 }
 
-function generateFigmaJson(n: XNode): string {
-  const hexToFigmaColor = (hex: string) => {
+function generateLayerJson(n: XNode): string {
+  const hexToNormalizedRgb = (hex: string) => {
     const clean = hex.replace("#", "");
     const r = parseInt(clean.slice(0, 2) || "0", 16) / 255;
     const g = parseInt(clean.slice(2, 4) || "0", 16) / 255;
@@ -1178,7 +1178,7 @@ function generateFigmaJson(n: XNode): string {
           type: "SOLID",
           visible: true,
           opacity: n.fillOpacity,
-          color: hexToFigmaColor(n.fill),
+          color: hexToNormalizedRgb(n.fill),
         }]
       : [],
     strokes: n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)
@@ -1186,7 +1186,7 @@ function generateFigmaJson(n: XNode): string {
           type: "SOLID",
           visible: true,
           opacity: n.strokeOpacity,
-          color: hexToFigmaColor(n.strokePaint),
+          color: hexToNormalizedRgb(n.strokePaint),
         }]
       : [],
     strokeWeight: n.strokeWidth,
@@ -1291,7 +1291,7 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   return (
     <>
       <div style={{ margin: "0 12px 10px", padding: "10px 12px", borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#1bcb55", boxShadow: "0 0 0 4px rgba(27,203,85,0.18)", flexShrink: 0 }} />
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#10b981", boxShadow: "0 0 0 4px rgba(16,185,129,0.20)", flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>Ready for development</div>
           <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
@@ -1521,7 +1521,7 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
     case "svg":
       return generateSvg(n);
     case "figma":
-      return generateFigmaJson(n);
+      return generateLayerJson(n);
     case "tokens":
       return generateDesignTokens(n);
     default:
@@ -4338,7 +4338,7 @@ function Design({
               </div>
               <Field
                 label="miter"
-                hint="Figma's miter angle: joins sharper than this bevel"
+                hint="Miter angle: joins sharper than this angle will bevel"
                 value={n.strokeMiterAngle ?? 0}
                 onChange={(v) => patch({ strokeMiterAngle: Math.max(0, Math.min(180, v)) })}
               />
@@ -5739,11 +5739,9 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
               >
                 {p.format}
               </button>
-              {/* Figma's scale field takes a multiplier or a size with a unit:
-                  `2x`, `500w`, `300h`. A vector format is pinned at 1x, because
-                  "Figma only supports exports for SVGs at 1x" - and the same
-                  for PDFs - so the field shows 1x rather than quietly ignoring
-                  what you type. */}
+              {/* The scale field takes a multiplier or a size with a unit:
+                  `2x`, `500w`, `300h`. Vector formats are pinned at 1x,
+                  so the field shows 1x rather than quietly ignoring what you type. */}
               <ScaleField
                 preset={p}
                 locked={FORMAT_CAPS[p.format].oneToOne}

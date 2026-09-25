@@ -89,10 +89,19 @@ Same typography/surfaces/controls/navigation/spacing/iconography/states/dialogs.
   - Added floating `ContextToolbar` on canvas for quick Auto Layout, Align, Group, Component, Flip, Duplicate, and Delete actions.
 - **P0-E Dashboard ↔ Editor consistency**:
   - Unified Graphite & Emerald aesthetic, elevations (`--elev-raised`, `--elev-floating`, `--elev-modal`), and semantic typography (`T_CONTROL`, `T_LABEL`, `T_BODY`, `T_SECTION`).
+- **Brand Decoupling & Independent Visual Identity (Graphite & Signal Emerald)**:
+  - Eliminated all competitor trademark names and comparative claims from user-facing UI, tooltips, hints, toasts, and code export menus.
+  - Renamed Dev Mode export option to "Layer JSON" with clean normalized representation.
+  - Removed trademarked competitor SVG marks from `icons.tsx`.
+  - Rebranded accent palette across the entire application to X-Native's distinctive Graphite & Signal Emerald (`#0e9f6e` / `#10b981`):
+    - Canvas selection bounding boxes, corner/edge handles, rotation angle badges, and flow starting points.
+    - Rulers selection range indicators, highlights, and backdrop.
+    - Minimap document viewport frame, fill tints, and canvas backing.
+    - Chrome tokens, comment pins, interactive focus rings, and action accents.
 
 ## 6. Verification plan
 
-- Code audit: selection chrome, inspector sections, x-ui tokens → components.
+- Code audit: selection chrome, inspector sections, x-ui tokens → components, brand decoupling audit.
 - Runtime verification required: mouse interactions (handle drag, rotation snap 15°, center-origin `⌥`, vector node insert `⌘`/bend `⌥`, frame double-click rename, eraser brush), keyboard (Cmd/Ctrl click deep select, `⌘K` palette), viewport collision for menus.
 
 ---

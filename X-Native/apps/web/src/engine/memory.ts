@@ -561,7 +561,7 @@ export function demoPage(): Page {
     fill: "#0d1220",
   });
   const doneDesc = node("text", "DoneDesc", 24, 125, 342, 60, {
-    text: "Navigated via organic Figma S-curve noodle. Click ← Back or press Esc to return.",
+    text: "Navigated via organic S-curve interaction connector. Click ← Back or press Esc to return.",
     fontSize: 14,
     fill: "#64748b",
   });

@@ -249,12 +249,12 @@ pub fn node_to_css(node: &Node, vars: &Variables) -> String {
         } else if radius > 0.0 {
             css.push_str(&format!("  border-radius: {radius}px;\n"));
         }
-        // Figma squircle corner smoothing (0.0–1.0).
+        // Corner smoothing (0.0–1.0).
         // CSS has no native squircle; use SVG clip-path or border-image
         // for production. We emit a comment for developer awareness.
         if node.corner_smoothing > 0.0 {
             css.push_str(&format!(
-                "  /* corner-smoothing: {:.2} (Figma squircle) */\n",
+                "  /* corner-smoothing: {:.2} (squircle) */\n",
                 node.corner_smoothing
             ));
         }
