@@ -3013,7 +3013,7 @@ mod tests {
         );
     }
 
-    /// A frame that already holds nothing but the selection IS the set — 
+    /// A frame that already holds nothing but the selection IS the set —
     /// reuses it rather than nesting a second frame.
     #[test]
     fn a_frame_holding_only_the_selection_becomes_the_set() {

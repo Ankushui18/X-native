@@ -271,8 +271,11 @@ fn rdp_open(points: &[(f64, f64)], tol: f64) -> Vec<usize> {
         let b = points[hi];
         let mut max_d = f64::NEG_INFINITY;
         let mut idx = lo;
-        for i in (lo + 1)..hi {
-            let d = perp_distance(points[i], a, b);
+        for (i, &pt) in points.iter().enumerate() {
+            if i <= lo || i >= hi {
+                continue;
+            }
+            let d = perp_distance(pt, a, b);
             if d > max_d {
                 max_d = d;
                 idx = i;

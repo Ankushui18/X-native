@@ -127,7 +127,8 @@ fn clip_once(s: &[Pt], c: &[Pt], op: ClipOp) -> Result<Vec<Vec<Pt>>, bool> {
         for j in 0..c.len() {
             let (d, e) = (c[j], c[(j + 1) % c.len()]);
             if let Some((si, ti, p)) = seg_x(a, b, d, e) {
-                if si < DEG || si > 1.0 - DEG || ti < DEG || ti > 1.0 - DEG {
+                let in_range = |t: f64| (DEG..=1.0 - DEG).contains(&t);
+                if !in_range(si) || !in_range(ti) {
                     return Err(true); // vertex-on-edge: perturb + retry
                 }
                 let id = xpts.len();

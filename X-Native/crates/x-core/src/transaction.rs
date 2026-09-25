@@ -155,7 +155,7 @@ impl Operation {
 impl Transaction {
     /// Inverts the entire transaction.
     pub fn invert(&self) -> Self {
-        let mut inverted_ops: Vec<Operation> =
+        let inverted_ops: Vec<Operation> =
             self.operations.iter().rev().map(|op| op.invert()).collect();
 
         Self {

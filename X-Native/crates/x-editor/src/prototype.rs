@@ -118,7 +118,7 @@ impl SmartTick {
 
 /// Arm the tick for a navigation that just happened, from one screen to
 /// another: `None` when the interaction does not ask for it — the tick starts
-/// off, the way the box does — when the action is an overlay, which 
+/// off, the way the box does — when the action is an overlay, which
 /// gives no smart animate at all, or when the two ids are the same screen.
 pub fn arm_smart_tick(ix: &Interaction, from: &Node, to: &Node) -> Option<SmartTick> {
     if !ix.animate_matching_layers || from.id == to.id {
