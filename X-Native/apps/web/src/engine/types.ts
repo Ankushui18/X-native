@@ -797,6 +797,11 @@ export type Command =
   | { type: "cut" }
   | { type: "copy" }
   | { type: "paste"; x?: number; y?: number; inPlace?: boolean }
+  /** Replace the in-app clipboard with layers that came from outside this
+   *  document — the system clipboard's own payload, so a copy made in another
+   *  tab or another file pastes with full fidelity. Not a document edit, so it
+   *  takes no undo step; the `paste` that follows does. */
+  | { type: "loadClip"; nodes: XNode[] }
   | { type: "group" }
   | { type: "ungroup" }
   | { type: "wrapSection" }

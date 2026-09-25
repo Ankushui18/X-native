@@ -23,72 +23,96 @@
   src: url(/fonts/inter-latin-700-normal.woff2) format("woff2");
 }
 
-/* X-Native signature theme (Light) — crisp studio white, slate canvas, electric indigo accent. */
+/* X-Native signature theme (Light) — warm studio white, graphite canvas, emerald accent. Distinct from violet/indigo clones. */
 :root,
 html[data-theme="light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --canvas: #f1f2f6;
+  --bg: #fcfcfa;
+  --canvas: #eef1f4;
   --panel: #ffffff;
   --elevated: #ffffff;
-  --hover: #f3f4f8;
-  --active: #e7e9f2;
-  --sel: rgba(99, 102, 241, 0.14);
-  --line: rgba(0, 0, 0, 0.08);
-  --line-2: rgba(0, 0, 0, 0.13);
-  --text: #0f172a;
-  --muted: rgba(15, 23, 42, 0.55);
-  --dim: rgba(15, 23, 42, 0.38);
-  --blue: #6366f1;
-  --blue-hover: #4f46e5;
+  --hover: #f1f5f1;
+  --active: #e6efe9;
+  --sel: rgba(16, 185, 129, 0.12);
+  --line: rgba(15, 23, 42, 0.07);
+  --line-2: rgba(15, 23, 42, 0.12);
+  --text: #111827;
+  --muted: rgba(17, 24, 39, 0.56);
+  --dim: rgba(17, 24, 39, 0.38);
+  --accent: #0e9f6e;
+  --accent-hover: #0a7f59;
+  --blue: #0e9f6e;
+  --blue-hover: #0a7f59;
   --on-accent: #ffffff;
-  --input: #f3f4f8;
+  --input: #f3f7f4;
   --field-focus: #ffffff;
-  --dock: rgba(255, 255, 255, 0.92);
-  --tool-fg: #0f172a;
-  --tool-on-bg: #6366f1;
+  --dock: rgba(255, 255, 255, 0.94);
+  --tool-fg: #111827;
+  --tool-on-bg: #0e9f6e;
   --tool-on-fg: #ffffff;
-  --help-bg: #1e1b4b;
+  --help-bg: #0f1f18;
   --help-fg: #ffffff;
-  --grid: rgba(99, 102, 241, 0.08);
-  --canvas-label: rgba(15, 23, 42, 0.5);
-  --dot: #c7cbd9;
-  --shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05);
-  --rail: 48px;
-  --left-w: 240px;
-  --right-w: 240px;
+  --grid: rgba(16, 185, 129, 0.07);
+  --canvas-label: rgba(17, 24, 39, 0.5);
+  --dot: #cbd5d1;
+  --shadow: 0 6px 22px rgba(16, 30, 24, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  /* Elevation scale — every floating surface uses one of these, not ad-hoc shadow */
+  --elev-flat: none;
+  --elev-raised: 0 1px 3px rgba(16,30,24,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+  --elev-floating: 0 8px 28px rgba(16,30,24,0.12), 0 0 0 1px rgba(0,0,0,0.06);
+  --elev-overlay: 0 16px 48px rgba(16,30,24,0.16), 0 0 0 1px rgba(0,0,0,0.08);
+  --elev-modal: 0 24px 64px rgba(16,30,24,0.22), 0 0 0 1px rgba(0,0,0,0.10);
+  /* Semantic typography — roles, not sizes */
+  --t-control: 500 11px/14px Inter, system-ui, sans-serif;
+  --t-label: 600 10px/13px Inter, system-ui, sans-serif;
+  --t-body: 400 11px/15px Inter, system-ui, sans-serif;
+  --t-section: 600 11px/16px Inter, system-ui, sans-serif;
+  --rail: 52px;
+  --left-w: 260px;
+  --right-w: 288px;
 }
 
-/* X-Native signature theme (Dark) — deep obsidian panels, deep slate canvas. */
+/* X-Native signature theme (Dark) — ink panels, graphite canvas, neon emerald accent. */
 html[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #181922;
-  --canvas: #101116;
-  --panel: #181922;
-  --elevated: #212330;
-  --hover: #262837;
-  --active: #313446;
-  --sel: rgba(99, 102, 241, 0.22);
-  --line: rgba(255, 255, 255, 0.08);
-  --line-2: rgba(255, 255, 255, 0.14);
-  --text: #f8fafc;
-  --muted: rgba(248, 250, 252, 0.55);
-  --dim: rgba(248, 250, 252, 0.38);
-  --blue: #6366f1;
-  --blue-hover: #818cf8;
-  --on-accent: #ffffff;
-  --input: #232534;
-  --field-focus: #181922;
-  --dock: rgba(24, 25, 34, 0.88);
-  --tool-fg: #f8fafc;
-  --tool-on-bg: #6366f1;
-  --tool-on-fg: #ffffff;
-  --help-bg: #232534;
+  --bg: #0f1419;
+  --canvas: #0a0e13;
+  --panel: #171c22;
+  --elevated: #1e252e;
+  --hover: #212c2a;
+  --active: #2a3530;
+  --sel: rgba(27, 203, 85, 0.18);
+  --line: rgba(255, 255, 255, 0.07);
+  --line-2: rgba(255, 255, 255, 0.12);
+  --text: #f1f5f3;
+  --muted: rgba(241, 245, 243, 0.56);
+  --dim: rgba(241, 245, 243, 0.38);
+  --accent: #1bcb55;
+  --accent-hover: #18b84c;
+  --blue: #1bcb55;
+  --blue-hover: #18b84c;
+  --on-accent: #0a0e13;
+  --input: #1e2a22;
+  --field-focus: #171c22;
+  --dock: rgba(15, 20, 25, 0.92);
+  --tool-fg: #f1f5f3;
+  --tool-on-bg: #1bcb55;
+  --tool-on-fg: #0a0e13;
+  --help-bg: #1e2a22;
   --help-fg: #ffffff;
-  --grid: rgba(99, 102, 241, 0.1);
-  --canvas-label: rgba(248, 250, 252, 0.5);
-  --dot: #3d4054;
-  --shadow: 0 8px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.07);
+  --grid: rgba(27, 203, 85, 0.09);
+  --canvas-label: rgba(241, 245, 243, 0.5);
+  --dot: #2d3a33;
+  --shadow: 0 10px 36px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --elev-flat: none;
+  --elev-raised: 0 2px 8px rgba(0,0,0,0.32), 0 0 0 1px rgba(255,255,255,0.06);
+  --elev-floating: 0 12px 36px rgba(0,0,0,0.48), 0 0 0 1px rgba(255,255,255,0.08);
+  --elev-overlay: 0 20px 56px rgba(0,0,0,0.58), 0 0 0 1px rgba(255,255,255,0.10);
+  --elev-modal: 0 28px 72px rgba(0,0,0,0.68), 0 0 0 1px rgba(255,255,255,0.12);
+  --t-control: 500 11px/14px Inter, system-ui, sans-serif;
+  --t-label: 600 10px/13px Inter, system-ui, sans-serif;
+  --t-body: 400 11px/15px Inter, system-ui, sans-serif;
+  --t-section: 600 11px/16px Inter, system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -195,7 +219,7 @@ input, textarea { user-select: text; }
 }
 .rail button.nav:hover { background: var(--hover); }
 .rail button.nav.on {
-  background: rgba(99, 102, 241, 0.12);
+  background: var(--sel);
   color: var(--blue);
 }
 .rail button.nav span {
@@ -368,7 +392,7 @@ html[data-theme="dark"] .row.comp .name { color: #c4b5fd; }
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #0d99ff;
+  background: var(--accent);
 }
 html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
 
@@ -523,7 +547,7 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
   background: var(--blue);
   color: #ffffff;
   border-radius: 7px;
-  box-shadow: 0 1px 6px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 1px 6px rgba(14, 159, 110, 0.32);
 }
 /* The flyout affordance is a chevron in its own gutter with a hairline before
    it, not a triangle sitting on top of the glyph. */
@@ -629,17 +653,17 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
   padding: 0 12px;
   border: 0;
   border-radius: 7px;
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: #ffffff;
   font-weight: 600;
   font-size: 11px;
   margin-left: auto;
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 2px 8px rgba(14, 159, 110, 0.32);
   transition: all 0.15s ease;
 }
 .share:hover {
-  background: linear-gradient(135deg, #4f46e5, #4338ca);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.5);
+  background: linear-gradient(135deg, var(--accent-hover), #087a54);
+  box-shadow: 0 4px 12px rgba(14, 159, 110, 0.4);
 }
 
 .tabs {
@@ -679,7 +703,7 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
   height: 2.5px;
   border-radius: 2px;
   background: var(--blue);
-  box-shadow: 0 0 8px rgba(99, 102, 241, 0.5);
+  box-shadow: 0 0 8px rgba(14, 159, 110, 0.4);
 }
 .tabs .zoom {
   margin-left: auto;
@@ -1312,8 +1336,8 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
   position: fixed;
   width: 240px;
   background: var(--elevated);
-  border-radius: 8px;
-  box-shadow: var(--shadow);
+  border-radius: 12px;
+  box-shadow: var(--elev-floating);
   padding: 8px;
   z-index: 80;
   display: flex;
@@ -2055,14 +2079,14 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   left: 4px;
   right: 4px;
   height: 2px;
-  background: var(--blue, #6366f1);
+  background: var(--accent);
   border-radius: 1px;
   pointer-events: none;
 }
 .row.drop-before::after { top: -1px; }
 .row.drop-after::after { bottom: -1px; }
 .row.drop-inside {
-  box-shadow: inset 0 0 0 1px var(--blue, #6366f1);
+  box-shadow: inset 0 0 0 1px var(--accent);
   border-radius: 3px;
 }
 
@@ -2088,7 +2112,7 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   cursor: grab;
 }
-.grad-stop.on { box-shadow: 0 0 0 2px var(--blue, #6366f1); }
+.grad-stop.on { box-shadow: 0 0 0 2px var(--accent); }
 .grad-pos { max-width: 42px; text-align: right; }
 
 /* Gradient stop controls: identity + values on one row, actions on the next,
@@ -2149,7 +2173,7 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 /* Effects: how full each kind is, and where a dragged row will land. */
 .fx-count { margin-left: auto; color: var(--dim); font-size: 10px; font-variant-numeric: tabular-nums; }
 .type-menu button:disabled { opacity: 0.45; cursor: default; }
-.fx-row.drop { box-shadow: inset 0 2px 0 0 var(--blue, #6366f1); }
+.fx-row.drop { box-shadow: inset 0 2px 0 0 var(--accent); }
 .fx-row .grip { margin-right: 2px; }
 /* the note that explains why per-corner fields are greyed out on an instance */
 .corner-lock { color: var(--dim); font-size: 10.5px; line-height: 1.4; }
@@ -2682,7 +2706,7 @@ html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
   gap: 16px;
   margin-bottom: 20px;
 }
-.dash-head h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.015em; }
+.dash-head h1 { margin: 0; font: var(--t-section); font-size: 16px; letter-spacing: -0.015em; }
 .dash-head-r { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .seg.pills {
   display: flex;
@@ -2746,10 +2770,10 @@ html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
   border-radius: 6px;
   overflow: hidden;
   background: var(--input);
-  box-shadow: inset 0 0 0 1px var(--line);
+  box-shadow: inset 0 0 0 1px var(--line), var(--elev-raised);
   transition: box-shadow 140ms ease, transform 140ms ease;
 }
-.file-card:hover .thumb { box-shadow: inset 0 0 0 1px var(--line-2), 0 4px 16px rgba(0, 0, 0, 0.08); }
+.file-card:hover .thumb { box-shadow: inset 0 0 0 1px var(--line-2), var(--elev-floating); }
 .file-card .thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .thumb-empty {
   width: 100%; height: 100%;
@@ -3785,3 +3809,250 @@ html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
   color: var(--muted);
   font: 11px/1.4 var(--mono, ui-monospace, monospace);
 }
+
+/* =========================================================================
+   X-Native Polish — Distinct dropdowns, popups, Dev Mode, icons
+   Makes native <select> feel like a designed control, not an OS leftover.
+   Every popup now has a border, soft shadow, and accent focus.
+   ========================================================================= */
+
+/* Fields that contain a <select> — add a chevron without extra markup */
+.field:has(> select) {
+  position: relative;
+  padding-right: 22px;
+}
+.field:has(> select)::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  transform: translateY(-50%);
+  background: no-repeat center / 10px 10px url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='0 0 10 10' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M2 3.2L5 6.2L8 3.2' stroke='%23999' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  pointer-events: none;
+  opacity: 0.7;
+}
+html[data-theme="dark"] .field:has(> select)::after {
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='10' viewBox='0 0 10 10' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M2 3.2L5 6.2L8 3.2' stroke='%23aaa' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.field:has(> select):hover::after { opacity: 1; }
+.field select {
+  padding-right: 2px;
+  cursor: pointer;
+}
+.field select:hover { color: var(--text); }
+
+/* Native select dropdown options — ensure readable */
+.field select option {
+  background: var(--elevated);
+  color: var(--text);
+}
+
+/* Menus / popups / context menus — unified X-Native chrome */
+.menu,
+.ctx,
+.type-menu,
+.dev-menu,
+.zoom-menu {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--elevated);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08), 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+html[data-theme="dark"] .menu,
+html[data-theme="dark"] .ctx,
+html[data-theme="dark"] .type-menu,
+html[data-theme="dark"] .dev-menu,
+html[data-theme="dark"] .zoom-menu {
+  box-shadow: 0 16px 48px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.08);
+}
+.menu {
+  width: 236px;
+  padding: 8px;
+  gap: 2px;
+}
+.menu button,
+.ctx button,
+.type-menu button,
+.dev-menu button,
+.zoom-menu button {
+  transition: background 90ms ease, color 90ms ease;
+}
+.menu button:hover,
+.ctx button:hover,
+.type-menu button:hover,
+.dev-menu button:hover {
+  background: var(--hover);
+}
+.menu button.on,
+.type-menu button.on,
+.dev-menu button.on {
+  background: var(--sel);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Dev Mode — premium cards, not a plain list */
+.dev-head {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 12px;
+}
+.dev-code {
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 12px;
+  padding: 10px;
+}
+.dev-pre {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.dev-group {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 12px 8px;
+  padding: 8px;
+}
+.dev-row {
+  border-radius: 6px;
+  padding: 0 8px;
+  height: 28px;
+}
+.dev-row:hover {
+  background: var(--hover);
+}
+.dev-row .dev-k {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 11px;
+}
+.dev-row .dev-v {
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Box model — more X-Native, less Figma grey box */
+.box-model-diagram {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.04);
+}
+.bm-outer {
+  border: 1px dashed var(--accent);
+  background: rgba(16,185,129,0.06);
+  border-radius: 8px;
+  padding: 10px;
+}
+.bm-inner {
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+
+/* Dock — distinct pill with emerald active, not violet */
+.dock {
+  border-radius: 16px;
+  padding: 4px 6px;
+  gap: 6px;
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
+}
+.tool.active > button.hit {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 2px 10px rgba(16,185,129,0.35);
+  border-radius: 9px;
+}
+.tool > button.hit:hover {
+  background: var(--hover);
+}
+
+/* Rail — airy, no longer Figma-dark mimic */
+.rail {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding: 10px 0 12px;
+  gap: 4px;
+}
+.rail button.nav {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  gap: 3px;
+}
+.rail button.nav.on {
+  background: var(--sel);
+  color: var(--accent);
+}
+.rail button.nav.on span {
+  color: var(--accent);
+}
+
+/* Fill popover — breathing room, elevation Floating (shared with x-popover) */
+.fill-pop {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  gap: 10px;
+  box-shadow: var(--elev-floating);
+}
+
+/* x-ui shared popover — elevation Floating, consistent across Fill/Stroke/Effect menus */
+.x-popover {
+  position: fixed;
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--elev-floating);
+  padding: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.x-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+  font: var(--t-label);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.x-popover-title { font: var(--t-label); }
+.x-popover-body { padding: 12px; display: grid; gap: 10px; }
+.x-field { display: flex; align-items: center; gap: 6px; font: var(--t-control); }
+.x-field-label { font: var(--t-label); color: var(--muted); min-width: 36px; }
+.x-field-input { flex: 1; display: flex; }
+.x-field-hint { font: var(--t-body); color: var(--dim); font-size: 10px; }
+.x-field.disabled { opacity: 0.5; pointer-events: none; }
+
+/* P0-D interaction states — centralize Default/Hover/Pressed/Active/Focused/Selected/Disabled */
+.x-interactive { transition: background 120ms, border-color 120ms, box-shadow 120ms; }
+.x-interactive:hover { background: var(--hover); }
+.x-interactive:active { background: var(--active); }
+.x-interactive:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.x-interactive.selected { background: var(--sel); border-color: var(--accent); }
+.x-interactive:disabled { opacity: 0.45; pointer-events: none; }
+
+/* Scrollbars — X-Native slim */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+::-webkit-scrollbar-track { background: transparent; }
+

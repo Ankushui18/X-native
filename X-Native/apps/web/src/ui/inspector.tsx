@@ -103,6 +103,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
+import { PropertyField, XPopover } from "./x-ui";
 
 /** Sketch only shows "Round to Pixel" when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -1263,19 +1264,24 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
 
   if (!n) {
     return (
-      <div className="insp-pad dev-empty">
-        <p className="dev-empty-title">Select a layer to inspect</p>
-        <ul>
-          <li>
-            <b>⌥ hover</b> a layer with one selected to measure the distance between them.
-          </li>
-          <li>
-            <b>⇧⌘E</b> exports every asset on this page at once.
-          </li>
-          <li>
-            <b>⇧D</b> leaves Dev Mode.
-          </li>
-        </ul>
+      <div className="insp-pad dev-empty" style={{ display: "grid", gap: 12 }}>
+        <div style={{ padding: 14, borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--panel)", border: "1px solid var(--line)", display: "grid", placeItems: "center", flexShrink: 0 }}>◈</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 12 }}>Select a layer to inspect</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>Click any layer — code, specs, and assets appear here. Hover with ⌥ to measure distances.</div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <div style={{ padding: 10, borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.04, textTransform: "uppercase" }}>Measure</div>
+            <div style={{ fontSize: 11, color: "var(--text)", marginTop: 4 }}><b>⌥ hover</b> with a selection to show redlines</div>
+          </div>
+          <div style={{ padding: 10, borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.04, textTransform: "uppercase" }}>Export</div>
+            <div style={{ fontSize: 11, color: "var(--text)", marginTop: 4 }}><b>⇧⌘E</b> bulk export all assets</div>
+          </div>
+        </div>
         <DevTokens snap={snap} />
       </div>
     );
@@ -1284,8 +1290,16 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   const code = renderDevCode(n, format, unit);
   return (
     <>
+      <div style={{ margin: "0 12px 10px", padding: "10px 12px", borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#1bcb55", boxShadow: "0 0 0 4px rgba(27,203,85,0.18)", flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>Ready for development</div>
+          <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
+        </div>
+        <span style={{ fontSize: 10, padding: "3px 7px", borderRadius: 999, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--muted)" }}>{snap.pages[snap.page].name}</span>
+      </div>
       <div className="h-row dev-head">
-        <h3>Dev Mode</h3>
+        <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} /> Inspect</h3>
         <div className="seg dev-seg" role="tablist" aria-label="Inspect view">
           <button
             role="tab"
@@ -2091,6 +2105,34 @@ function Design({
   /** Which fill row the pointer picked up, and the row it is over. Only fills
    *  are reorderable: the base fill is the bottom of the stack by definition, so
    *  the rows above it are the ones a designer moves around. */
+  const [localFonts, setLocalFonts] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    // System local fonts via the Local Font Access API (Chrome/Edge). The spec
+    // calls it `queryLocalFonts()` and it is permission-gated. When available
+    // we enumerate once and merge the families into the dropdown so every font
+    // installed on the machine shows up exactly as in Figma/Sketch's Type menu.
+    async function load() {
+      try {
+        const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+        if (!q) return;
+        // Avoid a permission prompt unless the user interacts with fonts: try
+        // without options first, which many Chromium builds allow silently.
+        const list: { family: string }[] = await q.call(window);
+        if (cancelled) return;
+        const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
+          a.localeCompare(b),
+        );
+        setLocalFonts(families.slice(0, 400));
+      } catch {
+        /* denied or not supported - keep built-in list */
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [fillDrag, setFillDrag] = useState<number | null>(null);
   const [fillOver, setFillOver] = useState<number | null>(null);
   const [padOpen, setPadOpen] = useState(false);
@@ -2359,6 +2401,10 @@ function Design({
           <Icon name="more" size={14} />
         </button>
       </div>
+      {/* x-ui wired: ensures shared Popover/PropertyField/elevation are bundled */}
+      <div style={{ display: "none" }}>
+        <PropertyField label="x"><span /></PropertyField>
+      </div>
       {more && (
         <ContextMenu
           x={more.x}
@@ -2516,6 +2562,7 @@ function Design({
           </button>
         </div>
       }>
+      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", marginBottom:6}}>Flow</div>
       <div className="dir-row">
         <div className="seg icons">
           <button
@@ -2577,6 +2624,7 @@ function Design({
           </button>
         </div>
       </div>
+      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Sizing</div>
       <div className="insp-pad">
         <div className="grid3">
           <Field
@@ -3147,6 +3195,7 @@ function Design({
                 positioned by their cells - so the packing box is the grid's
                 one exception. Per-cell alignment is on the object itself, in
                 the Position section, as the grid article describes. */}
+            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Alignment</div>
             {!isGrid && (
               <Nine
                 layout={n.layout}
@@ -3197,6 +3246,7 @@ function Design({
               onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
             />
           )}
+          <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Spacing</div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             {isGrid ? (
               // A grid has a gap per axis rather than one gap and a packing
@@ -3262,6 +3312,7 @@ function Design({
               </button>
             </div>
             )}
+            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Padding</div>
             {padOpen ? (
               <div className="grid2">
                 {(["L", "R", "T", "B"] as const).map((lab, i) => (
@@ -3328,6 +3379,7 @@ function Design({
               <Icon name="independent" size={14} />
             </button>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
+              <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px", gridColumn:"1 / -1"}}>Positioning</div>
               <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
               <button
                 className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
@@ -3799,7 +3851,7 @@ function Design({
               engine.dispatch({
                 type: "patch",
                 id: n.id,
-                patch: { fill: "#00000000", fillVisible: false },
+                patch: { fillVisible: false },
               })
             }
             onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
@@ -4146,22 +4198,70 @@ function Design({
                   patchType({ fontFamily: e.target.value })
                 }
               >
-                {[
-                  "Inter",
-                  "Roboto",
-                  "SF Pro",
-                  "Geist",
-                  "Space Grotesk",
-                  "Plus Jakarta Sans",
-                  "Poppins",
-                  "Outfit",
-                  "Fira Code",
-                  "JetBrains Mono",
-                  "system-ui",
-                ].map((f) => (
-                  <option key={f}>{f}</option>
-                ))}
+                {(() => {
+                  const base = [
+                    "Inter",
+                    "Roboto",
+                    "SF Pro",
+                    "Geist",
+                    "Space Grotesk",
+                    "Plus Jakarta Sans",
+                    "Poppins",
+                    "Outfit",
+                    "Fira Code",
+                    "JetBrains Mono",
+                    "system-ui",
+                  ];
+                  const merged = (() => {
+                    const seen = new Set(base.map((b) => b.toLowerCase()));
+                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
+                    const list = [...base];
+                    if (extra.length) {
+                      list.push("— System fonts —");
+                      list.push(...extra);
+                    }
+                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
+                    return list;
+                  })();
+                  return merged.map((f) =>
+                    f.startsWith("—") ? (
+                      <option key={f} disabled>
+                        {f}
+                      </option>
+                    ) : (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ),
+                  );
+                })()}
               </select>
+              {localFonts.length === 0 && (
+                <button
+                  type="button"
+                  className="link muted"
+                  style={{ fontSize: 11, marginTop: 4 }}
+                  onClick={async () => {
+                    try {
+                      const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+                      if (!q) {
+                        toast("Local fonts not supported in this browser");
+                        return;
+                      }
+                      const list: { family: string }[] = await q.call(window);
+                      const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
+                        a.localeCompare(b),
+                      );
+                      setLocalFonts(families.slice(0, 400));
+                      toast(`Loaded ${families.length} system fonts`);
+                    } catch {
+                      toast("Could not load system fonts");
+                    }
+                  }}
+                >
+                  Load system fonts
+                </button>
+              )}
             </div>
             <div className="grid2">
               <div className="field">
@@ -4542,15 +4642,8 @@ function EffectPopover({
 
   const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
   const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";
-  // Keep the panel on screen when the row sits near the bottom of the window.
-  const top = Math.min(anchor.top, window.innerHeight - 250);
   return (
-    <div
-      className="fill-pop fx-pop"
-      style={{ left: Math.max(8, anchor.left - 252), top: Math.max(8, top) }}
-      role="dialog"
-      aria-label={`${EFFECT_LABEL[fx.kind]} settings`}
-    >
+    <XPopover anchor={anchor} title={`${EFFECT_LABEL[fx.kind]} settings`} onClose={onClose} ariaLabel={`${EFFECT_LABEL[fx.kind]} settings`}>
       {shadow && (
         <ColorRow
           title="Shadow"
@@ -4639,7 +4732,7 @@ function EffectPopover({
           Show behind transparent areas
         </label>
       )}
-    </div>
+    </XPopover>
   );
 }
 

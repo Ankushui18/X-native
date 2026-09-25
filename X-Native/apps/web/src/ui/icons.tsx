@@ -2,9 +2,9 @@ import type { CSSProperties, ReactElement, SVGProps } from "react";
 import type { Tool } from "../engine/types";
 
 /**
- * 16×16 Figma UI3 icon specification:
- * Sourced from Figma UI3 design language (3icons / ui3-figmas-ui-kit).
- * Standard: 16×16 grid, 1.25px stroke, round caps/joins, currentColor.
+ * 16×16 X-Native icon specification:
+ * Sourced from X-Native design language — adapted from 16×16 grid systems.
+ * Standard: 16×16 grid, 1.25px stroke, round caps/joins, currentColor for crisp rendering at 14–16px.
  *
  * Four sizes are used on purpose, and nothing else:
  *   ICON_XS (12)  - a disclosure caret, or a glyph inside a line of small text.
@@ -258,14 +258,14 @@ export function Icon({
     // Components, Variants & Instances
     // -------------------------------------------------------------------------
     case "component":
-      // Figma UI3 4-diamond master component icon
+      // X-Native 4-diamond master component icon
       return (
         <svg {...p} fill="currentColor" stroke="none">
           <path d="M8 2.2l2 2-2 2-2-2zM12.3 6.5l2 2-2 2-2-2zM8 10.8l2 2-2 2-2-2zM3.7 6.5l2 2-2 2-2-2z" />
         </svg>
       );
     case "instance":
-      // Figma UI3 single outlined diamond
+      // X-Native single outlined diamond
       return (
         <svg {...p}>
           <polygon points="8,2.2 13.8,8 8,13.8 2.2,8" strokeWidth={1.25} />
@@ -1259,6 +1259,44 @@ export function Icon({
             fill="#FFFFFF"
             d="M8.90422 15.8311L9.29124 15.2795L9.67123 14.7429L9.93159 14.3702L10.4382 13.6472L10.5719 13.4609L11.2123 12.559L11.8597 11.6348L11.9793 11.4634L12.5 10.7255L12.2467 10.3752L11.8526 9.81615L11.4726 9.2795L11.2052 8.89938L10.6986 8.18385L10.5579 7.99006L9.92455 7.0882V7.07329H9.91751L9.27013 6.16398L9.15051 6H5.31548L5.43511 6.16398L6.07545 7.07329V7.0882L6.72283 7.99006L6.86357 8.18385L7.37021 8.89938L7.63761 9.2795L8.01055 9.81615L8.40461 10.3752L8.65794 10.7255L8.13722 11.4634L8.01055 11.6348L7.37021 12.5441L6.72987 13.4534L6.59617 13.6398L6.08952 14.3627L5.82916 14.7354L5.44918 15.272L5.06216 15.8236L4.80883 16.1814L4.28812 16.9118L4.16145 17.0907L3.52111 18H3.5H4.78772H6.07545H7.36317L8.01055 17.0832L8.13722 16.9043L8.65794 16.1739L8.91126 15.8161L8.90422 15.8311Z"
           />
+        </svg>
+      );
+    case "upload":
+    case "upload-alt":
+      return (
+        <svg {...p}>
+          <path d="M8 2.5v7.5M5.5 7.5L8 10l2.5-2.5M2.5 11v2a.5.5 0 00.5.5h10a.5.5 0 00.5-.5v-2" strokeWidth={1.25} />
+        </svg>
+      );
+    case "type":
+      return (
+        <svg {...p}>
+          <path d="M3 3.5h10M8 3.5v9.5M5.5 13h5" strokeWidth={1.3} />
+        </svg>
+      );
+    case "pointer":
+      return (
+        <svg {...p} fill="currentColor" stroke="none">
+          <path d="M3 2v11.5l3.2-3 2.3 4.5 1.7-.8-2.3-4.4 4.5-.2z" />
+        </svg>
+      );
+    case "history":
+      return (
+        <svg {...p}>
+          <path d="M3.5 8a4.5 4.5 0 101.3-3.2L3 6.5M3 3v3.5h3.5" strokeWidth={1.25} />
+        </svg>
+      );
+    case "fullscreen":
+    case "maximize":
+      return (
+        <svg {...p}>
+          <path d="M2.5 3.5V3a.5.5 0 01.5-.5h2.5M10.5 2.5H13a.5.5 0 01.5.5v2.5M13.5 10.5V13a.5.5 0 01-.5.5h-2.5M5.5 13.5H3a.5.5 0 01-.5-.5v-2.5" strokeWidth={1.3} />
+        </svg>
+      );
+    case "arrow-left":
+      return (
+        <svg {...p}>
+          <path d="M12.5 8H3.5M7 4.5L3.5 8 7 11.5" strokeWidth={1.25} />
         </svg>
       );
     default:

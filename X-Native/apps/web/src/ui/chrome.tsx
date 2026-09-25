@@ -23,7 +23,7 @@ import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo } from "./zoom";
 import { roundToPixel } from "./round";
 
 import { clearDoc } from "../engine/persist";
-import { copyText } from "../engine/clipboard";
+import { copyText, notePasteModifiers, pasteEventMissing } from "../engine/clipboard";
 import { armEyedrop, isNone } from "./color";
 import { getEngineInfo } from "../engine/wasmBridge";
 
@@ -89,7 +89,7 @@ export function NavRail({
                 setMenu(false);
               }}
             >
-              Inspect Figma (.fig) <span className="sc">⇧⌘F</span>
+              Inspect File (.fig) <span className="sc">⇧⌘F</span>
             </button>
             <button onClick={() => engine.dispatch({ type: "undo" })}>
               Undo <span className="sc">⌘Z</span>
@@ -132,11 +132,11 @@ export function NavRail({
       <div className="spacer" />
       <button
         className="nav"
-        title="Inspect Figma (.fig) file"
+        title="Inspect design file (.fig)"
         onClick={onInspectFig}
       >
-        <Icon name="figma" size={16} />
-        <span>Figma</span>
+        <Icon name="folder" size={16} />
+        <span>Inspect</span>
       </button>
       <button
         className="nav"
@@ -869,7 +869,7 @@ export function Actions({
   const { setPref } = useTheme();
   const items = [
     {
-      label: "Inspect Figma (.fig) file",
+      label: "Inspect file (.fig)",
       sc: "⇧⌘F",
       run: () => onInspectFig?.(),
     },
@@ -1267,8 +1267,20 @@ export function bindHotkeys(
       return;
     }
     if (meta && e.key.toLowerCase() === "v") {
-      e.preventDefault();
-      engine.dispatch({ type: "paste", inPlace: e.shiftKey });
+      // The keystroke is handed to the browser on purpose. `preventDefault()`
+      // here suppresses the `paste` event, and that event is the only
+      // permission-free look at the system clipboard — which is where a copy
+      // from Figma, from another tab, or from a screenshot is waiting. Canvas
+      // owns the event and places what it finds; the in-app clipboard is the
+      // fallback when the system one holds nothing this app can read.
+      notePasteModifiers(e.shiftKey);
+      // Insurance for a browser that does not fire `paste` at all: the copy
+      // made inside this document must still paste, as it did before. A real
+      // paste event clears the flag within a frame, so this never doubles up.
+      const inPlace = e.shiftKey;
+      window.setTimeout(() => {
+        if (pasteEventMissing()) engine.dispatch({ type: "paste", inPlace });
+      }, 250);
       return;
     }
     // Auto layout, exactly as the guide's shortcut table has it: ⇧A adds one

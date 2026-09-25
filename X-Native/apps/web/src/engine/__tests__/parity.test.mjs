@@ -28,7 +28,7 @@ import {
   projectPointOnSegment,
   computeFigmaNoodle,
 } from "../geometry.ts";
-import { MemoryEngine, defaultEffect, find, findParent, insideInstance, worldPos } from "../memory.ts";
+import { MemoryEngine, defaultEffect, find, findParent, insideInstance, node, worldPos } from "../memory.ts";
 import { evalField } from "../../ui/fieldExpr.ts";
 import {
   SPACING_MODES,
@@ -85,7 +85,17 @@ import { colorUsage, colorUsageAll, setOpacityMatches } from "../../ui/selection
 import { compositeOver, contrastRatio, readableLabel } from "../../ui/color.ts";
 import { contrastRatio, contrastTarget, nearestAccessible, passesContrast, parseHex, rgbToHsv } from "../../ui/color.ts";
 
-import { inspectFigFile, importFig } from "../figImport.ts";
+import { inspectFigFile, importFig, importFigContainer, isFigKiwi } from "../figImport.ts";
+import { Zip } from "../zip.ts";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  clipPlainText,
+  figmaClipFromHtml,
+  nativeClipFromHtml,
+  nativeClipHtml,
+  parseClipboard,
+} from "../clipboard.ts";
 import {
   DEFAULT_NUDGE,
   NUDGE_MAX,
@@ -111,7 +121,7 @@ import {
   stepZoom,
   wheelZoomFactor,
 } from "../view.ts";
-import { exportSvg, svgPath } from "../svgExport.ts";
+import { exportSvg, svgPath, exportClipSvg } from "../svgExport.ts";
 import {
   FORMAT_CAPS,
   FORMATS,
@@ -3340,6 +3350,119 @@ console.log("nesting flows, from \"Combine vertical, horizontal, and grid auto l
   t("evalField computes 50% of 200 as 100", evalField("50%", 200) === 100);
   t("evalField computes 150% of 200 as 300", evalField("150%", 200) === 300);
   t("evalField computes composite math (200+16)/2 as 108", evalField("(200+16)/2", 0) === 108);
+}
+
+console.log("system clipboard — direct copy/paste from Figma and cross-tab fidelity:");
+{
+  const bytes = new Uint8Array([0, 1, 255, 128, 64, 32]);
+  const b64 = bytesToBase64(bytes);
+  const back = base64ToBytes(b64);
+  t("base64 round-trips arbitrary bytes", back.length === bytes.length && back.every((v, i) => v === bytes[i]));
+  const big = new Uint8Array(70000);
+  for (let i = 0; i < big.length; i++) big[i] = i & 0xff;
+  const bigB64 = bytesToBase64(big);
+  const bigBack = base64ToBytes(bigB64);
+  t("base64 round-trips a large buffer", bigBack.length === big.length && bigBack[12345] === big[12345]);
+
+  const mkRect = (name, x, y) => node("rect", name, x, y, 100, 40, { fill: "#ff0000", cornerRadii: [8, 8, 8, 8], cornerIndependent: true });
+  const clipNodes = [mkRect("Card", 10, 20), mkRect("Badge", 140, 20)];
+  const svg = exportClipSvg(clipNodes);
+  t("exportClipSvg keeps relative offsets in the viewBox", svg.includes('viewBox="10 20'));
+  t("exportClipSvg lists both layers", svg.includes('fill="#ff0000"') || svg.includes("#ff0000"));
+  const txt = clipPlainText([{ ...mkRect("A", 0, 0), kind: "text", text: "Hello\nWorld" }, mkRect("B", 0, 0)]);
+  t("clipPlainText joins text layers with newlines", txt === "Hello\nWorld");
+  t("clipPlainText falls back to names when there are no words", clipPlainText([mkRect("Card", 0, 0)]) === "Card");
+  const html = nativeClipHtml(clipNodes, svg, "test.fig");
+  const decoded = nativeClipFromHtml(html);
+  t("native clip survives the HTML round-trip", !!decoded && decoded.length === 2 && decoded[0].name === "Card");
+  t("native clip is ignored when the attribute is absent", nativeClipFromHtml("<span>hello</span>") === null);
+  t("parseClipboard prefers the native payload over Figma's", (() => {
+    const figB64 = bytesToBase64(new Uint8Array(64).fill(1));
+    const both = html + '<span data-buffer="<!--(figma)' + figB64 + '(/figma)-->"></span>';
+    return parseClipboard({ getData: (k) => k === "text/html" ? both : "", types: ["text/html"] }).kind === "native";
+  })());
+
+  const figBytes = new Uint8Array([102, 105, 103, 45, 107, 105, 119, 105, 1, 0, 0, 0]);
+  const padded = new Uint8Array(512);
+  padded.set(figBytes);
+  const figB64Long = bytesToBase64(padded);
+  const meta = { fileKey: "abc", pasteID: 123, dataType: "scene" };
+  const metaB64Long = bytesToBase64(new TextEncoder().encode(JSON.stringify(meta)));
+  const figHtml = '<meta charset="utf-8"><span data-metadata="<!--(figmeta)' + metaB64Long + '(/figmeta)-->"></span><span data-buffer="<!--(figma)' + figB64Long + '(/figma)-->"></span>';
+  const figParsed = figmaClipFromHtml(figHtml);
+  t("Figma clipboard parses the buffer", !!figParsed && figParsed.buffer.length === padded.length);
+  t("Figma clipboard decodes the metadata", figParsed.meta?.fileKey === "abc" && figParsed.meta?.pasteID === 123);
+  t("Figma clipboard accepts the bare comment shape too", (() => {
+    const bare = '<!--(figma)' + figB64Long + '(/figma)--><!--(figmeta)' + metaB64Long + '(/figmeta)-->';
+    const p = figmaClipFromHtml(bare);
+    return !!p && p.buffer.length === padded.length;
+  })());
+  t("Figma clipboard rejects short base64", figmaClipFromHtml('<span data-buffer="<!--(figma)' + bytesToBase64(new Uint8Array([1, 2, 3])) + '(/figma)-->"></span>') === null);
+  t("Figma clipboard is null when no markers are present", figmaClipFromHtml("<span>hello</span>") === null);
+
+  const svgOnly = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+  t("SVG text on text/plain is detected", parseClipboard({ getData: (k) => k === "text/plain" ? svgOnly : "", types: ["text/plain"] }).kind === "svg");
+  t("plain words become a text paste", parseClipboard({ getData: (k) => k === "text/plain" ? "hello world" : "", types: ["text/plain"] }).kind === "text");
+  t("empty clipboard is none", parseClipboard({ getData: () => "", types: [] }).kind === "none");
+  t("files beat HTML", parseClipboard({ getData: (k) => k === "text/html" ? html : "", files: [{}], types: ["text/html"] }).kind === "files");
+
+  t("isFigKiwi accepts a fig-kiwi prelude", isFigKiwi(padded));
+  t("isFigKiwi rejects random bytes", !isFigKiwi(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])));
+  t("isFigKiwi rejects a short buffer", !isFigKiwi(new Uint8Array([102, 105, 103])));
+
+  const payloadNodes = (() => {
+    const n = node("rect", "Tmp", 5, 5, 50, 50, { fill: "#123456", cornerRadii: [4, 4, 4, 4], cornerIndependent: true });
+    const fromHtml = nativeClipFromHtml(nativeClipHtml([n], "<svg/>"));
+    return fromHtml;
+  })();
+  t("native HTML payload decodes back to nodes", !!payloadNodes && payloadNodes.length === 1 && payloadNodes[0].fill === "#123456");
+
+  const e2 = new MemoryEngine(false);
+  e2.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 40, h: 40, extra: { name: "A" } });
+  e2.dispatch({ type: "add", kind: "rect", x: 60, y: 0, w: 40, h: 40, extra: { name: "B" } });
+  const aId = e2.snapshot().pages[e2.snapshot().page].root.children.slice(-2)[0].id;
+  e2.dispatch({ type: "select", ids: [aId, e2.snapshot().selection[0]] });
+  e2.dispatch({ type: "copy" });
+  e2.dispatch({ type: "paste", x: 200, y: 100 });
+  const pasted = e2.snapshot().pages[e2.snapshot().page].root.children.slice(-2);
+  const cx = (Math.min(...pasted.map((n) => n.x)) + Math.max(...pasted.map((n) => n.x + n.w))) / 2;
+  const cy = (Math.min(...pasted.map((n) => n.y)) + Math.max(...pasted.map((n) => n.y + n.h))) / 2;
+  t("paste centres the group at the target", Math.abs(cx - 200) < 1 && Math.abs(cy - 100) < 1);
+  t("paste keeps the arrangement rather than stacking", Math.abs((pasted[1].x - pasted[0].x) - 60) < 1);
+  t("paste in place keeps source coordinates", (() => {
+    const e3 = new MemoryEngine(false);
+    e3.dispatch({ type: "add", kind: "rect", x: 30, y: 40, w: 20, h: 20, extra: { name: "P" } });
+    const pid = e3.snapshot().selection[0];
+    e3.dispatch({ type: "select", ids: [pid] });
+    e3.dispatch({ type: "copy" });
+    e3.dispatch({ type: "paste", inPlace: true });
+    const q = e3.snapshot().pages[e3.snapshot().page].root.children.slice(-1)[0];
+    return q.x === 30 && q.y === 40;
+  })());
+
+  const figPaths = [
+    resolve(process.cwd(), "e2e/fixtures/sample.fig"),
+    resolve(process.cwd(), "X-Native/apps/web/e2e/fixtures/sample.fig"),
+  ];
+  const figPath = figPaths.find((p) => existsSync(p));
+  if (figPath) {
+    const buf = readFileSync(figPath);
+    let canvasBytes;
+    try {
+      const z = new Zip(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+      const name = z.names().find((n) => n.endsWith("canvas.fig"));
+      if (name) canvasBytes = await z.read(name);
+    } catch {}
+    if (canvasBytes && isFigKiwi(canvasBytes)) {
+      const res = await importFigContainer(canvasBytes);
+      t("fig-kiwi container from a .fig imports as layers", res.nodes.length > 0);
+      const clipB64 = bytesToBase64(canvasBytes);
+      const clipHtml = '<span data-buffer="<!--(figma)' + clipB64 + '(/figma)-->"></span>';
+      const parsed2 = figmaClipFromHtml(clipHtml);
+      const res2 = parsed2 ? await importFigContainer(parsed2.buffer) : null;
+      t("the same container via clipboard base64 imports identically", !!res2 && res2.nodes.length === res.nodes.length);
+    }
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

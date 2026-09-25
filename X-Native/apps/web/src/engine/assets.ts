@@ -179,19 +179,25 @@ function missingRefs(node: XNode, out: Set<string>): void {
   for (const c of node.children) missingRefs(c, out);
 }
 
-function allRefs(doc: { pages: Page[]; components: ComponentMaster[] }): Set<string> {
-  const out = new Set<string>();
-  for (const p of doc.pages) missingRefs(p.root, out);
-  for (const c of doc.components) missingRefs(c.node, out);
-  return out;
-}
-
 /**
  * Fill every `asset:` ref in a document with the image it names, in place. Run
  * this before handing a stored document to the engine.
  */
 export async function hydrateDoc(doc: { pages: Page[]; components: ComponentMaster[] }): Promise<number> {
-  const missing = [...allRefs(doc)];
+  return hydrateNodes([...doc.pages.map((p) => p.root), ...doc.components.map((c) => c.node)]);
+}
+
+/**
+ * The same resolution for a handful of loose subtrees — what a paste arrives
+ * as. Refs are collected across all of them first so the store is read once,
+ * and the count that comes back is how many pictures this session does not
+ * have: a copy made in another browser profile carries refs whose bytes were
+ * never written here.
+ */
+export async function hydrateNodes(roots: XNode[]): Promise<number> {
+  const out = new Set<string>();
+  for (const r of roots) missingRefs(r, out);
+  const missing = [...out];
   if (missing.length) await idbGet(missing);
   let unresolved = 0;
   const fix = (n: XNode) => {
@@ -200,11 +206,20 @@ export async function hydrateDoc(doc: { pages: Page[]; components: ComponentMast
       if (url) n.imageSrc = url;
       else unresolved++;
     }
-    for (const c of n.children) fix(c);
+    for (const c of n.children ?? []) fix(c);
   };
-  for (const p of doc.pages) fix(p.root);
-  for (const c of doc.components) fix(c.node);
+  for (const r of roots) fix(r);
   return unresolved;
+}
+
+/** One subtree, with its inline images swapped for refs. The clipboard's
+ *  counterpart to `dehydrateDoc`: a copied photograph is megabytes of base64,
+ *  and the clipboard only needs the reference — the document that receives it
+ *  resolves that ref from the same store. */
+export function dehydrateNode(n: XNode): XNode {
+  const children = (n.children ?? []).map(dehydrateNode);
+  if (!n.imageSrc || isAssetRef(n.imageSrc)) return { ...n, children } as XNode;
+  return { ...n, imageSrc: putAsset(n.imageSrc), children } as XNode;
 }
 
 /**
@@ -213,15 +228,10 @@ export async function hydrateDoc(doc: { pages: Page[]; components: ComponentMast
  * nodes, and turning their pictures into refs in place would blank the canvas.
  */
 export function dehydrateDoc<T extends { pages: Page[]; components: ComponentMaster[] }>(doc: T): T {
-  const copyNode = (n: XNode): XNode => {
-    const children = n.children.map(copyNode);
-    if (!n.imageSrc || isAssetRef(n.imageSrc)) return { ...n, children } as XNode;
-    return { ...n, imageSrc: putAsset(n.imageSrc), children } as XNode;
-  };
   return {
     ...doc,
-    pages: doc.pages.map((p) => ({ ...p, root: copyNode(p.root) })),
-    components: doc.components.map((c) => ({ ...c, node: copyNode(c.node) })),
+    pages: doc.pages.map((p) => ({ ...p, root: dehydrateNode(p.root) })),
+    components: doc.components.map((c) => ({ ...c, node: dehydrateNode(c.node) })),
   };
 }
 

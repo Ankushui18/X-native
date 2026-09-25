@@ -5,7 +5,9 @@
  * 8-byte magic ("fig-kiwi"), u32 version, then length-prefixed chunks. Chunk 0 is the
  * compressed Kiwi schema (Figma ships its whole field dictionary in every
  * file, so the reader stays version-tolerant) and chunk 1 is the document
- * message.
+ * message. The container is also reachable on its own: Figma's ⌘C writes one,
+ * base64'd, into the clipboard's `text/html` — `importFigContainer` is that
+ * entry point, and it is what makes paste-from-Figma work.
  *
  * Supported: FRAME/SECTION/GROUP, RECTANGLE (+corner radius), ELLIPSE, LINE,
  * TEXT, COMPONENT/INSTANCE, solid fills and strokes, opacity, visibility,
@@ -195,8 +197,33 @@ export async function importFig(buf: ArrayBuffer): Promise<ImportResult> {
   const zip = new Zip(buf);
   const canvasName = zip.names().find((n) => n.endsWith("canvas.fig"));
   if (!canvasName) throw new Error("no canvas.fig entry in this .fig archive");
-  const canvas = await zip.read(canvasName);
+  return importFigContainer(await zip.read(canvasName), zip);
+}
 
+/** True when `bytes` start with the `fig-kiwi` prelude, so a caller can tell a
+ *  Figma scene buffer from arbitrary base64 that happened to be on the
+ *  clipboard before handing it to the (async, decompressing) importer. */
+export function isFigKiwi(bytes: Uint8Array): boolean {
+  return bytes.length >= 12 && new TextDecoder().decode(bytes.subarray(0, 8)) === "fig-kiwi";
+}
+
+/**
+ * Parse a bare `fig-kiwi` container — the same bytes a `.fig` archive carries
+ * in its `canvas.fig` entry, but without the ZIP around them.
+ *
+ * This is exactly what Figma puts on the system clipboard when you ⌘C a layer:
+ * the scene is serialised to a small Figma file, base64'd, and written into the
+ * `data-buffer` attribute of an empty `<span>` inside `text/html` (see
+ * `clipboard.ts`). Decoding that attribute therefore lands here, and a paste
+ * from Figma gets the same reader — schema, chunk inflation, paint and vector
+ * handling — as a `.fig` dropped on the canvas.
+ *
+ * `archive` is the ZIP the container came out of, when there was one: image
+ * fills live beside the scene as separate `images/…` entries, so only a `.fig`
+ * file can supply their bytes. A clipboard buffer is the container on its own
+ * and has no such entries, so it is omitted and the layers import without them.
+ */
+export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Promise<ImportResult> {
   const magic = new TextDecoder().decode(canvas.subarray(0, 8));
   if (canvas.length < 12 || magic !== "fig-kiwi") {
     throw new Error('not a fig-kiwi canvas (missing "fig-kiwi" prelude)');
@@ -402,12 +429,12 @@ export async function importFig(buf: ArrayBuffer): Promise<ImportResult> {
         : /\.webp$/i.test(name)
           ? "image/webp"
           : "image/png";
-  for (const name of zip.names()) {
+  for (const name of archive?.names() ?? []) {
     if (!/^images\//i.test(name) || /\/$/.test(name)) continue;
     const hash = name.slice(name.lastIndexOf("/") + 1).replace(/\.[^.]+$/, "");
     if (!hash || imageData.has(hash) || !wanted.has(hash)) continue;
     try {
-      const bytes = await zip.read(name);
+      const bytes = await archive!.read(name);
       let bin = "";
       // Chunked, or a few megabytes of images blow the argument limit.
       for (let i = 0; i < bytes.length; i += 0x8000) {
