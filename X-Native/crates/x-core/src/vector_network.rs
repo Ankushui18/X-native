@@ -18,7 +18,7 @@ pub enum WindingRule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum StrokeCap {
+pub enum VertexStrokeCap {
     None,
     Round,
     Square,
@@ -29,7 +29,7 @@ pub enum StrokeCap {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum StrokeJoin {
+pub enum VertexStrokeJoin {
     Miter,
     Round,
     Bevel,
@@ -39,8 +39,8 @@ pub enum StrokeJoin {
 pub struct Vertex {
     pub x: f64,
     pub y: f64,
-    pub stroke_cap: Option<StrokeCap>,
-    pub stroke_join: Option<StrokeJoin>,
+    pub stroke_cap: Option<VertexStrokeCap>,
+    pub stroke_join: Option<VertexStrokeJoin>,
     pub corner_radius: Option<f64>,
 }
 
@@ -111,8 +111,6 @@ pub trait GeometryBoolean {
 // keeps results sound.
 
 use std::f64::consts::PI;
-
-use crate::{Edge, EdgeId, GeometryError, RegionId, VectorNetwork, VertexId, WindingRule};
 
 /// Directed half-edge. `2*i` follows edge `i` from its start to its end;
 /// `2*i+1` follows it backwards.
@@ -680,7 +678,7 @@ impl VectorNetwork {
 }
 
 #[cfg(test)]
-mod planar_tests {
+pub(crate) mod planar_tests {
     //! Tests for the Phase-1 planar analysis + modifier evaluation.
     //!
     //! Coordinate convention: document space is y-down (as on screen).
@@ -1107,5 +1105,53 @@ mod planar_tests {
         assert!(net.point_is_filled((12.0, 5.0)).unwrap());
         // well outside the bulge
         assert!(!net.point_is_filled((16.0, 5.0)).unwrap());
+    }
+
+    /// Zigzag square: bottom edge straight, top edge has a 0.1 bump.
+    pub(crate) fn zigzag_square() -> VectorNetwork {
+        let pts = [
+            (0.0, 0.0), // 0 bottom-left
+            (4.0, 0.0), // 1 bottom-right
+            (4.0, 4.0), // 2 top-right
+            (3.0, 4.0), // 3
+            (2.5, 4.1), // 4 bump apex
+            (2.0, 4.0), // 5
+            (1.0, 4.0), // 6
+            (0.0, 4.0), // 7 top-left
+        ];
+        let mut net = VectorNetwork::default();
+        for (i, p) in pts.iter().enumerate() {
+            net.vertices.insert(
+                i,
+                crate::Vertex {
+                    x: p.0,
+                    y: p.1,
+                    stroke_cap: None,
+                    stroke_join: None,
+                    corner_radius: None,
+                },
+            );
+        }
+        for i in 0..pts.len() {
+            net.edges.insert(
+                i,
+                Edge {
+                    start: i,
+                    end: (i + 1) % pts.len(),
+                    tangent_start: None,
+                    tangent_end: None,
+                },
+            );
+        }
+        net.regions.insert(
+            0,
+            Region {
+                winding_rule: WindingRule::NonZero,
+                loops: vec![vec![0, 1, 2, 3, 4, 5, 6, 7]],
+                paint_id: Some(0),
+            },
+        );
+        net.winding_rule = Some(WindingRule::NonZero);
+        net
     }
 }

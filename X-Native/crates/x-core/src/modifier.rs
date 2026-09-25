@@ -490,7 +490,7 @@ mod modifier_tests {
 
     use super::{Modifier, ModifierStack};
     use crate::vector_network::planar_tests::{square, zigzag_square};
-    use crate::{GeometryError, ModifierError, VectorNetwork};
+    use crate::{Edge, GeometryError, ModifierError, VectorNetwork};
 
     // ------------------------------------------------------------------
     // Modifier evaluation

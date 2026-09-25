@@ -60,15 +60,35 @@ cubic flattening for winding; empty network; validation failures;
 transform correctness + NaN rejection; simplify (small features removed,
 large kept, zero tolerance = identity); stack purity/composability.
 
-## Verification note (important)
+## Verification (this commit)
 
-This sandbox **could not fetch crate dependencies** (network egress to
-crates.io / static.rust-lang.org blocked; partial offline toolchain
-only), so `cargo check -p x-core` was not runnable here. The code was
-therefore first developed and fully test-verified in a zero-dependency
-scratch crate (Rust 1.97.0, std only), then ported **verbatim** into
-`x-core` (diff-verified equivalent, `rustfmt --check` clean). CI runs the
-real `cargo test -p x-core`; treat this commit as validated there.
+crates.io / static.rust-lang.org egress is blocked in this sandbox, so
+the build used a **local directory source**: the exact locked versions of
+all 21 transitive crates were reconstructed from their git sources
+(crates are published from version-bump commits; monorepo workspace
+inheritance materialized per-package), with one documented surgical
+change — kurbo's *optional, unused-in-this-graph* `euclid` dep removed
+(servo/rust-euclid unreachable). In that harness:
+
+- `cargo test -p x-core`: **199 passed, 0 failed** (183 pre-existing +
+  16 new Phase-1 tests).
+- `cargo clippy` (workspace lints: correctness/suspicious denied): no
+  violations in the new code.
+- `rustfmt --check`: clean.
+- doctests: not runnable (partial offline toolchain lacks rustdoc) — CI
+  covers this.
+
+The same code was first developed and test-verified in a zero-dependency
+scratch crate (std only), then ported verbatim.
+
+## Pre-existing breakage fixed here
+
+At the parent commit, `x-core` **did not compile**: `StrokeJoin`/
+`StrokeCap` were defined in both `paint.rs` and `vector_network.rs` and
+both were glob-re-exported at the crate root (ambiguous in
+`booleans.rs`). The vector-network variants are renamed to
+`VertexStrokeCap` / `VertexStrokeJoin` (per-vertex stroke attributes);
+`paint.rs`'s rendering-side types keep their names.
 
 ## What is NOT done (next, in blueprint order)
 1. Boolean ops on the raw `VectorNetwork` (arrangement + curve
