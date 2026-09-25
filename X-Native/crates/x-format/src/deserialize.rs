@@ -310,7 +310,7 @@ fn parse_grid(v: Option<&V>) -> Option<x_core::GridLayout> {
     })
 }
 
-/// Figma's Count is "minimum is three and the maximum is 60": a file that
+/// the Count is "minimum is three and the maximum is 60": a file that
 /// says otherwise loads clamped rather than wrong.
 fn count(v: Option<&V>) -> usize {
     let n = v.and_then(V::num).unwrap_or(COUNT_MIN as f64) as usize;
@@ -813,7 +813,7 @@ pub(crate) fn parse_node(v: &V) -> Node {
                     time: e.get("video_time").and_then(V::num).unwrap_or(0.0) as f32,
                 },
                 Some("video-end") => Trigger::WhenVideoEnds,
-                // an unknown word is Figma's default rather than an error:
+                // an unknown word is the default rather than an error:
                 // files from other tools must still open
                 _ => Trigger::OnClick,
             };

@@ -173,7 +173,7 @@ export function Comments({
   const open = threads.find((t) => t.id === openId) ?? null;
   const host = useRef<HTMLDivElement>(null);
 
-  // Clicking anywhere outside a popover closes it, as in Figma.
+    // Clicking anywhere outside a popover closes it.
   useEffect(() => {
     if (!open && !draft) return;
     const onDown = (e: MouseEvent) => {

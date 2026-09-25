@@ -1,10 +1,10 @@
 //! Minimal recursive-descent JSON parser shared by the .x deserializer
-//! and the external-format importers (.sketch). Extracted from
+//! and the external-format importers (.). Extracted from
 //! deserialize.rs so importers don't grow a second hand-rolled parser.
 
 // ------------------------------------------------------------------- parser
 
-/// Recursion ceiling for untrusted documents (.sketch packages, Figma
+/// Recursion ceiling for untrusted documents (. packages, 
 /// REST JSON). Every legitimate file nests far below this; a hostile
 /// deeply-nested input errors cleanly instead of overflowing the stack.
 pub(crate) const MAX_JSON_DEPTH: usize = 512;
@@ -138,7 +138,7 @@ impl<'a> P<'a> {
                             self.i += 4;
                             // UTF-16 surrogate pair: a high surrogate
                             // followed by \uDC00-\uDFFF combines into one
-                            // astral char (emoji in Sketch/Figma text)
+                            // astral char (emoji in / text)
                             let ch = if (0xD800..0xDC00).contains(&cp) {
                                 let low = self
                                     .s
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn deeply_nested_hostile_input_errors_instead_of_overflowing() {
         // 100k nested arrays: far past MAX_JSON_DEPTH. Without the depth
-        // ceiling this overflows the stack (adversarial .sketch/Figma file);
+        // ceiling this overflows the stack (adversarial ./ file);
         // with it, the parser errors cleanly.
         let hostile = format!("{}1{}", "[".repeat(100_000), "]".repeat(100_000));
         let err = parse(&hostile).expect_err("must hit the depth ceiling");

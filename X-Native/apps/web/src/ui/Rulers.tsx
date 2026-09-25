@@ -1,12 +1,12 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Figma-style rulers along the top and left edges of the viewport.
+ * Rulers along the top and left edges of the viewport.
  *
  * Drawn on their own canvas so ticks stay crisp at any DPR and redrawing them
  * never touches the document render. Tick spacing steps through a 1/2/5
  * sequence so labels stay roughly 80px apart at every zoom level, and the
- * current selection is highlighted the way Figma shades the selected range.
+ * current selection is highlighted along the selected range.
  */
 
 const SIZE = 20;
@@ -105,7 +105,7 @@ export function Rulers({
       if (major) ctx.fillText(String(Math.round(v)), sx + 3, SIZE - 8);
     }
 
-    // Vertical ruler — labels rotated, matching Figma.
+    // Vertical ruler — labels rotated.
     const wy0 = (SIZE - panY) / zoom;
     const wy1 = (height - panY) / zoom;
     for (let v = Math.floor(wy0 / minor) * minor; v <= wy1; v += minor) {

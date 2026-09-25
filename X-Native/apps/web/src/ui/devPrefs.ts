@@ -6,12 +6,12 @@
  * language and px/rem, while the menu copied hand-built CSS in pixels. A
  * developer who set the panel to SwiftUI + rem and then used the menu got a
  * different answer for the same layer — so the answer lives here instead, and
- * outlives a reload, which is what Figma's Inspect settings do too.
+ * outlives a reload.
  */
 export type DevFormat = "css" | "tailwind" | "swiftui" | "compose" | "flutter" | "svg" | "figma" | "tokens";
 export type DevUnit = "px" | "rem";
 
-/** Order matters: it is the order of Figma's language dropdown. */
+/** Supported languages. */
 export const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
   { id: "css", label: "CSS", lang: "css" },
   { id: "tailwind", label: "Tailwind", lang: "html" },

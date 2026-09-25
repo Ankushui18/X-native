@@ -1,5 +1,5 @@
 /**
- * Auto layout, as Figma's "Guide to auto layout" describes it.
+ * Auto layout engine.
  *
  * The engine positions children with these rules and the right sidebar labels
  * them with the same ones, so what the panel says and where the pixels land
@@ -9,7 +9,7 @@ import type { AutoLayout, GridTrack, LayoutAlign, LayoutDirection, LayoutJustify
 
 /* ── The grid flow ──────────────────────────────────────────────────────────
  *
- * Figma's third flow, from "Use the grid in auto layout flow": cells arranged
+ * Grid flow: cells arranged cells arranged
  * into columns and rows (tracks), where an object can span several of each.
  * The geometry is worked out here and applied by the engine, so the panel, the
  * tests and the canvas all read the same numbers.
@@ -54,7 +54,7 @@ export interface Cell {
 /**
  * Place the objects into cells.
  *
- * With automatic positioning on - Figma's default - objects fill the grid "in
+ * With automatic positioning on - objects fill the grid "in
  * succession from left to right, top to bottom", each one taking the first cell
  * its span fits in. When it is off, every object stays in the cell it already
  * has (`gridCol`/`gridRow`), which is what preserves empty cells.
@@ -97,7 +97,7 @@ export function placeCells(flow: XNode[], cols: number, auto: boolean): Cell[] {
     return out;
   }
 
-  /* Automatic positioning. Figma: "click into one of the cells to place a
+  /* Automatic positioning: "click into one of the cells to place a
    * frame" - an object placed on purpose keeps the cell it was given, and the
    * rest of the flow reads the same grid and moves around it. Those cells are
    * reserved first, so an object earlier in the order cannot take one. */
@@ -150,7 +150,7 @@ export function placeCells(flow: XNode[], cols: number, auto: boolean): Cell[] {
  * "By default, Number of rows is set to `auto`... the number of rows in the grid
  * will increase or decrease to accommodate the number of cells needed by cell
  * objects. For example, deleting all cell objects from a row will also remove
- * that row." A row count that was set by hand is a floor, because Figma will
+ * that row." A row count that was set by hand is a floor, because layout will
  * "create new rows or columns to accommodate" objects that do not fit.
  */
 export function gridRows(layout: AutoLayout, cells: Cell[]): number {
@@ -182,9 +182,9 @@ export function resolveTracks(
   available: number,
   canFill: boolean,
 ): ResolvedTrack[] {
-  // A track that has not been given a mode is Figma's Auto: the free space is
+  // A track that has not been given a mode is Auto: the free space is
   // shared out between the tracks that ask for it, in proportion to their
-  // fractional units. (Figma's own help says "by default, the size is set to
+  // fractional units. (By default, the size is set to
   // auto, which means free space is divided evenly between all rows/columns".)
   const mode = (i: number): TrackMode => tracks?.[i]?.mode ?? "fill";
   const fr = (i: number) => Math.max(0.0001, tracks?.[i]?.fr ?? 1);
@@ -230,7 +230,7 @@ export interface GridPlan {
 /**
  * Where a new object goes in a grid's order.
  *
- * "This also means that when you add a cell object to the grid, Figma will try
+ * "This also means that when you add a cell object to the grid, the layout engine will try
  * to place it between the cell objects - in layer order - nearest your cursor."
  * The track the point falls in is read from the plan the current objects
  * produce, and the object is inserted before the first object whose cell is at
@@ -271,7 +271,7 @@ export function gridSpotForPoint(
  * The cell an object is sitting over.
  *
  * Automatic positioning off is the case where the object's own place on the
- * canvas is the truth: Figma says toggling it off "preserves empty cells", and
+ * canvas is the truth: toggling it off "preserves empty cells", and
  * the way to move something into one of them is to drag it there. The track a
  * point falls in is read from the plan the objects' last arrangement produced,
  * so dragging across a track boundary lands in the next cell rather than being
@@ -284,7 +284,7 @@ export function cellAt(plan: GridPlan, layout: AutoLayout, child: XNode): Cell {
   const colSpan = Math.max(1, Math.min(plan.cols, Math.floor(child.colSpan ?? 1) || 1));
   const rowSpan = Math.max(1, Math.floor(child.rowSpan ?? 1) || 1);
   // The last track that starts at or before the object's centre: for an object
-  // dragged out past the end that is the nearest track, which is where Figma
+  // dragged out past the end that is the nearest track, which is where auto-layout
   // parks it too rather than letting it float off the grid.
   const track = (offsets: number[], gap: number, at: number) => {
     let found = 0;
@@ -386,14 +386,14 @@ export function cellBox(plan: GridPlan, cell: Cell): { x: number; y: number; w: 
   };
 }
 
-/** How an object sits inside its cell: Figma's Position align buttons. */
+/** How an object sits inside its cell: Position align buttons. */
 export function cellAlign(n: XNode): { h: "min" | "center" | "max"; v: "min" | "center" | "max" } {
   const one = (c: string | undefined) => (c === "center" ? "center" : c === "max" ? "max" : "min");
   return { h: one(n.constraintH), v: one(n.constraintV) };
 }
 
 /**
- * A brand new auto layout frame, as Figma adds one: a horizontal flow hugging
+ * A brand new auto layout frame, when adding one: a horizontal flow hugging
  * its contents with an 8px gap and 8px of padding all round.
  *
  * It lives here rather than in the engine because the panel, the canvas and the
@@ -413,13 +413,13 @@ export function defaultLayout(): AutoLayout {
   };
 }
 
-/** Figma's three flows. Grid is its own article and is not this module. */
+/** Layout flows. Grid is its own article and is not this module. */
 export const LAYOUT_FLOWS: { id: "vertical" | "horizontal"; label: string }[] = [
   { id: "vertical", label: "Vertical" },
   { id: "horizontal", label: "Horizontal" },
 ];
 
-/** Figma's Auto gap, and its three packing rules. */
+/** Auto gap, and its three packing rules. */
 export type Spacing = "between" | "around" | "evenly";
 
 export const SPACING_MODES: { id: Spacing; label: string; hint: string }[] = [
@@ -438,7 +438,7 @@ export const SPACING_MODES: { id: Spacing; label: string; hint: string }[] = [
  * `free` is what is left over once the objects and the padding have taken their
  * share, so a frame that hugs its contents has no slack and every mode comes
  * out as zero. The three answers are CSS's space-between / space-around /
- * space-evenly, which is what Figma's Auto gap is:
+ * space-evenly, which is what Auto gap is:
  *
  *   Between  |□ □ □|        the objects are pushed to the padding
  *   Around   | □ □ □ |      each object carries half a gap on each side
@@ -465,7 +465,7 @@ export function autoSpacing(
   return { lead: 0, gap: count > 1 ? slack / (count - 1) : 0 };
 }
 
-/** True when the gap is Figma's Auto rather than a number. */
+/** True when the gap is Auto rather than a number. */
 export function isAutoGap(layout: AutoLayout | undefined): boolean {
   if (!layout) return false;
   return layout.gapMode === "auto";
@@ -474,7 +474,7 @@ export function isAutoGap(layout: AutoLayout | undefined): boolean {
 /**
  * Does any object in the flow fill along this axis?
  *
- * Figma: "If any child objects within an auto layout frame are set to Fill
+ * "If any child objects within an auto layout frame are set to Fill
  * container, the parent frame will no longer hug contents and become Fixed for
  * the axis." The children that fill need a size to fill *into*, so there is
  * nothing for the frame to hug down to - which is why the article pairs the two
@@ -488,7 +488,7 @@ export function hasFillChild(flow: XNode[], axis: "main" | "cross", horizontal: 
 /**
  * The children of a flow that fill along one axis.
  *
- * Fill is per dimension in Figma, not per flow, which is the whole basis of the
+ * Fill is per dimension, not per flow, which is the whole basis of the
  * nesting article: "Set their width resizing to Fill container ... Set their
  * height resizing to Hug contents" is a *vertical* stack whose children fill
  * its width - the cross axis of that flow.
@@ -705,10 +705,10 @@ export function clampToPadding(n: XNode): void {
 }
 
 /**
- * The auto layout values Figma's own "Suggest auto layout" would have picked.
+ * The auto layout values "Suggest auto layout" would have picked.
  *
  * The article keeps this behind ⌃⇧A: rather than adding an auto layout frame
- * with the defaults, Figma looks at how the objects are already arranged and
+ * with the defaults, looks at how the objects are already arranged and
  * fills in the direction, gap, padding and alignment that describe it. There is
  * no model here - just the arrangement itself, read off the geometry:
  *
@@ -794,7 +794,7 @@ export function suggestLayout(node: Pick<XNode, "children" | "w" | "h">): AutoLa
   const hugMain = Math.abs(mainSize - (contentMain + mainPad * 2)) < 1.5;
   const hugCross = Math.abs(crossSize - (contentCross + crossPad * 2)) < 1.5;
   // Where the objects sit across the flow decides the cross alignment; a hug
-  // leaves no room to sit anywhere but the start, which is Figma's default.
+  // leaves no room to sit anywhere but the start, which is default.
   const crossStart = Math.min(...flow.map((c) => (horizontal ? c.y : c.x)));
   const crossEnd = Math.max(...flow.map((c) => (horizontal ? c.y + c.h : c.x + c.w)));
   const lead = crossStart - crossPad;
@@ -852,8 +852,8 @@ export function hugsCross(layout: AutoLayout, node: XNode, flow: XNode[]): boole
 }
 
 /**
- * Figma: "Wrap becomes available" once the flow is horizontal, and the article
- * offers it nowhere else. A vertical flow with wrap set is not a state Figma
+ * "Wrap becomes available" once the flow is horizontal, and the article
+ * offers it nowhere else. A vertical flow with wrap set is not a valid state and
  * has, so it does not wrap here either - the flag is kept on the document (a
  * file that had it keeps its data) but it stops bending the layout.
  */
@@ -862,7 +862,7 @@ export function wraps(layout: AutoLayout | undefined): boolean {
 }
 
 /**
- * Figma's text rule from the same guide: "Text layers cannot have both a max
+ * Text rule: "Text layers cannot have both a max
  * height and a set number of max lines. Adding a max height will set max lines
  * to Auto. Setting max lines to a number will remove the layer's max height."
  *

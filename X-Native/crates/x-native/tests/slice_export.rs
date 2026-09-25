@@ -1,6 +1,6 @@
 //! A Slice exports the REGION it covers.
 //!
-//! Figma: "The Slice tool lets you specify a specific region of the screen for
+//! : "The Slice tool lets you specify a specific region of the screen for
 //! export, even if it's not organized into a single group" — with Contents Only
 //! off, "anything that overlaps the slice will be exported". The slice layer
 //! itself draws nothing, so exporting it must build the flattened page content
@@ -60,7 +60,7 @@ fn an_empty_slice_still_exports_its_size() {
     let doc =
         Node::frame("page", 800.0, 600.0).child(Node::slice("empty", 700.0, 500.0, 30.0, 20.0));
     let plan = prepare_export(&doc, &vars, Some(&ids), &fonts).expect("size only");
-    // the page's own background still overlaps the region (Figma's rule takes
+    // the page's own background still overlaps the region (the rule takes
     // anything that does); what matters is that the slice sets the canvas
     assert_eq!((plan.width, plan.height), (30.0, 20.0));
 }

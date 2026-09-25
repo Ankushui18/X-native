@@ -105,7 +105,7 @@ import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
 import { PropertyField, XPopover } from "./x-ui";
 
-/** Sketch only shows "Round to Pixel" when rounding can actually do something. */
+/** "Round to Pixel" is only shown when rounding can actually do something. */
 function isFractional(n: XNode) {
   return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
 }
@@ -223,7 +223,7 @@ export function RightPanel({
 }
 
 /**
- * Figma's File ▸ Export… and Sketch's ⌘⇧E "Export Assets": one sheet listing
+ * File ▸ Export… (⌘⇧E): one sheet listing
  * everything on the page that can be exported, each row with its own format and
  * scale, checkboxes to pick which ones to write. Thumbnails focus the layer so
  * a long list stays navigable.
@@ -338,7 +338,7 @@ function ExportAssetsDialog({
                   src={thumbs[n.id]}
                   alt=""
                   onClick={(e) => {
-                    // The thumbnail is Figma's shortcut to the layer itself.
+                    // The thumbnail is a shortcut to the layer itself.
                     e.preventDefault();
                     engine.dispatch({ type: "select", ids: [n.id] });
                     zoomTo(engine, "selection");
@@ -449,7 +449,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
   return (
     <>
       {tool !== "frame" && (
-        // Figma uses the empty right panel to teach rather than leaving it
+        // The empty right panel shows hints rather than leaving it
         // blank; with nothing selected the only controls are page-level, so
         // say what the panel will show once something is picked.
         <div className="empty-state">
@@ -920,7 +920,7 @@ function Prototype({
 }
 
 /**
- * CSS for the layer. `unit` is Figma's Dev Mode setting — the numbers are
+ * CSS for the layer. `unit` is the Dev Mode setting — the numbers are
  * the same, only the unit they are written in changes.
  */
 function generateCss(n: XNode, unit: DevUnit = "px"): string {
@@ -946,7 +946,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
     const sides = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
     if (sides.some((w) => w !== sides[0])) {
-      // Figma exports individual strokes as per-side borders; a side with no
+      // Individual strokes export as per-side borders; a side with no
       // weight still needs a style, or the corner mitre disappears.
       rules.push(`border-width: ${sides.map((w) => devLen(w, unit)).join(" ")};`);
       rules.push(`border-style: ${sides.map((w) => (w > 0 ? "solid" : "none")).join(" ")};`);
@@ -1247,7 +1247,7 @@ function BoxModelDiagram({ n }: { n: XNode }) {
 }
 
 /**
- * Dev Mode. Figma's inspect panel is the reference for behaviour: a Code|List
+ * Dev Mode inspect panel: a Code|List
  * toggle over the layer properties, a language picker with a units setting,
  * click any value to copy it, then component info, assets, prototype
  * interactions and annotations. The styling is ours.
@@ -1257,7 +1257,7 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   // Language and units are app-wide Dev Mode preferences (see devPrefs.ts) rather
   // than panel state: that is what lets the right-click menu and the ⌥⇧C chord
   // copy exactly what this panel shows, and it is why the choice outlives a
-  // reload, as Figma's Inspect settings do.
+  // reload.
   const { format, unit } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
   const setFormat = (f: DevFormat) => setDevPrefs({ format: f });
   const setUnit = (u: DevUnit) => setDevPrefs({ unit: u });
@@ -1379,8 +1379,8 @@ type TokenRow = { group: string; name: string; value: string; color?: string };
 
 /**
  * The file's colour and number tokens, offered as CSS custom properties or as a
- * JSON token file. Figma puts styles and variables in the properties panel when
- * nothing is selected; Sketch's handoff exports the same values as CSS or JSON.
+ * JSON token file. Styles and variables sit in the properties panel when
+ * nothing is selected.
  * A developer who has just inspected one layer usually wants the whole palette,
  * and until now had to read it off the Assets tab one row at a time.
  */
@@ -1529,7 +1529,7 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
   }
 }
 
-/** Language dropdown with the units setting underneath, as in Figma. */
+/** Language dropdown with the units setting underneath. */
 function DevLangMenu({
   format,
   setFormat,
@@ -1611,7 +1611,7 @@ function DevLangMenu({
   );
 }
 
-/** Figma's List view: property rows whose values copy on click. */
+/** List view: property rows whose values copy on click. */
 function DevList({ n, snap, unit }: { n: XNode; snap: Snapshot; unit: DevUnit }) {
   const rows = devProperties(n, snap, unit);
   const groups: { title: string; items: DevProp[] }[] = [];
@@ -1747,7 +1747,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     if (n.listStyle && n.listStyle !== "none") L("List", n.listStyle, "Typography");
     if (n.paragraphIndent) L("Paragraph indent", devLen(n.paragraphIndent, unit), "Typography");
   }
-  // Figma's "view applied styles": only paints are named here, matching the
+  // View applied styles: only paints are named here, matching the
   // two style slots the engine actually has.
   for (const [label, id] of [
     ["Fill style", n.fillStyle],
@@ -1767,7 +1767,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   return out;
 }
 
-/** Figma shows a typographic sample instead of the box model for text layers. */
+/** Typographic sample instead of the box model for text layers. */
 function TypeSpecimen({ n }: { n: XNode }) {
   return (
     <div className="dev-type">
@@ -1915,7 +1915,7 @@ function DevAssets({ n, engine }: { n: XNode; engine: Engine }) {
   );
 }
 
-/** Prototype interactions on the layer — Figma lists them with a jump. */
+/** Prototype interactions on the layer, listed with a jump target. */
 function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
   const list = n.interactions ?? [];
   if (!list.length) return null;
@@ -1957,7 +1957,7 @@ function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: 
 }
 
 /**
- * Annotations. Figma lets a note pin a property so the value travels with the
+ * Annotations: a note can pin a property so the value travels with the
  * callout; here the + menu writes the property text into the note, which keeps
  * the model a single string (and the canvas marker unchanged).
  */
@@ -2111,7 +2111,7 @@ function Design({
     // System local fonts via the Local Font Access API (Chrome/Edge). The spec
     // calls it `queryLocalFonts()` and it is permission-gated. When available
     // we enumerate once and merge the families into the dropdown so every font
-    // installed on the machine shows up exactly as in Figma/Sketch's Type menu.
+    // installed on the machine shows up in the font menu.
     async function load() {
       try {
         const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
@@ -2138,8 +2138,8 @@ function Design({
   const [padOpen, setPadOpen] = useState(false);
   const [conOpen, setConOpen] = useState(false);
   const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
-  // An instance inherits its corners; Figma rejects individual radii there.
-  /* Figma locks a handful of properties on a layer that lives inside an
+  // An instance inherits its corners; individual radii are rejected there.
+  /* Locks a handful of properties on a layer that lives inside an
    * instance: individual corner radii here, and the aspect-ratio lock and the
    * Scale tool below. All three ask the same question, so they share one
    * answer. */
@@ -2151,7 +2151,7 @@ function Design({
   const autoGap = n.layout ? isAutoGap(n.layout) : false;
   const wrapOn = n.layout ? wraps(n.layout) : false;
   const resolved = n.layout ? effectiveSizing(n.layout, n, n.children) : null;
-  /* Figma: "the parent frame will no longer hug contents and become Fixed for
+  /* The parent frame will no longer hug contents and become Fixed for
    * the axis" - so the resizing menu shows Fixed, and says why. */
   /* The two fields ask by *dimension*, not by axis. A vertical flow's main axis
    * is its height, so asking for "main" in the W field would show - and edit -
@@ -2199,7 +2199,7 @@ function Design({
   const [more, setMore] = useState<{ x: number; y: number } | null>(null);
   const multi = snap.selection.length > 1;
   const [scaleAnchor, setScaleAnchor] = useState<ScaleAnchor>("mc");
-  /* Figma keeps min and max behind the resizing menu: "Add min/max width and
+  /* Min and max width/height options behind the resizing menu: "Add min/max width and
    * height" puts the four fields in the panel, "Remove min and max" takes them
    * away again, and a layer that has none shows none. Tracked per layer, so the
    * fields come back only for the layer that asked for them. */
@@ -2220,7 +2220,7 @@ function Design({
       toast("Nothing to scale · the selection is empty or locked");
       return;
     }
-    // Figma scales "any object, with the exception of locked layers and layers
+    // Scales any object, with the exception of locked layers and layers
     // nested inside a component instance" - scaling children of an instance
     // would multiply overrides the instance does not own.
     const nested = picked.filter((m) => insideInstance(root, m.id));
@@ -2304,7 +2304,7 @@ function Design({
           ? "Rectangle"
           : n.kind[0].toUpperCase() + n.kind.slice(1);
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
-  /* Figma re-fits a text layer the moment a resizing mode is chosen, and after
+  /* Re-fits a text layer the moment a resizing mode is chosen, and after
    * any type metric that changes how much room the copy needs. The flags and
    * the box have to travel in the same patch: sizing alone leaves a stale box
    * up to the next keystroke. */
@@ -2337,7 +2337,7 @@ function Design({
   const hasAutoLayoutParent = !!parent?.layout;
   const gridParent = parent?.layout?.direction === "grid";
   /* First press turns the base stroke on; after that each press stacks another
-     stroke on top, the way Figma's Stroke "+" behaves. Shared by the header "+"
+     stroke on top, the way Stroke "+" behaves. Shared by the header "+"
      and the empty-state row so both paths do exactly the same thing. */
   const addStroke = () => {
     openSection("stroke");
@@ -2825,8 +2825,8 @@ function Design({
       <div className="hr" />
       <Section id="layout" title="Layout" actions={
         <div style={{ display: "flex", gap: 2 }}>
-          {/* Figma's two ways in: add an auto layout frame with the defaults, or
-              let Figma work the values out from how the objects already sit. */}
+          {/* Two ways in: add an auto layout frame with the defaults, or
+              work the values out from how the objects already sit. */}
           {!n.layout && (
             <button
               className="plus"
@@ -2883,7 +2883,7 @@ function Design({
           >
             <Icon name="layout-grid" />
           </button>
-          {/* Figma: "When you have the horizontal selected, Wrap becomes
+          {/* When horizontal is selected, Wrap becomes
               available." A vertical flow has no wrap to offer, so the button is
               shown disabled and says why rather than silently doing nothing. */}
           <button
@@ -2940,7 +2940,7 @@ function Design({
           />
           <button
             className={`icon-btn${n.aspectLocked ? " on" : ""}`}
-            // Figma: the aspect ratio of a child layer of an instance "can be
+            // The aspect ratio of a child layer of an instance "can be
             // adjusted from their respective main components".
             disabled={inInstance}
             title={
@@ -3618,7 +3618,7 @@ function Design({
                 ))}
               </div>
             ) : (
-              // Figma's panel keeps the padding as a horizontal and a vertical
+              // Padding is kept as a horizontal and a vertical
               // value by default - "Padding controls in the right panel are
               // separated into vertical (top and bottom) and horizontal (left
               // and right) by default" - and reads Mixed when the two sides of
@@ -3881,7 +3881,7 @@ function Design({
         )}
         {cornersOpen ? (
           <div className="grid2">
-            {/* Figma will not let an instance carry its own corner radii; they
+            {/* An instance cannot carry its own corner radii; they
                 come from the component. The fields say so instead of no-op'ing. */}
             {(["TL", "TR", "BL", "BR"] as const).map((lab, i) => (
               <Field
@@ -3932,7 +3932,7 @@ function Design({
             <Icon name="independent" size={14} />
           </button>
         )}
-        {/* Figma puts smoothing in the corner details panel: one value for the
+        {/* Corner smoothing in the corner details panel: one value for the
             whole shape, a slider, and an iOS preset at 60%. */}
         <div className="smooth-row">
           <input
@@ -3980,7 +3980,7 @@ function Design({
           onClick={() => {
             openSection("fill");
             // First press turns the base fill back on; after that each press
-            // stacks another fill on top, the way Figma's Fill "+" behaves.
+            // stacks another fill on top, the way Fill "+" behaves.
             if (isNone(n.fill) && !n.fillVisible) {
               engine.dispatch({
                 type: "patch",
@@ -4004,7 +4004,7 @@ function Design({
           <Icon name="plus" size={14} />
         </button>
       }>
-      {/* Figma lists a fill stack top-most first, and the base fill is the
+      {/* Fill stack is listed top-most first, and the base fill is the
           bottom of the stack, so it sits last in the list. */}
       {(n.fills ?? [])
         .map((p, i) => ({ p, i }))
@@ -4197,7 +4197,7 @@ function Design({
               value={n.strokeWidth}
               onChange={(strokeWidth) => {
                 // In Custom mode the four fields carry the weight, so typing a
-                // new one sets all four, as Figma does.
+                // new one sets all four.
                 if ((n.strokeSides ?? "all") === "custom") patch({ strokeWidth, strokeSideW: [strokeWidth, strokeWidth, strokeWidth, strokeWidth] });
                 else patch({ strokeWidth });
               }}
@@ -4227,7 +4227,7 @@ function Design({
                     aria-pressed={(n.strokeSides ?? "all") === side.id}
                     onClick={() => {
                       if (side.id === "custom") {
-                        // Figma seeds the four fields with the current weight.
+                        // Seeds the four fields with the current weight.
                         const w = n.strokeWidth;
                         patch({ strokeSides: "custom", strokeSideW: [w, w, w, w] });
                       } else {
@@ -4479,11 +4479,11 @@ function Design({
 }
 
 /**
- * Sketch's "Selection colors", widened to every selection instead of only
+ * "Selection colors", widened to every selection instead of only
  * multi-select, and walking the whole subtree so a frame reports the colours
  * inside it. Two click targets per row, one per app: the swatch opens the
- * picker and recolors every layer sharing that colour (Sketch's
- * click-to-update-all, one undo step), the hex selects them (Figma's "Select
+ * picker and recolors every layer sharing that colour (
+ * click-to-update-all, one undo step), the hex selects them ("Select
  * all with same fill").
  */
 function SelectionColors({
@@ -4500,7 +4500,7 @@ function SelectionColors({
   // The selected layers, not the page: a row is a claim about the selection.
   const usage = colorUsageAll(nodes.length ? nodes : [n]);
   const [picking, setPicking] = useState<{ key: string; rect: DOMRect } | null>(null);
-  // Sketch shows the section for any selection, single colour included — the
+  // Show the section for any selection, single colour included — the
   // count and the select-all affordance are the point, not the list length.
   if (!usage.length) return null;
   const root = snap.pages[snap.page].root;
@@ -4608,7 +4608,7 @@ function SelectionColors({
  * One effect's controls, shown in a popover anchored to its row.
  *
  * Inline these cost ~148px each — three shadows pushed the inspector 314px past
- * its viewport (measured). Figma keeps the list scannable and puts the detail
+ * its viewport (measured). Keeps the list scannable and puts the detail
  * behind a click, which is what this does: the row stays one line, the editing
  * surface opens next to it.
  */
@@ -4766,7 +4766,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   ];
   const effects = n.effects ?? [];
   // One layer takes eight drop shadows, eight inner shadows, one blur of each
-  // kind, two noise rows and a single glass or texture - Figma's budget, and
+  // kind, two noise rows and a single glass or texture, and
   // the menu says so instead of silently piling on more.
   const room = (kind: EffectKind) => canAddEffect(effects, kind);
   const addKind = (kind: EffectKind) => {
@@ -4942,7 +4942,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
  * The grid flow's own panel: the picker, the automatic-positioning switch and
  * the two track lists.
  *
- * Figma's article: "you can choose the desired number of rows and columns by
+ * "Choose the desired number of rows and columns by
  * clicking on the grid picker in the right sidebar. Enter a value in the Number
  * of columns and Number of rows fields, or use the interactive selector." The
  * picker here is that selector - a small grid of squares, click one to set the
@@ -4950,7 +4950,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
  * their contents.
  */
 /** What the Number of rows field's `Auto` stands for: not a count but a rule,
- *  the one Figma calls Auto - rows appear as the objects need them. */
+ *  Auto mode - rows appear as the objects need them. */
 const AUTO_ROWS = 0;
 
 /**
@@ -5146,7 +5146,7 @@ function GridPanel({
 /**
  * The alignment box.
  *
- * Figma's article: "Select the box and use arrow keys to switch between the
+ * "Select the box and use arrow keys to switch between the
  * different alignment settings. Select the box and press W/A/S/D to set
  * alignment to the edge of the frame" - so the box takes focus, arrows step the
  * position along an axis, the letters jump to an edge, `B` toggles baseline
@@ -5219,7 +5219,7 @@ function Nine({
 }
 
 /**
- * Figma's custom dash syntax: one text field holding `dash, gap, dash, gap…`.
+ * Custom dash syntax: one text field holding `dash, gap, dash, gap…`.
  * Anything that is not a list of non-negative numbers is refused and the field
  * snaps back to what the layer actually has, rather than clearing the dashes.
  */
@@ -5272,7 +5272,7 @@ function DashPatternField({
 /**
  * A padding field.
  *
- * Figma: "To set uniform padding or to use CSS shorthand, hold ⌘ Command or
+ * "To set uniform padding or to use CSS shorthand, hold ⌘ Command or
  * Control and click into any padding field... entering 1,2,3,4 sets the top,
  * right, bottom, and left to 1, 2, 3, and 4 respectively." So a plain click
  * commits one number, and a ⌘/Ctrl click turns the same field into a shorthand
@@ -5390,7 +5390,7 @@ function Field({
   /** Accessible name for icon-only fields, which otherwise expose no label
    *  at all to assistive tech or to keyboard users reading focus. */
   aria?: string;
-  /** Figma shows "Mixed" instead of a number when the selection - or, for
+  /** Shows "Mixed" instead of a number when the selection - or, for
    *  corner radii, the four corners - disagrees. Typing still applies. */
   mixed?: string;
   /** Words this field also accepts, each standing for a number: a grid's
@@ -5405,7 +5405,7 @@ function Field({
   useEffect(() => {
     if (!focused.current) setDraft(mixed ?? fmt(value));
   }, [value, mixed]);
-  // Figma reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
+  // Reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
   // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
   // commit evaluates, so typing `12/` mid-expression does not move the layer.
   const commit = () => {
@@ -5525,7 +5525,7 @@ function Constraints({
 const SCALES = SCALE_PRESETS;
 
 /* Every format's optional settings live behind one "Export settings" button, as
-   in Figma, and the list is built from the capability table rather than written
+   and the list is built from the capability table rather than written
    out per format - so a control cannot appear for something the exporter does
    not do. */
 function hasSettings(format: ExportFormat): boolean {
@@ -5541,7 +5541,7 @@ function hasSettings(format: ExportFormat): boolean {
   );
 }
 
-/** The settings Figma shows for whatever format the row is set to. */
+/** Export format settings for the current row format. */
 function ExportSettings({
   preset,
   onChange,
@@ -5608,7 +5608,7 @@ function ExportSettings({
   );
 }
 
-/** Figma's scale field: type `2x`, `500w` or `300h`, or click for the presets. */
+/** Scale field: type `2x`, `500w` or `300h`, or click for the presets. */
 function ScaleField({
   preset,
   locked,
@@ -5704,7 +5704,7 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
         {presets.map((p, i) => (
           <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
             <div className="export-row">
-              {/* Figma previews the export before you download it — the thumbnail
+              {/* Preview the export before download — the thumbnail
                   is the real render (SVG source, so it scales with the preset). */}
               <button
                 className={`export-thumb${preview[i] ? " on" : ""}`}
@@ -5975,7 +5975,7 @@ function readSections(): Record<string, boolean> {
 
 /** Ask a section to reveal itself. Adding a fill/stroke/export while its
  *  section is collapsed used to write state the user could not see, which read
- *  as "Export does nothing". Figma expands and scrolls to the new row. */
+ *  as "Export does nothing". Expands and scrolls to the new row. */
 export function openSection(id: string) {
   window.dispatchEvent(new CustomEvent("x-native-open-section", { detail: id }));
 }
@@ -6226,7 +6226,7 @@ function ColorRow({
 /**
  * What a paint is actually drawn over, for the contrast check: the nearest
  * ancestor with a visible solid fill, falling back to the white paper the
- * canvas sits on. Figma resolves the background the same way and always treats
+ * canvas sits on. Resolves the background the same way and always treats
  * the selected layer as the foreground.
  */
 function fillBackground(root: XNode, n: XNode): string {
@@ -6240,7 +6240,7 @@ function fillBackground(root: XNode, n: XNode): string {
   return "#ffffff";
 }
 
-/** WCAG's large-text exemption, in Figma's terms: 24px, or 19px and bold. */
+/** WCAG large-text exemption: 24px, or 19px and bold. */
 function isLargeText(n: XNode): boolean {
   return n.kind === "text" && (n.fontSize >= 24 || (n.fontSize >= 19 && n.fontWeight >= 700));
 }
@@ -6255,10 +6255,10 @@ function setDir(engine: Engine, snap: Snapshot, n: XNode, direction: "horizontal
   setFlow(engine, snap, n.id, direction);
 }
 
-/** Human labels + Figma's shortcuts for the align row. */
+/** Human labels and shortcuts for the align row. */
 /** Zoom control + view options.
  *
- *  Figma keeps this in one place: the top-right of the right sidebar shows the
+ *  The top-right of the right sidebar shows the
  *  current percentage, the field itself takes typed input, and the caret opens
  *  the zoom presets and the canvas view toggles. The previous button cycled
  *  100%→50%→100% and could never reach 200%.
@@ -6506,7 +6506,7 @@ export function align(
     if (!n || !p || p === root) return;
     // Children of an auto-layout frame are positioned by the layout engine, so a
     // raw `move` is recomputed away on the next pass and the button looks dead.
-    // Figma instead retargets the alignment onto the parent's layout axes, which
+    // Retargets the alignment onto the parent's layout axes, which
     // is the only thing that can actually move the child. Mirror that.
     if (p.layout?.direction === "grid") {
       // "Within a grid auto layout frame, a child object can be aligned to its

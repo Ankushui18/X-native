@@ -46,7 +46,7 @@ export function Guides({
   };
 
   // Drag is tracked on the window so the pointer can leave the layer — and so
-  // releasing over a ruler rail deletes the guide, as Figma does.
+        // releasing over a ruler rail deletes the guide.
   useEffect(() => {
     if (!drag) return;
     const move = (e: MouseEvent) => {

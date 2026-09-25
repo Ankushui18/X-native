@@ -55,7 +55,7 @@ fn mask_alphas(tree: &x_native::RenderTree) -> Vec<f32> {
         .collect()
 }
 
-/// Figma's Mask-section types (help 360040450253): Vector is outline only —
+/// the Mask-section types (help 360040450253): Vector is outline only —
 /// *"the mask's translucency is ignored"* — while Alpha and Luminance key the
 /// masked result on the mask's own opacity / brightness.
 #[test]

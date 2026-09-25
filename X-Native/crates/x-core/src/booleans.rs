@@ -468,7 +468,7 @@ pub fn arc_point(w: f64, h: f64, deg: f64, frac: f64) -> (f64, f64) {
 }
 
 /// An arc's signed sweep: `end - start`, with equal angles read as the whole
-/// circle. The sign is part of the shape — Figma: "dragging the handle up
+/// circle. The sign is part of the shape — : "dragging the handle up
 /// will produce a positive percentage, while dragging the handle down will
 /// indicate a negative percentage" — so it is never folded with `rem_euclid`.
 pub fn arc_sweep(start: f64, end: f64) -> f64 {
@@ -482,7 +482,7 @@ pub fn arc_sweep(start: f64, end: f64) -> f64 {
 
 /// Elliptical-arc geometry (y-down space, degrees from east, clockwise
 /// positive): cubic-bezier approximation, <= 90 degrees per segment, CLOSED —
-/// the region Figma's arc properties describe. `ratio` is the fraction of the
+/// the region the arc properties describe. `ratio` is the fraction of the
 /// radius the middle is cut back to, so 0 is a solid wedge through the centre
 /// and 0.85 a thin ring; the ring is a hole because its inner edge is walked
 /// the other way round (NonZero winding). Equal `start` and `end` is the full
@@ -542,12 +542,12 @@ fn arc_segments(cmds: &mut Vec<PathCmd>, w: f64, h: f64, from: f64, sweep: f64, 
     }
 }
 
-/// The Count bounds Figma documents for both a polygon's sides and a star's
+/// The Count bounds  documents for both a polygon's sides and a star's
 /// points: "The minimum is three and the maximum is 60."
 pub const COUNT_MIN: usize = 3;
 pub const COUNT_MAX: usize = 60;
 
-/// Figma's default star is "a five pointed star with ten sides"; the inner
+/// the default star is "a five pointed star with ten sides"; the inner
 /// points sit at 38.2% of the radius, the classic five-point star.
 pub const STAR_RATIO: f64 = 0.382;
 
@@ -568,7 +568,7 @@ fn ring_cmds(pts: &[(f64, f64)]) -> Vec<PathCmd> {
     out
 }
 
-/// Figma's Polygon: `sides` vertices on the ellipse inscribed in the box, the
+/// the Polygon: `sides` vertices on the ellipse inscribed in the box, the
 /// first one at the top — "the default shape for the polygon tool is a
 /// triangle" — walking clockwise. LOCAL node space, like the arc's geometry,
 /// so the shape is an appearance of the box and never resizes it.
@@ -580,7 +580,7 @@ pub fn poly_path_cmds(w: f64, h: f64, sides: usize) -> Vec<PathCmd> {
     ring_cmds(&pts)
 }
 
-/// Figma's Star: `points` outer vertices with the inner ones at `ratio` of the
+/// the Star: `points` outer vertices with the inner ones at `ratio` of the
 /// radius between them, so a five-point star has ten vertices. The first
 /// vertex is at the top, like the polygon's.
 pub fn star_path_cmds(w: f64, h: f64, points: usize, ratio: f64) -> Vec<PathCmd> {
@@ -804,7 +804,7 @@ pub fn stroke_outline_variable(pts: &[(f64, f64)], widths: &[f64]) -> Vec<PathCm
 /// `width` stroke. Open polylines become one polygon (left side forward,
 /// right side back); closed ones become a ring (two subpaths, opposite
 /// winding — NonZero fill renders the band). Approximate (miter joins,
-/// butt caps) — the honest version of Figma's Outline Stroke.
+/// butt caps) — the honest version of the Outline Stroke.
 pub fn stroke_outline(pts: &[(f64, f64)], width: f64, closed: bool) -> Vec<PathCmd> {
     if pts.len() < 2 || width <= 0.0 {
         return vec![];
@@ -944,7 +944,7 @@ fn offset_round(pts: &[(f64, f64)], d: f64, closed: bool) -> Vec<(f64, f64)> {
     out
 }
 
-/// Offset a path along its vertex normals — the honest version of Figma's
+/// Offset a path along its vertex normals — the honest version of the
 /// "Offset path" (`Object > Offset path`).
 ///
 /// Positive `distance` moves a CLOSED subpath OUTWARD and an open subpath to
@@ -954,7 +954,7 @@ fn offset_round(pts: &[(f64, f64)], d: f64, closed: bool) -> Vec<(f64, f64)> {
 ///
 /// Curves are flattened to polylines first ([`OFFSET_FLATTEN_STEPS`]
 /// subdivisions per cubic), so an offset path comes back polygonal — the same
-/// trade Figma makes when it re-authors the path. Corner treatment follows
+/// trade  makes when it re-authors the path. Corner treatment follows
 /// `join`: `Miter` reuses the stroke-outline miter (bounded by a 4x miter
 /// limit, past which it bevels), `Bevel` emits two points per corner, `Round`
 /// interpolates the normal across the corner.
@@ -1004,7 +1004,7 @@ mod tests {
     #[test]
     fn a_quarter_arc_is_a_wedge_through_the_centre() {
         // ratio 0: the outer quarter, then straight in to the centre and
-        // closed — a pie slice, which is what Figma draws for sweep 90
+        // closed — a pie slice, which is what  draws for sweep 90
         let cmds = arc_path_cmds(100.0, 100.0, 0.0, 90.0, 0.0);
         assert_eq!(cmds.len(), 4, "MoveTo + curve + LineTo + Close");
         assert!(
@@ -1104,7 +1104,7 @@ mod tests {
 
     #[test]
     fn a_polygon_is_a_ring_of_sides_whose_first_is_the_top() {
-        // Figma: "an enclosed shape that is made up of any number of straight
+        // : "an enclosed shape that is made up of any number of straight
         // lines", a triangle by default — every vertex on the box's rim, in
         // the box's own space, so the box never becomes the shape.
         let cmds = poly_path_cmds(100.0, 100.0, 3);
@@ -1127,7 +1127,7 @@ mod tests {
             assert!((r - 1.0).abs() < 1e-9, "vertex {x},{y} sits on the rim");
         }
         assert!(matches!(cmds.last(), Some(PathCmd::Close)));
-        // Figma's Count is clamped to 3..60 whatever the caller says
+        // the Count is clamped to 3..60 whatever the caller says
         assert_eq!(poly_path_cmds(100.0, 100.0, 1).len(), 4, "the floor is 3");
         assert_eq!(
             poly_path_cmds(100.0, 100.0, 200).len(),

@@ -207,7 +207,7 @@ function findInstanceRoot(root: XNode, id: string): XNode | null {
 }
 
 /**
- * True when the layer is an instance or sits inside one. Figma refuses a small
+ * True when the layer is an instance or sits inside one. An instance refuses a small
  * set of edits there - the geometry belongs to the component, so per-corner
  * radii in particular can only be set on the master.
  */
@@ -312,7 +312,7 @@ function applyLayout(n: XNode, gesture = false) {
   }
   const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
   const horiz = l.direction === "horizontal";
-  // Figma offers Wrap on a horizontal flow only, so a vertical frame that still
+  // Wrap is offered on a horizontal flow only, so a vertical frame that still
   // carries the flag lays out as a plain stack rather than wrapping.
   const doesWrap = wraps(l);
   const gap = typeof l.gap === "number" ? l.gap : 0;
@@ -645,7 +645,7 @@ export function demoPage(): Page {
   };
 }
 
-/** An empty page, the way a new Figma file opens: one invisible root frame
+/** An empty page, the default new page layout: one invisible root frame
  *  that holds the top-level layers and no content of its own. */
 export function blankPage(name = "Page 1"): Page {
   return {
@@ -776,7 +776,7 @@ function clipBounds(nodes: XNode[]): { minX: number; minY: number; cx: number; c
  * document. The system clipboard is what makes the same ⌘V work in another tab,
  * another file, or another program — and it carries two readings of the same
  * layers: this app's base64 payload (everything, including the properties no
- * vector format expresses) and an SVG (what a browser, a deck or Figma renders).
+ * vector format expresses) and an SVG (what standard renderers render).
  * Images go as asset refs, not inline data URLs, so copying a photograph does
  * not write megabytes of base64 into the clipboard.
  *
@@ -817,7 +817,7 @@ export class MemoryEngine implements Engine {
   private gesture = false;
   /** Last history-pushing command type and its timestamp, used to coalesce
    *  rapid repeats of the same command (e.g. holding an arrow key) into a
-   *  single undo step, as Figma does. */
+   *  single undo step. */
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
   private copiedProps: Partial<XNode> | null = null;
@@ -963,7 +963,7 @@ export class MemoryEngine implements Engine {
       "toggleFlows",
       "toggleMinimap",
       // Comments are annotations layered over the design, not part of it.
-      // Figma keeps them off the design undo stack entirely: ⌘Z after posting
+      // Keep them off the design undo stack entirely: ⌘Z after posting
       // a comment reverts your last *design* edit, it does not delete the note.
       "toggleComments",
       "openComment",
@@ -1029,7 +1029,7 @@ export class MemoryEngine implements Engine {
    * The index a new object takes in `parent`'s children, so that a grid places
    * it in the cell it was aimed at rather than at the end of the flow.
    *
-   * Figma: "when you add a cell object to the grid, Figma will try to place it
+   * "When you add a cell object to the grid, it will place it
    * between the cell objects - in layer order - nearest your cursor." Anything
    * else - a frame with no layout, a linear flow, automatic positioning off -
    * appends, which is where it always went.
@@ -1051,8 +1051,8 @@ export class MemoryEngine implements Engine {
   /**
    * Put an auto layout frame around what was selected.
    *
-   * Figma's note: "Auto layout is only supported on frames. If you have one or
-   * more layers selected, Figma will create an auto layout frame around them."
+   * "Auto layout is only supported on frames. If you have one or
+   * more layers selected, an auto layout frame wraps them."
    * A group is not wrapped but converted - it is already a container, and
    * pressing ⇧A on one has always turned it into a frame.
    *
@@ -1142,7 +1142,7 @@ export class MemoryEngine implements Engine {
       viewLayoutGuides: this.state.viewLayoutGuides,
       propertyLabels: this.state.propertyLabels,
       openComment: this.state.openComment,
-      // View options live in the tab, not in the file: Figma's article is
+      // View options live in the tab, not in the file:
       // explicit that zoom (and the menu beside it) applies to the current tab
       // only, so none of these are written into the document.
       presentFrame: this.state.presentFrame,
@@ -1373,7 +1373,7 @@ export class MemoryEngine implements Engine {
         const into = parent ?? this.root();
         const spot = this.gridSpotFor(into, cmd.x, cmd.y);
         into.children.splice(spot?.index ?? into.children.length, 0, n);
-        // "Figma will try to place it between the cell objects - in layer order
+        // "Place it between the cell objects - in layer order
         // - nearest your cursor", so the cell that was clicked is the one it
         // takes. The rest of the flow arranges itself around it.
         if (spot) {
@@ -1447,7 +1447,7 @@ export class MemoryEngine implements Engine {
             if (askedW !== oldW) n.sizingW = "fixed";
             if (askedH !== oldH) n.sizingH = "fixed";
           }
-          // Figma: "Any manual adjustments you make will set the layer to Fixed
+          // "Any manual adjustments you make will set the layer to Fixed
           // on the relevant axis" - so a typed width or a dragged edge turns a
           // hug into Fixed. An auto layout frame keeps its resizing in two
           // places, the layout's own pair and the layer's resizing menu, and the
@@ -1572,7 +1572,7 @@ export class MemoryEngine implements Engine {
             copy.isComponent = false;
             copy.componentId = masterId;
           }
-          // Figma puts the duplicate directly above the one it came from, and
+          // Put the duplicate directly above the one it came from, and
           // "the new frames will fill the subsequent cells" - so a copy of an
           // object that was placed on purpose is not itself placed.
           copy.gridPinned = false;
@@ -1591,7 +1591,7 @@ export class MemoryEngine implements Engine {
           // A hand-typed name pins the layer name; automatic naming stops.
           if (cmd.patch.name !== undefined) n.nameLocked = true;
           // Editing a bound colour by hand detaches it from its style, as in
-          // Figma — the alternative is silently diverging from the style, or
+          // Standard behavior — the alternative is silently diverging from the style, or
           // silently reverting the user's edit. Re-binding is explicit.
           if (cmd.patch.fill !== undefined && cmd.patch.fillStyle === undefined && n.fillStyle) {
             delete n.fillStyle;
@@ -1599,7 +1599,7 @@ export class MemoryEngine implements Engine {
           if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
           }
-          // Figma's text rule: a text layer cannot hold a max height and a max
+          // Text rule: a text layer cannot hold a max height and a max
           // line count at once - setting either clears the other - so the pair
           // is resolved here rather than in whichever panel did the writing.
           const patch = n.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
@@ -1610,7 +1610,7 @@ export class MemoryEngine implements Engine {
           }
           if (patch.aspectLocked === false) patch.aspectRatio = undefined;
           Object.assign(n, patch);
-          // Text layers follow their content until renamed, as in Figma.
+          // Text layers follow their content until renamed.
           if (n.kind === "text" && patch.text !== undefined && !n.nameLocked) {
             const first = (patch.text || "").split("\n")[0].trim();
             n.name = first ? first.slice(0, 60) : "Text";
@@ -2038,7 +2038,7 @@ export class MemoryEngine implements Engine {
         const style: SharedStyle = { id: uid("style"), name: cmd.name.trim() || "Style", kind: "paint", color };
         s.styles.push(style);
         // Bind every selected node, so "create from selection" works on a
-        // multi-selection the way Figma does.
+        // multi-selection cleanly.
         for (const n of nodes) {
           if (cmd.kind === "fill") {
             n.fillStyle = style.id;
@@ -2746,7 +2746,7 @@ function syncInstances(pages: Page[], master: XNode) {
 }
 
 /**
- * Is Figma's "snap to pixel grid" (View menu / Shift+Cmd+') switched on for this
+ * Is "snap to pixel grid" (View menu / Shift+Cmd+') switched on for this
  * page? It is a *drawing* behaviour — objects are rounded to whole pixels as
  * they are created, moved and resized — and is separate from the pixel-grid
  * *overlay*, which is only a ruler-grade guide drawn above 400% zoom. The two
@@ -2758,7 +2758,7 @@ function snapOn(s: { pages: Page[]; page: number }, index: number): boolean {
 }
 
 /**
- * Figma's default name for a new layer: the kind, then the lowest number that
+ * Default name for a new layer: the kind, then the lowest number that
  * is not already taken in the page. "Frame" for every frame - which is what
  * this used to do - makes the Layers list and the names on the canvas
  * indistinguishable the moment there are two of them.
@@ -2771,7 +2771,7 @@ function freshLabel(root: XNode, k: NodeKind): string {
     for (const c of n.children) walk(c);
   };
   walk(root);
-  // Always numbered, even the first: Figma's first frame is "Frame 1", not
+  // Always numbered, even the first: first frame is "Frame 1", not
   // "Frame", so a document's names never change shape as it grows.
   for (let i = 1; i < 10_000; i++) {
     const candidate = `${base} ${i}`;
@@ -3175,7 +3175,7 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
     spread: kind === "texture" ? 4 : 0,
     visible: true,
     blend: "Normal",
-    // Figma's checkbox starts unchecked, and only a drop shadow has one.
+    // Checkbox starts unchecked, and only a drop shadow has one.
     ...(kind === "drop-shadow" ? { showBehind: false } : {}),
   };
 }

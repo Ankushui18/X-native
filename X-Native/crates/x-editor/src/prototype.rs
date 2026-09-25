@@ -20,7 +20,7 @@ pub const TICK_FADE_MS: u32 = 120;
 /// are frozen when the navigation fires, so the tick cannot disagree with the
 /// screens as they were at that moment. What the tick adds is the clock every
 /// host shares: it runs for the interaction's own `transition_ms`, it reports
-/// the eased-in alpha for layers that are arriving, and it stops — Figma runs
+/// the eased-in alpha for layers that are arriving, and it stops —  runs
 /// the transition once per navigation, not on a loop.
 ///
 /// The interpolation itself is
@@ -38,7 +38,7 @@ pub struct SmartTick {
 
 impl SmartTick {
     /// The interaction's progress, 0 → 1. Easing is the renderer's to apply:
-    /// the tick's clock is the plain one Figma animates against.
+    /// the tick's clock is the plain one  animates against.
     pub fn progress(&self) -> f64 {
         if self.total_ms == 0 {
             return 1.0;
@@ -118,7 +118,7 @@ impl SmartTick {
 
 /// Arm the tick for a navigation that just happened, from one screen to
 /// another: `None` when the interaction does not ask for it — the tick starts
-/// off, the way Figma's box does — when the action is an overlay, which Figma
+/// off, the way the box does — when the action is an overlay, which 
 /// gives no smart animate at all, or when the two ids are the same screen.
 pub fn arm_smart_tick(ix: &Interaction, from: &Node, to: &Node) -> Option<SmartTick> {
     if !ix.animate_matching_layers || from.id == to.id {
@@ -160,10 +160,10 @@ pub struct FireEffect {
     pub overlays_changed: bool,
     /// Preview variables changed (a set-var / set-mode / conditional ran).
     pub vars_changed: bool,
-    /// Figma "scroll to": pan the viewport to this node without leaving
+    ///  "scroll to": pan the viewport to this node without leaving
     /// the screen — no history, no overlay changes, no delay re-arm.
     pub scrolled_to: Option<String>,
-    /// Figma "open link": hand this URL to the system browser; nothing
+    ///  "open link": hand this URL to the system browser; nothing
     /// else changes.
     pub opened_link: Option<String>,
 }
@@ -238,7 +238,7 @@ pub fn fire_action(
                 opened_link: None,
             }
         }
-        // Figma "scroll to": pan within the current screen — no history
+        //  "scroll to": pan within the current screen — no history
         // entry, no overlay changes, no delay re-arm. Hosts move the
         // viewport to the destination and stay on the screen.
         Action::ScrollTo { destination } => {
@@ -287,10 +287,10 @@ pub fn fire_action(
                 opened_link: None,
             }
         }
-        // Figma "swap overlay": with an overlay open, the top one is
+        //  "swap overlay": with an overlay open, the top one is
         // replaced in place (settings kept); from a bare frame it behaves
         // like "navigate to" — a screen change that adds NO history, so
-        // Back skips it. (Figma keys this on the hotspot's location; the
+        // Back skips it. ( keys this on the hotspot's location; the
         // engine keys it on stack emptiness, which agrees whenever the
         // hotspot that fired sits in the topmost layer — the only node a
         // top-down player can hit.)
@@ -333,7 +333,7 @@ pub fn fire_action(
                 opened_link: None,
             }
         }
-        // Figma "open link": leaves the prototype — the URL rides the
+        //  "open link": leaves the prototype — the URL rides the
         // effect to the host; nothing else changes.
         Action::OpenLink { url } => FireEffect {
             navigated: None,
@@ -414,7 +414,7 @@ pub struct Delay {
     pub ix: Interaction,
 }
 
-/// A "while" interaction in flight: Figma's "while hovering" and "while
+/// A "while" interaction in flight: the "while hovering" and "while
 /// pressing" auto-reverse — leaving the hotspot (hover) or lifting the
 /// pointer (press) undoes the navigate/overlay-open. The revert only
 /// lands if the player still sits in the "while" result: anything else
@@ -574,7 +574,7 @@ impl<'a> Player<'a> {
         Some(effect)
     }
 
-    /// Arm Figma's while-hovering/while-pressing auto-reverse: a "while"
+    /// Arm the while-hovering/while-pressing auto-reverse: a "while"
     /// trigger that navigated (with a history push) or opened an overlay
     /// reverts when the pointer leaves (hover) or lifts (press). Logic
     /// actions, closes, backs, and swaps never arm — a back already
@@ -836,7 +836,7 @@ impl<'a> Player<'a> {
 
     /// Release the pointer over `point`: ends drag detection, reverts an
     /// armed "while pressing" span, then fires `MouseUp` on the node
-    /// under the release point (Figma's drop-down pattern: the press
+    /// under the release point (the drop-down pattern: the press
     /// opens the menu, the release selects the item). Returns `true`
     /// when anything fired or reverted.
     pub fn release(&mut self, point: Point) -> bool {
@@ -1411,7 +1411,7 @@ mod tests {
         assert_eq!(p.key("a"), None);
     }
 
-    /// Figma's Mouse down is the press itself: permanent and one-way, where
+    /// the Mouse down is the press itself: permanent and one-way, where
     /// While pressing arms the release that unwinds it (help 360040315773).
     /// The player fires it from `press`, beside `OnPress`; `release` leaves it
     /// standing.

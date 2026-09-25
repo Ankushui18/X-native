@@ -1,4 +1,4 @@
-//! Advanced Eraser Tool (Figma-like + Image Support)
+//! Advanced Eraser Tool (standard + Image Support)
 //!
 //! This module implements a powerful eraser that works on:
 //! 1. **Vector paths** - Cuts through geometry, splitting paths where the eraser stroke intersects
@@ -6,7 +6,7 @@
 //! 3. **Text** - Converts text to outlines then erases (optional)
 //! 4. **Groups/Frames** - Recursively erases children
 //!
-//! The vector eraser behaves exactly like Figma's:
+//! The vector eraser behaves exactly like the:
 //! - Drag across a line: `────────────` → `──────  ──────`
 //! - Cuts closed shapes open
 //! - Splits complex paths into multiple segments

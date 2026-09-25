@@ -28,7 +28,7 @@ import { importFig } from "../engine/figImport";
 
 /**
  * The file browser the product opens with — Recents, Drafts, Trash — instead of
- * dropping straight into an unnamed editor tab. Same job Figma's dashboard does:
+ * dropping straight into an unnamed editor tab. Projects dashboard:
  * pick up where you left off, or start something new.
  *
  * Everything here is local: files live in the browser's own storage through

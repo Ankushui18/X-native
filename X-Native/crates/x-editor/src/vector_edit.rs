@@ -186,7 +186,7 @@ impl Editor {
             } else if let Some((c1x, c1y)) = out_c1 {
                 // c2 starts collapsed onto the new endpoint (no arrival
                 // bend yet); dragging while placing THIS anchor shapes it
-                // via `pen_shape_incoming`, mirroring Figma's pen tool.
+                // via `pen_shape_incoming`, mirroring the pen tool.
                 p.push(PathCmd::CurveTo(c1x, c1y, x, y, x, y));
             } else {
                 p.push(PathCmd::LineTo(x, y));
@@ -350,7 +350,7 @@ impl Editor {
         true
     }
 
-    /// Convert point (Figma/Illustrator "convert anchor"): straight <-> smooth.
+    /// Convert point (/Illustrator "convert anchor"): straight <-> smooth.
     /// A LineTo becomes a CurveTo with auto handles at 1/3rds; a CurveTo
     /// collapses back to a LineTo.
     pub fn convert_anchor(&mut self, id: &str, anchor_idx: usize) -> bool {
@@ -411,7 +411,7 @@ impl Editor {
         true
     }
 
-    /// Vector eraser (Figma Draw / node-edit Shift+E): erase the
+    /// Vector eraser ( Draw / node-edit Shift+E): erase the
     /// segments ENDING at each listed anchor index (0 = the implicit
     /// closing segment of a closed path). The path splits where
     /// segments are removed — the following drawing command becomes a
@@ -519,7 +519,7 @@ fn grow_bounds(n: &mut Node) {
 // ---------------------------------------------------------------------------
 // Batch path operations
 //
-// Figma's node surface is multi-select: you drag three anchors at once, delete
+// the node surface is multi-select: you drag three anchors at once, delete
 // a set of points, simplify the whole path, reverse it, split it, join two of
 // them. Each of those is ONE gesture, so each one rewrites the path in a single
 // pass through [`Editor::rewrite_path`] instead of looping per anchor — a loop
@@ -559,7 +559,7 @@ pub fn move_anchors_by(path: &mut [PathCmd], idxs: &[usize], dx: f64, dy: f64) {
 /// Delete several anchors at once, highest index first so the earlier indices
 /// stay valid. Returns false — changing nothing — when the list is empty or the
 /// deletion would leave fewer than two anchors, since a one-anchor path has no
-/// segment to be. Figma refuses the same delete.
+/// segment to be.  refuses the same delete.
 pub fn delete_anchors(path: &mut Vec<PathCmd>, idxs: &[usize]) -> bool {
     let n = anchors(path).len();
     let mut uniq: Vec<usize> = idxs.iter().copied().filter(|&i| i < n).collect();
@@ -691,7 +691,7 @@ fn anchor_point(c: PathCmd) -> (f64, f64) {
     }
 }
 
-/// Simplify a vector path (Figma: Edit object > Simplify). Per subpath, drop
+/// Simplify a vector path (: Edit object > Simplify). Per subpath, drop
 /// the anchors that sit within `tolerance` (the node's local units) of the chord
 /// between their surviving neighbours.
 ///
@@ -801,7 +801,7 @@ struct RevSeg {
     to: (f64, f64),
 }
 
-/// Reverse a path's direction of travel (Figma: Edit object > Reverse) — what
+/// Reverse a path's direction of travel (: Edit object > Reverse) — what
 /// turns a contour into a hole under even-odd fill, and what swaps an open
 /// stroke's start and end caps.
 ///
@@ -894,7 +894,7 @@ fn reverse_subpath(
     }
 }
 
-/// Split a path at an anchor into two OPEN paths (Figma: split; Illustrator's
+/// Split a path at an anchor into two OPEN paths (: split; Illustrator's
 /// scissors). The anchor itself ends the first half and starts the second, so no
 /// geometry is lost. `Close` is dropped from both halves — a split loop becomes
 /// two open strokes, which is the point of splitting. With several subpaths,
@@ -936,7 +936,7 @@ pub fn translate_path(cmds: &[PathCmd], dx: f64, dy: f64) -> Vec<PathCmd> {
 }
 
 /// Bend the corner at anchor `idx` into a smooth point by placing a handle at
-/// `pos` — Figma's drag on a corner point, and the whole of "add a handle".
+/// `pos` — the drag on a corner point, and the whole of "add a handle".
 ///
 /// The segment the user drags on gets the handle; with `mirror` (the default
 /// drag, Alt NOT held) the opposite handle follows as the reflection of `pos`
@@ -1125,7 +1125,7 @@ impl Editor {
         true
     }
 
-    /// Drag every selected anchor of the node in vector edit mode (Figma: node
+    /// Drag every selected anchor of the node in vector edit mode (: node
     /// tool with several points selected, or arrow-key nudge). ONE undo step for
     /// the whole drag. False when not in vector edit mode or nothing is
     /// selected.
@@ -1145,7 +1145,7 @@ impl Editor {
         })
     }
 
-    /// Delete the selected anchors (Figma: Backspace in node edit mode). ONE
+    /// Delete the selected anchors (: Backspace in node edit mode). ONE
     /// undo step; refuses — leaving the selection alone — when fewer than two
     /// anchors would survive.
     pub fn delete_vector_points(&mut self) -> bool {
@@ -1190,7 +1190,7 @@ impl Editor {
         })
     }
 
-    /// Simplify a path (Figma: Edit object > Simplify): the node in vector edit
+    /// Simplify a path (: Edit object > Simplify): the node in vector edit
     /// mode, else the single selected node. `tolerance` is in local units; see
     /// [`simplify_path`] for what survives and what approximates.
     pub fn simplify_vector(&mut self, tolerance: f64) -> bool {
@@ -1208,11 +1208,11 @@ impl Editor {
         })
     }
 
-    /// Offset a vector path along its normals (Figma: Object > Offset path).
+    /// Offset a vector path along its normals (: Object > Offset path).
     /// Positive `distance` grows a closed path outward and moves an open one to
     /// the left of travel; `join` picks the corner treatment. The result
     /// replaces the path in place — ONE undo step. Curves come back polygonal
-    /// (the same trade Figma makes when it re-authors the path).
+    /// (the same trade  makes when it re-authors the path).
     pub fn offset_vector(&mut self, node_id: &str, distance: f64, join: StrokeJoin) -> bool {
         // A zero offset is not a no-op: it would re-author the path through the
         // flattener and hand back the same shape with its curves polygonised.
@@ -1226,14 +1226,14 @@ impl Editor {
         })
     }
 
-    /// Reverse a path's direction (Figma: Edit object > Reverse). ONE undo step.
+    /// Reverse a path's direction (: Edit object > Reverse). ONE undo step.
     pub fn reverse_path_direction(&mut self, node_id: &str) -> bool {
         self.rewrite_path(node_id, |path| {
             (!path.is_empty()).then(|| reverse_path(path))
         })
     }
 
-    /// Split a path at an anchor into TWO vector nodes (Figma: split /
+    /// Split a path at an anchor into TWO vector nodes (: split /
     /// Illustrator's scissors). The second half is inserted right after the
     /// first and selected; both keep the original's paint, stroke and
     /// transform. ONE undo step. Returns the new node's id.
@@ -1276,7 +1276,7 @@ impl Editor {
         Some(new_id)
     }
 
-    /// Join two vector paths end to end into ONE node (Figma: Edit object > Join
+    /// Join two vector paths end to end into ONE node (: Edit object > Join
     /// selection): the END of `a` connects to the START of `b`, and `b` is
     /// removed. Both paths live in their own node's local space, so `b` is
     /// translated by the difference of the two origins; a node that is rotated,
@@ -1351,7 +1351,7 @@ impl Editor {
         Some(a.to_string())
     }
 
-    /// Lasso-select anchors (Figma: drag a marquee in node edit mode). The
+    /// Lasso-select anchors (: drag a marquee in node edit mode). The
     /// boundary is in WORLD space, the same space [`crate::vector_handles`] hits
     /// in, so the answer is the list of ANCHOR indices inside it. Cheap and
     /// side-effect free: the caller decides whether to replace or extend the
@@ -1370,7 +1370,7 @@ impl Editor {
             .collect()
     }
 
-    /// Drag a handle out of a corner point (Figma: pen/node tool drag on a
+    /// Drag a handle out of a corner point (: pen/node tool drag on a
     /// point that has no handles). `handle_pos` is in the node's LOCAL space,
     /// matching [`Editor::move_handle`]. ONE undo step, and the point stays
     /// smooth because the opposite handle mirrors by default.
@@ -1407,7 +1407,7 @@ impl Editor {
     }
 
     /// Take the handles away from an anchor: a curve point collapses back to a
-    /// corner (Figma's "convert point", the same operation from the other
+    /// corner (the "convert point", the same operation from the other
     /// direction). ONE undo step.
     ///
     /// [`Editor::convert_anchor`] only straightens the INCOMING segment, which
@@ -1798,7 +1798,7 @@ mod tests {
         let _ = Color::BLACK;
     }
 
-    // ---- batch path operations (Figma node-edit parity) -------------------
+    // ---- batch path operations ( node-edit parity) -------------------
 
     /// The path of a vector node, cloned out so assertions can borrow `e`.
     fn path_of(e: &Editor, id: &str) -> Vec<PathCmd> {

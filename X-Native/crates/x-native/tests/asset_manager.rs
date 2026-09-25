@@ -1,5 +1,5 @@
 //! AssetManager end-to-end (review item): embedded ZIP image data must
-//! flow Sketch → Import IR → content-addressed store → .x → render,
+//! flow  → Import IR → content-addressed store → .x → render,
 //! with NO filesystem dependency — that's document portability.
 
 use x_native::fileio::{import_sketch, load_x, save_x};

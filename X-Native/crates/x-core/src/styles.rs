@@ -1,6 +1,6 @@
 //! Shared Styles system — Color, Text, Effect, and Grid styles.
 //!
-//! This module provides Figma-like "Styles" that can be created, named,
+//! This module provides standard "Styles" that can be created, named,
 //! applied to layers, and updated globally. Styles are separate from
 //! Variables (which are design tokens with modes/aliases) — Styles are
 //! designer-facing presets for fills, text properties, effects, and grids.
@@ -119,7 +119,7 @@ impl ColorStyleData {
 
 // ------------------------------------------------------------- TextStyle data
 
-/// Line height as a text style carries it: Figma offers Auto, a fixed px
+/// Line height as a text style carries it:  offers Auto, a fixed px
 /// value, or a percentage of the font size. The engine's node bindings hold
 /// the same three states as `lhm` (`"px"`/`"pct"`) + `lhpx`/`lhp`, so a style
 /// applies without loss and reads back exactly.
@@ -128,9 +128,9 @@ pub enum LineHeight {
     /// Natural line box of the resolved face.
     #[default]
     Auto,
-    /// Absolute px per line (Figma's "px" mode; engine binding `lhm=px`).
+    /// Absolute px per line (the "px" mode; engine binding `lhm=px`).
     Px(f64),
-    /// Percentage of the font size (Figma's "%" mode; engine `lhm=pct`).
+    /// Percentage of the font size (the "%" mode; engine `lhm=pct`).
     Percent(f64),
     /// Multiple of the face's natural line box (the engine's original `lh`
     /// binding, and what every pre-mode document carries).
@@ -203,11 +203,11 @@ impl LineHeight {
 
 /// Text style — the named bundle of typography properties.
 ///
-/// The property list is Figma's (see "Create and apply text styles"): family,
+/// The property list is the (see "Create and apply text styles"): family,
 /// weight and size; line height; letter spacing; paragraph spacing and indent;
 /// decoration; case; lists; and wrap style. Equally deliberate is what is NOT
 /// here — alignment, fill, and resizing behaviour stay per-layer, because in
-/// Figma a text style does not carry them either.
+///  a text style does not carry them either.
 ///
 /// A style applies through the SAME channel the rest of the engine uses: the
 /// node's `bindings` map (Model B) for everything a renderer reads, plus the
@@ -221,11 +221,11 @@ pub struct TextStyleData {
     /// Point size; the engine's px contract makes this the glyph size in px.
     pub font_size: f64,
     pub line_height: LineHeight,
-    /// Letter spacing in px (the shaper's `ls`; Figma's tracking is 1/1000em).
+    /// Letter spacing in px (the shaper's `ls`; the tracking is 1/1000em).
     pub letter_spacing: f64,
     /// Space inserted after a paragraph, px.
     pub paragraph_spacing: f64,
-    /// First-line indent, px (Figma honours it on left-aligned paragraphs).
+    /// First-line indent, px ( honours it on left-aligned paragraphs).
     pub paragraph_indent: f64,
     pub text_case: TextCase,
     /// Synthesized small caps — the engine spells this `tc = "sc"`, which
@@ -270,7 +270,7 @@ pub const TEXT_STYLE_BINDINGS: [&str; 12] = [
 
 impl TextStyleData {
     /// Read the typography a node carries today — "create style from
-    /// selection" in Figma's flow.
+    /// selection" in the flow.
     pub fn from_node(n: &Node) -> Self {
         let num = |k: &str| n.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
         let small_caps = n.bindings.get("tc").map(String::as_str) == Some("sc");

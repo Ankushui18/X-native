@@ -222,7 +222,7 @@ export function FillPicker({
   const passAA = ratio + 1e-6 >= targetAA;
   const passAAA = ratio + 1e-6 >= targetAAA;
   const hasAAA = resolvedKind !== "graphics";
-  // Anchor to the row that opened us — Figma's picker appears beside the swatch,
+  // Anchor to the row that opened us — picker appears beside the swatch,
   // never 400px away — and flip above when the row sits near the bottom edge.
   // The height is measured after paint because the popover grows with gradient
   // and image controls.
@@ -712,7 +712,7 @@ function hexToRgb(c: string): [number, number, number] {
 }
 
 /**
- * Figma-style gradient ramp editor: a preview bar with draggable stop handles,
+ * Gradient ramp editor: a preview bar with draggable stop handles,
  * click-empty-space to insert, double-click / Delete to remove.
  */
 function GradientStops({

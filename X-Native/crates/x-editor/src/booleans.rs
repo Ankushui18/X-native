@@ -1,5 +1,5 @@
 //! Editor integration for vector booleans. The geometry core lives in
-//! `x_core::booleans` (shared with the format importers — Sketch boolean
+//! `x_core::booleans` (shared with the format importers —  boolean
 //! shapeGroups flatten through it); this module keeps the historical
 //! `x_editor::booleans` path alive and adds the undoable editor command.
 
@@ -107,7 +107,7 @@ impl Editor {
         Some(new_id)
     }
 
-    /// Flatten Selection (Figma): bake a shape primitive or a group of
+    /// Flatten Selection (): bake a shape primitive or a group of
     /// shapes into ONE editable vector path. Returns the new node id
     /// (None = nothing to flatten: already a path, or non-shape content).
     pub fn flatten_selected(&mut self) -> Option<String> {
@@ -205,7 +205,7 @@ impl Editor {
         self.replace_child(&parent, &id, v)
     }
 
-    /// Outline Stroke (Figma): replace the single selected shape with its
+    /// Outline Stroke (): replace the single selected shape with its
     /// stroke's outline. Returns the new node id (None when the selection is not
     /// exactly one node, or that node refuses outlining).
     pub fn outline_stroke_selected(&mut self) -> Option<String> {
@@ -457,7 +457,7 @@ mod tests {
         let mut ed = crate::Editor::new(page);
 
         // flatten: arc -> editable vector, 3 quarter curves + the closes the
-        // wedge/ring outline needs (Figma's Flatten is what makes the box hug
+        // wedge/ring outline needs (the Flatten is what makes the box hug
         // the shape; the arc itself keeps its own box)
         ed.selection = vec!["a".into()];
         let id = ed.flatten_selected().expect("flatten arc");

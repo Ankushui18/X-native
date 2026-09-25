@@ -14,7 +14,7 @@ pub struct Variables {
     /// P1: collection name per variable ("Primitives", "Semantic", ...).
     /// Unlisted variables belong to the implicit "Local" collection.
     pub collections: HashMap<String, String>,
-    /// Names of variables exposed to prototype viewers (Figma "exposed
+    /// Names of variables exposed to prototype viewers ( "exposed
     /// variables"): present mode shows an input chip so a viewer can set
     /// the value, which then drives conditional logic. Sorted set — the
     /// `.x` wire order is deterministic.
@@ -24,10 +24,10 @@ pub struct Variables {
     pub strings: HashMap<String, String>,
     pub bools: HashMap<String, bool>,
     pub aliases: HashMap<String, String>,
-    /// Color values per mode (Figma: variable modes, e.g. light/dark).
+    /// Color values per mode (: variable modes, e.g. light/dark).
     pub modes: HashMap<String, HashMap<String, Color>>,
     /// Mode tables for non-color variables (numbers/strings/bools can be
-    /// mode-driven too — Figma parity beyond the original color-only modes).
+    /// mode-driven too —  parity beyond the original color-only modes).
     pub num_modes: HashMap<String, HashMap<String, f64>>,
     pub str_modes: HashMap<String, HashMap<String, String>>,
     pub bool_modes: HashMap<String, HashMap<String, bool>>,

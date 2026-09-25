@@ -1,13 +1,13 @@
 /**
- * Figma (.fig) import and binary inspection.
+ * .fig binary import and inspection.
  *
  * A `.fig` is a ZIP whose `canvas.fig` entry is a `fig-kiwi` container:
  * 8-byte magic ("fig-kiwi"), u32 version, then length-prefixed chunks. Chunk 0 is the
- * compressed Kiwi schema (Figma ships its whole field dictionary in every
+ * compressed Kiwi schema (ships its whole field dictionary in every
  * file, so the reader stays version-tolerant) and chunk 1 is the document
- * message. The container is also reachable on its own: Figma's ⌘C writes one,
+ * message. The container is also reachable on its own: binary clipboard writes one,
  * base64'd, into the clipboard's `text/html` — `importFigContainer` is that
- * entry point, and it is what makes paste-from-Figma work.
+ * entry point, and powers binary scene paste.
  *
  * Supported: FRAME/SECTION/GROUP, RECTANGLE (+corner radius), ELLIPSE, LINE,
  * TEXT, COMPONENT/INSTANCE, solid fills and strokes, opacity, visibility,
@@ -33,7 +33,7 @@ const numOf = (v: KiwiValue | undefined, d = 0): number =>
   typeof v === "number" && Number.isFinite(v) ? v : d;
 
 /**
- * Inflate a container chunk. Figma writes raw DEFLATE or Zstandard (zstd).
+ * Inflate a container chunk. archive writes raw DEFLATE or Zstandard (zstd).
  */
 async function inflateChunk(data: Uint8Array): Promise<Uint8Array> {
   // zstd frame magic: 0x28, 0xb5, 0x2f, 0xfd
@@ -78,7 +78,7 @@ export interface FigmaPathCmd {
 }
 
 /**
- * Parses Figma's binary `commandsBlob` into vector path commands.
+ * Parses binary `commandsBlob` into vector path commands.
  */
 export function parseCommandsBlob(bytes: Uint8Array): FigmaPathCmd[] {
   const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -123,7 +123,7 @@ export function parseCommandsBlob(bytes: Uint8Array): FigmaPathCmd[] {
 }
 
 /**
- * Converts Figma path commands to `PathPoint[]`.
+ * Converts path commands to `PathPoint[]`.
  */
 export function figmaCommandsToPathPoints(cmds: FigmaPathCmd[]): { path: PathPoint[]; closed: boolean } {
   const path: PathPoint[] = [];
@@ -172,7 +172,7 @@ export function figmaCommandsToPathPoints(cmds: FigmaPathCmd[]): { path: PathPoi
   return { path, closed };
 }
 
-/** Figma colours are 0..1 floats with separate paint-level opacity. */
+/** Format colours are 0..1 floats with separate paint-level opacity. */
 function paintColor(paint: J | null): string | null {
   if (!paint) return null;
   if (paint.visible === false) return null;
@@ -201,7 +201,7 @@ export async function importFig(buf: ArrayBuffer): Promise<ImportResult> {
 }
 
 /** True when `bytes` start with the `fig-kiwi` prelude, so a caller can tell a
- *  Figma scene buffer from arbitrary base64 that happened to be on the
+ *  scene buffer from arbitrary base64 that happened to be on the
  *  clipboard before handing it to the (async, decompressing) importer. */
 export function isFigKiwi(bytes: Uint8Array): boolean {
   return bytes.length >= 12 && new TextDecoder().decode(bytes.subarray(0, 8)) === "fig-kiwi";
@@ -211,11 +211,11 @@ export function isFigKiwi(bytes: Uint8Array): boolean {
  * Parse a bare `fig-kiwi` container — the same bytes a `.fig` archive carries
  * in its `canvas.fig` entry, but without the ZIP around them.
  *
- * This is exactly what Figma puts on the system clipboard when you ⌘C a layer:
- * the scene is serialised to a small Figma file, base64'd, and written into the
+ * This is exactly what binary clipboards place when you ⌘C a layer:
+ * the scene is serialised to a small archive, base64'd, and written into the
  * `data-buffer` attribute of an empty `<span>` inside `text/html` (see
  * `clipboard.ts`). Decoding that attribute therefore lands here, and a paste
- * from Figma gets the same reader — schema, chunk inflation, paint and vector
+ * from binary clipboard gets the same reader — schema, chunk inflation, paint and vector
  * handling — as a `.fig` dropped on the canvas.
  *
  * `archive` is the ZIP the container came out of, when there was one: image
@@ -291,7 +291,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
   };
 
   /** Gradient direction and radius, in the 0..1 box our paint model uses.
-   *  Figma stores the two handles as 0..1 fractions of the node's box. */
+   *  Format stores the two handles as 0..1 fractions of the node's box. */
   const gradientOf = (paint: J): Partial<ImportedPaint> => {
     const stops = arr(paint.stops)
       .map((s) => {
@@ -306,7 +306,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
       })
       .filter((s): s is { color: string; position: number } => !!s);
     const tf = arr(paint.transform).map((n) => numOf(n));
-    // Figma's transform is [[m00 m01 m02] [m10 m11 m12]]; the first handle is
+    // Format transform is [[m00 m01 m02] [m10 m11 m12]]; the first handle is
     // the gradient's start, the second its end (or its radius, for radial).
     const gx = tf.length >= 9 ? tf[2] : 0.5;
     const gy = tf.length >= 9 ? tf[5] : 0;
@@ -364,7 +364,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
     return out;
   };
 
-  /** Kiwi effects. Figma's offsets and radii are already in our units; only
+  /** Kiwi effects: offsets and radii are already in our units; only
    *  the names differ. */
   const effectsOf = (nc: J): Effect[] => {
     const out: Effect[] = [];
@@ -454,7 +454,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
   interface FigNode {
     guid: string;
     parent: string | null;
-    /** Figma's fractional index for this child within its parent. */
+    /** Fractional index for this child within its parent. */
     position: string;
     order: number;
     change: J;
@@ -476,7 +476,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
   }
 
   const canvases = all.filter((n) => str(n.change.type) === "CANVAS");
-  // Figma keeps components' internals on a canvas marked `internalOnly`; a
+  // Components' internals sit on a canvas marked `internalOnly`; a
   // designer never sees it as a page, and importing it would look like a
   // second untitled page full of shapes nobody placed.
   const realCanvases = canvases.filter((c) => c.change.internalOnly !== true);
@@ -484,7 +484,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
   const isCanvas = (n: FigNode) => str(n.change.type) === "CANVAS";
   const isDocument = (n: FigNode) => str(n.change.type) === "DOCUMENT";
 
-  /** Children of a node, in Figma's own order. Positions are Figma's
+  /** Children of a node, in format order. Positions are
    *  fractional index strings ("!" first, "~" last, otherwise an increasing
    *  base-94 pair), so a plain lexicographic sort is the document order. */
   const childOf = new Map<string | null, FigNode[]>();

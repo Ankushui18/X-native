@@ -152,7 +152,7 @@ input, textarea { user-select: text; }
   overflow: hidden;
   visibility: hidden;
 }
-/* Figma floats the right sidebar over the canvas while minimized, so the
+/* The right sidebar floats over the canvas while minimized, so the
    document keeps its full width instead of being squeezed by a docked panel.
    With nothing selected it collapses away entirely, and reappears on select. */
 .app.min-ui .right {
@@ -385,7 +385,7 @@ html[data-theme="dark"] .row.comp .name { color: #c4b5fd; }
   white-space: nowrap;
   font-size: 12px;
 }
-/* The blue dot Figma puts in the layers list on an auto layout frame, which is
+/* The status dot in the layers list on an auto layout frame, which is
    also how the frames "Suggest auto layout" creates are spotted afterwards. */
 .row .al-dot {
   flex: 0 0 auto;
@@ -834,7 +834,7 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
 }
 /* View > Property labels. The right sidebar is deliberately terse - most
    properties are a glyph and a number - so this switch spells out the ones
-   that are icon-only, the same teaching aid Figma offers. */
+   that are icon-only. */
 :root[data-proplabels="on"] .field[data-pname] { gap: 4px; }
 :root[data-proplabels="on"] .field[data-pname] > svg { display: none; }
 :root[data-proplabels="on"] .field[data-pname]::before {
@@ -942,7 +942,7 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
 
 /* The auto layout gap reads as one row however it is set: a number field, or -
    when it is on Auto - the packing rule it is using. The button on the right is
-   the Auto switch itself, the same one Figma puts in the gap's dropdown. */
+   the Auto switch itself in the gap's dropdown. */
 .gap-row {
   display: flex;
   gap: 4px;
@@ -1065,7 +1065,7 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
   gap: 10px;
   align-items: flex-start;
 }
-/* Figma's interactive selector: a small grid of squares, one per cell. */
+/* Interactive selector: a small grid of squares, one per cell. */
 .grid-pick {
   display: grid;
   grid-template-columns: repeat(6, 12px);
@@ -1159,7 +1159,7 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
   height: 4px;
 }
 /* With the gap on Auto only the cross axis is left to choose, so the box shows
-   Figma's three cells instead of nine. */
+   three cells instead of nine. */
 .nine.nine-reduced {
   grid-template-columns: repeat(3, 12px);
   grid-template-rows: 12px;
@@ -1524,7 +1524,7 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
 .a11y-fix { margin-left: auto; }
 .a11y-note { margin: 0; font-size: 10px; line-height: 1.45; color: var(--muted); }
 
-/* Reordering fills. Figma shows the drag handle on a row's left edge while the
+/* Reordering fills: drag handle on a row's left edge while the
    pointer is over the row; the stack is listed top-most first so that dragging a
    row up is the same as moving it toward the front. */
 .paint-row { position: relative; }
@@ -2139,7 +2139,7 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 .stroke-ends .seg { flex: 0 0 auto; }
 .stroke-ends .icon-btn { flex: 0 0 auto; margin-left: auto; }
 
-/* Figma lists seven end points (none, round, square, line arrow, triangle,
+/* Standard seven end points (none, round, square, line arrow, triangle,
    reverse triangle, diamond), so the cap group can no longer assume five
    32px buttons fit beside the joins: it takes narrower buttons and wraps. */
 .stroke-ends .seg.caps { flex-wrap: wrap; gap: 2px; }
@@ -2163,7 +2163,7 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .grid4 > * { min-width: 0; }
 
-/* Corner smoothing: Figma's slider plus the iOS preset in the corner panel. */
+/* Corner smoothing: curvature slider plus the iOS preset in the corner panel. */
 .smooth-row { display: flex; align-items: center; gap: 6px; }
 .smooth-slider { flex: 1; min-width: 0; height: 3px; accent-color: var(--accent); }
 .smooth-row .field { width: 64px; flex: 0 0 auto; }
@@ -2194,7 +2194,7 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 
 /* ---------------------------------------------------------------------------
    Motion
-   Figma is restrained but not static: interactive chrome eases on hover/press
+   Interactive chrome eases on hover/press
    and popovers fade in rather than snapping. Durations are deliberately short
    (80-120ms) so the editor still feels instant. Everything here is cosmetic —
    no layout-affecting property is animated, so nothing can cause reflow jank.
@@ -2244,7 +2244,7 @@ button,
   }
 }
 
-/* Figma-style tooltip: dark pill, label plus dimmed shortcut. */
+/* Tooltip: dark pill, label plus dimmed shortcut. */
 .tip-host { display: contents; }
 .tip {
   position: fixed;
@@ -2532,7 +2532,7 @@ input:focus-visible,
 
 /* ==========================================================================
    Dashboard — the file browser the app opens with.
-   Density and vocabulary follow Figma's home: quiet chrome, generous canvas,
+   Quiet chrome, generous canvas,
    the only saturated colour is the accent used for actions and selection.
    ========================================================================== */
 .dash {
@@ -2992,7 +2992,7 @@ html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
 .open-card span { font-size: 12px; color: var(--muted); line-height: 1.5; }
 .open-card .primary { margin-top: 10px; align-self: flex-start; }
 
-/* Zoom + view options (Figma's Zoom/view menu) */
+/* Zoom + view options menu */
 .zoom-ctl {
   position: relative;
   display: flex;
@@ -3131,7 +3131,7 @@ html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
 .empty-add-menu button:hover { background: var(--hover); color: var(--text); border-color: var(--blue); }
 .color-row .swatch { width: 20px; height: 20px; flex: 0 0 20px; }
 
-/* Export preview (Figma previews the render before you download it) */
+/* Export preview (previews the render before you download it) */
 .export-thumb {
   width: 24px;
   height: 24px;
@@ -3165,7 +3165,7 @@ html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
 }
 .export-checker img { max-width: 100%; max-height: 132px; display: block; }
 
-/* Sketch's "Round to Pixel" is only offered when it would change something;
+/* "Round to Pixel" is only offered when it would change something;
    a quiet accent on the inspector icon says the same without a tooltip hunt. */
 .icon-btn.warn { color: var(--blue); }
 .icon-btn.warn::after {
@@ -3186,7 +3186,7 @@ html[data-theme="dark"] .primary { background: var(--blue); color: #fff; }
   font-style: normal;
 }
 
-/* Selection colors (Sketch) */
+/* Selection colors */
 .scolors {
   display: grid;
   gap: 2px;
@@ -3941,7 +3941,7 @@ html[data-theme="dark"] .zoom-menu {
   color: var(--text);
 }
 
-/* Box model — more X-Native, less Figma grey box */
+/* Box model — native visual styling */
 .box-model-diagram {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -3980,7 +3980,7 @@ html[data-theme="dark"] .zoom-menu {
   background: var(--hover);
 }
 
-/* Rail — airy, no longer Figma-dark mimic */
+/* Rail — native airy styling */
 .rail {
   background: var(--panel);
   border-right: 1px solid var(--line);

@@ -1,4 +1,4 @@
-//! CSS-Grid layout solver (Figma Grid, Config 2025).
+//! CSS-Grid layout solver ( Grid, Config 2025).
 //!
 //! Frames whose [`AutoLayout`] carries a [`GridLayout`] lay out as a grid:
 //! children place into cells (explicitly via [`ChildConstraints::grid_col`]

@@ -1,7 +1,7 @@
 /**
  * Local file store behind the dashboard.
  *
- * Figma keeps files on a server; this product is offline-first, so the store is
+ * This product is offline-first, so the store is
  * localStorage (metadata, read synchronously so the dashboard paints
  * immediately) with IndexedDB as the overflow for documents that carry inline
  * image data URLs and would blow the ~5MB quota.
@@ -363,7 +363,7 @@ function pageWith(name: string, root: XNode): Page {
   return page;
 }
 
-/** Build the document a new file starts with. Mirrors Figma's "new file"
+/** Build the document a new file starts with. Default new file template
  *  templates: real frames at device sizes, already named and laid out. */
 export function docFromTemplate(template: TemplateId): DocSeed {
   if (template === "blank") {
@@ -527,14 +527,14 @@ function forApp(screen: XNode): void {
   screen.children.push(box("List row 3", 24, 580, 345, 68, "#f1f3f7", 16));
 }
 
-/** Turn an SVG/Sketch/.fig import into a document, so the dashboard can create
+/** Turn an SVG, .sketch or .fig import into a document, so the dashboard can create
  *  a file from an import without first opening the editor.
  *
  *  Structure survives the trip: an imported `.fig` frame holds the layers that
  *  were inside it, and a file with several canvases becomes several pages.
  *  Coordinates are used as they came out of the file - a layer keeps the
  *  position its author gave it - and a page is sized to hold what is on it
- *  with the same margin Figma leaves around a frame. */
+ *  with standard margin around a frame. */
 export function docFromImport(fileName: string, result: ImportResult): DocSeed {
   const toNode = (n: ImportedNode): XNode => {
     // Only the fields the import actually knows about are copied: spreading an
@@ -584,7 +584,7 @@ export function docFromImport(fileName: string, result: ImportResult): DocSeed {
     if (Array.isArray(n.path)) extra.path = n.path as XNode["path"];
     if (n.vectorNetwork) extra.vectorNetwork = n.vectorNetwork;
     if (n.children?.length) extra.children = n.children.map(toNode);
-    // Rounded to whole pixels for the same reason Figma rounds: an imported
+    // Rounded to whole pixels: an imported
     // file should not start life with half-pixel layers nobody can see.
     return node(
       n.kind as XNode["kind"],
@@ -610,7 +610,7 @@ export function docFromImport(fileName: string, result: ImportResult): DocSeed {
       minX = Math.min(minX, k.x);
       minY = Math.min(minY, k.y);
     }
-    // 160 of margin on each side, the room Figma leaves around the work.
+    // 160 of margin on each side around the work.
     const page = blankPage(p.name || "Imported");
     page.root = node("frame", p.name || "Page 1", minX - 160, minY - 160, maxX - minX + 320, maxY - minY + 320, {
       fill: "#00000000",

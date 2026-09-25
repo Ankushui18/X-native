@@ -12,7 +12,7 @@ import {
   vertexDegree,
   insertPointOnPath,
   projectPointOnSegment,
-  computeFigmaNoodle,
+  computeConnectorNoodle,
   pathToVectorNetwork,
   balanceLines,
   cornerPinPoints,
@@ -145,7 +145,7 @@ type Drag =
       padOpp?: boolean;
       padAll?: boolean;
       /** A padding handle that was clicked rather than dragged opens a field to
-       *  type a value into - Figma: "Click handles to open input fields and
+       *  type a value into: "Click handles to open input fields and
        *  enter a numeric value". */
       moved?: boolean;
       origPad?: [number, number, number, number];
@@ -252,7 +252,7 @@ export function Canvas({
   /**
    * Set while the pen is drawing a branch into an existing vector network: the
    * node to keep adding to and the vertex index the next click connects from.
-   * Figma's networks "don't require a specific direction" — clicking a point of
+   * Vector networks "don't require a specific direction" — clicking a point of
    * the selected shape with the pen resumes drawing from that point, in any
    * direction, in the same layer.
    */
@@ -267,7 +267,7 @@ export function Canvas({
   const hoverIx = useRef("");
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
-  /* Figma keeps the rotation origin out of the way until `⌥R` asks for it. */
+  /* Keeps the rotation origin out of the way until `⌥R` asks for it. */
   const [rotTarget, setRotTarget] = useState(false);
   /** An open padding entry, from clicking a handle on an auto layout frame. */
   const [padInput, setPadInput] = useState<{
@@ -468,7 +468,7 @@ export function Canvas({
         return;
       }
       if (e.type === "keydown" && e.altKey && (e.key === "r" || e.key === "R") && !edit) {
-        // Figma: Option/Alt R reveals the target; it rotates about itself until
+        // Option/Alt R reveals the target; it rotates about itself until
         // it is moved, and Escape puts it away again. A multi-selection turns
         // about the middle of its bounds and has nothing to drag.
         setRotTarget((v) => !v);
@@ -598,7 +598,7 @@ export function Canvas({
           e.stopImmediatePropagation();
         }
       }
-      // Sketch vector editing: 1=Straight, 2=Mirrored, 3=Disconnected, 4=Asymmetric
+      // Vector editing mirror modes: 1=Straight, 2=Mirrored, 3=Disconnected, 4=Asymmetric
       if (e.type === "keydown" && !e.metaKey && !e.ctrlKey && !e.altKey && vecEdit && !edit) {
         const ptIdx = snap.vecPoint ?? vecPt.current;
         if (ptIdx >= 0) {
@@ -637,7 +637,7 @@ export function Canvas({
     };
   }, [snap, edit, draft, engine, vecEdit]);
 
-  // Figma: Escape finishes the path and leaves it open. The finisher is published
+  // Escape finishes the path and leaves it open. The finisher is published
   // to ui/penDraft.ts because that is the layer which actually decides Escape.
   useEffect(() => {
     if (!draft.length) {
@@ -704,7 +704,7 @@ export function Canvas({
     // read and a name you notice.
     const canvasLabel = readableLabel(themeLabel, pageFill || canvasBg, 4.5);
     const page = snap.pages[snap.page];
-    // Figma only paints the pixel grid from 400% up: below that it is grey
+    // Pixel grid paints from 400% up: below that it is grey
     // noise rather than something you can align to.
     if (page.pixelGrid && snap.zoom >= 4) {
       ctx.strokeStyle = page.pixelGridColor || grid;
@@ -970,7 +970,7 @@ export function Canvas({
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
         ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
         const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
-        // Figma lets the dashes carry their own cap: a dotted line is a 1px dash
+        // Dashes carry their own cap: a dotted line is a 1px dash
         // with round caps, and only the segments take the rounding.
         ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? ctx.lineCap : ctx.lineCap;
         if (dashes.length) ctx.setLineDash(dashes);
@@ -1030,7 +1030,7 @@ export function Canvas({
         if (arrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
-          // Figma puts the tips on both ends of an open path, so each end is
+          // Tips are placed on both ends of an open path, so each end is
           // drawn with the unit vector pointing back along its own segment.
           const ends: { ex: number; ey: number; ux: number; uy: number }[] = [];
           const pts = n.kind === "vector" || n.kind === "line" || n.kind === "arrow" ? (n.path.length ? n.path : shapePoly(n)) : [];
@@ -1339,7 +1339,7 @@ export function Canvas({
 
     // A frame's name sits above its top-left corner at a constant 11px, so it
     // stays the same size as the canvas zooms. Selected or hovered, it takes
-    // the accent colour - Figma's cue that the name belongs to the frame you
+    // the accent colour indicating the name belongs to the frame you
     // are about to act on.
     const labelNames = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
@@ -1435,7 +1435,7 @@ export function Canvas({
         ctx.stroke();
         if (closeHint === i) {
           // The ring says "this click joins here / closes the path", the same
-          // cue Figma puts next to the cursor.
+          // cue placed next to the cursor.
           ctx.beginPath();
           ctx.arc(px, py, 7, 0, Math.PI * 2);
           ctx.lineWidth = 1.5;
@@ -1445,7 +1445,7 @@ export function Canvas({
     }
 
     if (snap.rightTab === "prototype" && snap.showFlows && !snap.presentFrame) {
-      // 1. Render Flow Starting Point Badge ("Flow 1") on starting frame (Figma parity)
+      // 1. Render Flow Starting Point Badge ("Flow 1") on starting frame (parity)
       const flowStartId = snap.pages[snap.page].flowStart;
       if (flowStartId) {
         const startWp = worldPos(root, flowStartId);
@@ -1485,12 +1485,12 @@ export function Canvas({
         }
       }
 
-      // 2. Render all interaction connection noodles with smooth Figma S-curve geometry
+      // 2. Render all interaction connection noodles with smooth S-curve geometry
       walkInteractions(root, 0, 0, (n, nx, ny, destId, _ix, isOverlay) => {
         const dest = worldPos(root, destId);
         if (!dest) return;
 
-        const noodle = computeFigmaNoodle(
+        const noodle = computeConnectorNoodle(
           nx,
           ny,
           n.w,
@@ -1597,12 +1597,12 @@ export function Canvas({
         }
       }
 
-      // 4. Live dragging noodle using computeFigmaNoodle
+      // 4. Live dragging noodle using computeConnectorNoodle
       if (protoDrag) {
         const srcWp = protoDrag.srcId ? worldPos(root, protoDrag.srcId) : null;
         const twp = protoDrag.targetId ? worldPos(root, protoDrag.targetId) : null;
 
-        const noodle = computeFigmaNoodle(
+        const noodle = computeConnectorNoodle(
           srcWp ? srcWp.x : protoDrag.fromX,
           srcWp ? srcWp.y : protoDrag.fromY,
           srcWp ? srcWp.node.w : 0,
@@ -1965,7 +1965,7 @@ export function Canvas({
           ctx.stroke();
         }
       }
-      // Corner radius handles. Figma only shows these for a corner that is
+      // Corner radius handles: only show these for a corner that is
       // actually rounded, and draws them as a small bracket hugging the corner.
       // Painting a dot at every corner regardless of radius read as "why is
       // there a dot in my frame", and clamping the offset to half the box could
@@ -2011,7 +2011,7 @@ export function Canvas({
           ctx.lineCap = "butt";
         }
       }
-      // Auto Layout visualisation. Figma paints the padding and gap regions as
+      // Auto Layout visualisation: paints the padding and gap regions as
       // translucent pink bands across the frame, rather than parking four dots
       // on the edges: the bands show the extent, the dots showed only a point.
       if (wp.node.layout) {
@@ -2082,7 +2082,7 @@ export function Canvas({
     }
 
     // Combined bounding box for a multi-selection: one set of handles, one
-    // rotate stem, one size badge — exactly like Figma.
+    // rotate zone, one size badge.
     if (multiSel) {
       const bb = selectionBounds(root, snap.selection);
       if (bb) {
@@ -2207,7 +2207,7 @@ export function Canvas({
           const deg = vn ? vertexDegree(vn, i) : 2;
           const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
           if (deg >= 3) {
-            // Branching node indicator (Figma Vector Network Degree >= 3)
+            // Branching node indicator (Vector Network Degree >= 3)
             ctx.save();
             ctx.fillStyle = isSelected ? BRAND_ACCENT_GLOW : "rgba(16, 185, 129, 0.25)";
             ctx.beginPath();
@@ -2425,9 +2425,9 @@ export function Canvas({
   };
 
   /**
-   * Figma-style eraser: on a vector/freehand path it removes the anchors under
+   * Eraser: on a vector/freehand path it removes the anchors under
    * the brush and splits the remainder into separate paths; on any other layer
-   * it falls back to deleting the layer (Figma does the same for non-vectors).
+   * it falls back to deleting the layer.
    */
   const eraseAt = useCallback(
     (wx: number, wy: number) => {
@@ -2438,7 +2438,7 @@ export function Canvas({
       // Vector paths get true partial erasure via erasePath; any other
       // drawable shape (rect, ellipse, line, poly, star, boolean) is first
       // converted to its outline polyline so the brush can split it too —
-      // matching Figma's vector eraser which works on any stroked shape,
+      // eraser works on any stroked shape,
       // not just pen paths. Frames/groups/text fall back to delete.
       const canPartial = (hit.kind === "vector" && hit.path.length) || ["rect", "ellipse", "line", "arrow", "poly", "star", "boolean"].includes(hit.kind);
       if (canPartial) {
@@ -2691,7 +2691,7 @@ export function Canvas({
       return;
     }
     if (snap.tool === "zoom") {
-      // Sketch's Zoom tool: click to step in, ⌥-click to step out, or drag a
+      // Zoom tool: click to step in, ⌥-click to step out, or drag a
       // region to fit exactly that area. The drag reuses the create marquee so
       // the rubber band looks like every other drag on this canvas.
       drag.current = { mode: "create", zoom: true, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
@@ -2996,7 +2996,7 @@ export function Canvas({
           const PIN_INDEX = { tl: 0, tr: 1, bl: 2, br: 3 } as const;
           for (const pin of pins) {
             if (Math.hypot(px - (sx + pin.x), py - (sy + pin.y)) <= 7) {
-              // Alt is "this corner only", which Figma refuses on an instance -
+              // Alt is "this corner only", which is refused on an instance -
               // the corners belong to the component. Explain instead of
               // starting a drag that silently rounds all four.
               if (e.altKey && insideInstance(snap.pages[snap.page].root, wp.node.id)) {
@@ -3138,7 +3138,7 @@ export function Canvas({
           if (isLine && i !== 3 && i !== 7) continue;
           if (isTextHug && i % 2 === 0) continue;
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
-            // Figma's scale tool ignores layers nested inside an instance; a
+            // The scale tool ignores layers nested inside an instance; a
             // plain resize is still allowed, because that is an override.
             if (snap.tool === "scale" && insideInstance(root, wp.node.id)) {
               toast("Not scalable · this layer is inside an instance");
@@ -3317,7 +3317,7 @@ export function Canvas({
               next = resizeCursor(i, box.rot);
               break;
             }
-            // Just outside a corner is the rotate zone, as in Figma.
+            // Just outside a corner is the rotate zone.
             if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) <= 22 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) >= 6) {
               next = ROT_CURSOR;
             }
@@ -3379,7 +3379,7 @@ export function Canvas({
       const gx = Math.round(wpt.x);
       const gy = Math.round(wpt.y);
       if (!ghost || Math.round(ghost.x) !== gx || Math.round(ghost.y) !== gy) setGhost({ x: gx, y: gy });
-      // Which point would this click join? Figma marks it with a circle, and a
+      // Which point would this click join? Mark it with a circle, and a
       // guess-the-target affordance is how a pen either feels precise or feels
       // like a trap.
       let hint: number | null = null;
@@ -3468,7 +3468,7 @@ export function Canvas({
       if (dx || dy) {
         const sel = engine.snapshot().selection;
         // Snap the moved bounding box to nearby geometry. Holding ⌘/Ctrl
-        // bypasses snapping, matching Figma.
+        // bypasses snapping.
         if (!e.metaKey && !e.ctrlKey) {
           const root2 = snap.pages[snap.page].root;
           const bb = selectionBounds(root2, sel);
@@ -3577,7 +3577,7 @@ export function Canvas({
       const shape = node ? { ...node, x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h } : null;
       const local = shape ? nodeLocalPoint(raw.x, raw.y, d.orig.x, d.orig.y, shape) : { x: raw.x - d.orig.x, y: raw.y - d.orig.y };
       const b = shape ? { x: d.orig.x + local.x, y: d.orig.y + local.y } : raw;
-      // Two escape hatches Figma documents on this drag: the Scale tool always
+      // Two escape hatches on this drag: the Scale tool always
       // holds the ratio, and Control releases a ratio that is locked on the layer.
       const forcing = snap.tool === "scale" || !!node?.aspectLocked;
       const lock = e.shiftKey ? true : forcing && !e.ctrlKey;
@@ -3753,7 +3753,7 @@ export function Canvas({
         const [pl, pr, pt, pb] = d.origPad;
         const dx = Math.round(wpt.x - d.wx);
         const dy = Math.round(wpt.y - d.wy);
-        // Figma's on-canvas modifiers, from the guide's "From the canvas" table:
+        // On-canvas modifiers:
         // ⌥ sets the padding on the opposite side too, ⌥⇧ sets it on all four,
         // and ⇧ alone drags in big-nudge steps.
         const opp = e.altKey;
@@ -3939,7 +3939,7 @@ export function Canvas({
               },
             ],
           });
-          // Auto-set flow starting point on first connection (Figma parity)
+          // Auto-set flow starting point on first connection (parity)
           const currentPage = snap.pages[snap.page];
           if (!currentPage.flowStart) {
             let startFrame: XNode | null = srcNode.kind === "frame" ? srcNode : findParent(root, srcNode.id);
@@ -4177,7 +4177,7 @@ export function Canvas({
         const id = engine.snapshot().selection[0];
         if (id) setEdit({ id, text: "" });
       }
-      // Figma drops back to the move tool after a shape is committed, so the
+      // Drops back to the move tool after a shape is committed, so the
       // next drag manipulates what you just drew instead of stamping another
       // copy. Slice is the documented exception: it stays armed for repeat cuts.
       if (snap.tool !== "slice") engine.dispatch({ type: "setTool", tool: "select" });
@@ -4252,7 +4252,7 @@ export function Canvas({
       engine.dispatch({ type: "setZoom", zoom: next });
       engine.dispatch({ type: "setPan", x: cx - wx * next, y: cy - wy * next });
     } else if (e.shiftKey) {
-      // ⇧ + wheel scrolls horizontally, as in Figma.
+      // ⇧ + wheel scrolls horizontally.
       const d = normalizeWheelDelta(e.deltaY || e.deltaX, e.deltaMode);
       engine.dispatch({ type: "pan", dx: -d, dy: 0 });
     } else {
@@ -4302,7 +4302,7 @@ export function Canvas({
       const fill = e.altKey;
       const width = edgeHit.axis === "w";
       if (fill && !findParent(root, edgeHit.id)?.layout) {
-        // Figma only offers Fill container to a child of an auto layout frame:
+        // Fill container is only offered to a child of an auto layout frame:
         // there has to be something for the layer to fill.
         toast("Fill container needs an auto layout parent");
         return;
@@ -4329,7 +4329,7 @@ export function Canvas({
       return;
     }
     // Canvas frame-name inline rename: double-clicking the label above a
-    // frame opens an input there, as in Figma/Sketch.
+    // frame opens an input there.
     let frameLabelHit: XNode | null = null;
     {
       const root = snap.pages[snap.page].root;
@@ -4453,7 +4453,7 @@ export function Canvas({
     // An imported root carries the coordinates it had in its own file, so
     // placing it at `dx + n.x` puts the artwork wherever the source happened to
     // leave it. What lands on the target is the group's bounding box instead:
-    // its top-left for a drop, its centre for a paste, which is how Figma drops
+    // its top-left for a drop, its centre for a paste, which is standard drop behavior
     // a copy in the middle of the viewport. Several roots keep the arrangement
     // they were copied in rather than stacking on one point.
     const minX = Math.min(...result.nodes.map((n) => n.x));
@@ -4577,7 +4577,7 @@ export function Canvas({
   /* ------------------------------------------------------- system clipboard */
 
   /** The world point under the middle of the viewport. A paste lands there, the
-   *  way Figma's does, so a layer copied from somewhere off-screen still
+   *  so a layer copied from somewhere off-screen still
    *  arrives where the user is looking. */
   const viewCentre = () => {
     const r = wrap.current?.getBoundingClientRect();
@@ -4741,7 +4741,7 @@ export function Canvas({
 
   /* A textarea focused in code lands with its caret at position zero, so the
    * first keystroke would be inserted before the copy. Put it after the copy,
-   * which is where clicking into the layer leaves it in Figma. */
+   * which is where clicking into the layer leaves it. */
   useEffect(() => {
     if (!edit) return;
     const el = editRef.current;
@@ -4778,7 +4778,7 @@ export function Canvas({
       transform: wp.node.rotation ? `rotate(${wp.node.rotation}deg)` : undefined,
       transformOrigin: "center center",
       // The overlay is a real textarea, so the wrap style is handed to the
-      // browser's own text-wrap - the same rule Figma applies to its editor.
+      // browser's own text-wrap - the standard editor rule.
       ...((wp.node.textWrap === "balance" || wp.node.textWrap === "pretty") ? { textWrap: wp.node.textWrap } : {}),
       ...(gutter ? { paddingLeft: Math.round(gutter * snap.zoom) } : {}),
     } as CSSProperties;
@@ -4917,7 +4917,7 @@ export function Canvas({
         </div>
       )}
       {padInput && (
-        /* Figma's on-canvas padding entry: one field, floated over the handle it
+        /* On-canvas padding entry: one field, floated over the handle it
            came from. The label says whether it is setting one side, the
            opposite side, or all four. */
         <div className="pad-input" style={{ left: padInput.left, top: padInput.top }}>
@@ -5201,7 +5201,7 @@ function selectionBounds(
 }
 
 /**
- * Figma shows a resize cursor whose direction follows the handle *and* the
+ * Resize cursor direction follows the handle *and* the
  * node's rotation, so a 90deg-rotated box still reads correctly. Handle order is
  * TL,T,TR,R,BR,B,BL,L (see `handles`); each sits 45deg apart, so rotating by the
  * node angle and snapping back to the nearest 45deg step picks the right glyph.
@@ -5550,7 +5550,7 @@ function paintText(
     const gutter = marker ? widthOfLine(`${marker} `) : 0;
     const avail = wrap ? sw - gutter - indent : 1e6;
     let wrapped = wrapLines(ctx, para || " ", avail > 0 ? avail : 1e6, ls);
-    // Figma's wrap style only has something to say when the layer wraps: an
+    // Wrap style only has something to say when the layer wraps: an
     // auto-width layer breaks a line exactly where Return was pressed.
     if (wrap && (n.textWrap === "balance" || n.textWrap === "pretty") && sw > 0)
       wrapped = balanceLines(wrapped, avail, widthOfLine, n.textWrap);
@@ -5704,7 +5704,7 @@ function findClickedNoodle(
     if (hit) return;
     const dest = worldPos(root, destId);
     if (!dest) return;
-    const noodle = computeFigmaNoodle(nx, ny, n.w, n.h, dest.x, dest.y, dest.node.w, dest.node.h);
+    const noodle = computeConnectorNoodle(nx, ny, n.w, n.h, dest.x, dest.y, dest.node.w, dest.node.h);
     for (let step = 0; step <= 16; step++) {
       const t = step / 16;
       const u = 1 - t;

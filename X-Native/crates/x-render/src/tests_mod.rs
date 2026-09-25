@@ -649,7 +649,7 @@ mod variable_bindings {
         assert_eq!(n.bound_number("fontsize", &vars, 16.0), 16.0);
     }
 
-    /// The three typography tokens Figma lets you bind — font size, line
+    /// The three typography tokens  lets you bind — font size, line
     /// height, letter spacing — have to reach the render tree, not just the
     /// `bound_number` helper. Before this, "fontsize" was documented on
     /// `Node::bind` and asserted in the test above while every sink ignored
@@ -1022,7 +1022,7 @@ mod outline_view_tests {
         assert_eq!(stripped.children[0].transform.x, 10.0);
         assert_eq!(stripped.children[0].children[0].id, "inner");
         // Image and Text paint themselves and would swallow the stroke:
-        // they become the plain box they own (the named delta: Figma
+        // they become the plain box they own (the named delta: 
         // outlines the glyphs, we outline the text layer's box)
         assert!(
             matches!(

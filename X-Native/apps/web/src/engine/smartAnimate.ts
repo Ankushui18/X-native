@@ -14,7 +14,7 @@ export interface InterpolatedNode {
   fill: string;
 }
 
-/** Easing curves matching Figma and CSS specifications. */
+/** Easing curves matching standard animation specifications. */
 export function solveEasing(easing: ProtoEasing = "easeOut", t: number): number {
   const clampT = Math.max(0, Math.min(1, t));
   switch (easing) {
@@ -87,7 +87,7 @@ function collectNodes(root: XNode): { byId: Map<string, NodeEntry>; byPath: Map<
 
 /**
  * Smart-animate the destination frame against the frame it replaced at progress `t`.
- * Follows Figma's rule: layers are matched by ID or ancestor name path.
+ * Layers are matched by ID or ancestor name path.
  * Matched layers morph (position, size, opacity, rotation, corner radii, and fill).
  * Unmatched layers in destination dissolve in (opacity 0 -> target).
  */

@@ -620,7 +620,7 @@ export function DevicePreview({
   );
 }
 
-/** Device picker groups, in the order Figma lists them. */
+/** Device picker groups. */
 export const DEVICE_GROUPS: { group: DeviceSpec["group"]; items: DeviceSpec[] }[] = [
   { group: "Phone", items: DEVICES.filter((d) => d.group === "Phone" && d.id !== "none") },
   { group: "Tablet", items: DEVICES.filter((d) => d.group === "Tablet") },

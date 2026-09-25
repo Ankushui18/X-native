@@ -5,7 +5,7 @@ use x_core::*;
 // -------------------------------------------------------------- constraints
 
 /// The pin table itself: where a child goes and what size it takes when its
-/// container resizes. ONE function, because Figma has one table — the two
+/// container resizes. ONE function, because  has one table — the two
 /// appliers below only differ in how they write the answer down.
 pub fn pin_deltas(c: &Node, dw: f64, dh: f64, sx: f64, sy: f64) -> (f64, f64, f64, f64) {
     let (mut dx, mut dy) = (0.0, 0.0);
@@ -33,7 +33,7 @@ pub fn pin_deltas(c: &Node, dw: f64, dh: f64, sx: f64, sy: f64) -> (f64, f64, f6
     (dx, dy, w, h)
 }
 
-/// Do this node's children answer to constraints? Figma's table is about
+/// Do this node's children answer to constraints? the table is about
 /// layers inside FRAMES ("how layers should behave when you resize the frame
 /// they are in"), so a group — which resizes with its own contents — and a
 /// plain shape have none.
@@ -44,7 +44,7 @@ pub fn constrains_children(n: &Node) -> bool {
 /// Phase 2.12: apply pin constraints to `frame`'s children after the frame
 /// resizes from (old_w, old_h) to its current (w, h). A child that changed
 /// size hands the change on to ITS pinned children, which is how a nested
-/// frame behaves on Figma's canvas.
+/// frame behaves on the canvas.
 pub fn apply_constraints(frame: &mut Node, old_w: f64, old_h: f64) {
     let (dw, dh) = (frame.w - old_w, frame.h - old_h);
     let (sx, sy) = (
@@ -119,7 +119,7 @@ mod tests {
         n
     }
 
-    /// One frame, one child per row of Figma's table.
+    /// One frame, one child per row of the table.
     fn pinned_frame() -> Node {
         let mut f = Node::frame("f", 200.0, 200.0);
         f.children = vec![

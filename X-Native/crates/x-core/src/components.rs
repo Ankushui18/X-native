@@ -90,7 +90,7 @@ fn override_kind_tag(v: &OverrideValue) -> &'static str {
 }
 
 /// Target node id stored in an override map key. Composite keys are
-/// `{id}\x1f{kind}` so one layer can carry fill AND text at once (Figma).
+/// `{id}\x1f{kind}` so one layer can carry fill AND text at once ().
 fn override_target_id(key: &str) -> &str {
     key.split('\x1f').next().unwrap_or(key)
 }
@@ -106,7 +106,7 @@ pub fn typed_overrides(node: &Node) -> HashMap<String, OverrideValue> {
     out
 }
 
-/// Every typed override on `target`, in map order. Figma lets a layer hold
+/// Every typed override on `target`, in map order.  lets a layer hold
 /// a text change and a fill change at the same time.
 pub fn overrides_for(node: &Node, target: &str) -> Vec<OverrideValue> {
     node.overrides
@@ -120,7 +120,7 @@ pub fn set_override(node: &mut Node, target: &str, value: OverrideValue) {
     let tag = override_kind_tag(&value);
     // Preserve the legacy `target` key for the first property on a layer;
     // additional properties use a namespaced key so old `.x` readers and
-    // Figma's multi-property instances can coexist.
+    // the multi-property instances can coexist.
     let key = node
         .overrides
         .iter()
@@ -151,14 +151,14 @@ pub fn set_exclusive_override(node: &mut Node, target: &str, value: OverrideValu
     node.overrides.insert(target.to_string(), value.encode());
 }
 
-/// Reset every override on an instance (Figma "reset overrides"). Slot
+/// Reset every override on an instance ( "reset overrides"). Slot
 /// content lives in the instance's children, so it is kept.
 pub fn reset_overrides(instance: &mut Node) {
     instance.overrides.clear();
 }
 
-/// One entry in an instance's change list (Figma's More-actions menu, help
-/// 360039150733 "Reset changes": *"Figma only lists properties that have
+/// One entry in an instance's change list (the More-actions menu, help
+/// 360039150733 "Reset changes": *" only lists properties that have
 /// changes applied"*). `node` is the target layer's id, `property` the
 /// override kind's own word — the three the menu prints.
 #[derive(Debug, Clone, PartialEq)]
@@ -168,7 +168,7 @@ pub struct InstanceChange {
 }
 
 impl InstanceChange {
-    /// The label Figma shows above the Reset row: the layer the change sits
+    /// The label  shows above the Reset row: the layer the change sits
     /// on, then the property that changed. `root` is the tree to name it
     /// from — an override targets a layer of the MASTER, so the lookup cannot
     /// start at the instance.
@@ -180,7 +180,7 @@ impl InstanceChange {
     }
 }
 
-/// How far down Figma's list a change sits: the appearance rows first, then
+/// How far down the list a change sits: the appearance rows first, then
 /// the ones that name another layer. Overrides live in a map, so the menu has
 /// to impose this order itself to read the same on every render.
 fn change_rank(property: &str) -> u8 {
@@ -196,7 +196,7 @@ fn change_rank(property: &str) -> u8 {
 }
 
 /// Every override on `instance` — the change list the Reset menu is built from
-/// — grouped in Figma's property order and stable within a group. Slot content
+/// — grouped in the property order and stable within a group. Slot content
 /// is not an override; it lives in the instance's children, so it is never
 /// listed (and never reset).
 pub fn instance_changes(instance: &Node) -> Vec<InstanceChange> {
@@ -224,7 +224,7 @@ pub fn instance_changes(instance: &Node) -> Vec<InstanceChange> {
     out
 }
 
-/// Drop ONE override — Figma's *"Reset > Reset [property]"*. Returns whether
+/// Drop ONE override — the *"Reset > Reset [property]"*. Returns whether
 /// that layer carried an override at all.
 pub fn reset_override(instance: &mut Node, target: &str) -> bool {
     let before = instance.overrides.len();
@@ -234,7 +234,7 @@ pub fn reset_override(instance: &mut Node, target: &str) -> bool {
     instance.overrides.len() != before
 }
 
-/// Reset every override on ONE LAYER of the instance — Figma's *"select a
+/// Reset every override on ONE LAYER of the instance — the *"select a
 /// specific layer to view changes for that layer only"* then *"Reset all
 /// changes"*. Both the layer's own entry and any override naming one of its
 /// descendants go, so resetting a group resets what it contains.
@@ -256,10 +256,10 @@ pub fn reset_layer_overrides(instance: &mut Node, layer: &str) -> usize {
     before - instance.overrides.len()
 }
 
-/// Figma's **push changes to main component** (help 360039150733): the
+/// the **push changes to main component** (help 360039150733): the
 /// instance's overrides are written into the master, so every other instance
 /// of it follows. Only layer *appearance* is pushed — fill, stroke, text,
-/// visibility, opacity — because that is the set Figma lets an instance
+/// visibility, opacity — because that is the set  lets an instance
 /// override in the first place; a SWAP (which names another component) is not.
 ///
 /// Returns the number of layers the master actually changed.
@@ -493,7 +493,7 @@ pub enum ComponentProp {
         target_property: String, // "fill" or "stroke"
         default: Color,
     },
-    /// Slot property (Figma slots, 2024): an insertion point inside the
+    /// Slot property ( slots, 2024): an insertion point inside the
     /// master. `target` is the anchor node id — when an instance carries
     /// content for this slot, the anchor subtree is replaced by it; with
     /// no content, `default` (a component name) fills the anchor instead.
@@ -711,7 +711,7 @@ pub fn variant_set(component_name: &str) -> Option<(&str, &str)> {
 }
 
 /// The variant set a frame **is**: every child is a component master named
-/// `Set/Variant` and they all share one set prefix. Figma's set is not its own
+/// `Set/Variant` and they all share one set prefix. the set is not its own
 /// kind of node — it is a frame holding variants — so the rule that "a set can
 /// contain only components" falls straight out of this predicate.
 pub fn variant_set_members(frame: &Node) -> Option<(&str, Vec<(&str, &str)>)> {
@@ -1207,7 +1207,7 @@ mod tests {
         let (master, inst) = master_and_instance();
         let changes = instance_changes(&inst);
         assert_eq!(changes.len(), 3, "one entry per override");
-        // Figma's property order, not the map's
+        // the property order, not the map's
         assert_eq!(
             (changes[0].node.as_str(), changes[0].property),
             ("ico", "Fill")
@@ -1220,13 +1220,13 @@ mod tests {
             (changes[2].node.as_str(), changes[2].property),
             ("badge", "Swap")
         );
-        // the label names the LAYER the change sits on (Figma's menu is a list
+        // the label names the LAYER the change sits on (the menu is a list
         // of layers-and-properties, not of internal ids)
         assert_eq!(changes[0].label(&master), "ico · Fill");
         assert_eq!(changes[1].label(&master), "lbl · Text");
         assert_eq!(changes[2].label(&master), "badge · Swap");
 
-        // Figma's "Reset > Reset [property]": one override goes, the rest stay
+        // the "Reset > Reset [property]": one override goes, the rest stay
         let mut after = inst.clone();
         assert!(reset_override(&mut after, "lbl"));
         assert_eq!(after.overrides.len(), 2);

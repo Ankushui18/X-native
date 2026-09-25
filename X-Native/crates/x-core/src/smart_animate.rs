@@ -5,7 +5,7 @@
 //! transition duration. Nodes are matched by ID; nodes present in one frame
 //! but not the other fade in/out.
 //!
-//! This is the core of Figma's "Smart animate" transition preset.
+//! This is the core of the "Smart animate" transition preset.
 
 use crate::{Color, Node, Paint};
 use std::collections::HashMap;
@@ -100,7 +100,7 @@ pub fn interpolate_frames(
 }
 
 /// Smart-animate the destination screen against the screen it replaced at
-/// progress `t`, using Figma's own matching rule — name and hierarchy, the
+/// progress `t`, using the own matching rule — name and hierarchy, the
 /// rule behind **Animate matching layers** (help 360039818874) and behind the
 /// Smart animate preset. The result is keyed by the DESTINATION layer's id, so
 /// a renderer painting the new screen can pull each layer's in-between out of
@@ -111,7 +111,7 @@ pub fn interpolate_frames(
 ///   morphs nodes that share an id;
 /// * a layer that matched nothing *dissolves in*: it starts transparent and
 ///   reaches its own opacity at `t = 1`;
-/// * a fixed layer that matched is not in the map at all: Figma gives it no
+/// * a fixed layer that matched is not in the map at all:  gives it no
 ///   transition, so the renderer paints it where it is for the whole tick.
 ///
 /// [`matching_layers`]: crate::prototype::matching_layers
@@ -315,7 +315,7 @@ mod tests {
 
     /// The tick's half of Smart animate: layers matched by name and
     /// hierarchy morph, new ones dissolve in, and a matched fixed layer is
-    /// left alone — Figma's cases (help 360039818874).
+    /// left alone — the cases (help 360039818874).
     #[test]
     fn matching_layers_interpolate_by_name_not_id() {
         fn layer(id: &str, name: &str, x: f64, y: f64, w: f64, h: f64) -> Node {

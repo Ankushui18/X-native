@@ -7,12 +7,12 @@ use std::collections::HashMap;
 // -------------------------------------------------------------------- paint
 
 /// Phase 4: gradients join solid and variable-bound paints.
-/// Package 7: image patterns join them too (Sketch `fillType` 2). The
+/// Package 7: image patterns join them too ( `fillType` 2). The
 /// asset id is the content-addressed `asset://…` name shared with Image
-/// nodes; `fit` reuses the image-placement vocabulary (Sketch's
+/// nodes; `fit` reuses the image-placement vocabulary (the
 /// patternFillType 0 Tile → Tile, 1 Fill → Fill, 2 Stretch → Fill
 /// (approximated — proportional cover, no distortion)).
-/// Interpolation space for multi-stop gradients (Sketch 2026.2
+/// Interpolation space for multi-stop gradients ( 2026.2
 /// "perceptual gradients"). `Srgb` keeps legacy rendering byte-stable;
 /// `Oklab` interpolates perceptually — renderers densify the stop list
 /// in OKLab so the output is correct even on sRGB-lerping GPUs.
@@ -581,7 +581,7 @@ impl Stroke {
 }
 
 /// Phase 4: blend modes. Applied as a Vello mix layer around the node.
-/// Phase 6: Added PlusDarker, PlusLighter, and PassThrough for Figma parity.
+/// Phase 6: Added PlusDarker, PlusLighter, and PassThrough for  parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlendKind {
     #[default]
@@ -610,7 +610,7 @@ pub enum BlendKind {
     PassThrough,
 }
 impl BlendKind {
-    /// Figma's own words for the mode (`Apply blend modes…`). ONE owner: the
+    /// the own words for the mode (`Apply blend modes…`). ONE owner: the
     /// panel pill, the menu and any export read this, so a name can never
     /// drift between the control and the list it opens.
     pub fn label(self) -> &'static str {
@@ -637,7 +637,7 @@ impl BlendKind {
         }
     }
 
-    /// The dropdown for a **layer**, in Figma's order: *"Pass through is the
+    /// The dropdown for a **layer**, in the order: *"Pass through is the
     /// default mode for layers"*, and it leads the list.
     pub fn layer_modes() -> Vec<BlendKind> {
         let mut v = vec![BlendKind::PassThrough];
@@ -648,7 +648,7 @@ impl BlendKind {
     /// The dropdown for a fill, a stroke or an effect. **No Pass through** —
     /// *"Pass through cannot be applied to fills or effects."* Same 18 modes
     /// and the same order otherwise, so the two menus differ by exactly the
-    /// one row Figma's documentation says they differ by.
+    /// one row the documentation says they differ by.
     pub fn paint_modes() -> Vec<BlendKind> {
         vec![
             BlendKind::Normal,
@@ -672,7 +672,7 @@ impl BlendKind {
         ]
     }
 
-    /// Figma's menu order for a list, or `None` when the mode is not in it
+    /// the menu order for a list, or `None` when the mode is not in it
     /// (a `Pass through` on a paint cannot be ticked because it cannot be set).
     pub fn row_in(modes: &[BlendKind], kind: BlendKind) -> Option<usize> {
         modes.iter().position(|m| *m == kind)
@@ -736,9 +736,9 @@ pub enum Effect {
     },
 }
 
-/// The effect types this engine carries, in Figma's dropdown order (`Apply
+/// The effect types this engine carries, in the dropdown order (`Apply
 /// effects to layers`: *"Drop shadow"*, *"Inner shadow"*, *"Layer blur"*,
-/// *"Background blur"*, *"Noise"*). `Glass` and `Texture` are Figma's two
+/// *"Background blur"*, *"Noise"*). `Glass` and `Texture` are the two
 /// newer types and are not in the model — see the master list rows 8.23/8.24.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectKind {
@@ -750,7 +750,7 @@ pub enum EffectKind {
 }
 
 impl EffectKind {
-    /// The add menu and the row's type dropdown, in Figma's order.
+    /// The add menu and the row's type dropdown, in the order.
     pub fn all() -> [EffectKind; 5] {
         [
             EffectKind::DropShadow,
@@ -760,7 +760,7 @@ impl EffectKind {
             EffectKind::Noise,
         ]
     }
-    /// Figma's words for the type, the ONE owner of them.
+    /// the words for the type, the ONE owner of them.
     pub fn label(self) -> &'static str {
         match self {
             EffectKind::DropShadow => "Drop shadow",
@@ -781,7 +781,7 @@ impl EffectKind {
     }
 }
 
-/// One numeric row of an effect's settings block, in Figma's words and order:
+/// One numeric row of an effect's settings block, in the words and order:
 /// shadows show **X**, **Y**, **Blur**; blurs show **Radius**; noise shows
 /// **Density**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -816,8 +816,8 @@ impl Effect {
         }
     }
 
-    /// A new effect of `kind` with Figma's own starting values: a shadow
-    /// starts at `X 0 / Y 4 / Blur 4` in 25% black (Figma's drop shadow
+    /// A new effect of `kind` with the own starting values: a shadow
+    /// starts at `X 0 / Y 4 / Blur 4` in 25% black (the drop shadow
     /// default), a blur at a small radius, noise at a light density.
     pub fn default_of(kind: EffectKind) -> Effect {
         match kind {
@@ -842,7 +842,7 @@ impl Effect {
         }
     }
 
-    /// The numeric settings this effect shows, in the order Figma shows them.
+    /// The numeric settings this effect shows, in the order  shows them.
     /// The panel builds its block from this, so a type can never grow a field
     /// the model has no place for (or lose one it has).
     pub fn fields(&self) -> Vec<EffectField> {
@@ -889,7 +889,7 @@ impl Effect {
         }
     }
 
-    /// The shadow's **Fill** (Figma calls a shadow's colour a paint). `None`
+    /// The shadow's **Fill** ( calls a shadow's colour a paint). `None`
     /// for the effect types that have no colour.
     pub fn color(&self) -> Option<Color> {
         match self {
@@ -928,7 +928,7 @@ impl EffectLayer {
 mod tests {
     use super::*;
 
-    /// Figma (help 360040667874) writes the mode list out in order, and says
+    ///  (help 360040667874) writes the mode list out in order, and says
     /// the one thing that separates the two dropdowns: *"Pass through cannot be
     /// applied to fills or effects"* while it IS the default for layers.
     #[test]
@@ -960,7 +960,7 @@ mod tests {
             "Pass through cannot be applied to fills or effects"
         );
         let names: Vec<&str> = paints[1..].iter().map(|m| m.label()).collect();
-        assert_eq!(names, words, "Figma's order, after Normal");
+        assert_eq!(names, words, "Standard order, after Normal");
 
         let layers = BlendKind::layer_modes();
         assert_eq!(layers.len(), 19);
@@ -975,7 +975,7 @@ mod tests {
         assert_eq!(BlendKind::row_in(&paints, BlendKind::PassThrough), None);
     }
 
-    /// The five types this engine carries, in Figma's dropdown order, each with
+    /// The five types this engine carries, in the dropdown order, each with
     /// its own starting values and its own settings rows.
     #[test]
     fn the_effect_kinds_are_figmas_five_with_their_own_fields() {

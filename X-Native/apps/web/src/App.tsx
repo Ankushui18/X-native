@@ -206,7 +206,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, [engine, fileId]);
 
-  // Figma's View > Property labels. It is a stylesheet concern rather than a
+  // View > Property labels. It is a stylesheet concern rather than a
   // prop: the right sidebar is built from a hundred small field components and
   // threading a boolean through all of them would touch every one of them for
   // what is a single text-versus-icon decision.
@@ -243,7 +243,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, []);
 
-  // Opening a file shows the whole page - Figma's default for a file you have
+  // Opening a file shows the whole page - default view for a file you have
   // not seen before - rather than whatever viewport the last session left in
   // the document. A link that names a layer fits that layer instead, so this
   // stands down when one is present.
@@ -300,7 +300,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         return false;
       }
       if (at !== s.page) engine.dispatch({ type: "setPage", index: at });
-      // Sketch's handoff is a view anyone can inspect without touching the file;
+      // Handoff is a view anyone can inspect without touching the file;
       // the closest thing we have is opening such a link already in Dev Mode.
       engine.dispatch({ type: "setRightTab", tab: "inspect" });
       engine.dispatch({ type: "select", ids: [id] });
@@ -463,7 +463,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
       />
       <div className="canvas-col">
         {minUi && !hideUi && !snap.presentFrame && (
-          // Figma keeps the file name and a way out of the minimized state on
+          // Keeps the file name and a way out of the minimized state on
           // screen; ours lives at the top of the left panel, which is hidden
           // here, so the same two controls float in its place.
           <div className="min-chip">

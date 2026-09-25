@@ -3,7 +3,7 @@
  * the tests all agree on one thing: scaling is an affine map of the selection's
  * box about a chosen anchor point, and every member is pushed through it.
  *
- * Figma's scale tool differs from a plain resize in exactly two ways, and both
+ * The scale tool differs from a plain resize in exactly two ways, and both
  * are visible to a developer: the ratio is always preserved, and *content*
  * scales with the box - stroke weights, corner radii, font sizes, effects,
  * auto-layout gaps - instead of re-laying-out against the parent's constraints.
@@ -18,7 +18,7 @@ export interface Box {
   h: number;
 }
 
-/** The nine anchor points in Figma's anchor box, in reading order. */
+/** The nine anchor points in the anchor box, in reading order. */
 export type ScaleAnchor = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
 
 export const SCALE_ANCHORS: { id: ScaleAnchor; ax: number; ay: number; label: string }[] = [
@@ -33,7 +33,7 @@ export const SCALE_ANCHORS: { id: ScaleAnchor; ax: number; ay: number; label: st
   { id: "br", ax: 1, ay: 1, label: "Bottom right" },
 ];
 
-/** The multiplier choices Figma's dropdown offers, plus 1x to undo a step. */
+/** The multiplier choices the dropdown offers, plus 1x to undo a step. */
 export const SCALE_FACTORS = [0.5, 0.75, 1, 1.5, 2, 3];
 
 /** How the panel writes a multiplier: `0.75x`, `150%` would read as a size. */
@@ -83,7 +83,7 @@ export function sizeKeepingRatio(box: Box, next: { w?: number; h?: number }): Bo
 /**
  * Push a set of members through the scale of their shared box. Used for
  * multi-selections, where scaling each member about its own anchor would move
- * them apart: Figma keeps the relative positions and the gaps, so the whole
+ * them apart: keeps the relative positions and the gaps, so the whole
  * group maps as one.
  */
 export function scaleMembers(box: Box, members: Box[], f: number, anchor: ScaleAnchor): Box[] {

@@ -60,7 +60,7 @@ export class Zip {
     let dirStart = this.view.getUint32(eocd + 16, true);
 
     // ZIP64: the 32-bit fields saturate and the real values live in a separate
-    // record. Sketch files with many pages can cross that boundary.
+    // record. Archives with many pages can cross that boundary.
     if (dirStart === 0xffffffff || count === 0xffff) {
       for (let i = eocd - 20; i >= 0; i--) {
         if (this.view.getUint32(i, true) === EOCD64_LOCATOR) {

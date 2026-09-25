@@ -218,7 +218,7 @@ function LayerRow({
   })();
   useEffect(() => {
     if (!collapseTick) return;
-    // Figma keeps the selected layer visible when it folds everything, so a row
+    // Keeps the selected layer visible when it folds everything, so a row
     // that contains it stays open.
     if (!holds) setOpen(false);
   }, [collapseTick]);
@@ -359,7 +359,7 @@ function LayerRow({
         {/* "After you use this action, any nested auto layout frames that were
             created are indicated with a blue dot in the layers section in the
             left panel." The dot marks any auto layout frame, which is the same
-            thing Figma shows and is how a suggested frame is spotted. */}
+            thing shown and is how a suggested frame is spotted. */}
         {n.layout ? <span className="al-dot" title="Auto layout" /> : null}
         {renaming ? (
           <input
@@ -1064,14 +1064,14 @@ export function bindHotkeys(
       toast("Instance detached");
       return;
     }
-    // Sketch's Detach Symbol: ⇧⌘Y
+    // Detach Symbol: ⇧⌘Y
     if (meta && e.shiftKey && e.key.toLowerCase() === "y") {
       e.preventDefault();
       engine.dispatch({ type: "detachInstance" });
       toast("Instance detached");
       return;
     }
-    // Figma's Copy/Paste as ▸ Copy as code chord, so the clipboard path works
+    // Copy/Paste as ▸ Copy as code chord, so the clipboard path works
     // without hunting through a menu.
     if (meta && e.altKey && e.shiftKey && e.key.toLowerCase() === "c") {
       e.preventDefault();
@@ -1115,13 +1115,13 @@ export function bindHotkeys(
       extra.onMinimize();
       return;
     }
-    // Figma ⌘\ / Sketch ⌘. — toggle clean canvas / interface visibility
+    // ⌘\ / ⌘. — toggle clean canvas / interface visibility
     if (meta && (backslash || period)) {
       e.preventDefault();
       extra.onHide();
       return;
     }
-    // ⇧T — Figma's Annotate: Dev Mode on, note field focused, ready to type.
+    // ⇧T — Annotate: Dev Mode on, note field focused, ready to type.
     if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "t") {
       e.preventDefault();
       if (engine.snapshot().rightTab !== "inspect") {
@@ -1130,7 +1130,7 @@ export function bindHotkeys(
       window.dispatchEvent(new CustomEvent("x-native-annotate"));
       return;
     }
-    // ⇧T — Figma's Annotate: Dev Mode on, note field focused, ready to type.
+    // ⇧T — Annotate: Dev Mode on, note field focused, ready to type.
     if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "t") {
       e.preventDefault();
       if (engine.snapshot().rightTab !== "inspect") {
@@ -1157,7 +1157,7 @@ export function bindHotkeys(
       engine.dispatch({ type: "setRightTab", tab: cur === "prototype" ? "design" : "prototype" });
       return;
     }
-    // Figma ⌥1..3 / Sketch ⌃1..3 switch navigation panes
+    // ⌥1..3 / ⌃1..3 switch navigation panes
     if ((e.altKey || (e.ctrlKey && !meta && !e.shiftKey)) && extra.onNav) {
       if (e.key === "1") {
         extra.onNav("file");
@@ -1191,7 +1191,7 @@ export function bindHotkeys(
         return;
       }
     }
-    // Distribute spacing: ⌃⌥H / ⌃⌥V, as in Figma. The align row's tooltips
+    // Distribute spacing: ⌃⌥H / ⌃⌥V. The align row's tooltips
     // advertise these, so they must actually be bound.
     // NB: `meta` above is metaKey||ctrlKey, so it is always true when Ctrl is
     // held — test e.ctrlKey directly and exclude Cmd instead.
@@ -1238,13 +1238,13 @@ export function bindHotkeys(
       });
       return;
     }
-    // Figma & Sketch: ⇧X swaps fill and stroke
+    // ⇧X swaps fill and stroke
     if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "x") {
       e.preventDefault();
       engine.dispatch({ type: "swapFillStroke" });
       return;
     }
-    // Sketch: ⇧B toggles stroke / border
+    // ⇧B toggles stroke / border
     if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "b") {
       e.preventDefault();
       engine.dispatch({ type: "toggleStroke" });
@@ -1275,7 +1275,7 @@ export function bindHotkeys(
       // The keystroke is handed to the browser on purpose. `preventDefault()`
       // here suppresses the `paste` event, and that event is the only
       // permission-free look at the system clipboard — which is where a copy
-      // from Figma, from another tab, or from a screenshot is waiting. Canvas
+      // from the clipboard, from another tab, or from a screenshot is waiting. Canvas
       // owns the event and places what it finds; the in-app clipboard is the
       // fallback when the system one holds nothing this app can read.
       notePasteModifiers(e.shiftKey);
@@ -1291,7 +1291,7 @@ export function bindHotkeys(
     // Auto layout, exactly as the guide's shortcut table has it: ⇧A adds one
     // with the defaults, ⌥⇧A removes it, ⌃⇧A suggests the values from how the
     // objects are already arranged. This is tested before the ⌘A family below,
-    // which owns ⌘⇧A: Figma's chord is ⌃ (Control), and Select inverse in this
+    // which owns ⌘⇧A: the chord is ⌃ (Control), and Select inverse in this
     // app has always been ⇧⌘A, so the two do not have to collide.
     if (!e.metaKey && e.shiftKey && e.key.toLowerCase() === "a") {
       e.preventDefault();
@@ -1302,7 +1302,7 @@ export function bindHotkeys(
       else addAutoLayout(engine, snap);
       return;
     }
-    // Figma's two selection helpers share the ⌘A chord with Select all: with ⌥ it
+    // Two selection helpers share the ⌘A chord with Select all: with ⌥ it
     // gathers the same object in every other frame, with ⇧ it takes everything
     // at this level that is not already picked.
     if (meta && e.altKey && e.key.toLowerCase() === "a") {
@@ -1335,7 +1335,7 @@ export function bindHotkeys(
       engine.dispatch({ type: "arrange", dir: e.shiftKey ? "back" : "backward" });
       return;
     }
-    // Sketch: ⌘L adds stack layout, ⌥⌘L removes stack layout
+    // ⌘L adds stack layout, ⌥⌘L removes stack layout
     if (meta && !e.shiftKey && e.key.toLowerCase() === "l") {
       e.preventDefault();
       const snap = engine.snapshot();
@@ -1369,7 +1369,7 @@ export function bindHotkeys(
       const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
       // Deleting a layer that is scrolled out of view gives no visual feedback;
-      // confirm it and advertise the undo, as Figma does.
+      // confirm it and advertise the undo.
       if (n) toast(`Deleted ${plural(n, "layer")} · ⌘Z to undo`);
       return;
     }
@@ -1378,7 +1378,7 @@ export function bindHotkeys(
       // selection behind it must survive the keypress.
       if (popoverArmed()) return;
       // An in-progress pen path owns it next: Escape finishes the shape and
-      // leaves it open, in Figma's words, instead of deselecting out from under
+      // leaves it open, instead of deselecting out from under
       // the drawing. The tool stays the pen, so the next path starts at once.
       if (finishPenDraft()) {
         e.preventDefault();
@@ -1521,22 +1521,22 @@ export function bindHotkeys(
       zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
       return;
     }
-    // ⇧F — Figma's "View > Prototype flows": hide the noodles and hotspot
+    // ⇧F — "View > Prototype flows": hide the noodles and hotspot
     // handles without leaving Design mode.
     if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "f") {
       e.preventDefault();
       engine.dispatch({ type: "toggleFlows" });
       return;
     }
-    // ⇧G — Figma's View > Layout guides: every frame's grid at once, so a
+    // ⇧G — View > Layout guides: every frame's grid at once, so a
     // reviewer can look at spacing without losing the grids themselves.
     if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "g") {
       e.preventDefault();
       engine.dispatch({ type: "toggleLayoutGuides" });
       return;
     }
-    // ⌃P / ⌃⌥P cycle Figma's Pixel preview: the canvas as the raster it would
-    // export as. (Figma also offers 2× at ⌃⌥P.)
+    // ⌃P / ⌃⌥P cycle Pixel preview: the canvas as the raster it would
+    // export as. (Also offers 2× at ⌃⌥P.)
     if (e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key.toLowerCase() === "p" || e.code === "KeyP")) {
       e.preventDefault();
       const cur = engine.snapshot().pixelPreview;
@@ -1546,7 +1546,7 @@ export function bindHotkeys(
       });
       return;
     }
-    // ⌘' shows the pixel grid, ⌘⇧' toggles snapping to it — Figma's pair.
+    // ⌘' shows the pixel grid, ⌘⇧' toggles snapping to it — standard pair.
     // Matched on the physical key as well as the character, because with Shift
     // held the quote key *is* a different character: on a US layout ⇧' arrives
     // as `"`, on a German one ⇧2 as `@`, and matching only on those meant the
@@ -1561,7 +1561,7 @@ export function bindHotkeys(
       });
       return;
     }
-    // Sketch's zoom keyboard set. Figma's ⇧1/2 stay bound above, so both
+    // Standard zoom keyboard set: ⇧1/2 stay bound above, so both
     // vocabularies work.
     if (meta && !e.shiftKey && e.code === "Digit1") {
       e.preventDefault();
@@ -1598,7 +1598,7 @@ export function bindHotkeys(
       engine.dispatch({ type: "flip", axis: "v" });
       return;
     }
-    // ⇧⌘E — the same bulk-export command in Figma (File ▸ Export…) and Sketch.
+    // ⇧⌘E — bulk-export command (File ▸ Export…).
     if (meta && e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
       window.dispatchEvent(new CustomEvent("x-native-export-dialog"));
@@ -1647,7 +1647,7 @@ export function bindHotkeys(
     if (!meta && map[e.key.toLowerCase()]) {
       engine.dispatch({ type: "setTool", tool: map[e.key.toLowerCase()] });
     }
-    // Figma's Preferences > Nudge amount: 1 and 10 out of the box, both
+    // Preferences > Nudge amount: 1 and 10 out of the box, both
     // settable, ⇧ for the big one. Nudges are exact - they apply the number you
     // asked for whether or not snap-to-pixel-grid is on - because an explicit
     // distance is a request, while a drag is a gesture the grid may round.
@@ -2381,8 +2381,8 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
 ];
 
 /**
- * Figma's Preferences → "Nudge amount…" dialog: two fields, and it applies as
- * you leave them - there is no OK button in Figma's, and there should not be
+ * Preferences → "Nudge amount…" dialog: two fields, and it applies as
+ * you leave them - there is no OK button, and there should not be
  * one here. Typing a decimal point, or clearing the field to retype, must not
  * write a value, so a field only commits when it parses.
  */

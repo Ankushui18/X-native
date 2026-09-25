@@ -51,7 +51,7 @@ export function nextColorModel(m: ColorModel): ColorModel {
 }
 
 /**
- * Figma's blend modes, in the order its menu lists them. "Pass through" is
+ * Supported blend modes in menu order. "Pass through" is
  * missing on purpose: the article says it cannot be applied to a fill or an
  * effect, so callers that offer it (frames and groups only) prepend it.
  */
@@ -78,7 +78,7 @@ export const BLENDS = [
 
 /**
  * The composite operation a stored blend name maps to. Names come from the
- * menus, which are Figma's labels ("Soft light"), while the layers/fills store
+ * menus with human labels ("Soft light"), while the layers/fills store
  * lowercase values, so both spellings have to land on the same op. Plus
  * darker/lighter are canvas's own `darker`/`lighter`.
  */
@@ -95,7 +95,7 @@ export function canvasBlend(m?: string): GlobalCompositeOperation {
     "plus-lighter": "lighter",
     // Canvas has no "plus darker" (the CSS blend of that name is not one of
     // its operations, and assigning an unknown operation is silently ignored,
-    // which would render as Normal). Figma describes the mode as "like Darken,
+    // which would render as Normal). The mode acts like Darken,
     // but with a stronger impact on mid-tones", which is the shape of color
     // burn - the two also agree that blending with white does nothing.
     "plus-darker": "color-burn",
@@ -334,7 +334,7 @@ export function justEyedropped(): boolean {
 /* --------------------------------------------------------------- contrast */
 
 /**
- * WCAG 2.1 relative luminance. Figma's contrast check in the color picker uses
+ * WCAG 2.1 relative luminance. The contrast check in the color picker uses
  * exactly this, so the ratio the picker shows is the ratio a developer's audit
  * tool will report.
  */
@@ -374,7 +374,7 @@ export function compositeOver(fg: string, bg: string): string {
 /**
  * A readable version of `fg` on `bg`: the canvas's frame names, ruler numbers
  * and dimension badges, which are drawn as text straight onto whatever colour
- * the canvas happens to be. Figma's own labels clear about 7:1; ours were
+ * the canvas happens to be. Labels clear about 7:1; ours were
  * `rgba(15,23,42,0.5)` over `#f1f2f6`, which composites to a 3.3:1 grey - under
  * the 4.5:1 floor for text, and the reason the names read as decoration rather
  * than as the layer's name. Hue and saturation are kept, only the value moves,
@@ -385,7 +385,7 @@ export function readableLabel(fg: string, bg: string, target = 4.5): string {
   return nearestAccessible(base, bg, target);
 }
 
-/** Figma's contrast categories. "Auto" resolves from the layer being painted. */
+/** Contrast categories. "Auto" resolves from the layer being painted. */
 export type ContrastKind = "auto" | "large" | "normal" | "graphics";
 
 export const CONTRAST_KINDS: { id: ContrastKind; label: string }[] = [
@@ -412,7 +412,7 @@ export function passesContrast(fg: string, bg: string, kind: ContrastKind, level
 
 /**
  * The nearest color that clears `target` against `bg`, found by moving only the
- * value of the color: Figma repairs a failing fill by changing how light it is,
+ * value of the color: repair a failing fill by changing how light it is,
  * never its hue or its saturation, so the swatch still reads as the same brand
  * color. Returns the best reachable color when the target cannot be met.
  */

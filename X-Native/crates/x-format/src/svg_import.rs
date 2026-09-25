@@ -19,7 +19,7 @@ const MAX_SVG_DEPTH: usize = 512;
 
 pub fn import_svg(svg: &str) -> Result<Node, String> {
     // parse -> shared Import IR -> lower() (ONE set of import semantics
-    // across svg/sketch/figma/png), then unwrap the single page.
+    // across svg///png), then unwrap the single page.
     let mut lexer = XmlLexer {
         s: svg.as_bytes(),
         i: 0,
@@ -184,7 +184,7 @@ fn attr<'v>(attrs: &'v [(String, String)], key: &str) -> Option<&'v str> {
 /// declaration is unsupported.
 type CssRules = Vec<(String, HashMap<String, String>)>;
 
-/// Extract the small CSS subset commonly emitted by Illustrator/Figma/Sketch
+/// Extract the small CSS subset commonly emitted by Illustrator//
 /// SVG exports. CSS is parsed before the XML walk so a class rule can style a
 /// shape even when the `<style>` element appears after that shape.
 fn parse_css_rules(svg: &str) -> CssRules {

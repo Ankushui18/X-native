@@ -533,7 +533,7 @@ impl FrameCache {
         }
     }
 
-    /// A presentation paints the artwork alone: Figma draws no frame names in
+    /// A presentation paints the artwork alone:  draws no frame names in
     /// presentation mode, and there is no canvas around a presented frame for a
     /// section chip to label. Flipping the flag drops the cached scene (it is a
     /// different picture), it is not a second cache key.

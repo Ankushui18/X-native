@@ -8,7 +8,7 @@ import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, 
  * read - while a canvas `roundRect` and CSS `border-radius` want
  * `[tl, tr, br, bl]`. `cornerRadiiOf` is the one place that translates.
  *
- * Corner smoothing (Figma's squircles) is modelled here rather than in the
+ * Corner smoothing (squircles) is modelled here rather than in the
  * painter so the canvas, the hit test, the SVG export and the outline-stroke
  * operation all agree on the same curve.
  */
@@ -17,7 +17,7 @@ import type { BooleanOp, PathPoint, VectorNetwork, VectorSegment, VectorVertex, 
 export const CORNER_KAPPA = 0.5522847498;
 /**
  * How much further along its edges a corner reaches at full smoothing.
- * Figma stretches the corner rather than deepening the arc, which is why two
+ * Smoothing stretches the corner rather than deepening the arc, which is why two
  * heavily smoothed neighbours on one edge have to shrink to make room.
  */
 export const SMOOTHING_REACH = 0.39564;
@@ -58,7 +58,7 @@ export function cornerReach(r: number, smoothing: number): number {
  * `d` is how far the curve runs along each edge, `a` the handle length. With
  * `a = d·kappa` the cubic is the familiar circular corner; pulling the handles
  * further along the edges flattens the shoulders and tightens the turn, which is
- * what Figma's smoothing slider does - curvature at the tangent points drops
+ * what the smoothing slider does - curvature at the tangent points drops
  * towards zero while the middle of the corner goes past the circle's.
  */
 export function smoothedCorner(r: number, smoothing: number, w: number, h: number): { reach: number; handle: number } {
@@ -84,7 +84,7 @@ export function squircleOutline(w: number, h: number, radii: CornerRadii, smooth
   const br = corner(radii.br);
   const bl = corner(radii.bl);
   // Two corners that would overrun an edge at their smoothed reach shrink
-  // together, keeping the ratio between them - Figma does the same thing to the
+  // together, keeping the ratio between them - keeping the same ratio for the
   // plain radii, and it is why the reach has to be shared rather than clamped.
   const fit = (a: { d: number; a: number }, b: { d: number; a: number }, limit: number) => {
     const sum = a.d + b.d;
@@ -407,7 +407,7 @@ export function simplifyPath(pts: PathPoint[], tolerance: number): PathPoint[] {
 /**
  * Fit smooth bezier handles through a polyline (Catmull–Rom → cubic).
  *
- * `tension` 0 gives a polyline, 1 is very loose; Figma's pencil sits near 0.5.
+ * `tension` 0 gives a polyline, 1 is very loose; standard pencil sits near 0.5.
  * Handles are stored relative to their anchor, matching `PathPoint`.
  */
 export function smoothPath(pts: PathPoint[], closed: boolean, tension = 0.5): PathPoint[] {
@@ -427,7 +427,7 @@ export function smoothPath(pts: PathPoint[], closed: boolean, tension = 0.5): Pa
  * Erase the part of an open polyline that falls inside a circular brush.
  *
  * Returns one entry per surviving run, so erasing through the middle of a
- * stroke splits it into two paths — which is what Figma's eraser does to
+ * stroke splits it into two paths — which is what the eraser does to
  * vector geometry, rather than deleting the whole layer.
  */
 export function erasePath(
@@ -452,7 +452,7 @@ export function erasePath(
 }
 
 /**
- * Converts a sequence of `PathPoint`s to Figma's `VectorNetwork` graph representation.
+ * Converts a sequence of `PathPoint`s to `VectorNetwork` graph representation.
  */
 export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorNetwork {
   if (!path.length) return { vertices: [], segments: [] };
@@ -494,7 +494,7 @@ export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorN
 
 /**
  * Calculate the degree (connected segment count) for a vertex in a VectorNetwork.
- * A degree >= 3 indicates a branching point (Figma Vector Network characteristic).
+ * A degree >= 3 indicates a branching point (Vector Network branching characteristic).
  */
 export function vertexDegree(vn: VectorNetwork, vertexIndex: number): number {
   let count = 0;
@@ -796,12 +796,12 @@ export interface NoodleCurve {
 }
 
 /**
- * Calculates a smooth, organic Figma-grade S-curve connection noodle between
+ * Calculates a smooth, organic S-curve connection noodle between
  * source node and destination frame (or mouse cursor). Dynamically selects the
  * best perimeter edges (right/left/top/bottom) and computes tangential cubic
  * Bézier control handles and rotating arrowhead orientation.
  */
-export function computeFigmaNoodle(
+export function computeConnectorNoodle(
   srcX: number,
   srcY: number,
   srcW: number,
@@ -916,14 +916,14 @@ export function computeFigmaNoodle(
 }
 
 /**
- * Re-break an already wrapped paragraph for Figma's two wrap styles.
+ * Re-break an already wrapped paragraph for two wrap styles.
  *
  * `lines` is the greedy word wrap, one entry per line, and `widthOf` is the
  * same width model the wrapper used, so the two never disagree about what
  * fits. Greedy first-fit is already the fewest lines a paragraph can have, so
  * the count is fixed and the only freedom is *where* the breaks fall: this
  * picks the partition whose widest line is as narrow as possible, which is
- * what Figma means by distributing the lines evenly. Pretty takes the same
+ * distributing the lines evenly. Pretty takes the same
  * partition and then refuses a widow - a lone final word is joined to the
  * line above when it fits, otherwise it borrows a word from it.
  *
@@ -1016,3 +1016,6 @@ export function balanceLines(
   BALANCE_CACHE.set(key, out);
   return out;
 }
+
+/** Alias for backward compatibility */
+export const computeFigmaNoodle = computeConnectorNoodle;

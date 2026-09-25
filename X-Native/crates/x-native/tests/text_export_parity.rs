@@ -125,7 +125,7 @@ fn rich_runs_export_per_glyph_colors_to_svg() {
     let fm = fonts();
     let mut t = Node::text("t", 20.0, 20.0, 360.0, 24.0, "Red ink");
     // explicit black layer fill: unstyled glyphs fall back to THE NODE'S
-    // fill (the Node::text default is the Figma-like #0d1220, not black)
+    // fill (the Node::text default is the standard #0d1220, not black)
     t.fill = x_native::Paint::Solid(Color::from_rgb8(0, 0, 0));
     t.text_runs = vec![TextRun {
         start: 0,

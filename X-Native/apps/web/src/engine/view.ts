@@ -1,10 +1,10 @@
 /**
  * Viewport constants shared by the engine and the canvas.
  *
- * The zoom range is Figma's: 2% to 6400%. A designer expects to be able to
+ * The zoom range is: 2% to 6400%. A designer expects to be able to
  * scroll out until a whole 1440-wide page is a postage stamp, and in until a
  * single pixel is a fist — the previous 10%–800% clamp made both impossible,
- * which is what "the canvas doesn't behave like Figma" usually means.
+ * which is key to consistent canvas navigation.
  *
  * Kept in `engine/` rather than `ui/zoom.ts` because the engine clamps on
  * dispatch, and an engine must not import from the UI layer.
@@ -18,7 +18,7 @@ export const ZOOM_MAX = 64;
 export const clampZoom = (z: number): number =>
   Number.isFinite(z) ? Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) : 1;
 
-/** The percentages Figma lists in its zoom menu, in order. Two rungs per
+/** The percentages listed in the zoom menu, in order. Two rungs per
  *  doubling, which is why the steps look irregular: 100, 128, 200, 256, 400 -
  *  every press is visible, and every value is one a designer recognises from
  *  the field at the top of the right sidebar. */
@@ -27,7 +27,7 @@ export const ZOOM_PRESETS = [
   10.24, 16, 32, 64,
 ] as const;
 
-/** Next/previous zoom for the keyboard and the menu. Figma's zoom in and out
+/** Next/previous zoom for the keyboard and the menu. Zoom in and out
  *  shortcuts double and halve - the zoom-out a designer gets with them is
  *  100, 50, 25, 13, 6 - so a press is a whole step, not a nudge, and the value
  *  you started from never matters. */
@@ -47,7 +47,7 @@ export function zoomBy(current: number, factor: number): number {
  *  The canvas keeps the viewport's position in `panX/panY` rather than the
  *  centre of the view, so changing the zoom alone leaves the drawing anchored
  *  to the canvas's top-left corner: press ⇧+ twice and the artboard has walked
- *  off the right of the window. Figma keeps the middle of the canvas still (and
+ *  off the right of the window. The viewport keeps the middle of the canvas still (and
  *  the pointer, for a wheel), which is what this computes. */
 export function panForZoom(pan: number, zoom: number, next: number, anchor: number): number {
   return anchor - ((anchor - pan) / zoom) * next;
@@ -98,7 +98,7 @@ export function wheelZoomFactor(gesture: WheelGesture): number {
   return Math.min(2, Math.max(0.5, factor));
 }
 
-/** Zoom label as Figma writes it: whole percents, no decimals below 100%,
+/** Zoom label: whole percents, no decimals below 100%,
  *  one decimal above where it would otherwise be useless. */
 export function zoomLabel(z: number): string {
   const pct = z * 100;

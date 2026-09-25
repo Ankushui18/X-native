@@ -34,7 +34,7 @@ export const DEFAULT_THEME_PREF: ThemePref = "light";
 /**
  * A stored preference, reduced to one of the three. Anything unrecognised -
  * including the null of a first visit - becomes the default, which is what
- * Figma's own theme setting does when it has nothing better to go on.
+ * default system themes do when there is nothing better to go on.
  */
 export function normalizeThemePref(raw: unknown): ThemePref {
   if (typeof raw !== "string") return DEFAULT_THEME_PREF;

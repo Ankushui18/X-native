@@ -3,7 +3,7 @@ import type { Engine, Snapshot, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
 
 /**
- * The selection helpers from Figma's "Select layers and objects" and "Identify
+ * The selection helpers for "Select layers and objects" and "Identify
  * matching objects": pick one layer out of a stack, grab everything that shares
  * a property, and grab the same object in every frame.
  *
@@ -157,7 +157,7 @@ export function sameIds(root: XNode, ref: XNode, kind: SameKind): string[] {
 }
 
 /** A text layer still named after its content was never named by hand, which is
- *  Figma's cue to identify it by its typography instead of its name. */
+ *  the rule to identify it by its typography instead of its name. */
 function implicitName(n: XNode): boolean {
   if (n.kind !== "text") return false;
   const first = (n.text ?? "").split("\n")[0].slice(0, 60);
@@ -171,7 +171,7 @@ interface PathEntry {
 }
 
 /**
- * Index every layer by the name-path Figma compares when it looks for matching
+ * Index every layer by the name-path compared when it looks for matching
  * objects. A top-level layer's key is its own name, because it has no parents; a
  * nested one's key is the chain *below* its top-level frame, which is the rule
  * that lets the same "Header" match between a "Cart" and a "Checkout" frame
@@ -184,7 +184,7 @@ export function pathIndex(root: XNode): Map<string, PathEntry> {
     const name = own(n);
     // The depth leads the key: "a rectangle called Rectangle at the top level"
     // and "a rectangle called Rectangle two levels down" are different objects
-    // in Figma's eyes, and sharing a key here would tie them together.
+    // and sharing a key here would tie them together.
     const chain = top === null ? [name] : [...parts, name];
     map.set(n.id, { top, key: `${depth}:${chain.join("/")}` });
     const nextTop = top ?? n;
@@ -196,7 +196,7 @@ export function pathIndex(root: XNode): Map<string, PathEntry> {
 }
 
 /**
- * Figma's matching-object rule: same layer name, same ancestor names, same
+ * Matching-object rule: same layer name, same ancestor names, same
  * position in the hierarchy - but never the same top-level frame, since the
  * point is to find the copy in *another* frame. Depth is part of the key rather
  * than implied by it, so a loose layer and a nested one that happen to share a
@@ -222,7 +222,7 @@ export function matchingIds(root: XNode, ref: XNode): string[] {
 
 /**
  * The layers under a point, in Layers-panel order (topmost first) - the list
- * behind Figma's "Select layer" submenu. Hidden layers are left out; locked ones
+ * behind the "Select layer" submenu. Hidden layers are left out; locked ones
  * stay in, because selecting a locked layer is exactly what this menu is for.
  * A frame/group appears above its children, the same order the panel shows.
  */
@@ -264,7 +264,7 @@ export function selectSame(engine: Engine, snap: Snapshot, kind: SameKind) {
   toast(`Selected ${plural(ids.length, "more layer")} · same ${labelOf(kind).toLowerCase()}`);
 }
 
-/** Figma's "Select matching layers": the same object in every other frame. */
+/** "Select matching layers": the same object in every other frame. */
 export function selectMatching(engine: Engine, snap: Snapshot) {
   const root = snap.pages[snap.page].root;
   const id = snap.selection[0];
@@ -283,7 +283,7 @@ export function selectMatching(engine: Engine, snap: Snapshot) {
 }
 
 /**
- * Everything else at the same level: Figma's `⌘A ⇧` "select the inverse". It is
+ * Everything else at the same level: `⌘A ⇧` "select the inverse". It is
  * scoped to siblings because ⌘A itself is - inside a frame it selects the
  * frame's children, so the inverse has to mean the same neighbourhood.
  */

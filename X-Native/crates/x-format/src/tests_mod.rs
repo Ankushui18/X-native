@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
-    /// Figma's per-frame "Show name" switch is a document property, so it must
+    /// the per-frame "Show name" switch is a document property, so it must
     /// survive a save/load — and a file written before the flag existed must
     /// still show names (the reader defaults to true).
     #[test]
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
-    /// Figma's Polygon and Star survive a save/load with their Count and
+    /// the Polygon and Star survive a save/load with their Count and
     /// Ratio: the two are the shape, not a drawing of it.
     #[test]
     fn polygon_and_star_roundtrip_through_x_format() {
@@ -595,7 +595,7 @@ mod tests {
         assert_eq!(save_x(&loaded), text);
     }
 
-    /// Figma's "Animate matching layers" tick (help 360039818874) is part of
+    /// the "Animate matching layers" tick (help 360039818874) is part of
     /// the interaction, and off is what a file that predates the tick means:
     /// the word is written only when the box is on, so nothing older changes
     /// meaning on the way in.

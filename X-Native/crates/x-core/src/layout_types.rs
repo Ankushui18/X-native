@@ -50,12 +50,12 @@ pub struct ChildConstraints {
     pub grow: f64,
     pub shrink: f64,
     pub basis: Option<f64>,
-    /// Absolute positioning: removed from normal flow (Figma ABSOLUTE).
+    /// Absolute positioning: removed from normal flow ( ABSOLUTE).
     pub is_absolute: bool,
-    /// Fixed positioning: ignores the parent's scroll offset (Figma FIXED).
+    /// Fixed positioning: ignores the parent's scroll offset ( FIXED).
     pub fixed: bool,
     /// Sticky positioning: sticks to the scroll viewport edge when scrolled
-    /// past its natural position (Figma STICKY, top edge).
+    /// past its natural position ( STICKY, top edge).
     pub sticky: bool,
     /// Grid placement: explicit column index (0-based) within the parent
     /// grid's columns; `None` = auto-flow.
@@ -94,7 +94,7 @@ impl ChildConstraints {
 /// How a frame clips its overflowing content and whether it scrolls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Overflow {
-    /// Content can extend past the frame's bounds (Figma default).
+    /// Content can extend past the frame's bounds ( default).
     #[default]
     Visible,
     /// Content is clipped to the frame's bounds, no scrolling.
@@ -147,22 +147,22 @@ impl Overflow {
     }
 }
 
-/// Figma's **scroll position** for one object inside a frame that scrolls:
+/// the **scroll position** for one object inside a frame that scrolls:
 /// the Prototype tab's "Scroll behavior → Position" menu. The two flags on
 /// `ChildConstraints` are the state; this is the menu's own view of them, so
 /// the panel and the renderer cannot disagree about which one is set.
 ///
-/// Figma: "Scroll with parent" is the default and scrolls the object with the
+/// : "Scroll with parent" is the default and scrolls the object with the
 /// frame; "Fixed" leaves it where it is while the content moves; "Sticky"
 /// "will scroll at first, but become fixed once its top edge reaches the top
 /// of its parent frame" ([Prototype scroll and overflow behavior], help
 /// article 360039818734). The row is only meaningful on an object that sits
 /// on a frame whose Overflow says it scrolls.
 ///
-/// [Prototype scroll and overflow behavior]: https://help.figma.com/hc/en-us/articles/360039818734
+/// [Prototype scroll and overflow behavior]: https://help..com/hc/en-us/articles/360039818734
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScrollPosition {
-    /// Moves with the frame's content (Figma's default).
+    /// Moves with the frame's content (the default).
     #[default]
     ScrollWithParent,
     /// Ignores the parent's scroll offset.
@@ -172,7 +172,7 @@ pub enum ScrollPosition {
 }
 
 impl ScrollPosition {
-    /// The menu's label, in Figma's own words.
+    /// The menu's label, in the own words.
     pub fn label(self) -> &'static str {
         match self {
             ScrollPosition::ScrollWithParent => "Scroll with parent",
@@ -223,7 +223,7 @@ impl ScrollPosition {
 pub type Padding = [f64; 4];
 
 /// Canvas stacking order for negative-gap (overlapping) auto-layout stacks.
-/// Figma Jun-2026: controls which end of the stack paints on top when gap
+///  Jun-2026: controls which end of the stack paints on top when gap
 /// is negative (items overlap).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CanvasStacking {
@@ -258,7 +258,7 @@ impl CanvasStacking {
     }
 }
 
-/// CSS-Grid-style track sizing (Figma Grid, Config 2025).
+/// CSS-Grid-style track sizing ( Grid, Config 2025).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GridTrack {
     /// Fixed pixel size.
@@ -319,7 +319,7 @@ impl GridAutoFlow {
     }
 }
 
-/// Grid layout for frames (CSS grid; Figma Grid). Children place into
+/// Grid layout for frames (CSS grid;  Grid). Children place into
 /// cells — explicitly via [`ChildConstraints`] or auto-flowed row-major —
 /// and stretch to their spanned cell area. Column tracks size
 /// Fixed/Fr/Auto against the frame's content box; row tracks likewise
@@ -443,7 +443,7 @@ pub struct AutoLayout {
     /// Phase 5.1: cross-axis alignment of children.
     pub align: CrossAlign,
     /// Main-axis distribution of leftover space in Fixed frames — CSS
-    /// `justify-content` semantics, matching Figma's Aug-2026 auto-spacing
+    /// `justify-content` semantics, matching the Aug-2026 auto-spacing
     /// modes (Between / Around / Evenly). `Packed` keeps the authored gap.
     pub distribute: Distribute,
     /// Phase P0: wrap mode
@@ -458,13 +458,13 @@ pub struct AutoLayout {
     /// CSS-Grid mode: when set, the frame lays out as a grid instead of a
     /// stack (see [`GridLayout`]); the stack fields above are ignored.
     pub grid: Option<GridLayout>,
-    /// CSS Flexbox parity (Figma Jul-2026): when true, inside strokes on
+    /// CSS Flexbox parity ( Jul-2026): when true, inside strokes on
     /// THIS frame are included in layout calculations (minimum size and
     /// padding offset). Outside and center strokes are never included,
-    /// regardless of this setting. Default: true, matching Figma's new
+    /// regardless of this setting. Default: true, matching the new
     /// default for new frames.
     pub stroke_include_in_layout: bool,
-    /// Canvas stacking order for negative-gap (overlapping) stacks. Figma
+    /// Canvas stacking order for negative-gap (overlapping) stacks. 
     /// Jun-2026: controls paint order when items overlap due to negative
     /// gap. Default: LastOnTop (classic painter's-algorithm order).
     pub canvas_stacking: CanvasStacking,
@@ -489,7 +489,7 @@ impl Default for AutoLayout {
             max_height: None,
             resize_on_wrap: false,
             grid: None,
-            // CSS Flexbox parity (Figma Jul-2026): inside strokes are
+            // CSS Flexbox parity ( Jul-2026): inside strokes are
             // included in layout by default for new frames.
             stroke_include_in_layout: true,
             canvas_stacking: CanvasStacking::default(),

@@ -86,7 +86,7 @@ export interface ImportedNode {
   imageFit?: ImageFit;
   effects?: Effect[];
   blendMode?: string;
-  /** Figma's eye and lock states, carried over instead of dropping the layer. */
+  /** Layer eye and lock states, carried over instead of dropping the layer. */
   hidden?: boolean;
   locked?: boolean;
   overflow?: Overflow;
@@ -110,7 +110,7 @@ export interface ImportedNode {
   letterSpacing?: number;
 }
 
-/** One canvas of a Figma file. A design file can hold several. */
+/** One canvas of an imported file. A design file can hold several. */
 export interface ImportedPage {
   name: string;
   nodes: ImportedNode[];

@@ -69,7 +69,7 @@ pub struct AssetRecord {
     pub dimensions: Option<(u32, u32)>,
     pub bytes: Vec<u8>,
     pub source: AssetSource,
-    /// human name from the origin (filename / sketch ref) — display only,
+    /// human name from the origin (filename /  ref) — display only,
     /// NEVER used for identity
     pub name: String,
 }

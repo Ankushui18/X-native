@@ -3,8 +3,8 @@ import { find } from "../engine/memory";
 import { plural, toast } from "./toast";
 
 /**
- * Sketch's "Round to Pixel": snap the selection's own box to whole pixels
- * without switching on document-wide pixel fitting. Sketch exposes it in the
+ * "Round to Pixel": snap the selection's own box to whole pixels
+ * without switching on document-wide pixel fitting. Exposes it in the
  * Inspector header and on ⇧⌘P; both paths call this.
  */
 export function roundToPixel(engine: Engine) {

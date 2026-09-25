@@ -1,13 +1,12 @@
 /**
  * Equations in numeric fields.
  *
- * Figma lets you type arithmetic into the X, Y, W, H, rotation, font-size and
- * similar fields instead of a bare number: `120/3`, `2^3`, `(40+8)*2`. On top of
+ * Arithmetic evaluation inside numeric fields (X, Y, W, H, rotation, font-size and
+ * similar fields): `120/3`, `2^3`, `(40+8)*2`. On top of
  * that, an expression that *starts* with an operator is applied to the value
  * already in the field (`+10` means "10 more than now") and one that *ends* with
  * an operator takes the current value as its left operand (`*2` doubles it). The
- * panel has had plain `parseFloat` forever, which silently turned `120/3` into
- * `120`, so the whole feature lives here as a pure function: the field commits
+ * panel evaluates expressions cleanly: the field commits
  * whatever this returns, and null means "not an expression, revert".
  */
 

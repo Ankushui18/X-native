@@ -16,10 +16,10 @@ pub struct Transform {
     pub rotation: f64,
     pub scale_x: f64,
     pub scale_y: f64,
-    /// Skew angles (radians) applied after scale (Figma's shear transform).
+    /// Skew angles (radians) applied after scale (the shear transform).
     pub skew_x: f64,
     pub skew_y: f64,
-    /// Transform-origin pivot in NORMALIZED 0..1 local space (Figma's 9-point
+    /// Transform-origin pivot in NORMALIZED 0..1 local space (the 9-point
     /// origin). (0.5, 0.5) = center (the default); (0,0) = top-left, etc.
     pub origin_x: f64,
     pub origin_y: f64,
@@ -88,12 +88,12 @@ impl Transform {
     }
 }
 
-/// Figma's angle convention, in degrees: a layer starts at 0°, a positive angle
+/// the angle convention, in degrees: a layer starts at 0°, a positive angle
 /// runs counterclockwise towards 180°, a negative one clockwise towards -180°,
-/// and *"once you pass 180 in either direction, Figma will count down towards 0°
+/// and *"once you pass 180 in either direction,  will count down towards 0°
 /// in that direction"* — 195° is stored as -165°. The stored value therefore
 /// always lands in `(-180, 180]`, which is the range the Design panel's rotation
-/// field shows ([help 360039956914](https://help.figma.com/hc/en-us/articles/360039956914)).
+/// field shows ([help 360039956914](https://help..com/hc/en-us/articles/360039956914)).
 pub fn normalize_degrees(deg: f64) -> f64 {
     if !deg.is_finite() {
         return 0.0;
@@ -103,7 +103,7 @@ pub fn normalize_degrees(deg: f64) -> f64 {
         d -= 360.0;
     }
     // 180 is the top of the range and -180 is not: the two are the same angle,
-    // and Figma's own example counts down *from* 180, never to it.
+    // and the own example counts down *from* 180, never to it.
     if d <= -180.0 {
         d += 360.0;
     }
@@ -122,7 +122,7 @@ impl Transform {
     /// the box's own angle advances by the same delta and the box itself orbits
     /// the pivot. When `pivot` is the box's own transform-origin the point stays
     /// put — the arithmetic drops out of the matrix, whatever the box's scale or
-    /// skew — which is what Figma's rotation origin means.
+    /// skew — which is what the rotation origin means.
     pub fn rotate_about(&mut self, w: f64, h: f64, pivot: (f64, f64), delta: f64) {
         let (px, py) = self.pivot(w, h);
         let c = (self.x + px, self.y + py);

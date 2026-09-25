@@ -7,7 +7,7 @@ const KEY = "x-native-document";
 
 /** Only the document and the viewport are persisted. Transient interaction
  *  state (current tool, selection, present mode, open comment) is deliberately
- *  excluded: restoring a session mid-gesture is confusing, and Figma likewise
+ *  excluded: restoring a session mid-gesture is confusing, and editor state likewise
  *  reopens a file with nothing selected. */
 export interface PersistedDoc {
   version: number;

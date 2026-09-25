@@ -40,7 +40,7 @@ pub struct TextLayoutKey {
     pub max_width_bits: u64,
     pub letter_spacing_bits: u64,
     pub line_height_bits: u64,
-    /// Figma LH mode (0 auto / 1 px / 2 %): same multiplier, different
+    ///  LH mode (0 auto / 1 px / 2 %): same multiplier, different
     /// first-baseline model — must not collide in the cache
     pub lh_mode: u8,
     pub word_spacing_bits: u64,
