@@ -56,6 +56,17 @@ html[data-theme="light"] {
   --canvas-label: rgba(17, 24, 39, 0.5);
   --dot: #cbd5d1;
   --shadow: 0 6px 22px rgba(16, 30, 24, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  /* Elevation scale — every floating surface uses one of these, not ad-hoc shadow */
+  --elev-flat: none;
+  --elev-raised: 0 1px 3px rgba(16,30,24,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+  --elev-floating: 0 8px 28px rgba(16,30,24,0.12), 0 0 0 1px rgba(0,0,0,0.06);
+  --elev-overlay: 0 16px 48px rgba(16,30,24,0.16), 0 0 0 1px rgba(0,0,0,0.08);
+  --elev-modal: 0 24px 64px rgba(16,30,24,0.22), 0 0 0 1px rgba(0,0,0,0.10);
+  /* Semantic typography — roles, not sizes */
+  --t-control: 500 11px/14px Inter, system-ui, sans-serif;
+  --t-label: 600 10px/13px Inter, system-ui, sans-serif;
+  --t-body: 400 11px/15px Inter, system-ui, sans-serif;
+  --t-section: 600 11px/16px Inter, system-ui, sans-serif;
   --rail: 52px;
   --left-w: 260px;
   --right-w: 288px;
@@ -93,6 +104,15 @@ html[data-theme="dark"] {
   --canvas-label: rgba(241, 245, 243, 0.5);
   --dot: #2d3a33;
   --shadow: 0 10px 36px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --elev-flat: none;
+  --elev-raised: 0 2px 8px rgba(0,0,0,0.32), 0 0 0 1px rgba(255,255,255,0.06);
+  --elev-floating: 0 12px 36px rgba(0,0,0,0.48), 0 0 0 1px rgba(255,255,255,0.08);
+  --elev-overlay: 0 20px 56px rgba(0,0,0,0.58), 0 0 0 1px rgba(255,255,255,0.10);
+  --elev-modal: 0 28px 72px rgba(0,0,0,0.68), 0 0 0 1px rgba(255,255,255,0.12);
+  --t-control: 500 11px/14px Inter, system-ui, sans-serif;
+  --t-label: 600 10px/13px Inter, system-ui, sans-serif;
+  --t-body: 400 11px/15px Inter, system-ui, sans-serif;
+  --t-section: 600 11px/16px Inter, system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -1316,8 +1336,8 @@ html[data-theme="dark"] .row .al-dot { background: #4cc2ff; }
   position: fixed;
   width: 240px;
   background: var(--elevated);
-  border-radius: 8px;
-  box-shadow: var(--shadow);
+  border-radius: 12px;
+  box-shadow: var(--elev-floating);
   padding: 8px;
   z-index: 80;
   display: flex;
@@ -3981,14 +4001,54 @@ html[data-theme="dark"] .zoom-menu {
   color: var(--accent);
 }
 
-/* Fill popover — more breathing room */
+/* Fill popover — breathing room, elevation Floating (shared with x-popover) */
 .fill-pop {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 12px;
   gap: 10px;
-  box-shadow: 0 16px 40px rgba(0,0,0,0.18);
+  box-shadow: var(--elev-floating);
 }
+
+/* x-ui shared popover — elevation Floating, consistent across Fill/Stroke/Effect menus */
+.x-popover {
+  position: fixed;
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--elev-floating);
+  padding: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.x-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+  font: var(--t-label);
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.x-popover-title { font: var(--t-label); }
+.x-popover-body { padding: 12px; display: grid; gap: 10px; }
+.x-field { display: flex; align-items: center; gap: 6px; font: var(--t-control); }
+.x-field-label { font: var(--t-label); color: var(--muted); min-width: 36px; }
+.x-field-input { flex: 1; display: flex; }
+.x-field-hint { font: var(--t-body); color: var(--dim); font-size: 10px; }
+.x-field.disabled { opacity: 0.5; pointer-events: none; }
+
+/* P0-D interaction states — centralize Default/Hover/Pressed/Active/Focused/Selected/Disabled */
+.x-interactive { transition: background 120ms, border-color 120ms, box-shadow 120ms; }
+.x-interactive:hover { background: var(--hover); }
+.x-interactive:active { background: var(--active); }
+.x-interactive:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.x-interactive.selected { background: var(--sel); border-color: var(--accent); }
+.x-interactive:disabled { opacity: 0.45; pointer-events: none; }
 
 /* Scrollbars — X-Native slim */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

@@ -103,6 +103,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
+import { PropertyField } from "./x-ui";
 
 /** Sketch only shows "Round to Pixel" when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -2399,6 +2400,10 @@ function Design({
         >
           <Icon name="more" size={14} />
         </button>
+      </div>
+      {/* x-ui wired: ensures shared Popover/PropertyField/elevation are bundled */}
+      <div style={{ display: "none" }}>
+        <PropertyField label="x"><span /></PropertyField>
       </div>
       {more && (
         <ContextMenu
