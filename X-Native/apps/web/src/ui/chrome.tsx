@@ -1508,33 +1508,38 @@ export function bindHotkeys(
         engine.dispatch({ type: "boolean", op });
         return;
       }
+      if (e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        engine.dispatch({ type: "flatten" });
+        return;
+      }
     }
-    if (meta && e.altKey && e.key.toLowerCase() === "u") {
+    if ((meta || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "u") {
       e.preventDefault();
       engine.dispatch({ type: "boolean", op: "union" });
       return;
     }
-    if (meta && e.altKey && e.key.toLowerCase() === "s") {
+    if ((meta || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "s") {
       e.preventDefault();
       engine.dispatch({ type: "boolean", op: "subtract" });
       return;
     }
-    if (meta && e.altKey && e.key.toLowerCase() === "i") {
+    if ((meta || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "i") {
       e.preventDefault();
       engine.dispatch({ type: "boolean", op: "intersect" });
       return;
     }
-    if (meta && e.altKey && e.key.toLowerCase() === "x") {
+    if ((meta || e.ctrlKey) && e.altKey && (e.key.toLowerCase() === "x" || e.key.toLowerCase() === "e")) {
       e.preventDefault();
       engine.dispatch({ type: "boolean", op: "exclude" });
       return;
     }
-    if (meta && !e.shiftKey && e.key.toLowerCase() === "e") {
+    if ((meta || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
       engine.dispatch({ type: "flatten" });
       return;
     }
-    if (meta && e.shiftKey && e.key.toLowerCase() === "o") {
+    if ((meta || e.ctrlKey) && (e.altKey || e.shiftKey) && e.key.toLowerCase() === "o") {
       e.preventDefault();
       engine.dispatch({ type: "outlineStroke" });
       return;

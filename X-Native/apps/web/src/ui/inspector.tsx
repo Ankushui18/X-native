@@ -2102,6 +2102,11 @@ function Design({
   snap: Snapshot;
 }) {
   const [typeOpen, setTypeOpen] = useState(false);
+  const [offsetDist, setOffsetDist] = useState(8);
+  const [offsetJoin, setOffsetJoin] = useState<"round" | "miter">("round");
+  const [showOffsetControls, setShowOffsetControls] = useState(false);
+  const [simplifyTol, setSimplifyTol] = useState(4);
+  const [showSimplifyControls, setShowSimplifyControls] = useState(false);
   /** Which fill row the pointer picked up, and the row it is over. Only fills
    *  are reorderable: the base fill is the bottom of the stack by definition, so
    *  the rows above it are the ones a designer moves around. */
@@ -3302,15 +3307,15 @@ function Design({
             {/* Quick Actions */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
               <button
-                className="export-run"
+                className={`export-run ${showSimplifyControls ? "on" : ""}`}
                 style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
-                  engine.dispatch({ type: "simplifyPath", id: n.id });
-                  toast("Simplified path");
+                  setShowSimplifyControls((v) => !v);
+                  setShowOffsetControls(false);
                 }}
-                title="Reduce redundant anchor points"
+                title="Reduce redundant anchor points with tolerance control"
               >
-                Simplify
+                Simplify…
               </button>
               <button
                 className="export-run"
@@ -3325,15 +3330,15 @@ function Design({
                 Smooth
               </button>
               <button
-                className="export-run"
+                className={`export-run ${showOffsetControls ? "on" : ""}`}
                 style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
-                  engine.dispatch({ type: "offsetPath", id: n.id, distance: 8 });
-                  toast("Expanded path +8px");
+                  setShowOffsetControls((v) => !v);
+                  setShowSimplifyControls(false);
                 }}
-                title="Expand outline path"
+                title="Expand or contract outline path with offset distance"
               >
-                Offset Path
+                Offset Path…
               </button>
               <button
                 className="export-run"
@@ -3342,11 +3347,118 @@ function Design({
                   engine.dispatch({ type: "outlineStroke", id: n.id });
                   toast("Outlined stroke");
                 }}
-                title="Convert stroke to vector path (⇧⌘O)"
+                title="Convert stroke to vector path (⌥⌘O)"
               >
                 Outline Stroke
               </button>
             </div>
+
+            {/* Inline Simplify Controls */}
+            {showSimplifyControls && (
+              <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--input)", borderRadius: 6, display: "grid", gap: 6, fontSize: 11 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 500 }}>Simplify Path</span>
+                  <button
+                    onClick={() => setShowSimplifyControls(false)}
+                    style={{ background: "transparent", border: 0, color: "var(--dim)", cursor: "pointer", fontSize: 13 }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Tolerance:</span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="20"
+                    step="0.5"
+                    value={simplifyTol}
+                    onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
+                    style={{ flex: 1, accentColor: "var(--accent)" }}
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={simplifyTol}
+                    onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
+                    style={{ width: 44, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
+                  />
+                </div>
+                <button
+                  style={{ background: "var(--accent)", color: "#ffffff", border: 0, borderRadius: 4, padding: "4px 8px", fontWeight: 600, fontSize: 11, cursor: "pointer", marginTop: 2 }}
+                  onClick={() => {
+                    engine.dispatch({ type: "simplifyPath", id: n.id, tolerance: simplifyTol });
+                    toast(`Simplified path with tolerance ${simplifyTol}`);
+                    setShowSimplifyControls(false);
+                  }}
+                >
+                  Apply Simplify
+                </button>
+              </div>
+            )}
+
+            {/* Inline Offset Controls */}
+            {showOffsetControls && (
+              <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--input)", borderRadius: 6, display: "grid", gap: 6, fontSize: 11 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontWeight: 500 }}>Offset Vector Path</span>
+                  <button
+                    onClick={() => setShowOffsetControls(false)}
+                    style={{ background: "transparent", border: 0, color: "var(--dim)", cursor: "pointer", fontSize: 13 }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Distance:</span>
+                  <input
+                    type="range"
+                    min="-40"
+                    max="40"
+                    step="1"
+                    value={offsetDist}
+                    onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
+                    style={{ flex: 1, accentColor: "var(--accent)" }}
+                  />
+                  <input
+                    type="number"
+                    value={offsetDist}
+                    onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
+                    style={{ width: 44, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
+                  />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Join:</span>
+                  <div className="segmented" style={{ flex: 1 }}>
+                    <button
+                      className={offsetJoin === "round" ? "on" : ""}
+                      onClick={() => setOffsetJoin("round")}
+                      style={{ fontSize: 10, padding: "2px 6px" }}
+                    >
+                      Round
+                    </button>
+                    <button
+                      className={offsetJoin === "miter" ? "on" : ""}
+                      onClick={() => setOffsetJoin("miter")}
+                      style={{ fontSize: 10, padding: "2px 6px" }}
+                    >
+                      Square
+                    </button>
+                  </div>
+                </div>
+                <button
+                  style={{ background: "var(--accent)", color: "#ffffff", border: 0, borderRadius: 4, padding: "4px 8px", fontWeight: 600, fontSize: 11, cursor: "pointer", marginTop: 2 }}
+                  onClick={() => {
+                    engine.dispatch({ type: "offsetPath", id: n.id, distance: offsetDist, join: offsetJoin });
+                    toast(`Offset path by ${offsetDist > 0 ? "+" : ""}${offsetDist}px`);
+                    setShowOffsetControls(false);
+                  }}
+                >
+                  Apply Offset
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

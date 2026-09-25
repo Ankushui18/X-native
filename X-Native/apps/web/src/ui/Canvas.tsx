@@ -236,7 +236,7 @@ export function Canvas({
     },
     [engine],
   );
-  const [vecSubTool, setVecSubTool] = useState<"select" | "bend" | "paint" | "lasso">("select");
+  const [vecSubTool, setVecSubTool] = useState<"select" | "bend" | "paint" | "shapeBuilder" | "eraser" | "lasso">("select");
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
@@ -540,8 +540,13 @@ export function Canvas({
             n.kind === "line" ||
             n.kind === "arrow")
         ) {
-          if (n.kind !== "vector") engine.dispatch({ type: "flatten" });
-          setVecEdit(n.id);
+          if (n.kind !== "vector") {
+            engine.dispatch({ type: "flatten" });
+            const newId = engine.snapshot().selection[0];
+            setVecEdit(newId);
+          } else {
+            setVecEdit(n.id);
+          }
           e.stopImmediatePropagation();
         } else if (vecEdit) {
           setVecEdit(null);
@@ -3099,6 +3104,16 @@ export function Canvas({
             toast("Filled region (Paint tool)");
             return;
           }
+          if (vecSubTool === "shapeBuilder") {
+            if (e.altKey) {
+              engine.dispatch({ type: "shapeBuilder", op: "subtract" });
+              toast("Subtracted shape region (Option-click)");
+            } else {
+              engine.dispatch({ type: "shapeBuilder", op: "merge" });
+              toast("Merged shape region");
+            }
+            return;
+          }
           const meta = e.metaKey || e.ctrlKey || e.altKey || vecSubTool === "bend";
           if (meta) {
             const npts = pts.length;
@@ -4449,10 +4464,25 @@ export function Canvas({
           engine.dispatch({ type: "patchPath", id: hit.id, path, closed: hit.closed });
         }
       }
-    } else if (hit && (hit.kind === "vector" || hit.kind === "boolean")) {
+    } else if (
+      hit &&
+      (hit.kind === "vector" ||
+        hit.kind === "boolean" ||
+        hit.kind === "rect" ||
+        hit.kind === "ellipse" ||
+        hit.kind === "poly" ||
+        hit.kind === "star" ||
+        hit.kind === "line" ||
+        hit.kind === "arrow")
+    ) {
       engine.dispatch({ type: "select", ids: [hit.id] });
-      if (hit.kind !== "vector") engine.dispatch({ type: "flatten" });
-      setVecEdit(hit.id);
+      if (hit.kind !== "vector") {
+        engine.dispatch({ type: "flatten" });
+        const newId = engine.snapshot().selection[0];
+        setVecEdit(newId);
+      } else {
+        setVecEdit(hit.id);
+      }
     } else if (hit) {
       engine.dispatch({ type: "select", ids: [hit.id] });
     } else if (vecEdit) {
@@ -5255,6 +5285,30 @@ export function Canvas({
           >
             <Icon name="paint" size={14} />
             <span>Paint</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "shapeBuilder" ? "on" : ""}`}
+            style={{
+              background: vecSubTool === "shapeBuilder" ? "rgba(255,255,255,0.12)" : "transparent",
+              border: 0,
+              color: vecSubTool === "shapeBuilder" ? "#ffffff" : "rgba(255,255,255,0.7)",
+              padding: "6px 10px",
+              borderRadius: 16,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 500,
+            }}
+            onClick={() => {
+              setVecSubTool((t) => (t === "shapeBuilder" ? "select" : "shapeBuilder"));
+              toast(vecSubTool === "shapeBuilder" ? "Select mode" : "Shape Builder: drag to merge regions, ⌥-click to subtract");
+            }}
+            title="Shape Builder Tool"
+          >
+            <Icon name="shape-builder" size={14} />
+            <span>Shape Builder</span>
           </button>
           <button
             className="tool-btn"

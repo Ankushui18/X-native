@@ -262,7 +262,7 @@ export function canvasMenu(
   }
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
-  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O" });
+  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⌥⌘O" });
   items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
   items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });
   items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths" });
@@ -515,10 +515,17 @@ export function runMenu(
     case "outlineStroke":
       engine.dispatch({ type: "outlineStroke" });
       break;
-    case "offsetPath":
-      engine.dispatch({ type: "offsetPath", distance: 10 });
-      toast("Offset path +10px");
+    case "offsetPath": {
+      const distStr = window.prompt("Offset vector path distance (+ to expand, - to contract):", "8");
+      if (distStr !== null) {
+        const d = parseFloat(distStr);
+        if (!isNaN(d) && d !== 0) {
+          engine.dispatch({ type: "offsetPath", distance: d });
+          toast(`Offset vector path ${d > 0 ? "+" : ""}${d}px`);
+        }
+      }
       break;
+    }
     case "simplifyPath":
       engine.dispatch({ type: "simplifyPath" });
       toast("Simplified vector path");

@@ -476,6 +476,7 @@ export function Icon({
     // Boolean Operations
     // -------------------------------------------------------------------------
     case "boolean":
+    case "shape-builder":
       return (
         <svg {...p}>
           <circle cx="6" cy="8" r="4.5" strokeWidth={1.2} />
