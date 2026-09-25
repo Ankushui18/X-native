@@ -464,7 +464,7 @@ pub struct AutoLayout {
     /// regardless of this setting. Default: true, matching the new
     /// default for new frames.
     pub stroke_include_in_layout: bool,
-    /// Canvas stacking order for negative-gap (overlapping) stacks. 
+    /// Canvas stacking order for negative-gap (overlapping) stacks.
     /// Jun-2026: controls paint order when items overlap due to negative
     /// gap. Default: LastOnTop (classic painter's-algorithm order).
     pub canvas_stacking: CanvasStacking,
