@@ -50,7 +50,7 @@ import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
-import { hugSize, listGutter, listMarker, measureCached, textMetrics, wrapLines } from "./textLayout";
+import { applyTextCase, fitLineCount, hugSize, indentOf, listGutter, listMarker, measureCached, textMetrics, valignApplies, wrapLines } from "./textLayout";
 import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
@@ -277,6 +277,10 @@ export function Canvas({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const editRef = useRef<HTMLTextAreaElement | null>(null);
+  // Mousedown lands before blur: when editing text A and pressing on text B,
+  // the intercept below stashes B here so the blur commits A and opens B
+  // instead of closing the editor outright.
+  const editSwitch = useRef<string | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
@@ -3583,6 +3587,17 @@ export function Canvas({
       // Outside the crop window: apply and let the click through.
       setCropId(null);
     }
+    // Editing one text layer and pressing on another starts editing that one
+    // instead: the blur still to come commits the old copy (re-hug
+    // included), then opens the new editor over the press. No drag starts.
+    if (edit && snap.tool === "select" && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      const hitT = hitTest(root, wpt.x, wpt.y, { deep: true });
+      if (hitT && hitT.kind === "text" && hitT.id !== edit.id && !hitT.locked && hitT.visible) {
+        editSwitch.current = hitT.id;
+        engine.dispatch({ type: "select", ids: [hitT.id] });
+        return;
+      }
+    }
     if (snap.tool === "image") {
       pendingImage.current = { x: wpt.x, y: wpt.y };
       fileRef.current?.click();
@@ -5151,7 +5166,8 @@ export function Canvas({
           : k === "text"
             ? clicked
               ? { text: "", sizingW: "hug", sizingH: "hug", fontSize: 16 }
-              : { text: "", sizingW: "fixed", sizingH: "hug", fontSize: 16 }
+              : // A dragged box is exact dimensions: Fixed size, like Figma.
+                { text: "", sizingW: "fixed", sizingH: "fixed", fontSize: 16 }
             : k === "line" || k === "arrow"
               ? { rotation: nodeRotation }
               : {};
@@ -5980,6 +5996,7 @@ export function Canvas({
       // The overlay is a real textarea, so the wrap style is handed to the
       // browser's own text-wrap - the standard editor rule.
       ...((wp.node.textWrap === "balance" || wp.node.textWrap === "pretty") ? { textWrap: wp.node.textWrap } : {}),
+      ...(indentOf(wp.node) ? { textIndent: `${indentOf(wp.node) * snap.zoom}px` } : {}),
       ...(gutter ? { paddingLeft: Math.round(gutter * snap.zoom) } : {}),
     } as CSSProperties;
   })();
@@ -6078,7 +6095,11 @@ export function Canvas({
             if (n && (n.sizingW === "hug" || n.sizingH === "hug"))
               Object.assign(patch, hugSize(n, edit.text));
             engine.dispatch({ type: "patch", id: edit.id, patch });
-            setEdit(null);
+            const sw = editSwitch.current;
+            editSwitch.current = null;
+            const nn = sw ? worldPos(snap.pages[snap.page].root, sw)?.node : null;
+            if (nn && nn.kind === "text") setEdit({ id: sw as string, text: nn.text });
+            else setEdit(null);
           }}
           onKeyDown={(e) => {
             if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter"))
@@ -7014,7 +7035,10 @@ function paintText(
 ) {
   const textFill = fillStyle(ctx, n, sx, sy, sw, sh);
   const size = Math.max(1, n.fontSize * z);
-  ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
+  // Small caps rides the font's own small-cap glyphs (with the copy lowered
+  // so every letter takes part), not full-height capitals.
+  const smallCaps = n.textCase === "small-caps";
+  ctx.font = `${smallCaps ? "small-caps " : ""}${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
   ctx.textBaseline = "top";
   ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
   const clipped = n.truncate;
@@ -7029,15 +7053,15 @@ function paintText(
     if (clipped) ctx.restore();
     return;
   }
-  if (n.textCase === "upper" || n.textCase === "small-caps") content = content.toUpperCase();
-  if (n.textCase === "lower") content = content.toLowerCase();
-  if (n.textCase === "title") content = content.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
-  const lh = Math.max(size, (n.lineHeight || n.fontSize * 1.2) * z);
+  content = applyTextCase(content, n.textCase);
+  // Tight leading stays tight: the floor is degenerate input, not the font
+  // size, so the painter agrees with the hug box and the field.
+  const lh = Math.max(1, (n.lineHeight || n.fontSize * 1.2) * z);
   const ls = (n.letterSpacing || 0) * z;
   const paraGap = (n.paragraphSpacing || 0) * z;
   const wrap = n.sizingW !== "hug";
   const paras = content.split("\n");
-  const indent = (n.paragraphIndent || 0) * z;
+  const indent = indentOf(n) * z;
   type Row = { line: string; lastInPara: boolean; lead: number; marker: string };
   const rows: Row[] = [];
   const widthOfLine = (line: string) =>
@@ -7064,7 +7088,11 @@ function paintText(
   });
   let lines = rows;
   if (n.truncate) {
-    const limit = Math.max(1, n.maxLines || 1);
+    // Fixed-size layers have no max-lines setting: the box itself decides
+    // how many rows survive, with the ellipsis on the last one that fits.
+    const limit = valignApplies(n)
+      ? fitLineCount(sh / Math.max(1e-6, z), n.lineHeight || n.fontSize * 1.2, n.paragraphSpacing || 0)
+      : Math.max(1, n.maxLines || 1);
     if (lines.length > limit) {
       const clipped = lines.slice(0, limit);
       const last = clipped[clipped.length - 1];
@@ -7084,8 +7112,12 @@ function paintText(
   }
   const blockH = lines.reduce((h, r) => h + lh + (r.lastInPara ? paraGap : 0), 0) - paraGap;
   let y0 = sy;
-  if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
-  if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
+  // Hug axes ignore vertical alignment: only a fixed box has spare room to
+  // distribute (and a hug box that exactly fits would centre on zero anyway).
+  if (valignApplies(n)) {
+    if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
+    if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
+  }
   const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
   const setDrop = (drop?: Effect) => {
     if (!drop) {
@@ -7138,13 +7170,16 @@ function paintText(
     const justify = n.textAlign === "justified" && wrap && !row.lastInPara && line.includes(" ");
     if (justify) {
       const words = line.trim().split(/\s+/);
-      const total = words.reduce((s, w) => s + measureCached(ctx, w), 0);
-      const gap = words.length > 1 ? (innerW - total) / (words.length - 1) : 0;
+      const widths = words.map((w) => measureCached(ctx, w) + ls * Math.max(0, w.length - 1));
+      const total = widths.reduce((s, w) => s + w, 0);
+      // Letter-spacing still applies between the words; the distributed gap
+      // rides on top of it, as word-spacing does in CSS.
+      const gap = words.length > 1 ? (innerW - total - ls * (words.length - 1)) / (words.length - 1) : 0;
       let x = left;
       ctx.textAlign = "left";
-      for (const w of words) {
-        paintLine(w, x, ty);
-        x += measureCached(ctx, w) + gap;
+      for (let wi = 0; wi < words.length; wi++) {
+        paintLine(words[wi], x, ty);
+        x += widths[wi] + ls + gap;
       }
       ctx.textAlign = "left";
     } else if (ls) {
@@ -7161,9 +7196,10 @@ function paintText(
       paintLine(line, tx, ty, wrap ? innerW : undefined);
     }
     if (decorate && fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
-      const textWidth = measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
-      const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
-      const x0 = n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
+      const textWidth = justify ? innerW : measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
+      // Underline hugs the baseline; strikethrough crosses mid x-height.
+      const yy = n.textDecoration === "underline" ? ty + size : ty + size * 0.7;
+      const x0 = justify ? left : n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
       ctx.save();
       ctx.shadowColor = "transparent";
       ctx.globalAlpha *= n.fillOpacity ?? 1;

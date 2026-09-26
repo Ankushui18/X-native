@@ -1291,7 +1291,14 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     rules.push(`font-weight: ${n.fontWeight};`);
     if (n.lineHeight) rules.push(`line-height: ${devLen(Math.round(n.lineHeight), unit)};`);
     if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
-    if (n.textAlign && n.textAlign !== "left") rules.push(`text-align: ${n.textAlign};`);
+    if (n.textAlign && n.textAlign !== "left")
+      rules.push(`text-align: ${n.textAlign === "justified" ? "justify" : n.textAlign};`);
+    if (n.textDecoration && n.textDecoration !== "none") rules.push(`text-decoration: ${n.textDecoration};`);
+    if (n.textCase && n.textCase !== "none")
+      rules.push(
+        `text-transform: ${n.textCase === "upper" ? "uppercase" : n.textCase === "lower" ? "lowercase" : n.textCase === "title" ? "capitalize" : "none"};`,
+      );
+    if (n.textCase === "small-caps") rules.push("font-variant: small-caps;");
     // The three type settings that have a real CSS equivalent are handed over
     // by name, so the snippet reproduces the paragraph instead of only noting
     // that it differs.
@@ -1360,7 +1367,13 @@ function generateTailwind(n: XNode): string {
     else if (n.fontWeight >= 600) cls.push("font-semibold");
     else if (n.fontWeight >= 500) cls.push("font-medium");
     if (n.lineHeight) cls.push(`leading-[${Math.round(n.lineHeight)}px]`);
-    if (n.textAlign && n.textAlign !== "left") cls.push(`text-${n.textAlign}`);
+    if (n.textAlign && n.textAlign !== "left")
+      cls.push(n.textAlign === "justified" ? "text-justify" : `text-${n.textAlign}`);
+    if (n.textDecoration === "underline") cls.push("underline");
+    else if (n.textDecoration === "strikethrough") cls.push("line-through");
+    if (n.textCase === "upper") cls.push("uppercase");
+    else if (n.textCase === "lower") cls.push("lowercase");
+    else if (n.textCase === "title") cls.push("capitalize");
   }
   return `<!-- ${n.name} -->\n<div className="${cls.join(" ")}">\n  {/* Children */}\n</div>`;
 }
@@ -1369,8 +1382,20 @@ function generateSwiftUI(n: XNode): string {
   const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
   if (n.kind === "text") {
     const weight = n.fontWeight >= 700 ? ".bold" : n.fontWeight >= 600 ? ".semibold" : n.fontWeight >= 500 ? ".medium" : ".regular";
+    const deco =
+      n.textDecoration === "underline"
+        ? "\n    .underline()"
+        : n.textDecoration === "strikethrough"
+          ? "\n    .strikethrough()"
+          : "";
+    const tcase =
+      n.textCase === "upper"
+        ? "\n    .textCase(.uppercase)"
+        : n.textCase === "lower"
+          ? "\n    .textCase(.lowercase)"
+          : "";
     return `Text("${n.text || n.name}")
-    .font(.system(size: ${n.fontSize}, weight: ${weight}))
+    .font(.system(size: ${n.fontSize}, weight: ${weight}))${deco}${tcase}
     .foregroundColor(Color(hex: "${hex(n.fill || "#000000")}"))`;
   }
   const stack = n.layout ? (n.layout.direction === "horizontal" ? "HStack" : "VStack") : "ZStack";
@@ -1428,7 +1453,12 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
     };
     if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
     if (n.letterSpacing) textStyle.letterSpacing = `${n.letterSpacing}px`;
-    if (n.textAlign && n.textAlign !== "left") textStyle.textAlign = n.textAlign;
+    if (n.textAlign && n.textAlign !== "left")
+      textStyle.textAlign = n.textAlign === "justified" ? "justify" : n.textAlign;
+    if (n.textDecoration && n.textDecoration !== "none") textStyle.textDecoration = n.textDecoration;
+    if (n.textCase === "upper" || n.textCase === "lower" || n.textCase === "title")
+      textStyle.textTransform = n.textCase === "title" ? "capitalize" : n.textCase;
+    else if (n.textCase === "small-caps") textStyle.fontVariant = "small-caps";
 
     const styleEntries = Object.entries(textStyle)
       .map(([k, v]) => `    ${k}: ${typeof v === "number" ? v : `"${v}"`},`)
@@ -2320,6 +2350,20 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     if (n.lineHeight) L("Line height", devLen(n.lineHeight, unit), "Typography");
     if (n.letterSpacing) L("Letter spacing", devLen(n.letterSpacing, unit), "Typography");
     if (n.textAlign && n.textAlign !== "left") L("Alignment", n.textAlign, "Typography");
+    if (n.textDecoration && n.textDecoration !== "none")
+      L("Decoration", n.textDecoration === "strikethrough" ? "Strikethrough" : "Underline", "Typography");
+    if (n.textCase && n.textCase !== "none")
+      L(
+        "Letter case",
+        n.textCase === "upper"
+          ? "Uppercase"
+          : n.textCase === "lower"
+            ? "Lowercase"
+            : n.textCase === "title"
+              ? "Title Case"
+              : "Small caps",
+        "Typography",
+      );
     if (n.textAlignVertical && n.textAlignVertical !== "top")
       L("Vertical alignment", n.textAlignVertical, "Typography");
     if ((n.textWrap === "balance" || n.textWrap === "pretty")) L("Wrap style", n.textWrap, "Typography");
@@ -3134,7 +3178,17 @@ function Design({
       });
       return;
     }
-    const next = key === "opacity" ? Math.max(0, Math.min(1, v)) : v;
+    // Floor the type metrics the renderer could not honour: a sub-unit font
+    // never paints, a negative leading/paragraph gap/indent inverts the
+    // layout instead of tightening it. Zero leading stays Auto.
+    const next =
+      key === "opacity"
+        ? Math.max(0, Math.min(1, v))
+        : key === "fontSize"
+          ? Math.max(1, v)
+          : key === "lineHeight" || key === "paragraphSpacing"
+            ? Math.max(0, v)
+            : v;
     engine.dispatch({ type: "patch", id: n.id, patch: { [key]: next } });
     if (key === "fontSize" || key === "letterSpacing" || key === "lineHeight" || key === "paragraphSpacing")
       refitHug({ [key]: next });
@@ -3443,14 +3497,22 @@ function Design({
                 Truncate text
               </label>
               {n.truncate && (
-                <div className="insp-pad">
+                <div
+                  className="insp-pad"
+                  title={
+                    n.sizingW === "hug" || n.sizingH === "hug"
+                      ? undefined
+                      : "Max lines needs Auto width or Auto height - a fixed box truncates at its own height"
+                  }
+                >
                   <Field
                     label="L"
                     value={n.maxLines}
+                    disabled={n.sizingW !== "hug" && n.sizingH !== "hug"}
                     onChange={(v) =>
                       // Maximum lines and maximum height are exclusive: setting
                       // either clears the other, in both directions.
-                      patchType({ maxLines: v, maxH: undefined })
+                      patchType({ maxLines: Math.max(1, Math.round(v)), maxH: undefined })
                     }
                   />
                 </div>
@@ -3465,9 +3527,7 @@ function Design({
                 <Field
                   label="⇥"
                   value={n.paragraphIndent}
-                  onChange={(v) =>
-                    patchType({ paragraphIndent: v })
-                  }
+                  onChange={(v) => patchType({ paragraphIndent: Math.max(0, v) })}
                   aria="First-line indent of each paragraph"
                 />
               </div>
@@ -3479,7 +3539,7 @@ function Design({
                     value={n.textWrap}
                     onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
                   >
-                    <option value="auto">Wrap: Off</option>
+                    <option value="auto">Wrap: Auto</option>
                     <option value="balance">Wrap: Balance</option>
                     <option value="pretty">Wrap: Pretty</option>
                   </select>

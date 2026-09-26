@@ -59,28 +59,90 @@ export function listGutter(ctx: CanvasRenderingContext2D | null, n: XNode): numb
   return measureCached(ctx, `${listMarker(n.listStyle, 9)} `);
 }
 
+/**
+ * Vertical alignment only takes on a Fixed-size layer: auto-width and
+ * auto-height layers ignore it, so the renderer centres nothing on a hug
+ * axis. Fill counts as fixed - the box has a definite size.
+ */
+export function valignApplies(n: XNode): boolean {
+  return n.sizingW !== "hug" && n.sizingH !== "hug";
+}
+
+/**
+ * First-line indent only takes with left-aligned text; every other
+ * alignment ignores the field, so measuring and painting both read this
+ * instead of the raw value.
+ */
+export function indentOf(n: XNode): number {
+  return n.textAlign === "left" ? n.paragraphIndent || 0 : 0;
+}
+
+/**
+ * The layer's case transform as a pure string map. Small caps is NOT an
+ * uppercasing: the renderer pairs the lowered copy with a small-caps font
+ * variant, which keeps the distinct small-cap proportions instead of
+ * full-height capitals.
+ */
+export function applyTextCase(text: string, textCase: XNode["textCase"]): string {
+  if (textCase === "upper") return text.toUpperCase();
+  if (textCase === "lower" || textCase === "small-caps") return text.toLowerCase();
+  if (textCase === "title") return text.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
+  return text;
+}
+
+/**
+ * How many lines of a fixed-size box stay visible under truncation: the
+ * rows its height fits, at least one. Fixed layers have no max-lines
+ * setting, so the box itself is the limit.
+ */
+export function fitLineCount(boxH: number, lineH: number, paraGap: number): number {
+  if (!(lineH > 0)) return 1;
+  return Math.max(1, Math.floor((Math.max(0, boxH) + Math.max(0, paraGap)) / (lineH + Math.max(0, paraGap))));
+}
+
 export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: string) {
   ctx.font = `${n.fontWeight} ${n.fontSize}px ${n.fontFamily}, Inter, system-ui`;
   const wrap = n.sizingW !== "hug";
   const ls = n.letterSpacing || 0;
   const widthOf = (line: string) =>
     measureCached(ctx, line) + (ls ? ls * Math.max(0, line.length - 1) : 0);
-  const indent = n.paragraphIndent || 0;
+  const indent = indentOf(n);
+  // Truncation cuts the taken rows at max lines, exactly like the painter;
+  // the gaps counted are the paragraph breaks that survive the cut.
+  const limit = n.truncate ? Math.max(1, n.maxLines || 1) : Infinity;
   let lines = 0;
+  let completeParas = 0;
+  let partialTake = false;
   let maxW = 8;
-  (text || " ").split("\n").forEach((para, pi) => {
+  let cut = false;
+  for (const [pi, para] of (text || " ").split("\n").entries()) {
+    if (lines >= limit) {
+      cut = true;
+      break;
+    }
     const marker = listMarker(n.listStyle, pi);
     const gutter = marker ? widthOf(`${marker} `) : 0;
     const avail = wrap ? n.w - gutter - indent : 1e6;
     let wrapped = wrapLines(ctx, para || " ", avail > 0 ? avail : 1e6, ls);
     if (wrap && (n.textWrap === "balance" || n.textWrap === "pretty") && n.w > 0)
       wrapped = balanceLines(wrapped, avail, widthOf, n.textWrap);
-    lines += Math.max(1, wrapped.length);
-    wrapped.forEach((line, i) => {
-      maxW = Math.max(maxW, gutter + (i === 0 ? indent : 0) + widthOf(line));
-    });
-  });
-  return { lines, maxW };
+    const take = Math.min(wrapped.length, Math.max(0, limit - lines));
+    for (let i = 0; i < take; i++) {
+      maxW = Math.max(maxW, gutter + (i === 0 ? indent : 0) + widthOf(wrapped[i]));
+    }
+    if (take < wrapped.length) cut = true;
+    if (take > 0 && take < wrapped.length) partialTake = true;
+    if (take >= wrapped.length && take > 0) completeParas += 1;
+    lines += Math.max(1, take);
+  }
+  // The painter hangs a gap on every taken paragraph's last row, then takes
+  // one back: a cut mid-paragraph forces the flag on the cut row, which is
+  // the partial take counted here.
+  const gaps = Math.max(0, completeParas + (partialTake ? 1 : 0) - (lines > 0 ? 1 : 0));
+  // An auto-width layer appends the ellipsis past the last line instead of
+  // trimming to fit, so the box budgets for it when a cut happened.
+  if (cut && !wrap) maxW += widthOf("\u2026");
+  return { lines, gaps, maxW };
 }
 
 export function wrapLines(
@@ -165,6 +227,18 @@ export function measureCtx(): CanvasRenderingContext2D | null {
  * patch. Pass the node with its *target* sizing to size it as it is about to
  * wrap; the padding matches what the editor commits with.
  */
+/**
+ * Hug height for measured rows: every row its leading, every surviving
+ * paragraph break its gap, never shorter than one leading. Pure, so the
+ * headless checks cover the rule the canvas-backed hugSize applies.
+ */
+export function hugHeight(lines: number, gaps: number, lh: number, paraGap: number): number {
+  return Math.max(
+    Math.ceil(lh),
+    Math.ceil(Math.max(1, lines) * lh + Math.max(0, gaps) * Math.max(0, paraGap)),
+  );
+}
+
 export function hugSize(
   n: XNode,
   text: string,
@@ -176,8 +250,9 @@ export function hugSize(
   const wantH = axes?.h ?? n.sizingH === "hug";
   const m = textMetrics(ctx, n, text);
   const lh = n.lineHeight || n.fontSize * 1.2;
+  const gap = n.paragraphSpacing || 0;
   const out: { w?: number; h?: number } = {};
   if (wantW) out.w = Math.max(8, Math.ceil(m.maxW + 4));
-  if (wantH) out.h = Math.max(Math.ceil(lh), Math.ceil(Math.max(1, m.lines) * lh));
+  if (wantH) out.h = hugHeight(m.lines, m.gaps, lh, gap);
   return out;
 }

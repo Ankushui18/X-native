@@ -23,6 +23,7 @@ import { finishPenDraft } from "./penDraft";
 import { THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
+import { hugSize } from "./textLayout";
 import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo } from "./zoom";
 import { roundToPixel } from "./round";
 
@@ -167,6 +168,20 @@ function findNode(
     if (hit) return hit;
   }
   return null;
+}
+
+/**
+ * Re-fit a text layer's hug axes after a type shortcut changed its metrics.
+ * The follow-up patch lands in the engine's burst coalescer with the metric
+ * patch, so one keypress stays one undo step.
+ */
+function rehugText(engine: Engine, id: string, over: Partial<XNode>) {
+  const snap = engine.snapshot();
+  const n = find(snap.pages[snap.page].root, id);
+  if (!n || n.kind !== "text") return;
+  if (n.sizingW !== "hug" && n.sizingH !== "hug") return;
+  const fit = hugSize({ ...n, ...over } as XNode, n.text);
+  if (fit.w !== undefined || fit.h !== undefined) engine.dispatch({ type: "patch", id, patch: fit });
 }
 
 function matchesLayer(n: XNode, q: string): boolean {
@@ -1532,8 +1547,9 @@ export function bindHotkeys(
       extra.onMinimize();
       return;
     }
-    // ⌘\ / ⌘. — toggle clean canvas / interface visibility
-    if (meta && (backslash || period)) {
+    // ⌘\ / ⌘. — toggle clean canvas / interface visibility. ⌥ stays out of
+    // the period half: ⌥⌘. is font-weight up.
+    if (meta && (backslash || (period && !e.altKey))) {
       e.preventDefault();
       extra.onHide();
       return;
@@ -1707,9 +1723,24 @@ export function bindHotkeys(
       engine.dispatch({ type: "copy" });
       return;
     }
-    if (meta && !e.altKey && e.key.toLowerCase() === "x") {
+    if (meta && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "x") {
       e.preventDefault();
       engine.dispatch({ type: "cut" });
+      return;
+    }
+    if (meta && !e.altKey && e.shiftKey && (e.key.toLowerCase() === "x" || e.code === "KeyX")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          engine.dispatch({
+            type: "patch",
+            id,
+            patch: { textDecoration: n.textDecoration === "strikethrough" ? "none" : "strikethrough" },
+          });
+        }
+      }
       return;
     }
     if (meta && e.key.toLowerCase() === "v") {
@@ -1778,12 +1809,52 @@ export function bindHotkeys(
       return;
     }
     // ⌘L adds stack layout, ⌥⌘L removes stack layout
-    if (meta && !e.shiftKey && e.key.toLowerCase() === "l") {
+    if (meta && !e.shiftKey && (e.key.toLowerCase() === "l" || e.code === "KeyL")) {
       e.preventDefault();
       const snap = engine.snapshot();
       if (!snap.selection.length) return;
-      if (e.altKey) removeAutoLayout(engine, snap);
-      else addAutoLayout(engine, snap);
+      // ⌥⌘L is text-align-left (the sheet's claim); remove-layout lives on
+      // ⇧⌥A alone now. With no text selected the chord does nothing. e.code:
+      // with ⌥ held macOS reports L as ¬, so e.key never matches.
+      if (e.altKey) {
+        const root = snap.pages[snap.page].root;
+        for (const id of snap.selection) {
+          const n = find(root, id);
+          if (n && n.kind === "text") engine.dispatch({ type: "patch", id, patch: { textAlign: "left" } });
+        }
+      } else addAutoLayout(engine, snap);
+      return;
+    }
+    // Text align center / right / justified: the sheet has advertised the
+    // first two all along with no handler behind them.
+    if (meta && e.altKey && !e.shiftKey && (e.key.toLowerCase() === "t" || e.code === "KeyT")) {
+      e.preventDefault();
+      const snap = engine.snapshot();
+      const root = snap.pages[snap.page].root;
+      for (const id of snap.selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") engine.dispatch({ type: "patch", id, patch: { textAlign: "center" } });
+      }
+      return;
+    }
+    if (meta && e.altKey && !e.shiftKey && (e.key.toLowerCase() === "r" || e.code === "KeyR")) {
+      e.preventDefault();
+      const snap = engine.snapshot();
+      const root = snap.pages[snap.page].root;
+      for (const id of snap.selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") engine.dispatch({ type: "patch", id, patch: { textAlign: "right" } });
+      }
+      return;
+    }
+    if (meta && e.altKey && !e.shiftKey && (e.key.toLowerCase() === "j" || e.code === "KeyJ")) {
+      e.preventDefault();
+      const snap = engine.snapshot();
+      const root = snap.pages[snap.page].root;
+      for (const id of snap.selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") engine.dispatch({ type: "patch", id, patch: { textAlign: "justified" } });
+      }
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "l") {
@@ -1944,7 +2015,9 @@ export function bindHotkeys(
         const n = find(root, id);
         if (n && n.kind === "text") {
           e.preventDefault();
-          engine.dispatch({ type: "patch", id, patch: { fontWeight: n.fontWeight >= 700 ? 400 : 700 } });
+          const fontWeight = n.fontWeight >= 700 ? 400 : 700;
+          engine.dispatch({ type: "patch", id, patch: { fontWeight } });
+          rehugText(engine, id, { fontWeight });
         }
       }
       return;
@@ -1970,7 +2043,9 @@ export function bindHotkeys(
         const n = find(root, id);
         if (n && n.kind === "text") {
           e.preventDefault();
-          engine.dispatch({ type: "patch", id, patch: { fontSize: Math.max(1, (n.fontSize || 14) + 1) } });
+          const fontSize = Math.max(1, (n.fontSize || 14) + 1);
+          engine.dispatch({ type: "patch", id, patch: { fontSize } });
+          rehugText(engine, id, { fontSize });
         }
       }
       return;
@@ -1981,7 +2056,64 @@ export function bindHotkeys(
         const n = find(root, id);
         if (n && n.kind === "text") {
           e.preventDefault();
-          engine.dispatch({ type: "patch", id, patch: { fontSize: Math.max(1, (n.fontSize || 14) - 1) } });
+          const fontSize = Math.max(1, (n.fontSize || 14) - 1);
+          engine.dispatch({ type: "patch", id, patch: { fontSize } });
+          rehugText(engine, id, { fontSize });
+        }
+      }
+      return;
+    }
+    // Font weight ⌥⌘< / >, stepping through the nine weights. e.code: with ⌥
+    // held macOS reports the symbol keys as ≤ / ≥, never < / >.
+    if (meta && e.altKey && !e.shiftKey && (e.code === "Comma" || e.code === "Period")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          const step = e.code === "Period" ? 100 : -100;
+          const fontWeight = Math.max(100, Math.min(900, Math.round((n.fontWeight || 400) / 100) * 100 + step));
+          engine.dispatch({ type: "patch", id, patch: { fontWeight } });
+          rehugText(engine, id, { fontWeight });
+        }
+      }
+      return;
+    }
+    // Letter spacing ⌥< / >, line height ⇧⌥< / >. A leading nudge off Auto
+    // starts from the effective value instead of zero.
+    if (!meta && !e.ctrlKey && e.altKey && (e.code === "Comma" || e.code === "Period")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          const step = e.code === "Period" ? 1 : -1;
+          if (e.shiftKey) {
+            const lineHeight = Math.max(1, Math.round(n.lineHeight || n.fontSize * 1.2) + step);
+            engine.dispatch({ type: "patch", id, patch: { lineHeight } });
+            rehugText(engine, id, { lineHeight });
+          } else {
+            const letterSpacing = Math.round(((n.letterSpacing || 0) + step) * 100) / 100;
+            engine.dispatch({ type: "patch", id, patch: { letterSpacing } });
+            rehugText(engine, id, { letterSpacing });
+          }
+        }
+      }
+      return;
+    }
+    // Underline ⌥U: the help article's Mac chord (⌘U stays too). e.code
+    // again - ⌥U types a ¨ dead key, so e.key never reads "u".
+    if (!meta && !e.ctrlKey && e.altKey && !e.shiftKey && e.code === "KeyU") {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          engine.dispatch({
+            type: "patch",
+            id,
+            patch: { textDecoration: n.textDecoration === "underline" ? "none" : "underline" },
+          });
         }
       }
       return;
@@ -3159,11 +3291,20 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
     items: [
       { id: "bold", name: "Bold", keys: ["⌘", "B"] },
       { id: "underline", name: "Underline", keys: ["⌘", "U"] },
+      { id: "underline-opt", name: "Underline", keys: ["⌥", "U"] },
+      { id: "strike", name: "Strikethrough", keys: ["⌘", "⇧", "X"] },
       { id: "font-inc", name: "Increase font size", keys: ["⌘", "⇧", ">"] },
       { id: "font-dec", name: "Decrease font size", keys: ["⌘", "⇧", "<"] },
+      { id: "weight-inc", name: "Increase font weight", keys: ["⌘", "⌥", ">"] },
+      { id: "weight-dec", name: "Decrease font weight", keys: ["⌘", "⌥", "<"] },
+      { id: "tracking-inc", name: "Increase letter spacing", keys: ["⌥", ">"] },
+      { id: "tracking-dec", name: "Decrease letter spacing", keys: ["⌥", "<"] },
+      { id: "leading-inc", name: "Increase line height", keys: ["⇧", "⌥", ">"] },
+      { id: "leading-dec", name: "Decrease line height", keys: ["⇧", "⌥", "<"] },
       { id: "align-left", name: "Text align left", keys: ["⌥", "⌘", "L"] },
       { id: "align-center", name: "Text align center", keys: ["⌥", "⌘", "T"] },
       { id: "align-right", name: "Text align right", keys: ["⌥", "⌘", "R"] },
+      { id: "align-justify", name: "Text align justified", keys: ["⌥", "⌘", "J"] },
     ],
   },
   {

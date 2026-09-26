@@ -19,6 +19,7 @@
 
 import type { XNode } from "./types";
 import { outlineVariableStroke, shapePoly } from "./geometry";
+import { applyTextCase, valignApplies } from "../ui/textLayout";
 import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
 
 export function escXml(value: string) {
@@ -415,10 +416,10 @@ export function svgNode(n: XNode, top = false): string {
   const body: string[] = [];
   if (defs.length) body.push(`<defs>${defs.join("")}</defs>`);
   if (n.kind === "text") {
-    let text = n.text;
-    if (n.textCase === "upper" || n.textCase === "small-caps") text = text.toUpperCase();
-    if (n.textCase === "lower") text = text.toLowerCase();
-    if (n.textCase === "title") text = text.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
+    // Small caps lowers the copy and rides font-variant, exactly like the
+    // canvas painter, instead of exporting full-height capitals.
+    const smallCaps = n.textCase === "small-caps";
+    const text = applyTextCase(n.text, n.textCase);
     let lines = text.split("\n");
     if (n.truncate && lines.length > Math.max(1, n.maxLines || 1)) {
       lines = lines.slice(0, Math.max(1, n.maxLines || 1));
@@ -428,18 +429,16 @@ export function svgNode(n: XNode, top = false): string {
     const tx = n.textAlign === "center" ? n.w / 2 : n.textAlign === "right" ? n.w : 0;
     const lineHeight = n.lineHeight || n.fontSize * 1.2;
     const blockHeight = lines.length * lineHeight;
+    // Hug axes ignore vertical alignment, like the canvas painter.
+    const valign = valignApplies(n) ? n.textAlignVertical : "top";
     const yOffset =
-      n.textAlignVertical === "middle"
-        ? (n.h - blockHeight) / 2
-        : n.textAlignVertical === "bottom"
-          ? n.h - blockHeight
-          : 0;
+      valign === "middle" ? (n.h - blockHeight) / 2 : valign === "bottom" ? n.h - blockHeight : 0;
     const content = lines
       .map((line, i) => `<tspan x="${tx}" dy="${i ? lineHeight : yOffset + n.fontSize}">${escXml(line)}</tspan>`)
       .join("");
     const textStroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
     body.push(
-      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}" letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${filter}>${content}</text>`,
+      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${filter}>${content}</text>`,
     );
   } else if (n.fillType === "image" && n.imageSrc) {
     // Fill covers like the canvas does (slice, not stretch); the stored crop

@@ -20,8 +20,8 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 10 | Fill / color / gradient | ✅ done | P-001–P-010 (19 tests) |
 | 11 | Strokes (+ variable) | ✅ done | K-001–K-009 (55 tests) |
 | 12 | Effects / shadows / blur | ✅ done | L-001–L-010 (51 tests) |
-| 13 | Images (place/crop/mask/export) | … | |
-| 14 | Typography (+ phantom controls) | … | |
+| 13 | Images (place/crop/mask/export) | ✅ done | M-001–M-010 + export peek (52 tests) |
+| 14 | Typography (+ phantom controls) | ✅ done | Y-001–Y-015 (39 tests) |
 | 15 | Vector / pen (object vs edit mode) | … | |
 | 16 | Layers / structure | … | |
 | 17 | Components | … | |
@@ -558,3 +558,101 @@ natural size capped 480px; clipboard image/png ladder; inspector
 - Mask shortcut change (§26 owns shortcuts).
 - Export: crop-rect-exact, tile-pattern, stacked-fill, rotation and
   adjustment baking (§24 owns import/export).
+
+## §14 — Typography (+ phantom controls)
+
+Figma refs: "Adjust text dimensions and resizing" (click → auto width,
+drag → fixed, manual resize → fixed on the axis, scale tool scales
+font + bounds, wrap style has no effect on auto width), "Explore text
+properties" (all 4 chunks: alignment incl. vertical-align-is-fixed-
+only, decoration + underline details, family/weight/size, hanging
+quotes/lists, case, tracking, leading px/%/Auto, lists + list spacing,
+numbers, OpenType, indent left-only, paragraph spacing, truncate + max
+lines gating, vertical trim, wrap styles + Dev Mode `text-wrap`),
+"Guide to text" (both chunks: creation, text on a path, Enter/double-
+click edit, click-another-to-edit, multi-edit, fill-is-glyphs,
+stroke-is-per-character), shortcut cheatsheets (⌘⌥L/T/R/J align,
+⌘U/⌥U underline, ⇧⌘X strikethrough, ⇧⌘A remove-layout, > increases).
+After: full suite green
+(934 + 64 + 46 + 63 + 49 + 92 + 19 + 19 + 55 + 51 + 52 + 39 new type
+checks) + build clean.
+
+### Fixed (shipped in the §14 typography commit on this branch)
+
+- Y-001 — Drag-created text came out auto-height; a dragged box is
+  exact dimensions. Fix: drag creates Fixed/Fixed (click stays
+  hug/hug).
+- Y-002 — Vertical alignment applied on hug axes (visible with
+  truncate). Fix: `valignApplies` gates the renderer and SVG export
+  to fixed-size layers; fill counts as fixed.
+- Y-003 — Small caps rendered as full-height capitals. Fix: the copy
+  is lowered and painted/exported under a real small-caps variant
+  (`applyTextCase` + `font-variant`), keeping small-cap proportions.
+- Y-004 — Leading rendered floored at the font size while the field
+  and the hug box allowed tighter values: triple inconsistency. Fix:
+  the painter floors at 1px, so tight leading renders everywhere it
+  measures.
+- Y-005 — First-line indent applied under every alignment. Fix:
+  `indentOf` gates measure, paint and the edit overlay's text-indent
+  to left-aligned text.
+- Y-006 — Justified rows ignored letter-spacing in the gap math and
+  wore a short underline. Fix: tracking is accounted between words
+  with the distributed gap on top; decoration spans the row.
+- Y-007 — Strikethrough sat at half the em (cap-top area). Fix: it
+  crosses at 0.7em, mid x-height.
+- Y-008 — Hug height ignored paragraph spacing and truncation: tall
+  copy overflowed short boxes. Fix: `textMetrics` counts surviving
+  gaps and caps rows at max lines (budgeting the ellipsis on auto
+  width); `hugHeight` adds the gaps.
+- Y-009 — Fixed-size truncate cut at max lines though fixed layers
+  have no such setting, and the Max lines field showed regardless.
+  Fix: fixed layers truncate at the rows the box fits
+  (`fitLineCount`); the field disables off auto/hug with the reason
+  as its tooltip.
+- Y-010 — Clicking another text layer mid-edit only selected it.
+  Fix: the press commits the old copy (re-hug included) and opens
+  the new editor; no drag starts. (Multi-edit-all stays out: new
+  feature.)
+- Y-011 — The sheet advertised ⌥⌘L/T/R text alignment with no
+  handlers, and ⌥⌘L secretly removed auto layout. Fix: L/T/R/J
+  align text (Mac dead-key-safe via e.code); remove-layout keeps
+  its advertised ⇧⌥A alone.
+- Y-012 — Missing type chords + stale hug boxes after the existing
+  ones. Fix: weight ⌥⌘>/< (±100), tracking ⌥>/< (±1), leading
+  ⇧⌥>/< (±1 from the effective value), strikethrough ⇧⌘X (cut now
+  excludes Shift), underline ⌥U alongside ⌘U; every metric chord
+  re-hugs (one undo step via the burst coalescer); ⌘. hide-UI yields
+  ⌥⌘. to weight-up; sheet rows added.
+- Y-013 — Wrap-style "Off" misnamed Figma's Auto (default greedy
+  wrap). Fix: labelled Auto.
+- Y-014 — Dev Mode omitted decoration/case and emitted invalid
+  keywords (`text-align: justified`, `text-justify` as
+  `text-justified`). Fix: decoration + case/transform across CSS,
+  Tailwind, SwiftUI, React-style and spec rows; justify keywords
+  corrected.
+- Y-015 — Phantom values: the fields accepted sub-unit fonts and
+  negative leading/gaps/indents the renderer could not honour. Fix:
+  floors in `num()` (leading keeps 0 = Auto) and whole ≥1 max lines.
+
+### Verified parity (traced, no fix needed)
+
+Manual resize fixes the dragged axis; scale tool scales font +
+spacing + limits; auto-width breaks only on Return; fixed wraps and
+overflows vertically unclipped; justify skips the last line; Enter +
+double-click edit; Esc/⌘Enter commit; ⌘B bold; ⇧⌘>/< size direction
+(help-article prose claims `<` increases, but the cheatsheet gives
+`>` explicitly and convention + X's implementation agree, so X is
+kept); case options; lists with gutter markers; wrap auto/balance/
+pretty incl. overlay; truncate ellipsis trimming; font picker +
+system fonts; glyph fills + per-character strokes.
+
+### Deferred / out of scope
+
+- Text on a path; multi-edit; rich-text runs (`textRuns` is dead
+  model: nothing reads it); line-height % mode + px/% conversion;
+  underline details (style/thickness/offset/skip-ink/color); list
+  spacing as its own prop; numbers/OpenType/variable fonts; vertical
+  trim; hanging quotes/lists; italic (no model); links; spellcheck
+  beyond the native overlay; missing-font alert.
+- Type chords while the editor has focus (the typing guard stands).
+- SVG export wrapping + paragraph gaps (§24 owns export).
