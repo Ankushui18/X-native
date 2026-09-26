@@ -2501,8 +2501,10 @@ console.log("auto layout: wrap, and hugging with a filler inside:");
   });
   const child = (over = {}) => ({ id: "c", kind: "rect", name: "c", visible: true, w: 10, h: 10, ...over });
   t("wrap applies to a horizontal flow", wraps(layout({ wrap: true })));
-  // Figma: "When you have the horizontal selected, Wrap becomes available."
-  t("a vertical flow does not wrap, whatever the flag says", !wraps(layout({ wrap: true, direction: "vertical" })));
+  // Figma: wrap is offered on horizontal *and* vertical flows (vertical fills
+  // top to bottom, then starts a new column); only the grid flow never wraps.
+  t("a vertical flow wraps too", wraps(layout({ wrap: true, direction: "vertical" })));
+  t("but a grid flow never wraps", !wraps(layout({ wrap: true, direction: "grid" })));
   t("and a horizontal flow without the flag does not wrap", !wraps(layout()));
   t("no layout at all does not wrap", !wraps(undefined));
   const filling = [child({ sizingW: "fill" })];

@@ -42,6 +42,8 @@ import {
   cellBox,
   fillPatch,
   clampToPadding,
+  flowInsertIndex,
+  insideStrokeWidth,
   hugsCross,
   hugsMain,
   isAutoGap,
@@ -340,7 +342,29 @@ const MEMBER_REFUSED_KEYS = new Set([
   "path", "closed", "vectorNetwork",
   "gridCol", "gridRow", "gridPinned",
   "imageCrop", "kind", "booleanOp",
+  // Layout belongs to the main component: members refuse it through the
+  // generic patch too, not just through the autoLayout action. (Roots keep
+  // spacing fragments - padding and gaps - via `layoutSpacingFragment`.)
+  "layout",
 ]);
+
+/**
+ * The layout keys an instance root may override: padding and gaps only. The
+ * components article's table lets instances adjust auto-layout spacing while
+ * the structure - direction, wrap, alignment, sizing - stays with the main
+ * component. Stored as a fragment and merged over the master's layout at sync,
+ * so a master direction change still flows to instances that overrode padding.
+ */
+const LAYOUT_SPACING_KEYS = ["padding", "gap", "gapCross", "gapRows", "gapCols"] as const;
+function layoutSpacingFragment(l: Partial<AutoLayout> | null | undefined): Partial<AutoLayout> | null {
+  if (!l) return null;
+  const frag: Partial<AutoLayout> = {};
+  for (const k of LAYOUT_SPACING_KEYS) {
+    const v = l[k];
+    if (v !== undefined) (frag as Record<string, unknown>)[k] = v;
+  }
+  return Object.keys(frag).length ? frag : null;
+}
 
 /**
  * On instance roots and members a style is a paint override: mirror it
@@ -443,6 +467,8 @@ function sizeSignature(n: XNode): string {
 
 function applyLayout(n: XNode, gesture = false) {
   for (const c of n.children) applyLayout(c, gesture);
+  const entryW = n.w;
+  const entryH = n.h;
   const l = n.layout;
   if (!l) {
     if (n.children.length && (n.sizingW === "hug" || n.sizingH === "hug")) {
@@ -453,6 +479,9 @@ function applyLayout(n: XNode, gesture = false) {
       }
     }
     clampDims(n);
+    // A hug is a resize like any other: absolutely positioned children with
+    // constraints follow it, the same as after an explicit resize.
+    applyConstraints(n, entryW, entryH, n.w, n.h, true);
     return;
   }
   const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
@@ -465,12 +494,20 @@ function applyLayout(n: XNode, gesture = false) {
     // With automatic positioning off the objects stay where they are put - a
     // drop into a cell keeps it, empty cells and all - so their cells are read
     // off the arrangement the tracks were resolved from.
-    const first = planGrid(n, flow, l, hugW, hugH);
+    // The frame's own inside stroke counts as padding: tracks resolve inside
+    // it, cells paint inside it, and the hug grows around it. Outside and
+    // center strokes never count (layout.ts `insideStrokeWidth`).
+    const gsw = insideStrokeWidth(n);
+    const li =
+      gsw > 0 && Array.isArray(l.padding)
+        ? { ...l, padding: [l.padding[0] + gsw, l.padding[1] + gsw, l.padding[2] + gsw, l.padding[3] + gsw] as [number, number, number, number] }
+        : l;
+    const first = planGrid(n, flow, li, hugW, hugH);
     const plan =
       l.autoPosition === false && !gesture
-        ? planGrid(n, flow, l, hugW, hugH, flow.map((c) => cellAt(first, l, c)))
+        ? planGrid(n, flow, li, hugW, hugH, flow.map((c) => cellAt(first, li, c)))
         : first;
-    const [gl, gr, gt, gb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+    const [gl, gr, gt, gb] = Array.isArray(li.padding) ? li.padding : [0, 0, 0, 0];
     flow.forEach((c, i) => {
       const cell = plan.cells[i];
       if (!cell) return;
@@ -503,12 +540,19 @@ function applyLayout(n: XNode, gesture = false) {
     if (hugH) n.h = Math.max(1, gt + plan.totalH + gb);
     clampToPadding(n);
     clampDims(n);
+    applyConstraints(n, entryW, entryH, n.w, n.h, true);
     return;
   }
-  const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+  const [ql, qr, qt, qb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+  // The frame's own inside stroke behaves as extra padding on every side, so
+  // the inner size, the children's origin, and the hug all account for it at
+  // once. Outside and center strokes never count.
+  const sw = insideStrokeWidth(n);
+  const pl = ql + sw;
+  const pr = qr + sw;
+  const pt = qt + sw;
+  const pb = qb + sw;
   const horiz = l.direction === "horizontal";
-  // Wrap is offered on a horizontal flow only, so a vertical frame that still
-  // carries the flag lays out as a plain stack rather than wrapping.
   const doesWrap = wraps(l);
   const gap = typeof l.gap === "number" ? l.gap : 0;
   const innerW = n.w - pl - pr;
@@ -559,6 +603,10 @@ function applyLayout(n: XNode, gesture = false) {
     let y = pt;
     let rowH = 0;
     let rowW = 0;
+    // A wrapping flow has two gaps: `gap` spaces the objects within a line,
+    // `gapCross` spaces the lines themselves (rows, or columns in a vertical
+    // wrap). Older documents only have the one, which both fall back to.
+    const gapBetween = typeof l.gapCross === "number" ? l.gapCross : gap;
     const limit = horiz ? n.w - pr : n.h - pb;
     for (const c of flow) {
       const main = horiz ? c.w : c.h;
@@ -566,10 +614,10 @@ function applyLayout(n: XNode, gesture = false) {
       if (cur > (horiz ? pl : pt) && cur + main > limit) {
         if (horiz) {
           x = pl;
-          y += rowH + gap;
+          y += rowH + gapBetween;
         } else {
           y = pt;
-          x += rowW + gap;
+          x += rowW + gapBetween;
         }
         rowH = 0;
         rowW = 0;
@@ -595,6 +643,7 @@ function applyLayout(n: XNode, gesture = false) {
     for (const c of flow) clampDims(c);
     clampToPadding(n);
     clampDims(n);
+    applyConstraints(n, entryW, entryH, n.w, n.h, true);
     return;
   }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
@@ -657,6 +706,7 @@ function applyLayout(n: XNode, gesture = false) {
   // A frame is never narrower than its own padding.
   clampToPadding(n);
   clampDims(n);
+  applyConstraints(n, entryW, entryH, n.w, n.h, true);
 }
 
 export function demoPage(): Page {
@@ -1481,7 +1531,13 @@ export class MemoryEngine implements Engine {
     const l = parent.layout;
     if (!l || l.direction !== "grid" || l.autoPosition === false) return null;
     const flow = parent.children.filter((c) => c.visible && !c.absolutePosition);
-    return gridSpotForPoint(parent, flow, l, hugsMain(l, parent, flow), hugsCross(l, parent, flow), x, y);
+    // Cells resolve inside the frame's own inside stroke, like the tracks do.
+    const sw = insideStrokeWidth(parent);
+    const li =
+      sw > 0 && Array.isArray(l.padding)
+        ? { ...l, padding: [l.padding[0] + sw, l.padding[1] + sw, l.padding[2] + sw, l.padding[3] + sw] as [number, number, number, number] }
+        : l;
+    return gridSpotForPoint(parent, flow, li, hugsMain(li, parent, flow), hugsCross(li, parent, flow), x, y);
   }
 
   /**
@@ -1975,17 +2031,43 @@ export class MemoryEngine implements Engine {
       }
       case "reparent": {
         const dest = find(this.root(), cmd.parent) ?? this.root();
+        // A locked container takes no new children, and neither does an
+        // instance: its structure belongs to the main component. Same rule as
+        // `reorder`, which the panel drag goes through.
+        if (isEffectivelyLocked(this.root(), dest.id)) break;
+        if (dest !== this.root() && (isInstanceMember(this.root(), dest.id) || (!!dest.componentId && !dest.isComponent))) break;
         for (const id of cmd.ids) {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
           if (!p || !n || id === dest.id || !!find(n, dest.id)) continue;
+          if (isEffectivelyLocked(this.root(), id)) continue;
+          // Figma refuses to add an object that is larger than an auto layout
+          // parent ("you won't see the option"), unless the drop bypasses with
+          // ⌘/Ctrl. A hug axis always fits, since the frame grows around the
+          // newcomer; absolute drops never join the flow, so they never refuse.
+          if (dest.layout && !cmd.absolute && !cmd.bypassSizeGate) {
+            const dl = dest.layout;
+            const dflow = dest.children.filter((c) => c.visible && !c.absolutePosition);
+            const dhoriz = dl.direction === "horizontal";
+            const hugW = dhoriz ? hugsMain(dl, dest, dflow) : dl.direction === "grid" ? hugsMain(dl, dest, dflow) : hugsCross(dl, dest, dflow);
+            const hugH = dhoriz ? hugsCross(dl, dest, dflow) : dl.direction === "grid" ? hugsCross(dl, dest, dflow) : hugsMain(dl, dest, dflow);
+            if ((n.w > dest.w && !hugW) || (n.h > dest.h && !hugH)) continue;
+          }
           // Where it lands is worked out against the destination as it stands,
-          // before this object joins it.
+          // before this object joins it: an explicit slot wins, then the grid
+          // cell under the point, then the flow gap under the point. Anything
+          // else appends, as before.
           const spot = this.gridSpotFor(dest, cmd.x, cmd.y);
           p.children = p.children.filter((c) => c.id !== id);
           n.x = cmd.x;
           n.y = cmd.y;
-          dest.children.splice(spot?.index ?? dest.children.length, 0, n);
+          if (cmd.absolute) n.absolutePosition = true;
+          const flowIdx =
+            cmd.index === undefined && !spot && dest.layout && dest.layout.direction !== "grid"
+              ? flowInsertIndex(dest, cmd.x, cmd.y)
+              : null;
+          const at = cmd.index ?? spot?.index ?? flowIdx ?? dest.children.length;
+          dest.children.splice(Math.max(0, Math.min(at, dest.children.length)), 0, n);
           if (spot) {
             n.gridCol = spot.col;
             n.gridRow = spot.row;
@@ -2044,10 +2126,18 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
-          if (p && n && !isEffectivelyLocked(this.root(), id) && !isInstanceMember(this.root(), id)) {
-            p.children = p.children.filter((c) => c.id !== id);
+          if (!p || !n || isEffectivelyLocked(this.root(), id)) continue;
+          // Figma: "You can't delete a layer or object from an instance. If
+          // you try, Figma will only toggle the layer's visibility instead of
+          // removing it." Locked still wins over the toggle above.
+          if (isInstanceMember(this.root(), id)) {
+            n.visible = !n.visible;
+            n.overrides = { ...(n.overrides || {}), visible: n.visible };
             this.publishIfMasterEdit(p.id);
+            continue;
           }
+          p.children = p.children.filter((c) => c.id !== id);
+          this.publishIfMasterEdit(p.id);
         }
         s.selection = s.selection.filter((id) => !!find(this.root(), id));
         // Frame-level guides die with their frame rather than going stale.
@@ -2120,10 +2210,34 @@ export class MemoryEngine implements Engine {
             if (!stripped) break;
             incoming = stripped;
           }
-          // Layout belongs to the main component even on the instance root.
+          // Layout belongs to the main component: members were already stripped
+          // above, and an instance root keeps only spacing fragments (padding
+          // and gaps), merged over the layout it already has. Anything else in
+          // the fragment is refused, exactly like a member's.
+          let rootLayoutFrag: Partial<AutoLayout> | null = null;
+          let prevLayoutFrag: unknown = null;
           if (incoming.layout !== undefined && findInstanceRoot(this.root(), cmd.id)) {
+            rootLayoutFrag = layoutSpacingFragment(incoming.layout);
             const rest = { ...incoming };
-            delete rest.layout;
+            if (!rootLayoutFrag || !n.layout) {
+              rootLayoutFrag = null;
+              delete rest.layout;
+            } else {
+              rest.layout = { ...n.layout, ...rootLayoutFrag };
+              prevLayoutFrag = n.overrides && (n.overrides as Record<string, unknown>).layout;
+              // A hand-set spacing wins over the instance's own gap/padding
+              // bindings, or the next relayout would snap it back.
+              if (n.ownBindings) {
+                delete n.ownBindings.layoutGap;
+                delete n.ownBindings.layoutPadding;
+                if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+              }
+              if (n.variableBindings) {
+                delete n.variableBindings.layoutGap;
+                delete n.variableBindings.layoutPadding;
+                if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+              }
+            }
             if (!Object.keys(rest).length) break;
             incoming = rest;
           }
@@ -2173,6 +2287,14 @@ export class MemoryEngine implements Engine {
             this.publishMaster(n);
           } else if (n.componentId && !n.isComponent) {
             n.overrides = { ...(n.overrides || {}), ...incoming };
+            // The merged layout above is the node's working copy, not the
+            // override: the record keeps fragments only, so the master's
+            // structure still flows through at sync.
+            if (rootLayoutFrag) {
+              const prev =
+                prevLayoutFrag && typeof prevLayoutFrag === "object" ? (prevLayoutFrag as Partial<AutoLayout>) : {};
+              n.overrides = { ...(n.overrides || {}), layout: { ...prev, ...rootLayoutFrag } };
+            }
           } else {
             const inst = findInstanceRoot(this.root(), n.id);
             if (inst && inst !== n) {
@@ -2187,9 +2309,31 @@ export class MemoryEngine implements Engine {
       }
       case "autoLayout": {
         const n = find(this.root(), cmd.id);
-        // Instance layout belongs to the main component: refused on the
-        // instance root as well as its members (masters publish through).
-        if (n && !insideInstance(this.root(), cmd.id)) {
+        // Instance layout belongs to the main component: refused on members,
+        // while an instance root keeps spacing fragments (padding and gaps).
+        // Masters publish through.
+        const instRoot = n && n.componentId && !n.isComponent ? n : null;
+        if (instRoot && instRoot.layout) {
+          const frag = layoutSpacingFragment(cmd.layout);
+          if (frag) {
+            instRoot.layout = { ...instRoot.layout, ...frag };
+            const prev = instRoot.overrides?.layout;
+            instRoot.overrides = {
+              ...(instRoot.overrides || {}),
+              layout: { ...(prev && typeof prev === "object" ? prev : {}), ...frag },
+            };
+            if (instRoot.ownBindings) {
+              delete instRoot.ownBindings.layoutGap;
+              delete instRoot.ownBindings.layoutPadding;
+              if (Object.keys(instRoot.ownBindings).length === 0) delete instRoot.ownBindings;
+            }
+            if (instRoot.variableBindings) {
+              delete instRoot.variableBindings.layoutGap;
+              delete instRoot.variableBindings.layoutPadding;
+              if (Object.keys(instRoot.variableBindings).length === 0) delete instRoot.variableBindings;
+            }
+          }
+        } else if (n && !insideInstance(this.root(), cmd.id)) {
           n.layout = cmd.layout;
           // A fresh preset wins over gap/padding bindings; without the
           // detach the next relayout would snap the preset back.
@@ -4171,6 +4315,10 @@ function syncInstances(pages: Page[], edited: XNode, defaultDef: XNode, variants
     const id = instNode.id;
     const interactions = instNode.interactions;
     const localOverrides = instNode.overrides ? { ...instNode.overrides } : {};
+    // A layout override is fragments (root spacing), never a whole layout: it
+    // merges over the master's layout after the assign rather than replacing
+    // it, so master structure edits still flow through.
+    const { layout: layoutFrag, ...restOverrides } = localOverrides as Record<string, unknown>;
     const localBindings = instNode.variableBindings;
     const localExpr = instNode.expressions;
     // Own bindings (bound on the instance itself) pin their props against
@@ -4259,8 +4407,12 @@ function syncInstances(pages: Page[], edited: XNode, defaultDef: XNode, variants
       expressions: mergeLinkMaps(masterProps.expressions, localExpr),
       ownBindings: instNode.ownBindings,
       overrides: localOverrides,
-      ...localOverrides,
+      ...restOverrides,
     });
+    if (layoutFrag && typeof layoutFrag === "object" && instNode.layout) {
+      const frag = layoutSpacingFragment(layoutFrag as Partial<AutoLayout>);
+      if (frag) instNode.layout = { ...instNode.layout, ...frag };
+    }
   }
 
   for (const page of pages) {
@@ -4609,11 +4761,15 @@ export function hitTest(
   return n;
 }
 
-function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: number, newH: number) {
+function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: number, newH: number, absoluteOnly = false) {
   const dw = newW - oldW;
   const dh = newH - oldH;
   if (!dw && !dh) return;
   for (const c of parent.children) {
+    // After a hug the flow children are already packed where they belong, so
+    // only the absolutely positioned ones follow the resize; constraints never
+    // move a flow child. The cascade below still runs whole subtrees.
+    if (absoluteOnly && !c.absolutePosition) continue;
     const h = c.constraintH;
     const v = c.constraintV;
     const cw = c.w;

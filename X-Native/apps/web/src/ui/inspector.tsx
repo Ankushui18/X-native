@@ -91,6 +91,7 @@ import {
   hugsCross,
   hugsMain,
   planGrid,
+  insideStrokeWidth,
   isAutoGap,
   layoutKeyPatch,
   parsePaddingShorthand,
@@ -3033,6 +3034,15 @@ function Design({
    * Scale tool below. All three ask the same question, so they share one
    * answer. */
   const inInstance = insideInstance(snap.pages[snap.page].root, n.id);
+  /* Layout overrides on instances: members keep none of the layout controls,
+   * while an instance root may override spacing (padding and gaps) but never
+   * structure (direction, wrap, alignment, distribution). The engine refuses
+   * the rest; the panel says so instead of no-op'ing. */
+  const isInstRoot = (!!n.componentId && !n.isComponent) || n.kind === "instance";
+  const layoutMemberLocked = inInstance && !isInstRoot;
+  const layoutStructLocked = inInstance;
+  const layoutMemberTitle = "Layout comes from the main component";
+  const layoutStructTitle = "An instance can only override padding and gaps";
   /* Auto layout answers three questions the panel asks in several places: is
    * the gap on Auto, does this flow wrap, and is a declared hug still a hug
    * once something inside it is filling the same axis. */
@@ -3835,21 +3845,24 @@ function Design({
           <button
             className={!n.layout ? "on" : ""}
             // "In the right sidebar, click Freeform or Remove auto layout."
-            title="Freeform (remove auto layout, ⌥⇧A)"
+            title={layoutStructLocked ? layoutStructTitle : "Freeform (remove auto layout, ⌥⇧A)"}
+            disabled={layoutStructLocked}
             onClick={() => removeAutoLayout(engine, snap, n.id)}
           >
             <Icon name="layout-none" />
           </button>
           <button
             className={n.layout?.direction === "vertical" ? "on" : ""}
-            title="Vertical"
+            title={layoutStructLocked ? layoutStructTitle : "Vertical"}
+            disabled={layoutStructLocked}
             onClick={() => setDir(engine, snap, n, "vertical")}
           >
             <Icon name="layout-v" />
           </button>
           <button
             className={n.layout?.direction === "horizontal" ? "on" : ""}
-            title="Horizontal"
+            title={layoutStructLocked ? layoutStructTitle : "Horizontal"}
+            disabled={layoutStructLocked}
             onClick={() => setDir(engine, snap, n, "horizontal")}
           >
             <Icon name="layout-h" />
@@ -3860,23 +3873,26 @@ function Design({
               back to Horizontal or Vertical drops the grid's own fields. */}
           <button
             className={n.layout?.direction === "grid" ? "on" : ""}
-            title="Grid"
+            title={layoutStructLocked ? layoutStructTitle : "Grid"}
+            disabled={layoutStructLocked}
             onClick={() => setFlow(engine, snap, n.id, "grid")}
           >
             <Icon name="layout-grid" />
           </button>
-          {/* When horizontal is selected, Wrap becomes
-              available." A vertical flow has no wrap to offer, so the button is
-              shown disabled and says why rather than silently doing nothing. */}
+          {/* Wrap is offered on horizontal and vertical flows alike (a
+              vertical flow fills top to bottom, then starts a new column);
+              only the grid flow has no wrap to offer. */}
           <button
             className={wrapOn ? "on" : ""}
-            disabled={n.layout?.direction !== "horizontal"}
+            disabled={!n.layout || n.layout.direction === "grid" || layoutStructLocked}
             title={
-              n.layout?.direction !== "horizontal"
-                ? "Wrap is available on a horizontal flow"
-                : wrapOn
-                  ? "Wrapping onto the next line"
-                  : "Wrap onto the next line"
+              layoutStructLocked
+                ? layoutStructTitle
+                : !n.layout || n.layout.direction === "grid"
+                  ? "Wrap is available on horizontal and vertical flows"
+                  : wrapOn
+                    ? "Wrapping onto the next line"
+                    : "Wrap onto the next line"
             }
             onClick={() =>
               n.layout &&
@@ -4681,6 +4697,8 @@ function Design({
             {!isGrid && (
               <Nine
                 layout={n.layout}
+                disabled={layoutStructLocked}
+                disabledTitle={layoutStructTitle}
                 onChange={(patch) =>
                   engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })
                 }
@@ -4688,7 +4706,8 @@ function Design({
             )}
             <button
               className="icon-btn"
-              title={n.layout.justify === "between" ? "Packed" : "Space between"}
+              title={layoutStructLocked ? layoutStructTitle : n.layout.justify === "between" ? "Packed" : "Space between"}
+              disabled={layoutStructLocked}
               onClick={() =>
                 engine.dispatch({
                   type: "autoLayout",
@@ -4705,7 +4724,14 @@ function Design({
             {n.layout.direction === "horizontal" && (
               <button
                 className={`icon-btn${n.layout.align === "baseline" ? " on" : ""}`}
-                title={n.layout.align === "baseline" ? "Baseline alignment active" : "Align to text baseline"}
+                title={
+                  layoutStructLocked
+                    ? layoutStructTitle
+                    : n.layout.align === "baseline"
+                      ? "Baseline alignment active"
+                      : "Align to text baseline"
+                }
+                disabled={layoutStructLocked}
                 onClick={() =>
                   engine.dispatch({
                     type: "autoLayout",
@@ -4725,6 +4751,8 @@ function Design({
             <GridPanel
               node={n}
               layout={n.layout}
+              disabled={layoutStructLocked}
+              disabledTitle={layoutStructTitle}
               onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
             />
           )}
@@ -4738,12 +4766,16 @@ function Design({
                   icon="gap"
                   aria="Gap between columns"
                   value={n.layout.gapCols ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapCols: v } })}
                 />
                 <Field
                   icon="padding-vertical"
                   aria="Gap between rows"
                   value={n.layout.gapRows ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapRows: v } })}
                 />
               </div>
@@ -4752,7 +4784,8 @@ function Design({
               {autoGap ? (
                 <button
                   className="gap-mode"
-                  title="Gap between items"
+                  title={layoutStructLocked ? layoutStructTitle : "Gap between items"}
+                  disabled={layoutStructLocked}
                   onClick={() => {
                     const modes = SPACING_MODES.map((m) => m.id);
                     const at = modes.indexOf((n.layout!.spacing ?? "between") as never);
@@ -4770,14 +4803,31 @@ function Design({
                   icon="gap"
                   aria="Gap between items"
                   value={n.layout.gap}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   onChange={(v) =>
                     engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gap: v } })
                   }
                 />
               )}
+              {/* A wrapping flow has a second gap: `gap` spaces the objects
+                  within a line, and this one spaces the lines themselves. */}
+              {wrapOn && !autoGap && (
+                <Field
+                  icon="gap"
+                  aria="Gap between lines"
+                  value={n.layout.gapCross ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  onChange={(v) =>
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapCross: v } })
+                  }
+                />
+              )}
               <button
                 className={`icon-btn${autoGap ? " on" : ""}`}
-                title={autoGap ? "Use a fixed gap" : "Set the gap to Auto"}
+                title={layoutStructLocked ? layoutStructTitle : autoGap ? "Use a fixed gap" : "Set the gap to Auto"}
+                disabled={layoutStructLocked}
                 onClick={() =>
                   engine.dispatch({
                     type: "autoLayout",
@@ -4801,6 +4851,8 @@ function Design({
                   <PadField
                     key={lab}
                     label={lab}
+                    disabled={layoutMemberLocked}
+                    disabledTitle={layoutMemberTitle}
                     value={n.layout!.padding[i]}
                     onCommit={(v) => {
                       const p = [...n.layout!.padding] as [number, number, number, number];
@@ -4824,6 +4876,8 @@ function Design({
                 <PadField
                   icon="padding-horizontal"
                   aria="Horizontal padding"
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   value={n.layout.padding[0]}
                   mixed={n.layout.padding[0] !== n.layout.padding[1] ? "Mixed" : undefined}
                   onCommit={(v) => {
@@ -4839,6 +4893,8 @@ function Design({
                 <PadField
                   icon="padding-vertical"
                   aria="Vertical padding"
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   value={n.layout.padding[2]}
                   mixed={n.layout.padding[2] !== n.layout.padding[3] ? "Mixed" : undefined}
                   onCommit={(v) => {
@@ -4866,7 +4922,14 @@ function Design({
               <button
                 className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
                 style={{ fontSize: 10, padding: "2px 8px", width: "auto", height: 22 }}
-                title={n.layout.itemReverseZIndex ? "First on top (earlier children overlap later ones)" : "Last on top (standard CSS/DOM order)"}
+                title={
+                  layoutStructLocked
+                    ? layoutStructTitle
+                    : n.layout.itemReverseZIndex
+                      ? "First on top (earlier children overlap later ones)"
+                      : "Last on top (standard CSS/DOM order)"
+                }
+                disabled={layoutStructLocked}
                 onClick={() =>
                   engine.dispatch({
                     type: "autoLayout",
@@ -6796,10 +6859,14 @@ function GridPanel({
   node,
   layout,
   onChange,
+  disabled,
+  disabledTitle,
 }: {
   node: XNode;
   layout: AutoLayout;
   onChange: (patch: Partial<AutoLayout>) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const cols = Math.max(1, Math.floor(layout.columns ?? 2));
   const rowsAuto = layout.rows === "auto" || layout.rows == null;
@@ -6814,9 +6881,15 @@ function GridPanel({
     // The track list shows what the frame actually has, so the rows it counts
     // are the ones the objects need when the count is Auto.
     const need = cells.reduce((max, c) => Math.max(max, (c.gridRow ?? 0) + (c.rowSpan ?? 1)), 0);
+    // Tracks resolve inside the frame's own inside stroke, like the engine's.
+    const sw = insideStrokeWidth(node);
+    const li =
+      sw > 0 && Array.isArray(layout.padding)
+        ? { ...layout, padding: [layout.padding[0] + sw, layout.padding[1] + sw, layout.padding[2] + sw, layout.padding[3] + sw] as [number, number, number, number] }
+        : layout;
     return {
       used: { rows: Math.max(need, declaredRows, 1), cols },
-      plan: planGrid(node, cells, layout, hugsMain(layout, node, cells), hugsCross(layout, node, cells)),
+      plan: planGrid(node, cells, li, hugsMain(li, node, cells), hugsCross(li, node, cells)),
     };
   }, [node, layout, declaredRows, cols]);
   const trackRow = (axis: "col" | "row", i: number) => {
@@ -6838,7 +6911,8 @@ function GridPanel({
         </span>
         <button
           className="track-mode"
-          title="Auto shares the free space out by fractional unit, Hug wraps the objects in the track, Fixed holds a size"
+          title={disabled ? disabledTitle : "Auto shares the free space out by fractional unit, Hug wraps the objects in the track, Fixed holds a size"}
+          disabled={disabled}
           onClick={() => set({ mode: t.mode === "fill" ? "hug" : t.mode === "hug" ? "fixed" : "fill" })}
         >
           {t.mode === "fixed" ? "Fixed" : t.mode === "hug" ? "Hug" : (t.fr ?? 1) === 1 ? "Auto" : `${t.fr}fr`}
@@ -6847,6 +6921,8 @@ function GridPanel({
           <input
             className="track-size"
             aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} size`}
+            disabled={disabled}
+            title={disabled ? disabledTitle : undefined}
             defaultValue={String(Math.round(t.size ?? (axis === "col" ? plan.colW[i] : plan.rowH[i]) ?? 0))}
             onBlur={(e) => {
               const word = trackWord(e.target.value);
@@ -6862,6 +6938,8 @@ function GridPanel({
           <input
             className="track-size"
             aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} fraction`}
+            disabled={disabled}
+            title={disabled ? disabledTitle : undefined}
             defaultValue={String(t.fr ?? 1)}
             onBlur={(e) => {
               const word = trackWord(e.target.value);
@@ -6879,7 +6957,8 @@ function GridPanel({
         {!rowsAuto || axis === "col" ? (
           <button
             className="track-del"
-            title={`Delete this ${axis === "col" ? "column" : "row"}`}
+            title={disabled ? disabledTitle : `Delete this ${axis === "col" ? "column" : "row"}`}
+            disabled={disabled}
             aria-label={`Delete ${axis === "col" ? "column" : "row"} ${i + 1}`}
             onClick={() => {
               const next = [...list];
@@ -6920,6 +6999,8 @@ function GridPanel({
                 key={i}
                 className={on ? "on" : ""}
                 aria-label={`${c} columns by ${r} rows`}
+                title={disabled ? disabledTitle : undefined}
+                disabled={disabled}
                 onMouseEnter={() => setPick({ c, r })}
                 onClick={() => onChange({ columns: c, rows: r })}
               />
@@ -6930,10 +7011,14 @@ function GridPanel({
           <Field
             label="Cols"
             value={used.cols}
+            disabled={disabled}
+            disabledTitle={disabledTitle}
             onChange={(v) => onChange({ columns: Math.max(1, Math.round(v)) })}
           />
           <Field
             label="Rows"
+            disabled={disabled}
+            disabledTitle={disabledTitle}
             mixed={rowsAuto ? "Auto" : undefined}
             hint="Auto"
             hintNote="as many rows as the objects need"
@@ -6948,9 +7033,10 @@ function GridPanel({
           />
         </div>
       </div>
-      <label className="check grid-auto">
+      <label className="check grid-auto" title={disabled ? disabledTitle : undefined}>
         <input
           type="checkbox"
+          disabled={disabled}
           checked={layout.autoPosition !== false}
           onChange={(e) =>
             // Turning it back on also sets the row count to Auto, per the
@@ -6982,9 +7068,13 @@ function GridPanel({
 function Nine({
   layout,
   onChange,
+  disabled,
+  disabledTitle,
 }: {
   layout: AutoLayout;
   onChange: (p: Partial<AutoLayout>) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const cells = alignmentCells(layout);
   const jj = layout.justify === "between" ? "min" : layout.justify;
@@ -7013,12 +7103,17 @@ function Nine({
     // this box has focus the keys above are the box's, not the canvas's.
     <div
       className={`nine${reduced ? " nine-reduced" : ""}${layout.align === "baseline" ? " baseline" : ""}`}
-      title="Alignment — arrows step, W/A/S/D jump to an edge, B toggles baseline, X switches the gap"
+      title={
+        disabled && disabledTitle
+          ? disabledTitle
+          : "Alignment — arrows step, W/A/S/D jump to an edge, B toggles baseline, X switches the gap"
+      }
       data-align-box="1"
       tabIndex={0}
       role="group"
       aria-label="Alignment"
       onKeyDown={(e) => {
+        if (disabled) return;
         // Modifier chords are left to the app: ⌘A, ⌘S and friends still work.
         if (e.metaKey || e.ctrlKey) return;
         const key = alignKey(e.key);
@@ -7033,9 +7128,10 @@ function Nine({
       {cells.map((c, i) => (
         <button
           key={i}
-          title={titleOf(c)}
+          title={disabled ? disabledTitle : titleOf(c)}
           className={jj === c.j && layout.align === c.a ? "on" : ""}
           aria-label={titleOf(c)}
+          disabled={disabled}
           onClick={() => onChange({ justify: c.j, align: c.a })}
         />
       ))}
@@ -7260,6 +7356,8 @@ function PadField({
   mixed,
   onCommit,
   onShorthand,
+  disabled,
+  disabledTitle,
 }: {
   label?: string;
   icon?: IconName;
@@ -7270,6 +7368,8 @@ function PadField({
   /** Only the H/V fields accept shorthand: with four separate fields there is
    *  no single entry to spell four sides out in. */
   onShorthand?: (p: [number, number, number, number]) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const [shorthand, setShorthand] = useState(false);
   const [draft, setDraft] = useState("");
@@ -7291,10 +7391,13 @@ function PadField({
       <input
         value={shown}
         aria-label={aria ?? label}
+        disabled={disabled}
         title={
-          shorthand
-            ? "CSS shorthand: 1 · 1,2 · 1,2,3 · 1,2,3,4 (top, right, bottom, left)"
-            : "⌘-click to set all sides, or type 1,2,3,4"
+          disabled && disabledTitle
+            ? disabledTitle
+            : shorthand
+              ? "CSS shorthand: 1 · 1,2 · 1,2,3 · 1,2,3,4 (top, right, bottom, left)"
+              : "⌘-click to set all sides, or type 1,2,3,4"
         }
         onMouseDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && onShorthand) {
@@ -7349,6 +7452,7 @@ function Field({
   mixed,
   token,
   disabled,
+  disabledTitle,
 }: {
   label?: string;
   icon?: IconName;
@@ -7371,6 +7475,8 @@ function Field({
   token?: Record<string, number>;
   /** A property the layer cannot own here, e.g. a corner radius on an instance. */
   disabled?: boolean;
+  /** Why the field is disabled, shown on hover instead of the usual hint. */
+  disabledTitle?: string;
 }) {
   const [draft, setDraft] = useState(() => mixed ?? fmt(value));
   const focused = useRef(false);
@@ -7432,7 +7538,7 @@ function Field({
     >
       {icon ? (
         <span
-          title={`${aria ?? label ?? icon} · drag to scrub (⇧ = ×10)`}
+          title={disabled && disabledTitle ? disabledTitle : `${aria ?? label ?? icon} · drag to scrub (⇧ = ×10)`}
           onMouseDown={startScrub}
           style={disabled ? undefined : { cursor: "ew-resize", display: "inline-flex" }}
         >
@@ -7440,7 +7546,11 @@ function Field({
         </span>
       ) : (
         <label
-          title={`${hint ? `${label} · ${hintNote ?? hint}` : (label ?? "")}${disabled ? "" : " · drag to scrub (⇧ = ×10)"}`}
+          title={
+            disabled && disabledTitle
+              ? disabledTitle
+              : `${hint ? `${label} · ${hintNote ?? hint}` : (label ?? "")}${disabled ? "" : " · drag to scrub (⇧ = ×10)"}`
+          }
           onMouseDown={startScrub}
           style={disabled ? undefined : { cursor: "ew-resize" }}
         >
@@ -7451,7 +7561,11 @@ function Field({
         value={draft}
         disabled={disabled}
         aria-label={aria ?? label}
-        title={(aria && !label ? aria : "") || "Number or equation · + - * / ^ ( ) · ⌥-drag to scrub"}
+        title={
+          disabled && disabledTitle
+            ? disabledTitle
+            : (aria && !label ? aria : "") || "Number or equation · + - * / ^ ( ) · ⌥-drag to scrub"
+        }
         // Figma also scrubs from the input itself with ⌥ held; a plain press
         // still focuses and selects as usual.
         onMouseDown={(e) => {

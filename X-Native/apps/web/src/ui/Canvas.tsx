@@ -68,7 +68,7 @@ import { toast } from "./toast";
 import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
 import { getNudgePrefs } from "./nudgePrefs";
-import { alignKey } from "../engine/layout";
+import { alignKey, flowGapLine, flowInsertIndex, wrapLines as flowWrapLines, wraps } from "../engine/layout";
 import { ContextToolbar } from "./x-ui";
 import { addAutoLayout, removeAutoLayout } from "./layoutActions";
 import { align } from "./inspector";
@@ -467,6 +467,15 @@ export function Canvas({
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
+  /** Live drop target during a move drag: the frame outline plus, for a linear
+   *  flow, the blue insertion line - all in world coordinates. */
+  const [dropHint, setDropHint] = useState<{
+    fx: number;
+    fy: number;
+    fw: number;
+    fh: number;
+    line: { horiz: boolean; at: number; from: number; to: number } | null;
+  } | null>(null);
   /** Live Alt/Option distance measurement state */
   const [altMeasure, setAltMeasure] = useState(false);
   /** Live prototype connection dragging state */
@@ -2683,11 +2692,15 @@ export function Canvas({
         band(sx, sy + pt * z, pl * z, Math.max(0, sh - (pt + pb) * z));
         band(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, sh - (pt + pb) * z));
 
-        // Gap band between each pair of flowed children.
+        // Gap band between each pair of flowed children. In a wrapping flow the
+        // pairs that straddle a line break are skipped, and the space between
+        // the lines gets a band of its own, spanning the frame's inner size.
         const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
+        const wrapped = wraps(l);
         for (let i = 1; i < flowKids.length; i++) {
           const a = flowKids[i - 1];
           const b = flowKids[i];
+          if (wrapped && Math.abs((horiz ? a.y - b.y : a.x - b.x)) >= 0.5) continue;
           if (horiz) {
             const x0 = sx + (a.x + a.w) * z;
             const x1 = sx + b.x * z;
@@ -2696,6 +2709,22 @@ export function Canvas({
             const y0 = sy + (a.y + a.h) * z;
             const y1 = sy + b.y * z;
             band(sx + (b.x || 0) * z, y0, Math.max(2, b.w * z), (y1 - y0) || l.gap * z);
+          }
+        }
+        if (wrapped && flowKids.length >= 2) {
+          const lines = flowWrapLines(flowKids, horiz);
+          for (let i = 1; i < lines.length; i++) {
+            const prev = lines[i - 1];
+            const cur = lines[i];
+            if (horiz) {
+              const y0 = Math.max(...prev.map((c) => c.y + c.h));
+              const y1 = Math.min(...cur.map((c) => c.y));
+              band(sx + pl * z, sy + y0 * z, Math.max(0, sw - (pl + pr) * z), Math.max(0, (y1 - y0) * z));
+            } else {
+              const x0 = Math.max(...prev.map((c) => c.x + c.w));
+              const x1 = Math.min(...cur.map((c) => c.x));
+              band(sx + x0 * z, sy + pt * z, Math.max(0, (x1 - x0) * z), Math.max(0, sh - (pt + pb) * z));
+            }
           }
         }
         ctx.restore();
@@ -2818,6 +2847,35 @@ export function Canvas({
       }
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
+      ctx.restore();
+    }
+    // The drop target during a move drag: the frame's outline, plus the blue
+    // insertion line in a flow - the same gap the drop would land in.
+    if (dropHint) {
+      ctx.save();
+      ctx.strokeStyle = "#0d99ff";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(
+        snap.panX + dropHint.fx * z,
+        snap.panY + dropHint.fy * z,
+        Math.max(1, dropHint.fw * z),
+        Math.max(1, dropHint.fh * z),
+      );
+      const ln = dropHint.line;
+      if (ln) {
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if (ln.horiz) {
+          const x = snap.panX + ln.at * z;
+          ctx.moveTo(x, snap.panY + ln.from * z);
+          ctx.lineTo(x, snap.panY + ln.to * z);
+        } else {
+          const y = snap.panY + ln.at * z;
+          ctx.moveTo(snap.panX + ln.from * z, y);
+          ctx.lineTo(snap.panX + ln.to * z, y);
+        }
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -3275,7 +3333,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, panelHover, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, panelHover, ghost, guides, gapBadges, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -3283,6 +3341,27 @@ export function Canvas({
       x: (cx - r.left - snap.panX) / snap.zoom,
       y: (cy - r.top - snap.panY) / snap.zoom,
     };
+  };
+
+  /**
+   * The frame a drop would land in: the deepest frame under the point that may
+   * take children. Instances refuse (their structure belongs to the main
+   * component) and locked frames refuse, so the search climbs past them to an
+   * enclosing frame, if there is one.
+   */
+  const dropTargetFrame = (root: XNode, wx: number, wy: number, skip: Set<string>): XNode | null => {
+    let frame = deepestFrame(root, wx, wy, skip);
+    while (frame) {
+      const bad =
+        isInstanceMember(root, frame.id) ||
+        (!!frame.componentId && !frame.isComponent) ||
+        isEffectivelyLocked(root, frame.id);
+      if (!bad) return frame;
+      let q = findParent(root, frame.id);
+      while (q && q !== root && q.kind !== "frame") q = findParent(root, q.id);
+      frame = q && q !== root ? q : null;
+    }
+    return null;
   };
 
   /**
@@ -3343,6 +3422,7 @@ export function Canvas({
   );
 
   const onDown = (e: React.MouseEvent) => {
+    if (dropHint) setDropHint(null);
     if (edit && (e.target as HTMLElement).closest(".text-edit")) return;
     if (e.button === 2) return;
     // Frame quick-add badges, painted beside the hover outline. Left badge
@@ -4498,6 +4578,40 @@ export function Canvas({
         d.sx = e.clientX;
         d.sy = e.clientY;
       }
+      // The live drop target: the frame under the cursor, and the flow gap the
+      // drop would land in. Read off the same snapshot as the snap targets, so
+      // it trails the pointer by a frame at most; the drop itself re-reads.
+      {
+        const wpt = toWorld(e.clientX, e.clientY);
+        const r3 = snap.pages[snap.page].root;
+        const selNow = engine.snapshot().selection;
+        const frame = dropTargetFrame(r3, wpt.x, wpt.y, new Set(selNow));
+        const fw = frame ? worldPos(r3, frame.id) : null;
+        if (!frame || !fw) {
+          if (dropHint) setDropHint(null);
+        } else {
+          const gap = frame.layout ? flowGapLine(frame, wpt.x - fw.x, wpt.y - fw.y) : null;
+          const line = gap
+            ? gap.horiz
+              ? { horiz: true, at: fw.x + gap.at, from: fw.y + gap.from, to: fw.y + gap.to }
+              : { horiz: false, at: fw.y + gap.at, from: fw.x + gap.from, to: fw.x + gap.to }
+            : null;
+          const same =
+            dropHint &&
+            dropHint.fx === fw.x &&
+            dropHint.fy === fw.y &&
+            dropHint.fw === frame.w &&
+            dropHint.fh === frame.h &&
+            (dropHint.line === null) === (line === null) &&
+            (!line ||
+              !dropHint.line ||
+              (dropHint.line.horiz === line.horiz &&
+                dropHint.line.at === line.at &&
+                dropHint.line.from === line.from &&
+                dropHint.line.to === line.to));
+          if (!same) setDropHint({ fx: fw.x, fy: fw.y, fw: frame.w, fh: frame.h, line });
+        }
+      }
     } else if (d.mode === "multiResize" && d.bounds && d.origs && d.corner != null) {
       const b = toWorld(e.clientX, e.clientY);
       const next = resizeFrom(d.bounds, d.corner, b.x, b.y, {
@@ -5095,26 +5209,70 @@ export function Canvas({
     )
       engine.dispatch({ type: "end" });
     if (d.mode === "move") {
-      const selection = engine.snapshot().selection;
-      const sel = selection[0];
-      const root = snap.pages[snap.page].root;
-      const wp = sel ? worldPos(root, sel) : null;
-      if (wp) {
-        const cx = wp.x + wp.node.w / 2;
-        const cy = wp.y + wp.node.h / 2;
-        const frame = deepestFrame(root, cx, cy, new Set(selection));
-        if (frame) {
-          const frameWorld = worldPos(root, frame.id);
-          for (const id of selection) {
-            const item = worldPos(root, id);
-            const parent = findParent(root, id);
-            if (!item || item.node.id === frame.id || frame === parent || !frameWorld) continue;
-            engine.dispatch({
-              type: "reparent",
-              ids: [item.node.id],
-              parent: frame.id,
-              x: item.x - frameWorld.x,
-              y: item.y - frameWorld.y,
+      if (dropHint) setDropHint(null);
+      const fresh = engine.snapshot();
+      const selection = fresh.selection;
+      const root = fresh.pages[fresh.page].root;
+      // The drop target is the frame under the cursor, read off a fresh tree -
+      // the mid-drag snapshot is a frame behind and the selection has moved.
+      const pt = toWorld(e.clientX, e.clientY);
+      const frame = dropTargetFrame(root, pt.x, pt.y, new Set(selection));
+      const frameWorld = frame ? worldPos(root, frame.id) : null;
+      if (frame && frameWorld) {
+        // Figma's drop modifiers: ⌘/Ctrl bypasses the oversize refusal, and
+        // Ctrl-drag on the Mac drops the object as absolutely positioned
+        // (out of the flow, where it was let go).
+        const isMac = /mac/i.test(navigator.platform ?? "");
+        const absolute = e.ctrlKey && isMac;
+        const bypass = e.metaKey || (e.ctrlKey && !isMac);
+        const lx = pt.x - frameWorld.x;
+        const ly = pt.y - frameWorld.y;
+        const linear = !!frame.layout && frame.layout.direction !== "grid";
+        const sameParent: string[] = [];
+        const incomers: string[] = [];
+        for (const id of selection) {
+          const item = worldPos(root, id);
+          const parent = findParent(root, id);
+          if (!item || item.node.id === frame.id || !parent || find(item.node, frame.id)) continue;
+          if (absolute) {
+            // Out of the flow, where the move put it; cross-parent drops
+            // reparent below instead.
+            if (parent === frame) engine.dispatch({ type: "patch", id, patch: { absolutePosition: true } });
+            else incomers.push(id);
+          } else if (parent === frame) sameParent.push(id);
+          else incomers.push(id);
+        }
+        // Dragging within the frame reorders to the gap under the cursor;
+        // without a layout there is no order to change.
+        if (sameParent.length && linear) {
+          engine.dispatch({
+            type: "reorder",
+            ids: sameParent,
+            parent: frame.id,
+            index: flowInsertIndex(frame, lx, ly),
+          });
+        }
+        // Newcomers land as a block at the gap under the cursor. Grids place
+        // each object in its own cell instead, and plain frames append.
+        if (incomers.length) {
+          const r2 = engine.snapshot().pages[engine.snapshot().page].root;
+          const dest = find(r2, frame.id);
+          const fw2 = worldPos(r2, frame.id);
+          if (dest && fw2) {
+            const base = linear ? flowInsertIndex(dest, lx, ly) : 0;
+            incomers.forEach((id, i) => {
+              const item = worldPos(r2, id);
+              if (!item) return;
+              engine.dispatch({
+                type: "reparent",
+                ids: [id],
+                parent: frame.id,
+                x: item.x - fw2.x,
+                y: item.y - fw2.y,
+                ...(linear ? { index: base + i } : {}),
+                ...(absolute ? { absolute: true } : {}),
+                ...(bypass ? { bypassSizeGate: true } : {}),
+              });
             });
           }
         }

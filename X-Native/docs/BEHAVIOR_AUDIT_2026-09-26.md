@@ -26,7 +26,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 16 | Layers / structure | ✅ done | L-001–L-007 (24 tests) |
 | 17 | Components | ✅ done | C-001–C-013 (55 tests) |
 | 18 | Variables / tokens / styles | ✅ done | VR-001–VR-014 (32 tests) |
-| 19 | Auto Layout UX | … | |
+| 19 | Auto Layout UX | ✅ done | AL-001–AL-014 (42 tests) |
 | 20 | Contextual inspector | … | |
 | 21 | Context toolbar | … | |
 | 22 | Popups / popovers / menus | … | |
@@ -945,3 +945,94 @@ of variables”).
   paste-properties copying raw values instead of bindings.
 - Kept extras: cross-collection variable moves (Figma forbids),
   engine-level type change (Figma immutable, UI-unreachable).
+
+## §19 — Auto Layout UX
+
+Evidence: Figma “Guide to auto layout” (38346729433109, chunks 0–1:
+create/⌥⇧A/suggest, resize→Fixed, min/max clamps + Remove,
+padding panel + ⌘-shorthand, alignment box + WASD/B/X keys, canvas
+stacking, add-object indicator + oversize rule + ⌘ bypass, spacing
+modes, baseline, hide-vs-opacity) and “Use the horizontal and
+vertical flows” (31289464393751, chunks 0–2: vertical wrap =
+top-to-bottom then a new column, wrap dual gaps, min size =
+padding + inside stroke, auto spacing = space-between/around/
+evenly with gap floored at 0, single-child start, strokes in
+layout = inside counted by default / center+outside never /
+per-frame, reorder/delete-in-instance rules, duplicate placement).
+
+### Fixed (shipped in the §19 auto-layout commit on this branch)
+
+- AL-001 Vertical wrap: `wraps()` reads on vertical flows and the
+  panel toggle enables there (the packing branch already wrapped
+  columns; only the gate and the toggle were horizontal-only).
+- AL-002 A wrapping flow's second gap: new `gapCross` (“Gap between
+  lines”, falls back to `gap`) spaces rows — or columns in a
+  vertical wrap — while `gap` keeps the within-line spacing; panel
+  field for wrapping flows; the canvas overlay paints between-line
+  bands instead of skipping cross-line pairs.
+- AL-003 Inside strokes count in layout math (was explicitly
+  unsized): the frame's own inside stroke behaves as extra padding
+  (origins, inner/fill space, hug totals, grid tracks, drop spots),
+  and the minimum size is padding plus that stroke. Center and
+  outside strokes are never counted.
+- AL-004 A hug-driven resize settles absolutely positioned
+  children's constraints (was explicit-resize only); flow children
+  keep their packed seats.
+- AL-005 Instance-root spacing fragments: padding, gap, gapCross,
+  and the grid gap pair override on the root (both actions),
+  recorded as fragments and merged over the master's layout at
+  sync — master structure edits still flow underneath.
+- AL-006 Members refuse `layout` through the generic patch too
+  (was only the autoLayout action), matching “members only
+  override paint/text/effects”.
+- AL-007 Delete in an instance toggles the member's visibility
+  instead of removing it (was a silent no-op); the toggle is
+  recorded as an override, and deleting the root still deletes.
+- AL-008 Positional drops: `reparent` lands in the flow gap under
+  the point (`flowInsertIndex`, wrap-aware, absolute/hidden slots
+  kept), with an explicit `index` for multi-drops as a block.
+- AL-009 Oversize drops onto a fixed auto-layout axis are refused
+  unless bypassed with ⌘/Ctrl; hug axes always fit and grow.
+- AL-010 Ctrl-drop (Mac) lands absolutely positioned, out of the
+  flow, where let go; the size gate never applies to it.
+- AL-011 Dragging within a frame reorders to the pointed gap (was
+  silently kept); plain frames keep position-only moves.
+- AL-012 A live drop indicator (frame outline + blue insertion
+  line in the exact landing gap) during move drags; instance and
+  locked frames are skipped as targets, matching the engine.
+- AL-013 The layout panel says why on instances: structure locked
+  everywhere in an instance, spacing open on roots (members fully
+  locked) — direction, wrap, alignment box + keys, distribution,
+  stacking, grid structure, gap and padding fields.
+- AL-014 `reparent` refuses locked and instance destinations
+  (parity with `reorder`, which the panel drag already used).
+
+### Verified parity (traced, no fix needed)
+
+- Resize/patch→Fixed incl. layout-frame dual write + flow
+  children; edge-dblclick hug / ⌥-fill with guards; effective
+  fill⇒Fixed both axes; min/max model + clamps + Remove-clears.
+- Auto spacing semantics + single-child start + gap floor at 0;
+  the 3-cell alignment reduction + box keys (arrows/WASD/B/X);
+  canvas stacking toggle + render; baseline alignment.
+- Padding handles + click entry + ⌘-click CSS shorthand typing;
+  hidden/absolute filtered from the flow; opacity-kept gaps.
+- Duplicate lands after the original; arrow keys reorder flow
+  children (±1 by sign); reorder refuses instance members and
+  destinations; ⌥-duplicate and ⌘-bypass snapping while dragging.
+- Canvas autoPad/autoGap gestures (now spacing-override the
+  instance roots they land on, via AL-005); grid spots, pinned
+  cells, and manual grids; remove/wrap guards on instances.
+
+### Deferred / out of scope
+
+- Wrap + hug-main growth semantics (no Guide evidence either
+  way; X wraps at its current width, grow-only).
+- `gapMode`/`spacing` overrides on instance roots (refused with
+  structure; the Figma table names padding/gap values only).
+- `gapCross` variable binding (values only; no new binding key).
+- Grid-cell drop indicator (frame outline only); Windows S-drag
+  absolute (key untracked during canvas drags).
+- Per-frame stroke include/exclude toggle (X implements the
+  Figma default — included — with no toggle surfaced).
+- `suggestLayout` stroke-awareness (suggestion heuristic only).

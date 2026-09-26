@@ -499,6 +499,12 @@ export type Tool =
 export interface AutoLayout {
   direction: LayoutDirection;
   gap: number;
+  /** "Gap between lines" for a wrapping flow: the gap *between* rows (or
+   *  between columns in a vertical wrap), while `gap` keeps the within-line
+   *  spacing. Falls back to `gap` for documents written before the two were
+   *  separate. Only read when the flow wraps; the grid flow keeps its own
+   *  `gapRows`/`gapCols` pair. */
+  gapCross?: number;
   padding: [number, number, number, number];
   sizing: Sizing;
   cross: Sizing;
@@ -949,11 +955,25 @@ export type Command =
     }
   | { type: "move"; ids: string[]; dx: number; dy: number }
   | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean; ignoreConstraints?: boolean }
-  | { type: "reparent"; ids: string[]; parent: string; x: number; y: number }
+  | {
+      type: "reparent";
+      ids: string[];
+      parent: string;
+      x: number;
+      y: number;
+      /** Explicit child-list slot; without it the point picks the slot in a
+       *  flow or grid, and anything else appends. */
+      index?: number;
+      /** Drop as an absolutely positioned child: it keeps its point and stays
+       *  out of the flow (Figma's Ctrl/Cmd-drag into auto layout). */
+      absolute?: boolean;
+      /** Skip the oversize refusal below (Figma's ⌘/Ctrl bypass). */
+      bypassSizeGate?: boolean;
+    }
   /**
    * Move layers to an explicit slot in a parent's child list, preserving their
    * on-canvas position. This is what the layers-panel drag uses; `reparent`
-   * always appends and is driven by canvas coordinates instead.
+   * is driven by canvas coordinates instead.
    */
   | { type: "reorder"; ids: string[]; parent: string; index: number }
   | { type: "delete" }
