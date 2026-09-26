@@ -3927,7 +3927,6 @@ function Design({
         <Tooltip label="Round to whole pixels" shortcut="⇧⌘P">
           <button
             className={`icon-btn${isFractional(n) ? " warn" : ""}`}
-            title="Round to whole pixels"
             aria-label="Round to whole pixels"
             onClick={() => roundToPixel(engine)}
           >

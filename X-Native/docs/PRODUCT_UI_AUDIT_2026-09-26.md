@@ -119,7 +119,7 @@ token EXISTS (alias of --line) — divider renders; cleared.
 | TB-U1 Resources + Actions | FIXED: Resources key retargeted to Assets pane via onNav (label "Assets", ⌥2); Actions key keeps the ⌘/ palette | FIXED (P1) | — |
 | TB-U2 tool flyouts | FIXED: full menu pattern on tool + boolean flyouts (arrows/Home/End/Esc/Tab, focus-in on keyboard open, focus return, blur-close); open flyouts arm the shared popover guard so global Esc yields | FIXED (P1) | — |
 | TB-U3 Prototype entry | FIXED: toolbar Prototype toggle (flow glyph, mirrors DevMode toggle + ⇧E both-ways); palette rows show ⇧E | FIXED (P1) | — |
-| TB-U4 caret + Done tooltips | native `title=` inside a Tooltip-using component | PARTIAL (§2.3) | P2 |
+| TB-U4 | FIXED: the toolbar caret dropped its native `title` (it sits inside the tool's Tooltip) and gained an `aria-label` instead. The bridge now also refuses to adopt a label inside a `.tip-host`, so a re-added title cannot double up. | FIXED (P2) | — |
 | TB-U5 boolean flyout styles | inline styles (width/divider/label) bypass tokens | DRIFT (§29) | P2 |
 | TB-U6 palette Prototype/Design rows | FIXED: both rows show ⇧E | FIXED (P2) | — |
 
@@ -216,7 +216,7 @@ viewport clamp, role=tooltip; empty shortcut renders nothing).
 | TY-U2 | FIXED: all 9 type buttons wrapped in Tooltip + aria-label/aria-pressed (Underline shows ⌘U) | FIXED (P1) | — |
 | TY-U3 | FIXED: Mixed + per-layer values + apply-to-all (with hug refit) for size/leading/tracking/paragraph-spacing/indent, Mixed options + patchTypeMany for family/weight, Auto-reset applies to all. REMAINING (follow-up): align/decoration segs, type-pop selects, min/max fields | FIXED (P1) | — |
 | FS-U6 scope+ | RETRACTED with FS-U6: patchType→patch detaches correctly (verified) | — | — |
-| TY-U4 | Round-to-pixels button has BOTH Tooltip wrapper AND native title= → double tooltip | DRIFT | P2 |
+| TY-U4 | FIXED: same fix — also applied to the three dashboard buttons (Help, New project, Play prototype) that carried both. New suite check: no element under `.tip-host` carries a native `title`. | FIXED (P2) | — |
 | TY-U5 | FIXED: hidden wiring div deleted (XPopover is used for real in the effect and bind popovers, so x-ui is in the bundle on merit). | FIXED (P2) | — |
 | TY-U6 | FIXED in §4f: the shared component shows its pill on `:focus-visible`, and the `title` bridge does the same for title-only controls. | FIXED (P2) | — |
 
@@ -527,6 +527,18 @@ Also removed: a `display:none` div whose only job was to force `PropertyField` i
 `XPopover` is used for real in the effect and bind popovers, so the shared layer ships on merit.
 
 Suite **206 pass / 0 fail** (4 new checks in §34), unit 1621, tsc and build clean.
+
+## §4i. The double-label trap the tooltip bridge would have sprung (§4f follow-up)
+
+Wiring one tooltip surface made a latent inconsistency visible: five controls carried **both** labels — a
+`Tooltip` wrapper *and* a native `title` (the toolbar carets "More tools (n)", the round-to-pixels button,
+and the dashboard's Help / New project / Play prototype). With the bridge in place their hover would have
+rendered two boxes at once. Fixed on both sides: the redundant `title` attributes are gone (the caret also
+gained the `aria-label` the native tooltip had been standing in for), and the bridge now refuses to adopt a
+label inside a `.tip-host` — the shared component owns those, so a re-added title can no longer double up.
+
+New check in §32 scans for any `.tip-host [title]` and fails with the offending labels. Suite **207 pass /
+0 fail**; the dashboard's "New project" check now selects by accessible name rather than by the tooltip.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

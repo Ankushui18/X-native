@@ -1140,8 +1140,10 @@ export function Toolbar({
               <Icon name={TOOL_ICON[current]} size={16} />
               {multi && (
                 <i
+                  // No native title here: the whole tool is inside a Tooltip
+                  // wrapper, so a second label would show a second box (TY-U4).
                   className="caret"
-                  title={`More tools (${g.tools.length})`}
+                  aria-label={`More ${g.id} tools`}
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpen((o) => (o === g.id ? null : g.id));

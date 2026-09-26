@@ -1772,7 +1772,9 @@ for (const [label, payload] of [
   await p.goto(`${URL}/#/`, { waitUntil: "networkidle0" });
   await sleep(500);
   await spy();
-  await p.evaluate(() => document.querySelector('button[title="New project"], button[data-tip="New project"]').click());
+  // by accessible name: this button is Tooltip-wrapped, so it carries no native
+  // title for the bridge to adopt (and must not, or it would be labelled twice)
+  await p.evaluate(() => document.querySelector('button[aria-label="New project"]').click());
   await sleep(350);
   const project = await dlg(p);
   t(`new project asks in-app (${project?.title})`, project?.title === "New project");
@@ -1865,6 +1867,16 @@ for (const [label, payload] of [
   });
   t(`keyboard focus shows a title-only control's label (${kbAttr.text})`,
     kbAttr.pills === 1 && kbAttr.text.startsWith("Lock layer"));
+
+  // A control inside a Tooltip wrapper must not ALSO carry a native title: both
+  // systems would answer, and the user sees two boxes (TY-U4).
+  await p.mouse.move(30, 980);
+  await p.keyboard.press("Escape");
+  await sleep(250);
+  const doubly = await p.evaluate(() =>
+    [...document.querySelectorAll(".tip-host [title], .tip-host[title]")]
+      .map((el) => el.getAttribute("title") || ""));
+  t(`no control is labelled twice (${doubly.length ? doubly.join(", ") : "none"})`, doubly.length === 0);
   await p.close();
 }
 

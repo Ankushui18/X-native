@@ -397,7 +397,6 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           <Tooltip label="Help" shortcut="?">
             <button
               className="icon-btn"
-              title="Help (?)"
               aria-label="Help"
               onClick={() => window.dispatchEvent(new CustomEvent("x-native-shortcuts"))}
             >
@@ -468,7 +467,6 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
             <Tooltip label="New project" placement="left">
               <button
                 className="mini"
-                title="New project"
                 aria-label="New project"
                 onClick={async () => {
                   const name = await askPrompt({
@@ -609,7 +607,6 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
                           <Tooltip label="Play prototype">
                             <button
                               className="play-chip"
-                              title="Play prototype"
                               aria-label="Play prototype"
                               onClick={(e) => {
                                 e.stopPropagation();

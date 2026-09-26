@@ -127,7 +127,12 @@ export function installTooltipBridge(): () => void {
   const target = (node: EventTarget | null): HTMLElement | null => {
     const el =
       node instanceof Element ? (node.closest("[title],[data-tip]") as HTMLElement | null) : null;
-    if (!el || el.closest(".tip, .tip-host")) return null;
+    // `.tip-host` is the shared component's own anchor: it already labels the
+    // control, and the bridge owning it too would show two boxes (TY-U4). The
+    // redundant `title` at those call sites is gone; this keeps a re-added one
+    // from doubling up.
+    if (!el || el.closest(".tip")) return null;
+    if (el.closest(".tip-host")) return null;
     return el;
   };
 
