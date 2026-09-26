@@ -31,7 +31,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 21 | Context toolbar | ✅ done | TB-001–TB-006 (12 tests) |
 | 22 | Popups / popovers / menus | ✅ done | MN-001–MN-008 (13 tests) |
 | 23 | Prototyping | ✅ done | PT-001–PT-019 (13 tests) |
-| 24 | Import / export | … | |
+| 24 | Import / export | ✅ done | EX-001–EX-014 (43 tests) |
 | 25 | Undo / redo (per category) | … | |
 | 26 | Keyboard behavior | … | |
 
@@ -1381,3 +1381,93 @@ slide-offset+dissolve).
 - Video triggers/actions: no video surface in X; Change-to
   via own-instance swap covers the interactive-component
   core (nested→parent falls out of instance bubbling).
+
+## §24 — Import / export
+
+Evidence: Figma "Export static designs" (360040028114:
+exportable units incl. slice regions and whole-page
+deselect export, + unlimited configs, preview hidden for
+multi-select, "Show in exports" fill checkbox,
+slash-naming folders, ⇧⌘E modal listing selections with
+configs), "Export formats and settings" (13402894554519:
+PNG/JPG overlap+box, SVG adds id/outline/simplify, PDF
+none of the five, JPG-default-High / PDF-default-Medium,
+detailed-vs-basic resampling, SVG+PDF 1x-only, suffix
+append, slice×ignore-overlap semantics, bounding-box trim,
+outline-text default on, 72×scale DPI), "Import guide"
+(360040027794: images/vectors/videos/GIFs, .fig +
+.sketch imports), "Copy between design tools"
+(360040030374: SVG clipboard round-trip, paste-SVG
+excludes markers/patterns, Copy as SVG/PNG).
+
+### Fixed (shipped in the §24 export commit on this branch)
+
+- EX-001 — Outline-text + Simplify-strokes checkboxes join
+  Export settings (caps, resolver defaults and
+  format-switch preservation all supported them; only the
+  UI rows were missing).
+- EX-002 — Sidebar Export edits apply to every selected
+  layer in one undo step; per-row preview hides for
+  multi-select (Figma) and the Export button fans out with
+  staggered downloads.
+- EX-003 — Slice-region export. X had no slice in the
+  model (the Slice tool drew a plain dashed rect), so the
+  tool now sets an `isSlice` flag: exports render the
+  container — or the whole page in root coordinates when
+  overlap is not ignored — cropped to the slice viewBox.
+  Slices never render inline; a lone copied slice pastes
+  as its region's content, and copy-as-SVG / the dev
+  panel's SVG tab render the region too.
+- EX-004 — Page export sizes to the content box on a
+  transparent ground instead of the 4000² canvas frame.
+- EX-005 — Outline text honored (SVG default on) through
+  the editor's own vectoriser; live and outlined share
+  one layout helper, and raster intermediates keep live
+  text.
+- EX-006 — Simplify strokes honored (SVG default on):
+  non-centre strokes become filled rings, while centre
+  strokes, dashes, per-side strokes and multi-contour
+  networks keep the attribute construction.
+- EX-007 — "Show in exports" per fill (base + stacked):
+  the renderer drops hidden fills while the canvas keeps
+  showing them.
+- EX-008 — Bulk dialog scale locks at 1x for SVG/PDF and
+  format switches normalise a stale 2x, as the sidebar
+  already did.
+- EX-009 — Bulk rows show output dims and the file name
+  on hover; selected and slice layers are always
+  candidates.
+- EX-010 — Bulk run exports the dialog row plus stored
+  extras (deduped, unit-tested); the footer counts files,
+  not layers.
+- EX-011 — Copy-as-SVG and the inspect SVG tab delegate
+  to the real exporter (the lossy single-path emitter is
+  gone).
+- EX-012 — Copy-as-PNG and copy-as-code cover
+  multi-select (world-positioned; code joins one labelled
+  block per layer).
+- EX-013 — `.x.json` re-imports from the Dashboard
+  through a validating predicate (tested); the old
+  not-a-.fig/.sketch/.svg dead-end is gone.
+- EX-014 — The clipboard SVG flavour positions copies at
+  world coordinates, so a nested multi-select keeps its
+  arrangement in other apps.
+
+### Verified parity (traced, no fix needed)
+
+- Include-id root-only; paste ladder
+  native→figma-kiwi→SVG→files→text; paste-SVG excludes
+  markers/patterns (matching Figma's own note); per-layer
+  SVG/PDF 1x lock with multiplier/width/height scale
+  syntax; suffix appended with no separator; JPG-default-
+  High and PDF-default-Medium; detailed/basic resampling
+  mapping; thumbnail click-through to the canvas layer.
+
+### Deferred / out of scope
+
+- Overlap-included rendering for plain layers (single-
+  node renderer has no scope); bounding-box text trim
+  (needs measuring); slash-folder zip output; PNG DPI
+  chunks; vector/selectable PDF (X builds bitmap-in-PDF);
+  video and animated export; 144dpi import scaling;
+  slice icons in the Layers panel; whole-file export.
