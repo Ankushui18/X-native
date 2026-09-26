@@ -22,6 +22,14 @@
 Debt: `--blue` is a legacy alias OF the green accent (rename, don't reuse); canvas consts
 (`BRAND_ACCENT #10b981`, `#a855f7`, `#ff3b6b`, chip `#18181b`) bypass tokens incl. dark mode (FR-U2).
 
+Debt, measured and ratcheted (2026-09-26): `src/ui/*.tsx` still carries **414 inline `style={{`
+objects, 195 quoted hex literals, 340 native `title=`, 363 raw `<button` and 49 raw `<select`** —
+`inspector.tsx` alone is 179/44/221/192/41. `src/ui/__tests__/drift.test.mjs` pins those per file and
+fails if any grows, so rules 1 and 2 below are enforced rather than aspirational; each round lowers a
+row. The dock and the inspector's vector card are the two surfaces already at zero inline layout
+(§4q of `PRODUCT_UI_AUDIT_2026-09-26.md`), which is what a finished surface looks like: classes in the
+sheet, colours from tokens, controls from the primitives.
+
 ## Typography / icons / elevation (verified)
 
 - Type scale: `--t-control` 500 11px/14 · `--t-label` 600 10px/13 · `--t-body` 400 11px/15 ·
@@ -40,8 +48,19 @@ Debt: `--blue` is a legacy alias OF the green accent (rename, don't reuse); canv
 
 - Button/input/numeric/select/segmented/popover/dialog/tabs: `x-ui.tsx` (`XButton`/`XInput`/
   `XNumericInput`/`XSelect`/`XSegmentedControl`/`XPopover`/`XDialog`/`XTabs`) + `PropertyField`,
-  `XSection`, `ContextToolbar`. ADOPTION: `XPopover` used (EffectPopover); all others orphaned —
-  migrate per §29 (plus `XConfirm`/`XPrompt` on `XDialog` for PM-U1).
+  `XSection`, `ContextToolbar`. ADOPTION (measured 2026-09-26, `<X…` call sites outside `x-ui.tsx`):
+  `XButton` 14 (DialogHost + the inspector's vector card), `XSegmentedControl` 5 (dev-seg, the vector
+  card's mirroring + offset join), `XPopover` 2 (EffectPopover, the bind picker), `XDialog` 2,
+  `XTabs` 1, `ContextToolbar` 1 — and still **0** for `XInput`, `XNumericInput`, `XSelect`,
+  `PropertyField` and `XSection`, which the inspector's own `Field`/`Section` predate and outclass
+  (arithmetic, Mixed, multi-value, scrub, fold + persistence). The migration is therefore *not*
+  "replace Field with XNumericInput"; it is either promote `Field`/`Section` into x-ui or retire the
+  five orphans — decide before adopting them anywhere new.
+- Action rows vs switches: a segmented control is for a value the layer has (`role="tab"` + one
+  `aria-selected` + one tab stop). A row of one-shot actions — align, distribute, tidy — is the
+  panel's `.align > .g` idiom of plain buttons behind `Tooltip`, with no selection claim. Passing
+  `value=""` to `XSegmentedControl` for such a row is a defect, not a shortcut: its roving tabindex
+  then gives every tab `tabindex="-1"` and the row leaves the tab order.
 - Inspector: `Section` (collapse + persist + `openSection` bus) + `Field` (arithmetic, Mixed,
   multi-values, tokens, disabled-reasons) + `ColorRow` (swatch/hex/opacity/visibility/export/remove +
   anchored picker) + `BindingChip`. All new rows compose these; no bespoke headers (IN-U3/U4).

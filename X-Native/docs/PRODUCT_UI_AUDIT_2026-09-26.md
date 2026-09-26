@@ -67,9 +67,16 @@ engine comments). Dead Ends from prior phases retained: no browser/Rust; E2E unw
 - Direction: migrate surfaces to x-ui incrementally (highest-traffic first: toolbar, inspector rows,
   menus, pickers); do NOT restyle everything at once.
 
-### §2.2 FINDING: token foundation exists — document & enforce (§6/§28) — P2
-- styles.css already defines surface/text/accent/input/elevation/type tokens for light (+ dark theme
-  to verify). Next: audit for hardcoded colors/geometry bypassing tokens (grep `#` hex + `px` in tsx).
+### §2.2 FINDING: token foundation exists — document & enforce (§6/§28) — ENFORCED (P2, §4q)
+- styles.css already defines surface/text/accent/input/elevation/type tokens for light and dark.
+- **Enforced now, not "next".** `src/ui/__tests__/drift.test.mjs` is the audit the bullet asked for,
+  run on every `npm test`: per-file ceilings for inline `style={{`, quoted `#rrggbb`, native `title=`,
+  raw `<button` and raw `<select` (workspace 414 / 195 / 340 / 363 / 49, measured 2026-09-26), pinned
+  in a table that a new surface has to join and a fix has to lower. Same instrument as
+  `DEAD_CODE_CEILING`; see `docs/KNOWN_DEBT.md` §12 for what it costs and what it does not gate.
+- Dark theme: token-driven and checked in the browser suite for the dock (§4n), the player (§4o) and
+  the vector card + Done button (§42 — written, not run in the sandbox that produced it). The
+  exception is still FR-U2: the canvas chrome constants, which no token reaches.
 
 ### §2.3 FINDING: two tooltip systems (§21) — FIXED (P1)
 - `Tooltip.tsx` imported by Dashboard/chrome/inspector, but native `title=` still dominated: chrome 40,
@@ -120,7 +127,7 @@ token EXISTS (alias of --line) — divider renders; cleared.
 | TB-U2 tool flyouts | FIXED: full menu pattern on tool + boolean flyouts (arrows/Home/End/Esc/Tab, focus-in on keyboard open, focus return, blur-close); open flyouts arm the shared popover guard so global Esc yields | FIXED (P1) | — |
 | TB-U3 Prototype entry | FIXED: toolbar Prototype toggle (flow glyph, mirrors DevMode toggle + ⇧E both-ways); palette rows show ⇧E | FIXED (P1) | — |
 | TB-U4 | FIXED: the toolbar caret dropped its native `title` (it sits inside the tool's Tooltip) and gained an `aria-label` instead. The bridge now also refuses to adopt a label inside a `.tip-host`, so a re-added title cannot double up. | FIXED (P2) | — |
-| TB-U5 boolean flyout styles | inline styles (width/divider/label) bypass tokens | DRIFT (§29) | P2 |
+| TB-U5 boolean flyout styles | FIXED: the boolean tool is the dock's own split-tool recipe (`tool split` + `.caret` gutter + the plain `.fly`, so it takes the 220px min-width every other menu has instead of an inline 180px), the separator is `.fly-div`, and the two remaining inline objects in the Toolbar — the multi-select `.toolset` and its count label — became `.toolset.multi` / `.sel-count`. The vector-edit **Done** button next door carried an inline accent with a hardcoded `#fff`; it is `.hit.vec-done` on `--accent`/`--on-accent`, so it survives the dark theme (where the accent's ink is `#0a0e13`, not white). The dock now has zero inline styles outside `Icon`'s own svg box. §4q | FIXED (P2) | — |
 | TB-U6 palette Prototype/Design rows | FIXED: both rows show ⇧E | FIXED (P2) | — |
 
 Fix directions: U1 → Resources opens left Assets pane (or palette w/ resources filter), not the same
@@ -168,7 +175,7 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 | IN-U1 | FIXED: shared patchMany/mixedProp/manyVals/patchNumMany helpers; Mixed display + apply-to-all for opacity/blend/corners(+toggles)/stroke weight/base fill+stroke rows (incl gradient/image/meta/remove/visibility) and Fill/Stroke/Effect Add; ColorRow gains a mixed swatch+hex. REMAINING (follow-up): fill/stroke/effect stack ROW edits, effect row ops, visibility-toggle display states (all: first-layer display kept, Export-precedent documented) | FIXED (P1) | — |
 | IN-U2 | FIXED: seg entry shows only when the vector card is absent (exactly one entry always); both use id+toast+⇧⌘O title; card refuses the stroke-less no-op with a teaching toast; labels unified | FIXED (P1) | — |
 | IN-U3 | FIXED: every ad-hoc header is now a `Section` — Component/Instance (its action buttons moved into the section's action slot), Boolean, Star/Polygon, and on the page/prototype surfaces Frame Presets, Background, Local styles, Pixel grid, Flow starting point, Prototype settings, Interactions, Annotations. `h-row h3` and `.sec-toggle h2` were already the same 11px/500/muted style, so the chrome reads identically while every block gained fold + persistence + the scroll-to hook. Left bespoke on purpose: `Design health` (score + issues button) and the Dev Mode `Inspect` header (dot + view tabs) — both carry live, bespoke chrome a plain title would lose. Note: the audit's "10 sections" observation was itself approximate — the count varies by selection (screen 4 / layer 11 / text 12) and now includes these blocks. | FIXED (P2) | — |
-| IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
+| IN-U4 | FIXED: the card is the shared primitives — `Section id="vector"` for the header (fold + persistence + the scroll-to hook, chip and edit button in its action slot), `Field` for the vertex numbers, `XSegmentedControl` for mirroring and the offset join, `XButton` for the header and quick actions, `.x-btn-primary` for Apply. Its six point-alignment actions are the panel's own `.align > .g` idiom behind `Tooltip` (not tabs: a one-shot action has no selected panel to claim, and a `value=""` tablist would have left the row out of the tab order). All inline style objects and both `#fff`/`#ffffff` literals are gone; the geometry lives in `.vec-card`/`.vec-row`/`.vec-align`/`.vec-vertex`/`.vec-pair`/`.vec-slider`/`.vec-actions`/`.vec-sub`. Vertex fields are named `Vertex X` / `Vertex Y` / `Vertex corner radius` so they cannot collide with the layer's own `X` / `Y` / `Corner radius`, which the e2e `field()` helper and assistive tech address by aria-label. §4q | FIXED (P2) | — |
 | IN-U5 | FIXED: "Edit vector" → **"Edit points"**, and it now enters vector edit mode (the inspector twin of double-clicking a layer; booleans still bake first, because their points only exist once the group is applied). The button reads "Editing points" while the editor is open. It previously dispatched `flatten` — the exact action of the button beside it — so the label promised editing and delivered a bake. "Flatten" stays a distinct bake. Seg buttons are still unclassed (x-ui adoption family). | FIXED (label+action) / DRIFT (styling) | P2 |
 | IN-U6 | Flip buttons + assorted icon-only buttons use native title= amid Tooltip siblings | PARTIAL (§2.3) | P2 |
 | IN-U7 | FIXED with PM-U5: `XTabs` now carries `role=tablist`/`tab`/`aria-selected` + roving `tabindex` + arrows/Home/End, keeps `aria-current` so the underline styling and the e2e checks that read it still work, and the zoom menu shares a `.tabs-row` so the divider still spans the strip. | FIXED (P2) | — |
@@ -662,6 +669,126 @@ chord that starts one (⌘⌥↩, which the palette lists and `bindHotkeys` impl
 (PT-U7).
 
 Suite **260 pass / 0 fail** (7 new checks in §41), unit 1621, tsc and build clean.
+
+## §4q. P2 round 4 — the last bespoke card, and the dock's last inline paint (IN-U4, TB-U5)
+
+Two surfaces were left that styled themselves instead of reading the sheet: the inspector's vector
+card and the dock's boolean flyout. Both are now composed from the primitives the rest of the product
+uses, and — the part that matters for the next round — both are now *verifiable in this sandbox*.
+
+**The vector card (IN-U4).** It was the one block in the panel that no shared component reached: a
+`<strong style={{fontSize:11}}>` header, four `export-run` buttons resized by inline padding (a class
+named for the export sheet's Run button, doing double duty as a small pill), a hand-written row of six
+24px icon buttons, raw `<input type="number">`s with no accessible name, and `#fff`/`#ffffff` typed
+onto two accent buttons so the accent's own ink never reached them. It is a `Section id="vector"` now
+— so it folds, persists and answers the `openSection` bus like the eleven blocks around it — with
+`Field` for the vertex numbers (which brings arithmetic, label-scrub and a name for free: `100/4` and
+`+5` now work on an anchor point), `XSegmentedControl` for mirroring and the offset join, `XButton`
+for the header and the four actions, `.x-btn-primary` for Apply, and the panel's own `.align > .g`
+idiom behind `Tooltip` for the six alignment actions. Geometry moved to `.vec-*` classes.
+
+One decision worth recording, because it is the kind of thing a component library quietly gets wrong:
+the alignment row is **not** a segmented control. Those six are one-shot actions on the selected
+points, and `role="tab"` claims a panel is being shown — a selection the points do not have. It also
+would have broken the keyboard: `XSegmentedControl` derives its roving tabindex from `value`, and an
+action row has no value, so `tabIndexFor` returns −1 for every tab and the row leaves the tab order
+altogether. The layer-alignment row two sections above already had the right shape, so the card takes
+it — and names its buttons for what they move (`Align points left`, not `Align left`), because ⌥A and
+friends belong to the layer row and `vectorAlign` has no chord to advertise.
+
+The vertex fields are named `Vertex X` / `Vertex Y` / `Vertex corner radius` for the same reason the
+e2e suite addresses fields by aria-label rather than position: the panel already has an `X`, a `Y` and
+a `Corner radius`, and a second field with the same name makes `field(p, "Corner radius")` — and a
+screen reader — read the wrong one.
+
+**The dock (TB-U5).** The boolean tool was the only menu in the dock that laid itself out inline:
+`style={{width: 180, left: 0}}` on the `.fly` (narrower than the recipe's own 220px min-width, so it
+was the one menu clipping its chord chips), `style={{width:"auto", padding:"0 6px", gap:3}}` on its
+trigger, and an inline hairline separator. Every tool group already had the recipe it now uses:
+`tool split`, a `.caret` gutter, a plain `.fly`. The other two inline objects in the Toolbar (the
+multi-select `.toolset` and its count label) became `.toolset.multi` / `.sel-count`, and the
+vector-edit **Done** button — an inline accent with a hardcoded `#fff` — became `.hit.vec-done` on
+`--accent`/`--on-accent`, which is the fix that actually matters: the dark theme's accent ink is
+`#0a0e13`, so white-on-accent was illegible there. The dock now carries no inline style outside
+`Icon`'s own svg box. A `.h-act` class also replaces the Component section's inline action row, the
+last leftover of IN-U3.
+
+**Verification — a new tier, because this sandbox has no browser.** Chromium cannot be fetched here
+(`googlechromelabs.github.io` and `storage.googleapis.com` are unreachable; the `@sparticuz/chromium`
+binary unpacks but its `libnss3`/`libnspr4` are absent and no apt mirror is reachable either), so the
+browser suite could not be run. Rather than ship the round as "code-traced, NOT VERIFIED" — the
+caveat every previous round carried — `src/ui/__tests__/domEnv.mjs` adds a headless DOM tier: jsdom
+globals installed *before* react-dom is imported (import it first and React falls back to its legacy
+IE value-change polyfill and throws `activeElement.detachEvent is not a function` on every
+keystroke), then `RightPanel` / `Toolbar` mounted on a real `MemoryEngine` document the way `App.tsx`
+mounts them (snapshot from the store, so a dispatch re-renders). That is enough to read the markup the
+components actually produce, click it, type into it and watch the engine answer.
+
+- `vectorcard.dom.test.mjs` — **45 checks**: the card renders for a vector and not for a rectangle;
+  the header is a `Section` among the others; zero stray inline styles; alignment clicks move the
+  points (`vectorAlign`), mirroring writes `mirrorMode`, typing into `Vertex X` writes the point and
+  reads `100/4` as 25 and `+5` as relative; the corner-radius Field and its slider share one name;
+  Simplify…/Offset Path… open their forms, read as pressed while open, apply through
+  `simplifyPath`/`offsetPath` and close; Outline stroke refuses a stroke-less path without touching
+  it; Smooth rewrites the handles; Edit points/Done drive `vecEdit`; the section folds and unfolds;
+  one undo returns a typed vertex.
+- `dock.dom.test.mjs` — **21 checks**: the dock is inline-free; the count is `.sel-count`; the boolean
+  tool is `tool split` with a `.caret` and `aria-haspopup`/`aria-expanded`; opening it shows the five
+  operations with their chords and a `.fly-div` separator; Intersect makes a boolean and closes the
+  menu; the Done button appears only in vector edit and leaves it.
+- `vectorcard.test.mjs` — **53 checks** on the source contract, so a future edit cannot quietly
+  reintroduce the drift: the card composes the four primitives, carries no inline `style={{`, no
+  literal colour, no `export-run`, no `<strong>`; every class it names exists in `styles.css`; the
+  engine commands are all still dispatched; the boolean tool keeps the split recipe. This one is a
+  ratchet and was mutation-checked (adding `style={{color:"#fff"}}` back fails two checks).
+
+Measuring the two surfaces turned up the reason they survived four rounds: the drift was never
+counted. `src/ui/__tests__/drift.test.mjs` now counts it — **22 checks**, one per surface plus a
+census of the table itself — and pins a ceiling per file for the five things the design system's rules
+name: inline `style={{` objects, quoted `#rrggbb` literals, native `title=`, raw `<button`, raw
+`<select`. The workspace stands at **414 / 195 / 340 / 363 / 49**, with `inspector.tsx`
+(179/44/221/192/41) and `FigInspectorModal.tsx` (113 inline objects for a dev modal) the two piles
+that matter. It is the same instrument as `DEAD_CODE_CEILING` in `scripts/check.sh`: it does not claim
+the pile is good, it claims the pile is known and cannot grow without someone editing the table and
+saying so. It was mutation-checked (an added `style={{color:"#fff"}}` in `Comments.tsx` fails with
+`OVER: inline 3→4, colour 0→1`), and a row that *falls* prints `(lower the ceiling: …)` so a fix and
+its ratchet cannot be committed apart. Recorded as `docs/KNOWN_DEBT.md` §12, with the caveat that
+belongs there: nothing in CI runs the web suite, so this ratchet only bites where `npm test` runs.
+
+**A defect the build warning turned up (CSS-U1, fixed).** `vite build` has been printing
+`▲ [WARNING] Unexpected "@media" [css-syntax-error]` at `styles.css:2522`, and the cause is a dangling
+selector list: `.fill-pop, .ctx, .menu, .type-menu, .palette,` with no declaration block, immediately
+followed by the reduced-motion `@media`. The `@media` was being parsed as the next *selector* in that
+list, so the block never reached the minified sheet — the copy at the end of the file is the one that
+has been applying the preference (so reduced motion did work, by luck of duplication), and `.palette`
+names a class nothing in `src/` renders. The list is deleted, the duplicate block with it, and the
+build is warning-free. It was the shared entrance animation for those four popover surfaces —
+`.dash-menu`, `.xmodal` and the command palette each carry `animation: x-pop-in 110ms cubic-bezier(0.2,
+0, 0.13, 1)` while `.fill-pop` / `.ctx` / `.menu` / `.type-menu` carry none. **Completing it is
+deliberately not done here:** it is a visible motion change on four surfaces, and this sandbox has no
+browser to look at it with. The rule to add is written down in the stylesheet comment where the list
+used to be; it is the whole of the remaining motion-parity gap (MOTION-U1, open).
+
+Unit suite **1610 checks, 0 failed** (1469 → 1610, so 141 new), `tsc -b` clean, `vite build` clean and
+— for the first time in this file's recorded runs — **warning-free**.
+
+Browser suite: **§42 added (15 checks), NOT RUN here** — it covers exactly the half jsdom cannot:
+computed geometry read *against the panel's own recipes* (the card's align buttons measured against
+the layer align row, its fields against the Position fields, the boolean `.fly` against a tool group's
+`.fly`, so a scale change moves both sides and the claim survives), the Apply button's background
+against the `--accent` token, the dark-theme card well against `--hover` and the Done button's ink
+against `--on-accent`, and the inline-style census of the dock. It is syntax-checked and written to
+the file's conventions; it needs `npm run test:e2e` with a Chromium to be believed.
+
+**Still open after this round:** MOTION-U1 (the four popover surfaces with no entrance animation, rule
+written down above — needs eyes on it), FR-U2 (the canvas chrome constants — `BRAND_ACCENT #10b981` vs
+the `--accent` token `#0e9f6e`, `#a855f7`, `#ff3b6b`, `#18181b` — the largest remaining token gap, and
+it needs the same token-feeding the canvas already does for `--canvas`/`--grid`/`--canvas-label`),
+IN-U6/FS-U4 (native `title=` on the flip and ColorRow buttons: behaviourally equivalent since §2.3's
+bridge, stylistically split, and frozen by the drift ratchet rather than fixed), PM-U3 (two Escape
+ownership patterns), PM-U6 (export sheet's initial focus), LP-U3–U6, RW-U1, FR-U3/U4 — and the
+`inspector.tsx` / `FigInspectorModal.tsx` rows of the drift table, which are where the next rounds'
+numbers come from.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

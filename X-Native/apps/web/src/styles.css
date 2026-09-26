@@ -609,6 +609,31 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   align-items: center;
   gap: 2px;
 }
+/* The multi-selection end of the dock: the count, then the actions that apply
+   to the whole selection. Both used to carry their layout inline (TB-U5), which
+   is where the sheet could not reach them. */
+.toolset.multi { gap: 3px; }
+.sel-count {
+  padding: 0 6px;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* "Done" while editing points: the dock's one commit button rather than a tool
+   pick, so it wears the accent — with the accent's own ink, which the `#fff` it
+   used to hardcode could not follow into the dark theme. */
+.tool .hit.vec-done {
+  width: auto;
+  padding: 0 10px;
+  gap: 4px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.tool .hit.vec-done:hover { background: var(--accent-hover); }
 .tool {
   position: relative;
   display: flex;
@@ -687,6 +712,14 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
 .fly button:hover { background: var(--hover); }
 .fly button.on { background: var(--sel); }
 .fly .sc { margin-left: auto; color: var(--dim); font-size: 11px; }
+/* A hairline between two groups of menu rows. The boolean flyout used to write
+   `style={{ height: 1, background: "var(--border)", margin: "4px 0" }}` inline
+   (TB-U5); every menu separator is this now. */
+.fly-div {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
 .fly-hint {
   margin-top: 4px;
   padding: 6px 8px 2px;
@@ -907,6 +940,15 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
      At full text strength they competed with the fields and the whole panel
      read as one flat list. */
   color: var(--muted);
+}
+/* A section header's action slot: buttons and chips in a row at the far end.
+   Sections used to write `style={{ display: "flex", gap: 4 }}` per call site
+   (IN-U3's leftovers); this is that layout, once. */
+.h-act {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 .plus {
   width: 24px;
@@ -2470,20 +2512,22 @@ button,
   from { opacity: 0; transform: translateY(-4px) scale(0.98); }
   to   { opacity: 1; transform: none; }
 }
-.fill-pop,
-.ctx,
-.menu,
-.type-menu,
-.palette,
+/* A dangling selector list used to sit here — `.fill-pop, .ctx, .menu,
+   .type-menu, .palette,` with no declaration block after it, followed by a
+   reduced-motion `@media`. Two consequences, both silent: the `@media` was
+   parsed as the next selector in that list (esbuild's "Unexpected @media"
+   warning at build time, and the block dropped from the minified sheet), and
+   `.palette` named a class nothing in `src/` renders.
 
-/* Respect the OS reduced-motion preference. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
+   The reduced-motion rule survives — the copy further down this file is the
+   well-formed one, and it is the one that was actually being applied. The
+   selector list is deleted rather than completed on purpose: it was the shared
+   entrance animation for the four popover surfaces (`.dash-menu`, `.xmodal` and
+   the command palette all carry `animation: x-pop-in 110ms cubic-bezier(0.2, 0,
+   0.13, 1)`), and giving those four the same rule is a *visible* motion change
+   that has to be looked at, not inferred. It is recorded as an open motion-parity
+   item in docs/PRODUCT_UI_AUDIT_2026-09-26.md §4q; the rule to add is
+   `.fill-pop, .ctx, .menu, .type-menu { animation: x-pop-in 110ms cubic-bezier(0.2, 0, 0.13, 1); }`. */
 
 /* Tooltip: dark pill, label plus dimmed shortcut. */
 .tip-host { display: contents; }
@@ -4529,6 +4573,122 @@ html[data-theme="dark"] .zoom-menu {
 .x-field-input { flex: 1; display: flex; }
 .x-field-hint { font: var(--t-body); color: var(--dim); font-size: 10px; }
 .x-field.disabled { opacity: 0.5; pointer-events: none; }
+
+/* ── Vector card (IN-U4) ───────────────────────────────────────────────────
+   The card used to carry its whole layout inline: a `padding/background/radius/
+   border/grid` style object, six alignment buttons written out with their own
+   24px flex recipe, `export-run` buttons resized by inline padding, and
+   `#fff`/`#ffffff` typed straight onto the accent buttons (so the accent's own
+   `--on-accent` ink never reached them). The classes below are that layout, and
+   the buttons are `XButton` / `XSegmentedControl`, so the card reads the tokens
+   the rest of the panel does — including in the dark theme. */
+.vec-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  background: var(--hover);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+/* One labelled row: a caption on the left, its control (or a note) filling the
+   rest. Replaces the four inline `flex-direction: column` wrappers. */
+.vec-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+.vec-label {
+  font: var(--t-label);
+  color: var(--dim);
+  white-space: nowrap;
+}
+/* The vertex counter sits on the same line as its caption, at the far end. */
+.vec-row .vec-note { margin-left: auto; }
+.vec-note {
+  font: var(--t-label);
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+/* "Native Graph": an informational chip in the section's action slot, so it
+   keeps the 9px badge idiom instead of an inline style object. */
+.vec-chip {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--input);
+  color: var(--dim);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.vec-vertex { display: grid; gap: 8px; }
+/* The point-alignment row is the panel's `.align` recipe; inside the card's own
+   10px grid its 8px bottom margin would double the gap. */
+.vec-align { margin-bottom: 0; }
+.vec-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.vec-pair .field { min-width: 0; }
+/* Sliders: the range grows, the number beside it stays a fixed 52px. One
+   accent colour, from the token, for every slider in the card. */
+.vec-slider,
+.vec-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vec-range {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* The number beside a slider is a shared `Field`, so the row only has to give
+   it a stable width: the slider grows, the field does not. */
+.vec-sub-row .field {
+  flex: 0 0 auto;
+  width: 116px;
+}
+/* The four path operations, two to a row. */
+.vec-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.vec-actions .x-btn { width: 100%; }
+/* A toggle that opens a form reads as pressed while the form is open. */
+.x-btn-secondary.on {
+  background: var(--sel);
+  border-color: var(--accent-ring);
+  color: var(--accent-ink);
+}
+/* Simplify / Offset forms: the card's own inset well. */
+.vec-sub {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.vec-sub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.vec-sub-title { font: var(--t-control); font-weight: 500; }
+.vec-sub .vec-label { width: 60px; flex: 0 0 auto; }
+.vec-apply { width: 100%; margin-top: 2px; }
+/* The segmented rows inside the card sit on the card's own well, so they take
+   the panel colour instead of `--input` (which the well already uses). */
+.seg.vec-seg { background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.seg.vec-seg button { min-width: 0; }
+.seg.vec-seg button[role="tab"] { height: 24px; font-size: 10px; }
 
 /* P0-D interaction states — centralize Default/Hover/Pressed/Active/Focused/Selected/Disabled */
 

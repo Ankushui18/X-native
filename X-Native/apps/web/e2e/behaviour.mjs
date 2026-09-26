@@ -2521,6 +2521,156 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 42. the vector card and the boolean menu are sheet chrome (IN-U4, TB-U5) ---
+{
+  const p = await page();
+  await rows(p);
+  await drawRect(p);
+  // A rectangle has no path, so the card stays hidden until the shape is baked
+  // into a vector — the same route §35 takes.
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")]
+    .find((b) => b.textContent.trim() === "Flatten")?.click());
+  await sleep(500);
+
+  // The card's geometry is read *against the panel's own recipes* rather than
+  // against numbers written here: the claim is "one recipe", so the layer align
+  // row and the Position fields are the reference. If the sheet's scale moves,
+  // both sides move and this stays true; a bespoke copy would not.
+  const card = await p.evaluate(() => {
+    const c = document.querySelector(".vec-card");
+    const cs = c ? getComputedStyle(c) : null;
+    const size = (el) => { const r = getComputedStyle(el); return `${r.width}x${r.height}`; };
+    return {
+      present: !!c,
+      headers: [...document.querySelectorAll(".h-row .sec-toggle h2")].map((h) => h.textContent.trim()),
+      chip: document.querySelector(".h-act .vec-chip")?.textContent.trim() ?? null,
+      // Icon sizes its svg and Field marks its label scrubbable; anything else
+      // inline is bespoke layout the sheet cannot reach.
+      inline: [...(c?.querySelectorAll("[style]") ?? [])].map((e) => e.getAttribute("style"))
+        .filter((v) => !/^(width: \d+px; height: \d+px; display: block;|cursor: ew-resize;( display: inline-flex;)?$)/.test(v || "")),
+      hex: (c?.innerHTML.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []),
+      exportRun: document.querySelectorAll(".vec-card .export-run").length,
+      strong: document.querySelectorAll(".vec-card strong").length,
+      cardBg: cs?.backgroundColor,
+      alignSizes: [...document.querySelectorAll(".vec-align .g button")].map(size),
+      layerAlignSizes: [...document.querySelectorAll(".align:not(.vec-align) .g button")].map(size),
+      fieldHeights: [...document.querySelectorAll(".vec-card .field")].map((f) => getComputedStyle(f).height),
+      positionFieldHeights: [...document.querySelectorAll(".inspector .field")]
+        .filter((f) => !f.closest(".vec-card")).map((f) => getComputedStyle(f).height),
+      actionHeights: [...document.querySelectorAll(".vec-actions button")].map((b) => getComputedStyle(b).height),
+      mirrorTabs: [...document.querySelectorAll('.seg[aria-label="Handle mirroring"] button[role="tab"]')]
+        .map((b) => `${b.textContent.trim()}=${b.getAttribute("aria-selected")}`),
+      alignRoles: [...document.querySelectorAll(".vec-align button")].map((b) => b.getAttribute("role")),
+    };
+  });
+  t(`the card is a section among the others (${card.headers.join(" / ")})`,
+    card.present && card.headers.includes("Vector") && card.chip === "Native Graph");
+  t(`the card styles itself from the sheet (${card.inline.length} stray inline, ${card.hex.length} literal colours, ${card.exportRun} export-run, ${card.strong} <strong>)`,
+    card.inline.length === 0 && card.hex.length === 0 && card.exportRun === 0 && card.strong === 0);
+  t(`its align row is the layer align row's recipe (${card.alignSizes.join(" ")} vs ${card.layerAlignSizes.slice(0, 3).join(" ")})`,
+    card.alignSizes.length === 6 && card.layerAlignSizes.length > 0 &&
+    card.alignSizes.every((s) => s === card.layerAlignSizes[0]));
+  t(`its numbers are the panel's fields (${[...new Set(card.fieldHeights)].join(",")} vs ${[...new Set(card.positionFieldHeights)].join(",")})`,
+    card.fieldHeights.length >= 3 && card.positionFieldHeights.length > 0 &&
+    card.fieldHeights.every((h) => h === card.positionFieldHeights[0]));
+  t(`its four actions share one height (${[...new Set(card.actionHeights)].join(",")})`,
+    card.actionHeights.length === 4 && new Set(card.actionHeights).size === 1);
+  // Six one-shot actions must not claim a selection: a tab says "this panel is
+  // showing", which an align button never is. The mirroring switch does select,
+  // so it keeps the tab semantics and shows the point's current mode.
+  t(`alignment claims no tab (${card.alignRoles.filter(Boolean).length} roles)`, card.alignRoles.every((r) => r === null));
+  t(`mirroring selects exactly one tab (${card.mirrorTabs.join(" ")})`,
+    card.mirrorTabs.length === 3 && card.mirrorTabs.filter((m) => m.endsWith("=true")).length === 1);
+
+  // The form's Apply is the accent from the token, not a colour typed onto it.
+  await p.evaluate(() => [...document.querySelectorAll(".vec-actions button")]
+    .find((b) => /Simplify/.test(b.textContent))?.click());
+  await sleep(350);
+  const apply = await p.evaluate(() => {
+    const token = document.createElement("div");
+    token.style.color = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+    document.body.appendChild(token);
+    const want = getComputedStyle(token).color;
+    token.remove();
+    const el = document.querySelector(".vec-sub .x-btn-primary");
+    const b = [...document.querySelectorAll(".vec-actions button")].find((x) => /Simplify/.test(x.textContent));
+    return { want, got: el ? getComputedStyle(el).backgroundColor : null, cls: el?.className ?? null,
+             toggle: b?.className ?? null, toggleBg: b ? getComputedStyle(b).backgroundColor : null };
+  });
+  t(`Apply simplify is the accent token (${apply.cls}, ${apply.got})`,
+    apply.got === apply.want && /x-btn-primary/.test(apply.cls || ""));
+  t(`and its toggle reads as pressed while the form is open (${apply.toggle})`,
+    / on/.test(apply.toggle || "") && apply.toggleBg !== apply.want);
+
+  // Entering point edit puts the dock's one commit button on screen: it wears
+  // the accent, and its ink has to be the accent's own — the `#fff` it used to
+  // hardcode is unreadable on the dark theme's accent ink (`#0a0e13`).
+  await p.evaluate(() => [...document.querySelectorAll(".h-act button")]
+    .find((b) => /Edit points/.test(b.textContent))?.click());
+  await sleep(400);
+  const dark = await p.evaluate(() => {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const token = (name) => {
+      const d = document.createElement("div");
+      d.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.appendChild(d);
+      const c = getComputedStyle(d).color;
+      d.remove();
+      return c;
+    };
+    const done = document.querySelector(".hit.vec-done");
+    const card = document.querySelector(".vec-card");
+    const out = {
+      hover: token("--hover"), onAccent: token("--on-accent"), accent: token("--accent"),
+      cardBg: card ? getComputedStyle(card).backgroundColor : null,
+      doneBg: done ? getComputedStyle(done).backgroundColor : null,
+      doneFg: done ? getComputedStyle(done).color : null,
+      doneInline: done?.getAttribute("style") ?? null,
+      doneTitle: done?.getAttribute("title") ?? null,
+    };
+    document.documentElement.removeAttribute("data-theme");
+    return out;
+  });
+  t(`the card follows the theme in dark (${dark.cardBg} vs --hover ${dark.hover})`, dark.cardBg === dark.hover);
+  t(`and the dock's Done wears the accent and its ink (${dark.doneBg}, ${dark.doneFg} vs ${dark.onAccent})`,
+    dark.doneBg === dark.accent && dark.doneFg === dark.onAccent && dark.doneInline === null &&
+    (dark.doneTitle || "").startsWith("Done editing path"));
+
+  // TB-U5: the boolean menu only exists once two layers are selected, and its
+  // width is measured against a tool group's `.fly` rather than a number — the
+  // finding was that this one menu did not use the recipe the others do.
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await sleep(500);
+  const dock = await p.evaluate(() => {
+    const bool = document.querySelector('.tool[data-group="bool"] .fly');
+    const shape = document.querySelector('.tool[data-group="shape"] .fly');
+    const m = (el) => { const r = getComputedStyle(el); return { min: r.minWidth, radius: r.borderRadius, pad: r.padding }; };
+    const div = bool?.querySelector(".fly-div");
+    return {
+      bool: bool ? m(bool) : null, shape: shape ? m(shape) : null,
+      boolInline: bool?.getAttribute("style") ?? null,
+      split: document.querySelector('.tool[data-group="bool"]')?.className ?? null,
+      hitInline: document.querySelector('.tool[data-group="bool"] .hit')?.getAttribute("style") ?? null,
+      caret: document.querySelector('.tool[data-group="bool"] i.caret')?.getAttribute("aria-label") ?? null,
+      rows: [...(bool?.querySelectorAll('button[role="menuitem"]') ?? [])].map((b) => b.textContent.trim()),
+      divH: div ? getComputedStyle(div).height : null,
+      divInline: div?.getAttribute("style") ?? null,
+      dockStrays: [...document.querySelectorAll(".dock [style]")].map((e) => e.getAttribute("style"))
+        .filter((v) => !/^width: \d+px; height: \d+px; display: block;$/.test(v || "")),
+    };
+  });
+  t(`the boolean menu is the tool groups' menu (${JSON.stringify(dock.bool)} vs ${JSON.stringify(dock.shape)})`,
+    !!dock.bool && !!dock.shape && dock.bool.min === dock.shape.min &&
+    dock.bool.radius === dock.shape.radius && dock.bool.pad === dock.shape.pad &&
+    dock.boolInline === null && dock.rows.length === 5);
+  t(`its trigger is the dock's split tool (${dock.split}, caret ${dock.caret})`,
+    /tool split/.test(dock.split || "") && dock.hitInline === null && !!dock.caret);
+  t(`its separator is a hairline from the sheet (${dock.divH})`, dock.divH === "1px" && dock.divInline === null);
+  t(`and the whole dock is inline-free (${dock.dockStrays.length} stray: ${dock.dockStrays.join(" ") || "none"})`,
+    dock.dockStrays.length === 0);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

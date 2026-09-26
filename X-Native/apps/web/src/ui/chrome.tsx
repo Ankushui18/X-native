@@ -1185,10 +1185,8 @@ export function Toolbar({
       {snap.selection.length >= 2 && (
         <>
           <div className="div" />
-          <div className="toolset" style={{ display: "flex", alignItems: "center", gap: 3 }}>
-            <span style={{ fontSize: 11, fontWeight: 500, color: "var(--dim)", padding: "0 6px" }}>
-              {snap.selection.length} selected
-            </span>
+          <div className="toolset multi">
+            <span className="sel-count">{snap.selection.length} selected</span>
             <div className="tool">
               <Tooltip label="Create component" shortcut="⌥⌘K">
                 <button
@@ -1200,9 +1198,14 @@ export function Toolbar({
                 </button>
               </Tooltip>
             </div>
+            {/* TB-U5: the split tool, drawn the way every tool group draws one —
+                `tool split` for the gutter padding, `.caret` for the chevron, and
+                the plain `.fly` recipe (min-width 220px) instead of an inline
+                180px that no other menu has. The inline `width/left/gap` objects
+                were the last geometry in the dock that bypassed the sheet. */}
             <div
               data-group="bool"
-              className={`tool${boolOpen ? " open" : ""}`}
+              className={`tool split${boolOpen ? " open" : ""}`}
               onMouseLeave={() => setBoolOpen(false)}
               onBlur={(e) => {
                 if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setBoolOpen(false);
@@ -1211,7 +1214,6 @@ export function Toolbar({
               <Tooltip label="Boolean groups">
                 <button
                   className="hit"
-                  style={{ width: "auto", padding: "0 6px", gap: 3 }}
                   aria-haspopup="menu"
                   aria-expanded={boolOpen}
                   onKeyDown={(e) => triggerKeys(e, "bool", boolOpen)}
@@ -1219,11 +1221,22 @@ export function Toolbar({
                   onClick={() => setBoolOpen((v) => !v)}
                 >
                   <Icon name="boolean-union" size={16} />
-                  <Icon name="chevron" size={caretSize()} />
+                  <i
+                    // No native title: the whole tool sits inside a Tooltip, so a
+                    // second label would show a second box (TY-U4).
+                    className="caret"
+                    aria-label="More boolean operations"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setBoolOpen((v) => !v);
+                    }}
+                  >
+                    <Icon name="chevron" size={caretSize()} />
+                  </i>
                 </button>
               </Tooltip>
               {boolOpen && (
-                <div className="fly" role="menu" aria-label="Boolean operations" style={{ width: 180, left: 0 }} onKeyDown={(e) => menuKeys(e, "bool")}>
+                <div className="fly" role="menu" aria-label="Boolean operations" onKeyDown={(e) => menuKeys(e, "bool")}>
                   <button
                     role="menuitem"
                     onClick={() => {
@@ -1272,7 +1285,7 @@ export function Toolbar({
                     Exclude selection
                     <span className="sc">⌥⇧E</span>
                   </button>
-                  <div style={{ height: 1, background: "var(--border)", margin: "4px 0" }} />
+                  <div className="fly-div" role="separator" />
                   <button
                     role="menuitem"
                     onClick={() => {
@@ -1350,18 +1363,13 @@ export function Toolbar({
         <>
           <div className="div" />
           <div className="tool">
+            {/* The one button in the dock that is a commit rather than a tool
+                pick, so it wears the accent — from the tokens, including its ink
+                (`--on-accent`): the inline `#fff` it carried could not follow the
+                theme, and the accent's own ink is what every other filled
+                surface uses (TB-U5, §29). */}
             <button
-              className="hit"
-              style={{
-                background: "var(--accent)",
-                color: "#fff",
-                padding: "0 10px",
-                width: "auto",
-                borderRadius: 6,
-                fontWeight: 500,
-                fontSize: 12,
-                gap: 4,
-              }}
+              className="hit vec-done"
               onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
               title="Done editing path (Esc or ⌘↵)"
             >

@@ -43,3 +43,31 @@ npm run dev
 
 Figma UI3: Design / Prototype / Inspect tabs, layers tree, **bottom** tool
 dock. Shortcuts: V F T R O L H, ⌘Z / ⌘⇧Z, ⌘D, arrows, Delete.
+
+## Verify
+
+Three tiers, each covering what the one below it cannot:
+
+```bash
+npm test          # engine + headless UI (no browser needed)
+npm run build     # tsc -b && vite build
+npm run test:e2e  # behaviour suite — needs a Chromium and a running dev server
+```
+
+| Tier | What it proves | Where |
+| --- | --- | --- |
+| Engine / model | commands, geometry, layout, undo, importers, exporters | `src/engine/__tests__/*.test.mjs` |
+| Headless UI | a real DOM: which node renders, with what class, name, role and state, and what a click dispatches | `src/ui/__tests__/*.dom.test.mjs` over `domEnv.mjs` (jsdom) |
+| Browser | computed styles, geometry, focus, hover, canvas pixels, keyboard chords | `e2e/behaviour.mjs` (puppeteer-core) |
+
+`domEnv.mjs` mounts `RightPanel` / `Toolbar` on an engine document the way
+`App.tsx` does (snapshot from the store, so a dispatch re-renders). It exists
+because a development sandbox often has no browser at all — without it, every
+UI fix could only be shipped as "code-traced, NOT VERIFIED". jsdom has no
+stylesheet and no canvas backend, so anything about *appearance* (sizes,
+colours, focus rings, painted pixels) still belongs to the e2e tier; a finding
+is closed when both halves are checked, and the audit ledger says which tier
+closed which half.
+
+The e2e suite points `CHROMIUM_PATH` / `CHROMIUM_LIBS` at a local Chromium
+(e.g. the binary inside `@sparticuz/chromium`) and `APP_URL` at the dev server.
