@@ -3,7 +3,7 @@ import type { Effect, Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Proto
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveVariable } from "../engine/variables";
 import { prefersReducedMotion } from "./a11y";
-import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
+import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
@@ -232,7 +232,7 @@ function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
   const out: MultiOrigin[] = [];
   for (const id of ids) {
     const wp = worldPos(root, id);
-    if (!wp || wp.node.locked) continue;
+    if (!wp || isEffectivelyLocked(root, id)) continue;
     out.push({
       id,
       x: wp.x,
@@ -5321,15 +5321,16 @@ export function Canvas({
 
       const ids: string[] = [];
       const deep = e.metaKey || e.ctrlKey;
-      const visit = (n: XNode, px: number, py: number, top: boolean) => {
+      const visit = (n: XNode, px: number, py: number, top: boolean, lockedAbove = false) => {
         const x = px + n.x;
         const y = py + n.y;
-        if (n !== snap.pages[snap.page].root && n.visible && !n.locked) {
+        const effLocked = lockedAbove || n.locked;
+        if (n !== snap.pages[snap.page].root && n.visible && !effLocked) {
           const hit = x + n.w >= x0 && y + n.h >= y0 && x <= x1 && y <= y1;
           if (hit && (deep || top)) ids.push(n.id);
         }
         const nest = deep || n === snap.pages[snap.page].root;
-        if (nest) for (const c of n.children) visit(c, x, y, n === snap.pages[snap.page].root);
+        if (nest) for (const c of n.children) visit(c, x, y, n === snap.pages[snap.page].root, effLocked);
       };
       visit(snap.pages[snap.page].root, 0, 0, false);
       // ⇧-marquee adds to the pre-drag selection instead of replacing it;

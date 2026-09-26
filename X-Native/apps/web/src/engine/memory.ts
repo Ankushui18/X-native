@@ -230,6 +230,21 @@ function findParent(root: XNode, id: string): XNode | null {
   return null;
 }
 
+/**
+ * Figma lock inheritance: locking a frame/group locks its whole subtree, and
+ * a child cannot be unlocked while an ancestor stays locked. All canvas
+ * interaction and structural ops go through this instead of `n.locked`.
+ */
+function isEffectivelyLocked(root: XNode, id: string): boolean {
+  let cur: XNode | null = find(root, id);
+  while (cur) {
+    if (cur.locked) return true;
+    if (cur.id === root.id) break;
+    cur = findParent(root, cur.id);
+  }
+  return false;
+}
+
 function findInstanceRoot(root: XNode, id: string): XNode | null {
   const curr = find(root, id);
   if (!curr) return null;
@@ -1710,7 +1725,7 @@ export class MemoryEngine implements Engine {
       case "nudge":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (!n || n.locked) continue;
+          if (!n || isEffectivelyLocked(this.root(), id)) continue;
           const parent = findParent(this.root(), id);
           if (parent?.layout && !n.absolutePosition) {
             const idx = parent.children.findIndex((c) => c.id === id);
@@ -1827,10 +1842,12 @@ export class MemoryEngine implements Engine {
           const n = find(root, id);
           const wp = worldPos(root, id);
           // Refuse to drop a node into itself or its own subtree.
-          if (!n || n.locked || id === dest.id || find(n, dest.id)) continue;
+          if (!n || isEffectivelyLocked(root, id) || id === dest.id || find(n, dest.id)) continue;
           moving.push({ node: n, wx: wp?.x ?? n.x, wy: wp?.y ?? n.y });
         }
         if (!moving.length) break;
+        // A locked container takes no new children.
+        if (isEffectivelyLocked(root, dest.id)) break;
         // Count how many of the moved nodes sit before the target slot in the
         // destination, so the index still points at the intended gap after
         // they are spliced out.
@@ -1856,7 +1873,7 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
-          if (p && n && !n.locked) p.children = p.children.filter((c) => c.id !== id);
+          if (p && n && !isEffectivelyLocked(this.root(), id)) p.children = p.children.filter((c) => c.id !== id);
         }
         s.selection = s.selection.filter((id) => !!find(this.root(), id));
         // Frame-level guides die with their frame rather than going stale.
@@ -1880,7 +1897,7 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
-          if (!n || n.locked) continue;
+          if (!n || isEffectivelyLocked(this.root(), id)) continue;
           const copy = clone(n);
           const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
@@ -2255,7 +2272,7 @@ export class MemoryEngine implements Engine {
         // of its visible children; children keep their absolute positions.
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (!n || (n.kind !== "frame" && n.kind !== "group") || n.locked) continue;
+          if (!n || (n.kind !== "frame" && n.kind !== "group") || isEffectivelyLocked(this.root(), id)) continue;
           const kids = n.children.filter((c) => c.visible && !c.absolutePosition);
           if (!kids.length) continue;
           const x0 = Math.min(...kids.map((c) => c.x));
@@ -2274,24 +2291,43 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "ungroup": {
-        const id = s.selection[0];
-        if (!id) break;
-        const parent = findParent(this.root(), id);
-        const n = find(this.root(), id);
-        if (!parent || !n || !n.children.length) break;
-        const i = parent.children.findIndex((c) => c.id === id);
-        const kids = n.children.map((c) => {
-          const k = clone(c);
-          k.x += n.x;
-          k.y += n.y;
-          return k;
-        });
-        parent.children.splice(i, 1, ...kids);
-        s.selection = kids.map((k) => k.id);
+        const rt = this.root();
+        const out: string[] = [];
+        for (const id of [...s.selection]) {
+          const parent = findParent(rt, id);
+          const n = find(rt, id);
+          if (!parent || !n || !n.children.length) continue;
+          if (isEffectivelyLocked(rt, id)) continue;
+          // Preserve world geometry through the unwrap: each child's center
+          // rotates about the group's rotation origin, and the rotation is
+          // inherited, so an unrotated group behaves exactly as before.
+          const rot = ((n.rotation ?? 0) * Math.PI) / 180;
+          const o = n.rotOrigin ?? [0.5, 0.5];
+          const lox = o[0] * n.w;
+          const loy = o[1] * n.h;
+          const cos = Math.cos(rot);
+          const sin = Math.sin(rot);
+          const kids = n.children.map((c) => {
+            const k = clone(c);
+            const cx = c.x + c.w / 2;
+            const cy = c.y + c.h / 2;
+            const ncx = lox + (cx - lox) * cos - (cy - loy) * sin;
+            const ncy = loy + (cx - lox) * sin + (cy - loy) * cos;
+            k.x = n.x + ncx - k.w / 2;
+            k.y = n.y + ncy - k.h / 2;
+            k.rotation = ((k.rotation ?? 0) + (n.rotation ?? 0)) % 360;
+            return k;
+          });
+          const i = parent.children.findIndex((c) => c.id === id);
+          parent.children.splice(i, 1, ...kids);
+          out.push(...kids.map((k) => k.id));
+        }
+        if (out.length) s.selection = out;
         break;
       }
       case "arrange": {
-        const selected = new Set(s.selection);
+        const rt = this.root();
+        const selected = new Set(s.selection.filter((id) => !isEffectivelyLocked(rt, id)));
         const groups = new Map<XNode, string[]>();
         const collect = (parent: XNode) => {
           const ids = parent.children.filter((c) => selected.has(c.id)).map((c) => c.id);
@@ -2357,6 +2393,17 @@ export class MemoryEngine implements Engine {
       case "renamePage":
         s.pages[s.page].name = cmd.name;
         break;
+      case "movePage": {
+        const from = cmd.from;
+        const to = cmd.to;
+        if (from < 0 || from >= s.pages.length || to < 0 || to >= s.pages.length || from === to) break;
+        const [pg] = s.pages.splice(from, 1);
+        s.pages.splice(to, 0, pg);
+        if (s.page === from) s.page = to;
+        else if (from < s.page && to >= s.page) s.page -= 1;
+        else if (from > s.page && to <= s.page) s.page += 1;
+        break;
+      }
       case "patchPage":
         Object.assign(s.pages[s.page], cmd.patch);
         break;
@@ -3526,24 +3573,53 @@ export class MemoryEngine implements Engine {
     const s = this.state;
     const ids = s.selection;
     if (ids.length < 1) return;
-    const parent = findParent(this.root(), ids[0]);
+    const rt = this.root();
+    const parent = findParent(rt, ids[0]);
     if (!parent) return;
-    const nodes = parent.children.filter((c) => ids.includes(c.id));
-    if (nodes.length !== ids.length) return;
-    const minX = Math.min(...nodes.map((n) => n.x));
-    const minY = Math.min(...nodes.map((n) => n.y));
-    const maxX = Math.max(...nodes.map((n) => n.x + n.w));
-    const maxY = Math.max(...nodes.map((n) => n.y + n.h));
-    const g = node(extra.kind ?? "group", name, minX, minY, maxX - minX, maxY - minY, extra);
-    g.children = nodes.map((n) => {
+    const nodes: XNode[] = [];
+    for (const id of ids) {
+      const n = find(rt, id);
+      if (!n) return;
+      nodes.push(n);
+    }
+    // A selected ancestor already carries its selected descendants; grouping
+    // the pair would clone the child twice, so this stays a no-op.
+    for (const a of nodes) {
+      for (const b of nodes) {
+        if (a !== b && find(a, b.id)) return;
+      }
+    }
+    // Figma groups across parents: everything is measured in world coords and
+    // the group lands in the first selection's parent, preserving visuals.
+    const worlds = nodes.map((n) => ({ n, wp: worldPos(rt, n.id)! }));
+    const minX = Math.min(...worlds.map(({ wp }) => wp.x));
+    const minY = Math.min(...worlds.map(({ wp }) => wp.y));
+    const maxX = Math.max(...worlds.map(({ n, wp }) => wp.x + n.w));
+    const maxY = Math.max(...worlds.map(({ n, wp }) => wp.y + n.h));
+    const pwp = parent === rt ? { x: 0, y: 0 } : worldPos(rt, parent.id)!;
+    const g = node(
+      extra.kind ?? "group",
+      name,
+      minX - pwp.x,
+      minY - pwp.y,
+      Math.max(1, maxX - minX),
+      Math.max(1, maxY - minY),
+      extra,
+    );
+    g.children = worlds.map(({ n, wp }) => {
       const c = clone(n);
-      c.x -= minX;
-      c.y -= minY;
+      c.x = wp.x - minX;
+      c.y = wp.y - minY;
       return c;
     });
-    const firstIndex = parent.children.findIndex((c) => ids.includes(c.id));
-    parent.children = parent.children.filter((c) => !ids.includes(c.id));
-    parent.children.splice(Math.max(0, Math.min(firstIndex, parent.children.length)), 0, g);
+    const selSet = new Set(ids);
+    const firstIndex = parent.children.findIndex((c) => selSet.has(c.id));
+    const detach = (p: XNode) => {
+      p.children = p.children.filter((c) => !selSet.has(c.id));
+      for (const c of p.children) detach(c);
+    };
+    detach(rt);
+    parent.children.splice(Math.max(0, firstIndex < 0 ? parent.children.length : Math.min(firstIndex, parent.children.length)), 0, g);
     if (g.kind === "frame" && parent === this.root()) this.lastFrameSize = { w: g.w, h: g.h };
     s.selection = [g.id];
   }
@@ -3926,8 +4002,9 @@ export function hitTest(
   opts?: { deep?: boolean; selection?: string[]; includeLocked?: boolean },
 ): XNode | null {
   let hit: XNode | null = null;
-  const visit = (n: XNode, parentWorld: Matrix) => {
-    if (!n.visible || (n.locked && !opts?.includeLocked)) return;
+  const visit = (n: XNode, parentWorld: Matrix, lockedAbove = false) => {
+    const effLocked = lockedAbove || !!n.locked;
+    if (!n.visible || (effLocked && !opts?.includeLocked)) return;
     const world = n === root ? parentWorld : multiply(parentWorld, nodeMatrix(n));
     const local = n === root ? { x: wx, y: wy } : applyMatrix(inverse(world) ?? IDENTITY, wx, wy);
     // A visible outside/centre stroke spills painted pixels past the box and
@@ -3937,7 +4014,7 @@ export function hitTest(
       n === root ||
       (local.x >= -pad && local.y >= -pad && local.x <= n.w + pad && local.y <= n.h + pad);
     if (n === root || n.overflow === "visible" || inside) {
-      for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], world);
+      for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], world, effLocked);
     }
     if (n === root || !inside || !nodeShapeHit(n, local.x, local.y, pad) || hit) return;
     hit = n;
@@ -4072,7 +4149,7 @@ export function deepestFrame(root: XNode, wx: number, wy: number, skip?: Set<str
   return hit;
 }
 
-export { find, findParent, framesOf };
+export { find, findParent, framesOf, isEffectivelyLocked };
 
 export function collectColors(root: XNode): string[] {
   const out: string[] = [];

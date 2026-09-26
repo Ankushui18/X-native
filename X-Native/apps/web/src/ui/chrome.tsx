@@ -229,6 +229,8 @@ interface LayerRowProps {
   collapseTick?: number;
   /** Precomputed by withMaskedAbove (see above): any row above this one masked. */
   maskedAbove: boolean;
+  /** True when an ancestor is locked: the row renders (and behaves) locked. */
+  lockedAbove?: boolean;
 }
 
 function sameIds(a: XNode[], b: XNode[]): boolean {
@@ -311,6 +313,7 @@ function rowPropsEqual(a: Readonly<LayerRowProps>, b: Readonly<LayerRowProps>): 
   if (a.depth !== b.depth) return false;
   if ((a.collapseTick ?? 0) !== (b.collapseTick ?? 0)) return false;
   if (a.maskedAbove !== b.maskedAbove) return false;
+  if (!!a.lockedAbove !== !!b.lockedAbove) return false;
   if (a.sel !== b.sel || a.engine !== b.engine || a.drag !== b.drag) return false;
   if (!sameIds(a.siblings, b.siblings)) return false;
   // Read-only: the store is written by the row's commit effect below, so an
@@ -334,6 +337,7 @@ function LayerRowImpl({
   onDrop,
   collapseTick = 0,
   maskedAbove,
+  lockedAbove = false,
 }: LayerRowProps) {
   const [open, setOpen] = useState(true);
   const holds = sel.includes(n.id) || n.children.some(function test(c: XNode): boolean {
@@ -359,6 +363,24 @@ function LayerRowImpl({
     window.addEventListener("x-rename-layer", onReq);
     return () => window.removeEventListener("x-rename-layer", onReq);
   }, [n.id]);
+  const effLocked = !!lockedAbove || n.locked;
+  // ⌥-click on a twistie folds/unfolds the whole subtree (Figma): the
+  // clicked row broadcasts the descendant ids, each row answers for itself.
+  useEffect(() => {
+    const onSub = (e: Event) => {
+      const d = (e as CustomEvent<{ ids: string[]; open: boolean }>).detail;
+      if (d && d.ids.includes(n.id)) setOpen(d.open);
+    };
+    window.addEventListener("x-expand-subtree", onSub);
+    return () => window.removeEventListener("x-expand-subtree", onSub);
+  }, [n.id]);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  // A canvas selection reveals itself in the panel: ancestors unfold and the
+  // row scrolls into view, as in Figma.
+  useEffect(() => {
+    if (holds && !open) setOpen(true);
+    if (sel.includes(n.id)) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [sel]);
   // Commits this row's on-screen signature for the memo comparator above.
   // Runs after every commit (no deps by design); the comparator only reads.
   useEffect(() => {
@@ -375,6 +397,7 @@ function LayerRowImpl({
   return (
     <>
       <div
+        ref={rowRef}
         data-row-id={n.id}
         className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}${
           isOver ? ` drop-${drag!.zone}` : ""
@@ -475,7 +498,17 @@ function LayerRowImpl({
             aria-expanded={open}
             onClick={(e) => {
               e.stopPropagation();
-              setOpen((v) => !v);
+              const next = !open;
+              if (e.altKey) {
+                const ids: string[] = [];
+                const walkT = (m: XNode) => {
+                  ids.push(m.id);
+                  for (const c of m.children) walkT(c);
+                };
+                walkT(n);
+                window.dispatchEvent(new CustomEvent("x-expand-subtree", { detail: { ids, open: next } }));
+              }
+              setOpen(next);
             }}
           >
             <Icon name={open ? "chevron" : "chevron-right"} size={caretSize()} />
@@ -514,8 +547,9 @@ function LayerRowImpl({
             defaultValue={n.name}
             onClick={(e) => e.stopPropagation()}
             onBlur={(e) => {
-              if (!cancelRename.current) {
-                engine.dispatch({ type: "patch", id: n.id, patch: { name: e.target.value } });
+              const v = e.target.value.trim();
+              if (!cancelRename.current && v) {
+                engine.dispatch({ type: "patch", id: n.id, patch: { name: v } });
               }
               cancelRename.current = false;
               setRenaming(false);
@@ -545,13 +579,23 @@ function LayerRowImpl({
         </button>
         <button
           className="mini"
-          title={`${n.locked ? "Unlock" : "Lock"} layer (⇧⌘L)`}
+          title={
+            lockedAbove && !n.locked
+              ? "Locked by parent frame — unlock the parent first"
+              : `${effLocked ? "Unlock" : "Lock"} layer (⇧⌘L)`
+          }
           onClick={(e) => {
             e.stopPropagation();
+            // A child cannot be unlocked while its parent stays locked
+            // (Figma): say so instead of flipping a flag with no effect.
+            if (lockedAbove && !n.locked) {
+              toast("Unlock the parent frame to unlock this layer");
+              return;
+            }
             engine.dispatch({ type: "patch", id: n.id, patch: { locked: !n.locked } });
           }}
         >
-          <Icon name={n.locked ? "lock" : "unlock"} size={14} />
+          <Icon name={effLocked ? "lock" : "unlock"} size={14} />
         </button>
       </div>
       {open &&
@@ -561,6 +605,7 @@ function LayerRowImpl({
             rangeAnchor={rangeAnchor}
             n={c}
             maskedAbove={maskedAbove}
+            lockedAbove={effLocked}
             depth={depth + 1}
             sel={sel}
             engine={engine}
@@ -603,6 +648,9 @@ function LeftPanelImpl({
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
   const [pageMenuAt, setPageMenuAt] = useState<{ x: number; y: number; i: number } | null>(null);
+  const [pageRename, setPageRename] = useState<number | null>(null);
+  const pageCancelRename = useRef(false);
+  const [pageDrag, setPageDrag] = useState<number | null>(null);
   const [drag, setDrag] = useState<LayerDrag | null>(null);
   // One counter for the whole tree: bumping it tells every row to fold, and the
   // rows answer by themselves so no open-state has to be lifted up here.
@@ -705,20 +753,61 @@ function LeftPanelImpl({
             snap.pages.map((p, i) => (
               <div
                 key={p.id}
-                className={`row${i === snap.page ? " sel" : ""}`}
+                className={`row${i === snap.page ? " sel" : ""}${pageDrag === i ? " dragging" : ""}`}
                 onClick={() => engine.dispatch({ type: "setPage", index: i })}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   engine.dispatch({ type: "setPage", index: i });
                   setPageMenuAt({ x: e.clientX, y: e.clientY, i });
                 }}
-                onDoubleClick={() => {
-                  const name = window.prompt("Rename page", p.name);
-                  if (name) engine.dispatch({ type: "renamePage", name });
+                onDoubleClick={() => setPageRename(i)}
+                draggable={pageRename !== i}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", `page:${i}`);
+                  setPageDrag(i);
                 }}
+                onDragOver={(e) => {
+                  if (pageDrag !== null && pageDrag !== i) e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (pageDrag !== null && pageDrag !== i) {
+                    engine.dispatch({ type: "movePage", from: pageDrag, to: i });
+                  }
+                  setPageDrag(null);
+                }}
+                onDragEnd={() => setPageDrag(null)}
               >
                 <Icon name="page" size={14} />
-                <span className="name">{p.name}</span>
+                {pageRename === i ? (
+                  <input
+                    className="name"
+                    autoFocus
+                    defaultValue={p.name}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (!pageCancelRename.current && v) {
+                        engine.dispatch({ type: "setPage", index: i });
+                        engine.dispatch({ type: "renamePage", name: v });
+                      }
+                      pageCancelRename.current = false;
+                      setPageRename(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        pageCancelRename.current = true;
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                  />
+                ) : (
+                  <span className="name">{p.name}</span>
+                )}
               </div>
             ))}
           <div className="section-label">
@@ -747,6 +836,7 @@ function LeftPanelImpl({
                 rangeAnchor={rangeAnchor}
                 n={n}
                 maskedAbove={maskedAbove}
+                lockedAbove={false}
                 depth={0}
                 sel={snap.selection}
                 engine={engine}
@@ -773,9 +863,8 @@ function LeftPanelImpl({
           onRun={(id) =>
             runMenu(engine, id, {
               onRename: () => {
-                const p = snap.pages[pageMenuAt.i];
-                const name = window.prompt("Rename page", p.name);
-                if (name) engine.dispatch({ type: "renamePage", name });
+                engine.dispatch({ type: "setPage", index: pageMenuAt.i });
+                setPageRename(pageMenuAt.i);
               },
             })
           }

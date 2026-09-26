@@ -23,7 +23,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 13 | Images (place/crop/mask/export) | ✅ done | M-001–M-010 + export peek (52 tests) |
 | 14 | Typography (+ phantom controls) | ✅ done | Y-001–Y-015 (39 tests) |
 | 15 | Vector / pen (object vs edit mode) | ✅ done | V-001–V-010 (28 tests) |
-| 16 | Layers / structure | … | |
+| 16 | Layers / structure | ✅ done | L-001–L-007 (24 tests) |
 | 17 | Components | … | |
 | 18 | Variables / tokens / styles | … | |
 | 19 | Auto Layout UX | … | |
@@ -725,3 +725,53 @@ corner radius, paint toggle, eraser, multi-point bbox, corner smooth toggle).
   values; the main eraser tool exists separately).
 - Per-point caps inside edit mode beyond the node's start/end pair (same
   thing for every 2-endpoint path).
+
+## §16 — Layers / structure
+
+Evidence: Figma “Lock and unlock layers” (⇧⌘L, inheritance, panel
+selection of locked, Select-layer submenu), lock/hide shortcut ground
+truth, plus panel-behavior conventions (⌥-click subtree fold, reveal on
+select, inline rename).
+
+### Fixed (shipped in the §16 layers commit on this branch)
+
+- L-001 Lock inheritance: new `isEffectivelyLocked` helper — a locked
+  frame/group locks its whole subtree. Wired through hit-testing,
+  drag-move origins, marquee selection, and the delete / duplicate /
+  reorder / nudge / arrange / ungroup / resizeToFit ops; dropping into a
+  locked container is refused. Panel rows render the inherited padlock and
+  explain (“unlock the parent first”) instead of flipping a dead flag.
+- L-002 Ungroup: unwraps every selected group (was selection[0] only),
+  refuses locked groups, and preserves world geometry through rotation
+  (child centers rotate about the group's rotation origin, rotation is
+  inherited; unrotated output byte-identical to before).
+- L-003 Cross-parent grouping: ⌘G across frames/pages-parents now forms
+  one group in the first selection's parent with world-measured bounds
+  (was a silent no-op); ancestor/descendant pairs stay a no-op so a child
+  is never cloned twice.
+- L-004 ⌥-click on a twistie folds/unfolds the whole subtree (Figma) via
+  a descendant-id broadcast each row answers itself.
+- L-005 A canvas selection reveals itself in the panel: ancestors
+  auto-expand and the row scrolls into view (`nearest`).
+- L-006 Empty/whitespace renames revert (layer rows and pages); committed
+  names are trimmed.
+- L-007 Pages: inline rename replaces both `window.prompt` calls (row
+  double-click and page menu), and pages drag-reorder via a new `movePage`
+  op that keeps the current page selected.
+
+### Verified parity (traced, no fix needed)
+
+- Panel order (front-on-top), select/⌘-toggle/⇧-range over visible DOM
+  rows, hover outline on canvas, inspector-editable locked layers
+  (Figma's “adjust any properties”), hidden-subtree render skip,
+  Select-layer submenu with padlocks, collapse-all, name search,
+  drag reorder zones + position preservation.
+- ⌘R rename, ⇧⌘L / ⇧⌘H, ⌘G / ⇧⌘G / ⌥⌘G, ⌘⌫ group-dissolve, ⌘[/] arrange,
+  ⌘A skipping hidden+locked, page add/duplicate/guarded-delete.
+
+### Deferred / out of scope
+
+- Drag-across eye/lock to batch-toggle rows (Figma tip, new gesture).
+- Mixed-selection lock/hide semantics beyond per-layer toggle (no
+  evidence either way).
+- Sort-position / batch-rename plugins territory.

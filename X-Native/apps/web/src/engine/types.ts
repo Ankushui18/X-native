@@ -990,6 +990,7 @@ export type Command =
   | { type: "duplicatePage" }
   | { type: "deletePage" }
   | { type: "renamePage"; name: string }
+  | { type: "movePage"; from: number; to: number }
   | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
   | { type: "tidyUp"; axis?: "auto" | "h" | "v" }
