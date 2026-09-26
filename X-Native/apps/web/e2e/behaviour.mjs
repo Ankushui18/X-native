@@ -502,6 +502,32 @@ for (const [label, payload] of [
   await p.close();
 }
 {
+  // A drop on a frame's edge used to place the artwork entirely outside that
+  // frame's clip, so the import looked like it silently did nothing. Client x
+  // 800 is the right edge of the demo's "iPhone 16 Pro" frame at this viewport.
+  const p = await page();
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="160">
+      <rect x="30" y="30" width="160" height="100" fill="#dddddd" stroke="#ff0000" stroke-width="10"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "edge.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  const red = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 180 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) n++;
+    }
+    return n;
+  });
+  t(`an import dropped on a frame's edge stays visible (${red}px red)`, red > 200);
+  await p.close();
+}
+{
   // a malformed file must not break the app
   const p = await page();
   const before = (await rows(p)).length;
@@ -522,6 +548,9 @@ for (const [label, payload] of [
 {
   const p = await page();
   const b64 = fs.readFileSync(path.join(HERE, "fixtures", "sample.sketch")).toString("base64");
+  // Dropped on empty canvas, not over a frame: this check is about fills
+  // surviving the round trip, and a frame that clips part of the artwork would
+  // hide the green dot regardless of how faithfully it imports.
   const dropSketch = (name) => p.evaluate((data, n) => {
     const bin = atob(data);
     const u8 = new Uint8Array(bin.length);
@@ -529,7 +558,7 @@ for (const [label, payload] of [
     const dt = new DataTransfer();
     dt.items.add(new File([u8], n, { type: "" }));
     document.querySelector(".canvas-wrap").dispatchEvent(
-      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 420, clientY: 250 }));
   }, b64, name);
 
   const before = (await rows(p)).length;

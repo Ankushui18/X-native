@@ -319,11 +319,15 @@ palette (max-width/max-height/scroll).
 ## §4b. Behaviour suite status (PM-U1 pass, 2026-09-26)
 
 The suite is runnable in this sandbox again: `npm i -D @sparticuz/chromium`, brotli-extract `al2023.tar.br`
-and launch with `CHROMIUM_PATH=/tmp/chromium CHROMIUM_LIBS=/tmp/al2023x/lib npm run test:e2e`.
-155 pass / 24 fail, no crash. **Attribution measured, not assumed**: the identical suite was run against
-`0a910ce` on a second port — 30 failures there, 24 now: the 6 fixed are the 5 dialog checks and the
-effect-popover check that could not run before (its guard bug is above). Nothing in the list is
-caused by the dialog migration or the FS-U1 inspector work.
+and launch with `CHROMIUM_PATH=/tmp/chromium CHROMIUM_LIBS=/tmp/al2023x/lib npm run test:e2e`. The sandbox
+resets between sessions and takes `/tmp` and `node_modules` with it; `/home/user/restore.sh` redoes the
+branch tip, the install and the browser in one shot (it uses `reset --mixed`, so uncommitted edits survive).
+**166 pass / 16 fail** as of the edge-drop fix in §4c (161/20 before it; the row-addressing round was
+161/20 as well). **Attribution measured, not assumed**: the identical suite was run against `0a910ce` on
+a second port — 30 failures there, 16 now, with no check that passed at baseline failing at any later
+step. The checks fixed along the way: the 5 dialog checks, the effect-popover check that could not run
+before (its guard bug is above), the TY-U3 row-addressing repairs, the three stroke/import checks the
+§4c drop-point bug was hiding, and the new edge-drop regression check.
 
 Was previously unreachable: the suite died at §10 on a stale selector (the colour-copy "+" moved into the
 Vars pane's Styles subtab), so §§11–30 had **never executed in this environment**. Fixed, plus three more
@@ -332,12 +336,16 @@ every `clickRow` helper (`.panel.left .row` now starts with the Pages list, so i
 clicking it switched page and shift-clicking it cleared the selection), and §TY-U3's text setup
 (crash-proof + a deselect first, since T on a selected text layer edits it).
 
-Open, pre-existing (each verified failing at baseline, all outside PM-U1/FS-U1):
-pixel/canvas assertions (stamped/unstamped fills and strokes read 0px under the software rasteriser:
-§"Card keeps radius 8 and stroke 2", sketch/.fig fills, stroke stack, style repaint + reload), "every
-inspector section is collapsible", "creating a style lists it", "three effects do not overflow the panel"
-(1164 > 912 — the popover refactor's own budget), the boolean-menu marquee, "locked selection drops the
-accent", and the corrupt-save toast.
+Open, pre-existing (each verified failing at baseline, all outside PM-U1/FS-U1) — the 16 remaining:
+`Card keeps corner radius 8 and stroke 2` and `.fig keeps radius 8 and stroke 2` (radius reads 8, stroke
+reads s0), `.fig fills render (3243px red, 0px green)`, the style family (`creating a style lists it`,
+`one style edit repaints every bound layer` — red is now 10365 but blue 0, `styles survive a reload`, `the
+style list survives a reload`), `a style can be created from the stroke`, `a bound selection offers
+detach`, `every inspector section is collapsible` (stale: asserts 8, the panel has 10–11), `three effects
+do not overflow the panel` (`.inspector{overflow:auto}` is by design — stale, see §4d), `clicking centres
+the viewport (dx=10, dy=1)`, `locked selection drops the accent (554px)`, `two selected layers show the
+boolean menu`, `New file resets to a blank document (24->24, base 23)`, and the corrupt-save toast. The
+three stroke/import checks that used to head this list are fixed — see §4c.
 
 **CORRECTION to this section's earlier claim.** The TY-U3 text-size failure was reported here as a product
 finding — "dragging with the text tool creates the layer at a position unrelated to the drag". That was
@@ -350,24 +358,58 @@ rows it clicked were the sample document's own layers. Rows carry `data-row-id`;
 them by id and extends a selection with ⌘/Ctrl-toggle rather than a shift range (a range spans every row
 *between* two layers — the whole tree when one of them nested into a frame).
 
-## §4c. OPEN P1 — imported strokes with `inside` alignment paint nothing (2026-09-26)
+## §4c. CORRECTION — the "inside-aligned imported stroke paints nothing" P1 was a phantom; the real bug was where an edge drop lands (2026-09-26)
 
-Repro (headless Chromium, software rasteriser): drop this SVG onto the demo file
+**Retracted.** A stroke that arrives through the SVG importer with `strokeAlign: "inside"` does not fail
+to paint. The node was invisible because the **whole import had landed outside its parent frame's clip**,
+and the stroke question never entered into it.
+
+Repro (unchanged): dropping
+
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" width="220" height="160">
   <rect x="30" y="30" width="160" height="100" fill="#dddddd" stroke="#ff0000" stroke-width="10"/>
 </svg>
 ```
-at client (800,520) over the "iPhone 16 Pro" frame. The rect's fill paints; the stroke does not.
 
-**What is ruled in and out (measured, not guessed):**
-- The model is right: `strokePaint "#ff0000"`, `strokeWidth 10`, `strokeVisible true`, `strokeAlign "inside"`, and nothing else differs from a drawn rect's model (full-node diff run).
-- The app *does* stroke it: patching `CanvasRenderingContext2D.prototype.stroke` records `{ lineWidth: 14.75, strokeStyle: "#ff0000" }` (= 10 × zoom), so it is not a "the painter never ran" case.
-- Red pixels on the canvas: **0**. Not a repaint artefact — a nudge, an arrow-key nudge back, a zoom-menu interaction and a second import all leave 0.
-- Alignment is the switch: clicking the inspector's **center** button gives 180 red px, **outside** 553, back to **inside** 0. Each click also confirms `strokeAlign` in the model, so the pixels track the model.
-- It is not "inside alignment is broken": a rect drawn with the rect tool, given a stroke through the inspector at the same width 10 and left `inside`, renders 2868 red px — top-level *and* when drawn inside a frame.
+at client (800,520) over the demo file gives 0 red px, and the node's model is `x 390, y 637, w 160, h 100`
+inside the "iPhone 16 Pro" frame (`box [80,60,390,844]`, `overflow: "clip"`).
 
-So the failing combination is specifically **a stroke that arrived through the SVG importer with inside alignment**. Root cause not established; the next step is to compare the importer's node against a drawn one for state the design API's `getNode(full)` does not serialise (the painter reads the live node, and the two models serialise identically). Two of the four stroke failures in the behaviour suite ("base stroke renders", "both strokes and the fill render together" — which drops the same SVG) are this bug; the style-list and .fig/`.sketch` failures are still unexplained and may or may not share it.
+What those coordinates mean (read off a temporary instrumented `placeNodes`, since removed): `at` is a
+**world** point, and the host-local drop point was `origin = {x: 389.76, y: 637.11}` with `host.w = 390`.
+Client x 800 is *exactly* that frame's right edge at this viewport, so the drop point sits 0.24 host px
+inside it. The artwork is anchored top-left at the cursor, so 159.76 of its 160 px width hang outside the
+frame — the part inside the clip is a sub-pixel sliver, hence 0 red px.
+
+Evidence that clears both the importer and the painter:
+- Moving the imported node to local x = 150 (inspector X field) paints **2155 red px**. The stroke that
+  "paints nothing" paints normally the moment it is inside the frame; nothing about the import is broken.
+- The same file, one fresh page per drop, paints wherever the cursor is not on a frame edge: over
+  "Success" 2170 px, on empty canvas 2170 px, inside "Filter Sheet" 2162 px.
+- The alignment buttons (center 180 / outside 553 / inside 0) were measuring that same, already-invisible
+  node; the counts track the model but say nothing about alignment. The painter recording
+  `{lineWidth: 14.75, strokeStyle: "#ff0000"}` was likewise a stroke being asked to draw off-clip.
+- The pale 1-px `240,203,206` column at x=508 was the antialiased edge of that sliver, not a faint stroke.
+
+Measurement hygiene, because it cost the most time: earlier pixel counts were read cumulatively from one
+long-lived page while importing file after file, so successive "0 → 639 → 2239" readings were not
+comparable to each other. And the `.sketch` failure that looked related was a second instance of this same
+clipping: the imported artboard's green dot sat just outside the frame that clipped it (green 1051 px once
+dropped on empty canvas, 0 over the frame).
+
+**Fix — `ui/Canvas.tsx` (`placeNodes`).** After the anchor is computed, an axis whose visible overlap with
+a clipping host is under 1 px is pulled inside that host: flush to the far edge when the artwork fits,
+else flush to the host's origin. Artwork that already shows a pixel or more is untouched, and any drop
+that is not inside a frame is untouched.
+- Regression check added: "an import dropped on a frame's edge stays visible" (the (800,520) drop) —
+  0 px before the fix, 2156 px after.
+- The `.sketch` check now drops on empty canvas, because it measures whether fills survive the round trip
+  and was otherwise measuring the clip instead.
+
+Suite effect: 161 pass / 20 fail → **166 pass / 16 fail, 0 regressions**. Besides the new check, three
+pre-existing failures were cured by the same fix — "base stroke renders", "both strokes and the fill
+render together" and "undo steps back through the stroke stack" all dropped their SVG onto that same
+frame edge. The `.fig` fills and the style checks were *not* this bug and are unchanged.
 
 ## §4d. Suite-side corrections found while checking the remaining failures
 

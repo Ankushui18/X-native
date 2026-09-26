@@ -5962,8 +5962,25 @@ export function Canvas({
     const minY = Math.min(...result.nodes.map((n) => n.y));
     const spanW = Math.max(...result.nodes.map((n) => n.x + Math.max(1, n.w))) - minX;
     const spanH = Math.max(...result.nodes.map((n) => n.y + Math.max(1, n.h))) - minY;
-    const dx = -minX - (opts?.centre ? spanW / 2 : 0);
-    const dy = -minY - (opts?.centre ? spanH / 2 : 0);
+    let dx = -minX - (opts?.centre ? spanW / 2 : 0);
+    let dy = -minY - (opts?.centre ? spanH / 2 : 0);
+    // A drop anchors the artwork's top-left at the cursor and parents it to
+    // whatever frame sits under it. Dropped on that frame's edge - which is
+    // what happens whenever the cursor is over the border itself - the artwork
+    // lands almost entirely outside the frame's clip and only a sliver shows,
+    // so the drop looks like it did nothing. An axis whose visible overlap is
+    // under a pixel is therefore pulled inside, flush to the far edge when the
+    // artwork fits, else flush to the host's origin so at least part shows.
+    if (host && host.overflow !== "visible") {
+      const left = origin.x + dx + minX;
+      const top = origin.y + dy + minY;
+      const fit = (v: number, span: number, size: number) =>
+        span <= size ? Math.min(Math.max(v, 0), size - span) : 0;
+      const shownX = Math.min(left + spanW, host.w) - Math.max(left, 0);
+      const shownY = Math.min(top + spanH, host.h) - Math.max(top, 0);
+      if (shownX < 1) dx += fit(left, spanW, host.w) - left;
+      if (shownY < 1) dy += fit(top, spanH, host.h) - top;
+    }
     engine.dispatch({ type: "begin" });
     // Containers come with their children - a .fig frame arrives holding what
     // was inside it - so the insert walks the tree. A child's coordinates are
