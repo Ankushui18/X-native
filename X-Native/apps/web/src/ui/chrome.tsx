@@ -2277,6 +2277,17 @@ export function bindHotkeys(
         e.stopImmediatePropagation();
         return;
       }
+      // Editing a path's points owns Escape the same way: it leaves the point
+      // editor and keeps the layer selected. Falling through to the deselect
+      // below dropped the shape the user was editing and sent the inspector
+      // back to the page panel, which is what the canvas handler already
+      // guards against - it just cannot when focus is outside the canvas.
+      if (engine.snapshot().vecEdit) {
+        engine.dispatch({ type: "setVecEdit", id: null });
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       if (engine.snapshot().presentFrame) {
         extra.onPresentExit?.();
         return;

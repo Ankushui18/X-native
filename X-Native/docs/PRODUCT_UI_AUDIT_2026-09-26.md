@@ -169,7 +169,7 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 | IN-U2 | FIXED: seg entry shows only when the vector card is absent (exactly one entry always); both use id+toast+⇧⌘O title; card refuses the stroke-less no-op with a teaching toast; labels unified | FIXED (P1) | — |
 | IN-U3 | FIXED: every ad-hoc header is now a `Section` — Component/Instance (its action buttons moved into the section's action slot), Boolean, Star/Polygon, and on the page/prototype surfaces Frame Presets, Background, Local styles, Pixel grid, Flow starting point, Prototype settings, Interactions, Annotations. `h-row h3` and `.sec-toggle h2` were already the same 11px/500/muted style, so the chrome reads identically while every block gained fold + persistence + the scroll-to hook. Left bespoke on purpose: `Design health` (score + issues button) and the Dev Mode `Inspect` header (dot + view tabs) — both carry live, bespoke chrome a plain title would lose. Note: the audit's "10 sections" observation was itself approximate — the count varies by selection (screen 4 / layer 11 / text 12) and now includes these blocks. | FIXED (P2) | — |
 | IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
-| IN-U5 | "Edit vector" label dispatches `flatten` (misleading); seg buttons raw/unclassed | LABEL + DRIFT | P2 |
+| IN-U5 | FIXED: "Edit vector" → **"Edit points"**, and it now enters vector edit mode (the inspector twin of double-clicking a layer; booleans still bake first, because their points only exist once the group is applied). The button reads "Editing points" while the editor is open. It previously dispatched `flatten` — the exact action of the button beside it — so the label promised editing and delivered a bake. "Flatten" stays a distinct bake. Seg buttons are still unclassed (x-ui adoption family). | FIXED (label+action) / DRIFT (styling) | P2 |
 | IN-U6 | Flip buttons + assorted icon-only buttons use native title= amid Tooltip siblings | PARTIAL (§2.3) | P2 |
 | IN-U7 | Design/Prototype/Inspect tabs are raw buttons, not XTabs; no arrow-key nav (§19 evidence) | DRIFT | P2 |
 
@@ -539,6 +539,25 @@ label inside a `.tip-host` — the shared component owns those, so a re-added ti
 
 New check in §32 scans for any `.tip-host [title]` and fails with the offending labels. Suite **207 pass /
 0 fail**; the dashboard's "New project" check now selects by accessible name rather than by the tooltip.
+
+## §4j. "Edit vector" that flattened, and the Escape it exposed (IN-U5)
+
+The vector row offered two buttons for one action: "Edit vector" and "Flatten" both dispatched `flatten`, so
+the first label promised point editing and delivered a bake. It is now the inspector's twin of
+double-clicking a layer — it enters vector edit mode (reading "Editing points" while open), and booleans
+still bake first because their points only exist once the group is applied. "Flatten" remains the bake.
+
+**What the fix uncovered:** Esc out of the point editor cleared the selection. The canvas has always
+guarded this (`setVecEdit(null)` + `stopImmediatePropagation`), but it can only guard keydowns it hears —
+the App's Escape cascade in `bindHotkeys` deselects without knowing edit mode exists, and when focus is in
+the inspector (which is where the new button lives) the cascade wins. Result: leaving the editor dropped
+the layer and sent the inspector back to the page panel. The cascade now yields to path editing exactly as
+it already did to pen drafts and to open popovers, so Esc leaves the editor and keeps the layer; a second
+Esc walks up/deselects as before. This is a small piece of PM-U3 (two Escape owners) paid down at the
+cascade rather than by adding another owner.
+
+Suite **212 pass / 0 fail** (§35: distinct actions, edit mode entered, Esc keeps the layer, flatten still
+converts), unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

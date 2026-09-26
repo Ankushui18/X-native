@@ -4461,12 +4461,22 @@ function Design({
       <div className="insp-pad">
         <div className="seg">
           <button
-            title="Convert to vector path"
+            title="Edit this shape's points on the canvas (double-click does the same)"
             onClick={() => {
-              if (n.kind !== "vector") engine.dispatch({ type: "flatten" });
+              // The inspector's twin of double-clicking the layer: enter vector
+              // edit mode. It used to dispatch `flatten` — the very action of the
+              // button next to it — so the label promised editing and delivered
+              // a bake (IN-U5). Booleans still bake first, because their points
+              // only exist once the group is applied.
+              if (n.kind === "boolean") {
+                engine.dispatch({ type: "flatten" });
+                engine.dispatch({ type: "setVecEdit", id: engine.snapshot().selection[0] ?? null });
+              } else {
+                engine.dispatch({ type: "setVecEdit", id: n.id });
+              }
             }}
           >
-            Edit vector
+            {snap.vecEdit === n.id ? "Editing points" : "Edit points"}
           </button>
           <button onClick={() => engine.dispatch({ type: "flatten" })}>Flatten</button>
           {n.strokeWidth > 0 &&

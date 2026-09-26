@@ -1959,6 +1959,58 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 35. "Edit points" edits; "Flatten" bakes (IN-U5) ----------------------------
+{
+  const p = await page();
+  await rows(p);
+  await drawRect(p);
+  const seg = () => p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .seg button")].map((b) => b.textContent.trim()).filter(Boolean));
+  const names = await seg();
+  // Both buttons used to dispatch `flatten`, so "Edit vector" promised editing
+  // and delivered a bake - the same action twice under two labels.
+  t(`the vector row offers distinct actions (${names.join(" / ")})`,
+    names.includes("Edit points") && names.includes("Flatten"));
+  const doneVisible = () => p.evaluate(() => !!document.querySelector('.dock [title^="Done editing path"]'));
+  t("vector edit mode is off to begin with", (await doneVisible()) === false);
+
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")].find((b) => b.textContent.trim() === "Edit points").click());
+  await sleep(500);
+  const editing = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".inspector .seg button")].find((x) => /point/i.test(x.textContent));
+    return { label: b?.textContent.trim(), done: !!document.querySelector('.dock [title^="Done editing path"]') };
+  });
+  t(`Edit points enters vector edit (${editing.label}, done button ${editing.done})`,
+    editing.done === true && editing.label === "Editing points");
+
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const left = await p.evaluate(() => {
+    const s = window.__xNativeDesignApi.call("getSelection", {}).data;
+    return {
+      done: !!document.querySelector('.dock [title^="Done editing path"]'),
+      sel: s.ids.length,
+      seg: [...document.querySelectorAll(".inspector .seg button")].map((b) => b.textContent.trim()).filter(Boolean),
+    };
+  });
+  // Leaving the point editor must not also drop the layer: the inspector used
+  // to jump back to the page panel and the shape being edited was lost, because
+  // the App's Escape cascade deselects without knowing edit mode exists.
+  t(`Esc leaves vector edit and keeps the layer selected (${left.sel} selected, ${left.seg.join("/")})`,
+    left.done === false && left.sel === 1 && left.seg.includes("Edit points"));
+
+  // Flatten is still its own action: it converts the shape, not the mode.
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")].find((b) => b.textContent.trim() === "Flatten")?.click());
+  await sleep(500);
+  const after = await p.evaluate(() => {
+    const s = window.__xNativeDesignApi.call("getSelection", {}).data;
+    return { kind: s.nodes?.[0]?.kind ?? null, done: !!document.querySelector('.dock [title^="Done editing path"]') };
+  });
+  t(`Flatten converts the shape without entering edit mode (kind ${after.kind})`,
+    after.kind === "vector" && after.done === false);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();
