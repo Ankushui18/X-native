@@ -32,7 +32,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 22 | Popups / popovers / menus | ✅ done | MN-001–MN-008 (13 tests) |
 | 23 | Prototyping | ✅ done | PT-001–PT-019 (13 tests) |
 | 24 | Import / export | ✅ done | EX-001–EX-014 (43 tests) |
-| 25 | Undo / redo (per category) | … | |
+| 25 | Undo / redo (per category) | ✅ done | HI-001–HI-007 (24 tests) |
 | 26 | Keyboard behavior | … | |
 
 ## Findings log
@@ -1471,3 +1471,72 @@ excludes markers/patterns, Copy as SVG/PNG).
   chunks; vector/selectable PDF (X builds bitmap-in-PDF);
   video and animated export; 144dpi import scaling;
   slice icons in the Layers panel; whole-file export.
+
+## §25 — Undo / redo
+
+Evidence: Figma undo/redo chain model (⌘Z / ⇧⌘Z, Edit
+menu, session-only stepping that "rocks back and forth"
+between two states — saasdesign.io/learn/figma-undo),
+"View a file's version history" (360038006754: autosave
+checkpoints + named versions + restore, which itself
+writes checkpoints), undo depth bounded but undefined
+(aeanet.org, greatsoftware.io), outline mode as a
+View-menu toggle (⌘Y — forum.figma.com, help 5724448965527
+via secondary refs).
+
+### Fixed (shipped in the §25 history commit on this branch)
+
+- HI-001 — A no-op gesture (begin+end, e.g. a click that
+  never moved) popped its entry but still cleared redo:
+  redo now clears at `end` only when the gesture changed
+  the document.
+- HI-002 — Guard-refused commands pushed an entry and
+  cleared redo (delete/paste with nothing to act on, a
+  patch to a missing layer — the §17-deferred no-op
+  pollution): dispatch compares post-apply and drops the
+  entry, keeps redo, and breaks the burst, so a refusal
+  never lends its coalescing identity onward.
+- HI-003 — Burst context leaked across gestures and
+  across undo/redo: a post-drag nudge could merge with a
+  pre-drag burst, and a post-undo edit could coalesce
+  into thin air (unundoable, redo eaten). `lastHist`
+  resets on begin, end, undo and redo.
+- HI-004 — View and present state pushed history:
+  toggleOutlines, open/closeOverlay and the six
+  prototype device/orientation/scale/hotspot/input/sound
+  settings join the non-history list.
+- HI-005 — Unbounded stacks: redo is capped like undo,
+  and gesture pushes observe MAX_UNDO (both previously
+  grew without limit).
+- HI-006 — Boolean grouping split nested gestures (an
+  inner `end` ungrouped the outer one): a marker stack
+  replaces the flag, only the outermost gesture owns an
+  entry, and nesting is one step.
+- HI-007 — A stray `end` compared the live stack top
+  rather than its own entry: the outermost `end` settles
+  history only when its entry is still on top by
+  reference, so mid-gesture undo/redo and stray ends
+  touch neither stack.
+
+### Verified parity (traced, no fix needed)
+
+- One step per drag, per text session (blur commit;
+  native textarea undo while typing), per rename
+  (commit-on-blur/prompt), per cut/paste/transaction;
+  select-then-begin order and marquee-without-begin keep
+  clicks and rubber-bands free; selection restores with
+  the state (reselect-on-undo); cross-page undo lands on
+  the reverted edit's page; guide add+place stays one
+  step (G-001); annotations stay in history (persisted
+  doc data); comments, file rename and navigation stay
+  out (deliberate, documented); 200-step cap.
+
+### Deferred / out of scope
+
+- "Undo <action>" Edit-menu labels: a single weak source
+  plus an invasive parallel label stack — not taken.
+- Ctrl+Y redo on Windows and every other chord: §26 owns
+  shortcuts.
+- Named versions / checkpoints / restore: a product
+  surface (Figma's version history), not a behavior fix.
+- Multiplayer undo scoping: no collaboration runtime in X.

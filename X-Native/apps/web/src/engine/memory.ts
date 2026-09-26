@@ -1135,10 +1135,18 @@ export class MemoryEngine implements Engine {
   private redo: Internal[] = [];
   private listeners = new Set<() => void>();
   private snapCache: Snapshot;
-  private grouping = false;
+  /** One marker per open gesture, innermost last: the undo-stack top at the
+   *  moment it began (null when the stack was empty). A stack rather than a
+   *  flag, so a nested gesture's `end` neither ungroups the outer one nor
+   *  settles history early — and the outermost `end` can tell, by reference,
+   *  whether an undo or redo mid-gesture moved its entry away. */
+  private groupStack: (Internal | null)[] = [];
   /** True between `begin` and `end`: a pointer gesture is in flight, and a
    *  manually positioned grid lets its objects follow the pointer until the
    *  gesture ends and they settle into a cell. */
+  private get grouping(): boolean {
+    return this.groupStack.length > 0;
+  }
   private gesture = false;
   /** Last history-pushing command type and its timestamp, used to coalesce
    *  rapid repeats of the same command (e.g. holding an arrow key) into a
@@ -1466,25 +1474,42 @@ export class MemoryEngine implements Engine {
 
   dispatch(cmd: Command): void {
     if (cmd.type === "begin") {
-      this.undo.push(clone(this.state));
-      this.redo = [];
-      this.grouping = true;
+      // Only the outermost gesture owns an undo entry: a nested gesture is
+      // one user action with its parent, not a sub-step of its own.
+      if (this.groupStack.length === 0) {
+        this.undo.push(clone(this.state));
+        if (this.undo.length > MAX_UNDO) this.undo.shift();
+      }
+      this.groupStack.push(this.undo[this.undo.length - 1] ?? null);
       this.gesture = true;
+      // A gesture is its own burst context: without this, a nudge after a
+      // drag could coalesce with a nudge from before it and lose its step.
+      this.lastHist = null;
       return;
     }
     if (cmd.type === "end") {
-      this.grouping = false;
+      const saved = this.groupStack.pop();
       // The end of a gesture is a drop: a grid in manual positioning reads the
       // cell the object was let go nearest to, so it settles here rather than
-      // mid-drag.
-      this.gesture = false;
+      // mid-drag. Nested gestures keep the flag until the outermost ends.
+      this.gesture = this.groupStack.length > 0;
       this.relayout();
-      const previous = this.undo[this.undo.length - 1];
-      if (previous && JSON.stringify(previous) === JSON.stringify(this.state)) {
-        this.undo.pop();
-        this.snapCache = this.build();
-        this.listeners.forEach((f) => f());
+      // Only the outermost `end` settles history; a stray `end` (no open
+      // gesture) only settles the grid. The reference check notices an undo
+      // or redo mid-gesture (the top moved away): a compromised gesture
+      // touches neither stack.
+      if (saved && this.groupStack.length === 0 && this.undo[this.undo.length - 1] === saved) {
+        if (JSON.stringify(saved) === JSON.stringify(this.state)) {
+          // A no-op gesture (a click that never moved): the entry goes, and
+          // the redo chain survives — an abandoned drag is not a new branch.
+          this.undo.pop();
+        } else {
+          this.redo = [];
+        }
       }
+      this.lastHist = null;
+      this.snapCache = this.build();
+      this.listeners.forEach((f) => f());
       return;
     }
     // Pure selection/view commands must never enter history: a user pressing
@@ -1500,6 +1525,18 @@ export class MemoryEngine implements Engine {
       "toggleFlows",
       "toggleMinimap",
       "toggleMaskOutlines",
+      // Outline mode is a View-menu toggle (Figma ⌘Y), not a document edit.
+      "toggleOutlines",
+      // Present runtime: opening/closing overlays and present-viewer options
+      // while presenting are navigation, not edits.
+      "openOverlay",
+      "closeOverlay",
+      "setPrototypeDevice",
+      "setPrototypeOrientation",
+      "setPrototypeScale",
+      "togglePrototypeHotspots",
+      "togglePrototypeLiveInputs",
+      "togglePrototypeSound",
       // Comments are annotations layered over the design, not part of it.
       // Keep them off the design undo stack entirely: ⌘Z after posting
       // a comment reverts your last *design* edit, it does not delete the note.
@@ -1540,6 +1577,9 @@ export class MemoryEngine implements Engine {
       // Effect-kind hover preview; render-only by design.
       "previewEffect",
     ].includes(cmd.type);
+    let pushedEntry: Internal | null = null;
+    let histKey = "";
+    let histAt = 0;
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
       // resize steps) into one undo entry so a single undo reverses the whole
@@ -1555,14 +1595,35 @@ export class MemoryEngine implements Engine {
       if (!repeat) {
         this.undo.push(clone(this.state));
         if (this.undo.length > MAX_UNDO) this.undo.shift();
+        pushedEntry = this.undo[this.undo.length - 1];
       }
-      this.redo = [];
-      this.lastHist = { type: key, at: now };
+      histKey = key;
+      histAt = now;
     } else if (!hist && cmd.type !== "undo" && cmd.type !== "redo") {
       // A non-history command (select, zoom, ...) ends the current burst.
       this.lastHist = null;
     }
+    if (cmd.type === "undo" || cmd.type === "redo") {
+      // Undo and redo end the current burst: the next edit is always its own
+      // step. Without this, an edit within the coalesce window of a
+      // pre-undo burst would merge into thin air — unundoable — and eat redo.
+      this.lastHist = null;
+    }
     this.apply(cmd);
+    if (hist && !this.grouping) {
+      const top = this.undo[this.undo.length - 1];
+      if (pushedEntry && top === pushedEntry && JSON.stringify(pushedEntry) === JSON.stringify(this.state)) {
+        // A guard refused the command (delete with no selection, paste with
+        // an empty clipboard): no document change, so the entry goes, the
+        // redo chain survives, and the burst breaks — a refused command must
+        // never lend its coalescing identity to the next real edit.
+        this.undo.pop();
+        this.lastHist = null;
+      } else {
+        this.redo = [];
+        this.lastHist = { type: histKey, at: histAt };
+      }
+    }
     // Tree edits mutate nodes in place, so document panels cannot use reference
     // equality to detect them; the revision does that job instead. Pure
     // viewport moves leave it alone, letting those panels skip the frame.
@@ -2523,6 +2584,7 @@ export class MemoryEngine implements Engine {
         const prev = this.undo.pop();
         if (prev) {
           this.redo.push(clone(this.state));
+          if (this.redo.length > MAX_UNDO) this.redo.shift();
           this.state = prev;
         }
         break;
