@@ -13,8 +13,9 @@
 1. The previous "Emerald UI/UX locked / do not change UI" constraint is SUPERSEDED for this phase by
    the new prompt's §1 ("make X-Native substantially better than the current UI"). Guardrail kept:
    do NOT blindly replace Graphite & Signal — evolve it (§6 of the prompt).
-2. The pasted prompt ends mid-word ("moder…"); §§31+ (if any) were not received. Deliverables mirror
-   the previous phase (audit + fixes + design-system docs, tests, verification) unless told otherwise.
+2. Full prompt §§1–40 received 2026-09-26 (supersedes the truncated copy). Deliverables per §37:
+   `UI_UX_MASTER_AUDIT.md`, `UI_CODE_INTEGRATION_AUDIT.md`, `X_NATIVE_DESIGN_SYSTEM.md`,
+   `UI_UX_IMPROVEMENT_ROADMAP.md` (+ §38 table, §39 criteria), all in `X-Native/docs/`.
 3. Sandbox honesty: no browser here, so visual outcomes CANNOT be screenshotted; every visual change
    ships structurally verified (tokens consumed, shared components used, headless tests) and is marked
    NOT VERIFIED visually (needs runtime/manual check). Code↔UI integrity is fully verifiable headless.
@@ -106,6 +107,31 @@ token EXISTS (alias of --line) — divider renders; cleared.
 Fix directions: U1 → Resources opens left Assets pane (or palette w/ resources filter), not the same
 palette; U2 → arrow/Esc/focus discipline on `.fly` menus; U3 → toolbar Prototype toggle w/ active state
 (mirror Dev Mode button) + ⇧E in palette row.
+
+## §6. Prototype mode trace (prompt §16) — Canvas + inspector Prototype:726–1322 + Player
+
+CANVAS (all connected): 4 conn handles/layer, 13px hit, rotation/flip-aware → protoConnect drag;
+flow-start badge click → presentStart; S-curve noodles (gated showFlows + prototype tab, hidden while
+presenting); selected-conn chip → deleteInteraction + toast; ⌘C/V on noodle; Esc drops conn selection.
+PANEL (all wired via setInteractions + page/patch dispatches): flow start; device/scale/orientation +
+live DevicePreview; interactions CRUD; 9 triggers (incl. key-capture, delay, drag); 10 actions
+(navigate/overlay×3/back/scrollTo/openUrl/setVariable/setVariableMode/setVariant); overlay pos +
+close-outside; duration clamp 1–10000; 9 animations; 6 easings + curve preview SVG; smart-match;
+conditions (8 ops); "Present Prototype" run button.
+PREVIEW: start = inspector Present btn / palette "Present ⌘⌥↩" / ⌘⌥↩ chord → presentStart + hideUi +
+toast; Esc cascade overlay→back→stop; Player has prev/next/restart/hotspots/scale/inputs/sound/
+fullscreen/Exit — all functional.
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| TB-U3 (upheld) | No TOOLBAR entry for the prototype authoring tab (Present btn ≠ tab; ⇧E + palette only) | MISSING UI | P1 |
+| PT-U1 | No-op `onClick={() => {}}` on "Prototype settings" h-row (inspector ~779) | DEAD handler | P2 |
+| PT-U2 | "Present Prototype" reuses `export-run` class | DRIFT (§29) | P2 |
+| PT-U3 | All proto selects/inputs raw + inline styles; icon-only btns native title= (orientation/plus/minus/condition) | DRIFT + tooltip split | P2 |
+| PT-U4 | Selected-conn chip: hardcoded #18181b/#fff + inline styles + native title | DRIFT | P2 |
+| PT-U5 | Player: 9 controls all inline-styled + native title= + hardcoded colors; zero x-ui/Tooltip | DRIFT | P2 |
+| PT-U6 | "Prototype flows ⇧F" toggle lives in ZoomMenu (view menu inside inspector tab bar) — works, surprising home | IA note | P2 |
+| PT-U7 | Present button Tooltip shows "Esc to exit" but never the start chord ⌘⌥↩ (exists + in palette) | PARTIAL | P2 |
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
