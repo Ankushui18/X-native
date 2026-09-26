@@ -254,6 +254,22 @@ palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts
 | LP-U5 | ToolsPane: no disabled states/shortcuts; "Plugins" label with no plugins | PARTIAL | P2 |
 | LP-U6 | AgentPane: unmatched input silently ignored (chat appended, nothing happens); hardcoded geometry (390×844 frame at 120,80…). Fix: scope feedback | PARTIAL | P2 |
 
+## §13. Import/export + responsive + icons/motion sweep (prompts §§12, 24, 31)
+
+CONNECTED: import = canvas file-drop at cursor, global paste (SVG/text), Dashboard SVG/Sketch/Fig w/
+busy state; all failures toasted w/ reasons. Export = per-layer Export section, bulk dialog (3 entries:
+palette ⇧⌘E, layers-pane button, section link), copy-as SVG/PNG/code, PDF print path. Icons (§12):
+PASS — disciplined 12/14/16 + caretSize/rowIconSize helpers (20px only for logo marks). Motion (§31):
+PASS — restrained (120ms control fades, 140ms palette entrance, 180–280ms prototype transitions; never
+blocks interaction). Responsive foundations: bounded panel drags (180–420/200–420), minUi ≤860px panel
+overlays, min-width discipline in grids/rows, viewport-clamped popovers/menus/tooltips, responsive
+palette (max-width/max-height/scroll).
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| RW-U1 | Bottom toolbar dock has NO narrow-width protection (fixed content row, no max-width/scroll/wrap) → tools clip off-screen on narrow windows while minUi saves only the panels. Fix: max-width + scroll or overflow flyout | PARTIAL | P2 |
+| RW-U2 | All window-size behavior code-verified ONLY (1280/1440/1920/2560 + narrow/wide need a browser) | NOT VERIFIED visually | P2 |
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
