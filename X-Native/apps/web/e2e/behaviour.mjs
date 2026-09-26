@@ -1103,6 +1103,27 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 24. prototype entry: toolbar toggle + palette shortcut ----------------------
+{
+  const p = await page();
+  await rows(p);
+  const tab = () => p.evaluate(() =>
+    [...document.querySelectorAll(".panel.right .tabs .tab")]
+      .find(el => (el.textContent || "").trim() === "Prototype")
+      ?.getAttribute("aria-current"));
+  t("toolbar has a Prototype toggle",
+    await p.evaluate(() => !!document.querySelector('.dock button[aria-label="Prototype"]')));
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]').click());
+  await sleep(400);
+  t("toggle opens the Prototype tab",
+    (await tab()) === "true" &&
+    (await p.evaluate(() => !!document.querySelector(".inspector .proto-row"))));
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]').click());
+  await sleep(400);
+  t("toggle returns to Design", (await tab()) === "false");
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

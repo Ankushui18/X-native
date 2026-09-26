@@ -114,6 +114,7 @@ export type IconName =
   | "flatten"
   | "flip-h"
   | "flip-v"
+  | "flow"
   | "folder"
   | "frame"
   | "fullscreen"
@@ -1037,6 +1038,14 @@ export function Icon({
           <rect x="3" y="5.5" width="4.5" height="5" rx="1.5" strokeWidth={1.2} />
           <rect x="8.5" y="5.5" width="4.5" height="5" rx="1.5" strokeWidth={1.2} />
           <path d="M6.5 8h3" strokeWidth={1.3} />
+        </svg>
+      );
+    case "flow":
+      return (
+        <svg {...p}>
+          <circle cx="4" cy="12" r="2" strokeWidth={1.25} />
+          <circle cx="12" cy="4" r="2" strokeWidth={1.25} />
+          <path d="M5.6 10.4L10.4 5.6M9 5.4h1.6v1.6" strokeWidth={1.25} />
         </svg>
       );
     case "link":

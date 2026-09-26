@@ -1217,6 +1217,23 @@ export function Toolbar({
           </button>
         </Tooltip>
       </div>
+      <div className={`tool${snap.rightTab === "prototype" ? " active" : ""}`}>
+        <Tooltip label={snap.rightTab === "prototype" ? "Back to Design" : "Prototype"} shortcut="⇧E">
+          <button
+            className="hit"
+            aria-label="Prototype"
+            aria-pressed={snap.rightTab === "prototype"}
+            onClick={() =>
+              engine.dispatch({
+                type: "setRightTab",
+                tab: snap.rightTab === "prototype" ? "design" : "prototype",
+              })
+            }
+          >
+            <Icon name="flow" size={16} />
+          </button>
+        </Tooltip>
+      </div>
       <div className={`tool${snap.rightTab === "inspect" ? " active" : ""}`}>
         <Tooltip label={snap.rightTab === "inspect" ? "Exit Dev Mode" : "Dev Mode"} shortcut="⇧D">
           <button
@@ -1370,8 +1387,8 @@ export function Actions({
         window.dispatchEvent(new CustomEvent("x-native-annotate"));
       },
     },
-    { label: "Prototype", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "prototype" }) },
-    { label: "Design", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
+    { label: "Prototype", sc: "⇧E", run: () => engine.dispatch({ type: "setRightTab", tab: "prototype" }) },
+    { label: "Design", sc: "⇧E", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
     {
       label: "Present",
       sc: "⌘⌥↩",

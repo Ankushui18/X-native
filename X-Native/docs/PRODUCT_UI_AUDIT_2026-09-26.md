@@ -99,10 +99,10 @@ token EXISTS (alias of --line) — divider renders; cleared.
 | VecEdit Done | `setVecEdit` null | CONNECTED (+P2: native title=) | P2 |
 | TB-U1 Resources + Actions | FIXED: Resources key retargeted to Assets pane via onNav (label "Assets", ⌥2); Actions key keeps the ⌘/ palette | FIXED (P1) | — |
 | TB-U2 tool flyouts | no arrows/Esc/focus mgmt; global Esc skips toolbar `open` | PARTIAL (mouse-only menu) | P1 |
-| TB-U3 Prototype entry | rightTab via ⇧E/palette only; no toolbar button; palette shows no sc | MISSING UI (undiscoverable) | P1 |
+| TB-U3 Prototype entry | FIXED: toolbar Prototype toggle (flow glyph, mirrors DevMode toggle + ⇧E both-ways); palette rows show ⇧E | FIXED (P1) | — |
 | TB-U4 caret + Done tooltips | native `title=` inside a Tooltip-using component | PARTIAL (§2.3) | P2 |
 | TB-U5 boolean flyout styles | inline styles (width/divider/label) bypass tokens | DRIFT (§29) | P2 |
-| TB-U6 palette Prototype/Design rows | `sc: ""` though ⇧E exists | PARTIAL | P2 |
+| TB-U6 palette Prototype/Design rows | FIXED: both rows show ⇧E | FIXED (P2) | — |
 
 Fix directions: U1 → Resources opens left Assets pane (or palette w/ resources filter), not the same
 palette; U2 → arrow/Esc/focus discipline on `.fly` menus; U3 → toolbar Prototype toggle w/ active state
@@ -124,7 +124,7 @@ fullscreen/Exit — all functional.
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| TB-U3 (upheld) | No TOOLBAR entry for the prototype authoring tab (Present btn ≠ tab; ⇧E + palette only) | MISSING UI | P1 |
+| TB-U3 (upheld) | FIXED with TB-U3 above (distinct flow glyph, not the Present play triangle) | FIXED (P1) | — |
 | PT-U1 | No-op `onClick={() => {}}` on "Prototype settings" h-row (inspector ~779) | DEAD handler | P2 |
 | PT-U2 | "Present Prototype" reuses `export-run` class | DRIFT (§29) | P2 |
 | PT-U3 | All proto selects/inputs raw + inline styles; icon-only btns native title= (orientation/plus/minus/condition) | DRIFT + tooltip split | P2 |
