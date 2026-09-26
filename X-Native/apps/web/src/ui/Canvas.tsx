@@ -46,6 +46,7 @@ import { withPreviewEffect } from "./effectModel";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
 import { coverCrop, normalizeCropRect } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
+import { registerConnDismiss } from "./connSelection";
 import { clampZoom, normalizeWheelDelta, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
 import { Guides } from "./Guides";
@@ -680,6 +681,14 @@ export function Canvas({
     if (onRunInteraction) onRunInteraction(runInteraction);
   }, [onRunInteraction, runInteraction]);
 
+  // The chip's Escape lives in the hotkey layer's cascade (ui/connSelection.ts
+  // explains why the canvas listener cannot answer it itself); it is registered
+  // for exactly as long as a connection is selected.
+  useEffect(() => {
+    registerConnDismiss(selectedConn ? () => setSelectedConn(null) : null);
+    return () => registerConnDismiss(null);
+  }, [selectedConn]);
+
   // §23 PT-016: a layer copy/cut invalidates a copied connection, so the most
   // recent copy always wins the next ⌘V.
   useEffect(() => {
@@ -778,7 +787,12 @@ export function Canvas({
         e.preventDefault();
         return;
       }
-      if (e.type === "keydown" && e.key === "Escape" && draft.length < 2) {
+      // Only a *stray pen point* is this branch's business. Without the
+      // draft-length guard it swallowed every Escape on canvas (a no-op clear,
+      // then `return`), so the rotation-origin, vector-edit and selected-
+      // connection handlers below never ran — Escape looked dead on a
+      // connection chip even though the code to dismiss it was right there.
+      if (e.type === "keydown" && e.key === "Escape" && draft.length > 0 && draft.length < 2) {
         setDraft([]);
         setCloseHint(null);
         penBranch.current = null;
@@ -6692,24 +6706,11 @@ export function Canvas({
       )}
       {selectedConn && snap.rightTab === "prototype" && !snap.presentFrame && (
         <div
+          className="canvas-dock conn-chip"
           onClick={(e) => e.stopPropagation()}
           style={{
-            position: "absolute",
             left: snap.panX + selectedConn.midX * snap.zoom,
             top: snap.panY + selectedConn.midY * snap.zoom,
-            transform: "translate(-50%, -50%)",
-            background: "#18181b",
-            color: "#ffffff",
-            padding: "5px 10px",
-            borderRadius: 14,
-            fontSize: 11,
-            fontWeight: 500,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 0 1.5px ${BRAND_ACCENT}`,
-            zIndex: 35,
-            userSelect: "none",
           }}
         >
           <span>{selectedConn.label}</span>
@@ -6724,15 +6725,7 @@ export function Canvas({
               toast("Connection deleted");
             }}
             title="Delete connection (⌫)"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              cursor: "pointer",
-              padding: 0,
-              display: "flex",
-              alignItems: "center",
-            }}
+            className="dock-x"
           >
             <Icon name="close" size={12} />
           </button>
@@ -6780,39 +6773,9 @@ export function Canvas({
           );
         })()}
       {(vecEdit || snap.tool === "pen" || draft.length > 0) && !snap.presentFrame && (
-        <div
-          className="vector-edit-toolbar"
-          style={{
-            position: "absolute",
-            bottom: 32,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#18181b",
-            borderRadius: 24,
-            padding: "4px 8px",
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px #27272a",
-            zIndex: 40,
-            userSelect: "none",
-          }}
-        >
+        <div className="canvas-dock vector-edit-toolbar">
           <button
             className={`tool-btn ${snap.tool === "select" && vecSubTool === "select" ? "on" : ""}`}
-            style={{
-              background: snap.tool === "select" && vecSubTool === "select" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: snap.tool === "select" && vecSubTool === "select" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               if (draft.length >= 2) {
                 engine.dispatch({ type: "addPath", points: draft, closed: false });
@@ -6830,19 +6793,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${snap.tool === "pen" ? "on" : ""}`}
-            style={{
-              background: snap.tool === "pen" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: snap.tool === "pen" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => engine.dispatch({ type: "setTool", tool: "pen" })}
             title="Pen (P)"
           >
@@ -6851,19 +6801,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${vecSubTool === "bend" ? "on" : ""}`}
-            style={{
-              background: vecSubTool === "bend" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: vecSubTool === "bend" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               setVecSubTool((t) => (t === "bend" ? "select" : "bend"));
               toast(vecSubTool === "bend" ? "Select mode" : "Bend tool active (drag segment to curve)");
@@ -6875,19 +6812,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${vecSubTool === "paint" ? "on" : ""}`}
-            style={{
-              background: vecSubTool === "paint" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: vecSubTool === "paint" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               setVecSubTool((t) => (t === "paint" ? "select" : "paint"));
               toast(vecSubTool === "paint" ? "Select mode" : "Paint bucket: fill region / face");
@@ -6899,19 +6823,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${vecSubTool === "shapeBuilder" ? "on" : ""}`}
-            style={{
-              background: vecSubTool === "shapeBuilder" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: vecSubTool === "shapeBuilder" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               setVecSubTool((t) => (t === "shapeBuilder" ? "select" : "shapeBuilder"));
               toast(vecSubTool === "shapeBuilder" ? "Select mode" : "Shape Builder: drag to merge regions, ⌥-click to subtract");
@@ -6923,16 +6834,6 @@ export function Canvas({
           </button>
           <button
             className="tool-btn"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              padding: "6px 8px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-            }}
             onClick={() => {
               if (vecEdit) {
                 engine.dispatch({ type: "simplifyPath", id: vecEdit });
@@ -6945,17 +6846,6 @@ export function Canvas({
           </button>
           <button
             className="tool-btn"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              padding: "6px 8px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
             onClick={() => {
               if (vecEdit) {
                 engine.dispatch({ type: "vectorCleanup", id: vecEdit });
@@ -6965,20 +6855,10 @@ export function Canvas({
             title="Clean up vector (sketch to perfect Bézier)"
           >
             <Icon name="visual-search" size={14} />
-            <span style={{ fontSize: 11 }}>Clean up</span>
+            Clean up
           </button>
           <button
             className="tool-btn"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              padding: "6px 8px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-            }}
             onClick={() => {
               if (draft.length > 0) {
                 setDraft((d) => d.slice(0, -1));
@@ -6997,21 +6877,9 @@ export function Canvas({
           >
             <Icon name="eraser" size={14} />
           </button>
-          <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.15)", margin: "0 4px" }} />
+          <div className="dock-sep" />
           <button
-            style={{
-              background: "var(--accent)",
-              border: 0,
-              color: "#ffffff",
-              padding: "5px 14px",
-              borderRadius: 14,
-              cursor: "pointer",
-              fontSize: 11,
-              fontWeight: 600,
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
+            className="dock-done"
             onClick={() => {
               if (draft.length >= 2) {
                 engine.dispatch({ type: "addPath", points: draft, closed: false });

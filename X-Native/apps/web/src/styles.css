@@ -3646,6 +3646,95 @@ input:focus-visible,
 }
 .canvas-hud b { font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* Canvas floating chrome — the selected-connection chip and the vector tool
+   strip. Both used to paint their own near-black (#18181b + white text) with
+   inline styles, so nothing on the canvas could follow the theme and the two
+   surfaces drifted from the HUD and the contextual toolbar right above them.
+   They are dock surfaces now, like every other overlay that sits on canvas. */
+.canvas-dock {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--dock);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line-2);
+  color: var(--tool-fg);
+  box-shadow: var(--elev-floating);
+  z-index: 40;
+  user-select: none;
+}
+/* The connection chip is anchored to the midpoint of the connector it names. */
+.conn-chip {
+  transform: translate(-50%, -50%);
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  /* Accent ring: this chip is the selected connection, the ring is the
+     selection, not decoration. */
+  box-shadow: var(--elev-floating), 0 0 0 1.5px var(--accent);
+  z-index: 35;
+}
+.conn-chip .dock-x {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.conn-chip .dock-x:hover { color: var(--red); }
+
+.vector-edit-toolbar {
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 24px;
+}
+.tool-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--muted);
+  font: var(--t-control);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.tool-btn:hover { background: var(--hover); color: var(--text); }
+.tool-btn.on { background: var(--active); color: var(--text); font-weight: 600; }
+.dock-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--line-2);
+}
+.dock-done {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font: var(--t-control);
+  font-weight: 600;
+  cursor: pointer;
+}
+.dock-done:hover { background: var(--accent-hover); }
+
 .right-head .grow { flex: 1; }
 
 /* ------------------------------------------------------------------ Dev Mode */

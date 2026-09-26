@@ -2140,6 +2140,146 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 39. canvas floating chrome is a dock, not near-black (PT-U4) --------------
+{
+  const p = await page();
+  await rows(p);
+  /** Resolve a CSS token/value to a canonical computed colour, so a token read
+   *  off the root ("rgba(255, 255, 255, 0.94)") compares equal to a computed
+   *  style no matter how each side is spaced. */
+  const norm = (v) => p.evaluate((val) => {
+    const d = document.createElement("div");
+    d.style.color = val;
+    document.body.appendChild(d);
+    const c = getComputedStyle(d).color;
+    d.remove();
+    return c;
+  }, v);
+  const token = (name) => p.evaluate((n) =>
+    getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
+
+  // (a) the vector tool strip
+  await drawRect(p);
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")].find((b) => b.textContent.trim() === "Edit points").click());
+  await sleep(500);
+  const bar = await p.evaluate(() => {
+    const el = document.querySelector(".vector-edit-toolbar");
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return {
+      bg: cs.backgroundColor,
+      radius: cs.borderRadius,
+      labels: [...el.querySelectorAll("button")].map((b) => (b.textContent || "").trim() || b.title),
+      // every inline style left inside the strip; the Icon component sets its own
+      // width/height/display, nothing here may lay the chrome out or colour it
+      inline: [...el.querySelectorAll("[style]")].map((e) => e.getAttribute("style")),
+      sep: !!el.querySelector(".dock-sep"),
+      doneBg: getComputedStyle(el.querySelector(".dock-done")).backgroundColor,
+      on: el.querySelector(".tool-btn.on")?.textContent?.trim() ?? null,
+    };
+  });
+  const dock = await token("--dock");
+  const accent = await token("--accent");
+  // It carried `background: "#18181b"` + `color: "#fff"` inline on the strip and
+  // on all nine buttons, so nothing on canvas could follow the theme.
+  t(`the vector strip is a dock surface (${bar?.bg}, radius ${bar?.radius})`,
+    bar?.bg === (await norm(dock)) && bar?.radius === "24px" &&
+    bar?.inline.every((v) => !/background|border|color|padding/.test(v)));
+  // The italic "Delete point (⌫)" comes from the button's title: it is icon-only.
+  const WANT = ["Select", "Pen", "Bend", "Paint", "Shape Builder", "Simplify path", "Clean up", "Delete point (⌫)", "Done"];
+  t(`and keeps all nine tools (${bar?.labels.join(", ")})`,
+    bar?.labels.length === WANT.length && WANT.every((w) => bar.labels.includes(w)));
+  t(`divider and Done use tokens (sep ${bar?.sep}, ${bar?.doneBg})`,
+    bar?.sep === true && bar?.doneBg === (await norm(accent)));
+
+  await p.evaluate(() => [...document.querySelectorAll(".vector-edit-toolbar .tool-btn")].find((b) => b.textContent.trim() === "Bend").click());
+  await sleep(350);
+  const switched = await p.evaluate(() => document.querySelector(".vector-edit-toolbar .tool-btn.on")?.textContent.trim());
+  t(`the active tool moves to the one chosen (${switched})`, switched === "Bend");
+  await p.keyboard.press("Escape");
+  await sleep(400);
+
+  // (b) the selected-connection chip: it renders only for a clicked connector, so
+  //     the noodles are found by their own pixels on the canvas.
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]')?.click());
+  await sleep(600);
+  await p.mouse.click(760, 200);            // empty canvas: clear the selection
+  await sleep(400);
+  const cand = await p.evaluate(() => {
+    const main = [...document.querySelectorAll("canvas")]
+      .map((c) => ({ c, r: c.getBoundingClientRect() }))
+      .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height)[0];
+    const { c, r } = main;
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    const sx = r.width / c.width, sy = r.height / c.height;
+    const seen = new Set(), out = [];
+    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+      const i = (y * c.width + x) * 4;
+      if (Math.abs(d[i] - 16) < 26 && Math.abs(d[i + 1] - 185) < 30 && Math.abs(d[i + 2] - 129) < 30 && d[i + 3] > 200) {
+        const px = Math.round(r.left + x * sx), py = Math.round(r.top + y * sy);
+        const k = `${Math.round(px / 24)},${Math.round(py / 24)}`;
+        if (seen.has(k)) continue;
+        seen.add(k); out.push([px, py]);
+      }
+    }
+    return out.slice(0, 80);
+  });
+  /** Click the first canvas accent pixel that opens a chip. The connectors are
+   *  canvas drawings with their own hit test, so their pixels are how a test
+   *  finds one without knowing the document's geometry. */
+  const clickANoodle = async () => {
+    for (const [x, y] of cand) {
+      if (x < 240 || y < 120 || x > 1400 || y > 900) continue;
+      await p.mouse.click(x, y);
+      await sleep(90);
+      if (await p.evaluate(() => !!document.querySelector(".conn-chip"))) return [x, y];
+    }
+    return null;
+  };
+  const onNoodle = await clickANoodle();
+  t(`clicking a connector opens its chip (${onNoodle ? onNoodle.join(",") : "no noodle hit"})`, !!onNoodle);
+  if (onNoodle) {
+    const chip = await p.evaluate(() => {
+      const el = document.querySelector(".conn-chip");
+      const cs = getComputedStyle(el);
+      return {
+        text: el.querySelector("span")?.textContent,
+        bg: cs.backgroundColor, color: cs.color, radius: cs.borderRadius,
+        transform: cs.transform, shadow: cs.boxShadow,
+        inline: [...el.querySelectorAll("[style]")].map((e) => e.getAttribute("style")),
+      };
+    });
+    t(`the chip is a dock surface too (${chip.bg}, radius ${chip.radius})`,
+      chip.bg === (await norm(dock)) && chip.radius === "14px" && chip.text?.includes("→") &&
+      chip.inline.every((v) => !/background|color|border|padding/.test(v)));
+    // The ring is the selection, so it has to be the accent token, not a literal.
+    t(`its selection ring is the accent token (${chip.shadow.split(", ").pop()})`,
+      chip.shadow.includes(await norm(accent)));
+    // The same surface has to answer the theme; the old literal #18181b could not.
+    const darkBg = await p.evaluate(async () => {
+      document.documentElement.setAttribute("data-theme", "dark");
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const out = {
+        chip: getComputedStyle(document.querySelector(".conn-chip")).backgroundColor,
+        dock: getComputedStyle(document.documentElement).getPropertyValue("--dock").trim(),
+      };
+      return out;
+    });
+    t(`and follows the theme (dark dock ${darkBg.chip})`, darkBg.chip === (await norm(darkBg.dock)) && darkBg.chip !== chip.bg);
+    await p.evaluate(() => document.documentElement.removeAttribute("data-theme"));
+    await p.keyboard.press("Escape");
+    await sleep(400);
+    t("Escape dismisses the chip and leaves the connection", await p.evaluate(() => !document.querySelector(".conn-chip")));
+    // The connector is still there to be clicked: Escape dropped the chip, not
+    // the interaction (the same accent pixels are still drawn).
+    await p.mouse.move(1000, 200);
+    await sleep(400);
+    const again = await clickANoodle();
+    t(`and the connector opens again (${again ? again.join(",") : "no noodle"})`, !!again);
+  }
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

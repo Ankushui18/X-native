@@ -147,7 +147,7 @@ fullscreen/Exit — all functional.
 | PT-U1 | FIXED with IN-U3: the header is a `Section`, so a click now folds the block instead of doing nothing | FIXED (P2) | — |
 | PT-U2 | "Present Prototype" reuses `export-run` class | DRIFT (§29) | P2 |
 | PT-U3 | All proto selects/inputs raw + inline styles; icon-only btns native title= (orientation/plus/minus/condition) | DRIFT + tooltip split | P2 |
-| PT-U4 | Selected-conn chip: hardcoded #18181b/#fff + inline styles + native title | DRIFT | P2 |
+| PT-U4 | FIXED: the selected-connection chip and the vector tool strip are the same `.canvas-dock` surface the canvas HUD and contextual toolbar use (`--dock`, `--line-2`, `--tool-fg`, elevation tokens). ~10 inline style objects per surface are gone, `#18181b`/`#fff` with them, and both follow the light/dark theme. Fixing it surfaced a second defect: **the chip could not be dismissed with Escape at all** — the canvas's own Escape branch is unreachable for real keypresses because the hotkey layer registers earlier and answers first (the reason `ui/penDraft.ts` exists), so the dismissal is now published (`ui/connSelection.ts`) and answered in the cascade. | FIXED (P2) | — |
 | PT-U5 | Player: 9 controls all inline-styled + native title= + hardcoded colors; zero x-ui/Tooltip | DRIFT | P2 |
 | PT-U6 | "Prototype flows ⇧F" toggle lives in ZoomMenu (view menu inside inspector tab bar) — works, surprising home | IA note | P2 |
 | PT-U7 | Present button Tooltip shows "Esc to exit" but never the start chord ⌘⌥↩ (exists + in palette) | PARTIAL | P2 |
@@ -598,6 +598,27 @@ family). It is now the shared `XDialog`: same chrome as every other modal, `aria
 close-button dismissal, Escape handled once, values and persistence unchanged.
 
 Suite **232 pass / 0 fail** (4 new checks in §38), unit 1621, tsc and build clean.
+
+## §4n. Canvas chrome is a dock — and a dead Escape branch (PT-U4)
+
+The chip and the vector strip were the last two surfaces on canvas painting themselves near-black
+(`#18181b` + white text), each with ~10 inline style objects per control, so nothing on the canvas could
+follow the theme and the two had already drifted from the HUD and the contextual toolbar floating right
+above them. Both are `.canvas-dock` now: `--dock` + blur, `--line-2`, `--tool-fg`, `--elev-floating`, with
+`--hover`/`--active` states, an accent `--accent` ring on the selected connection, and `--accent` /
+`--on-accent` for Done. The only inline styles left inside either surface are the Icon component's own
+sizes. Light and dark were both screenshotted, and the theme is asserted in the suite.
+
+Fixing the chip exposed why Escape "did nothing": in the canvas key handler the pen-draft branch cleared an
+empty draft and returned for *every* Escape, so the rotation-origin, vector-edit and selected-connection
+branches below it were dead code. Scoping that branch to a real stray point was necessary but not
+sufficient — instrumenting the handler showed it only ever receives **keyup** for keys the global hotkey
+layer also handles (its own listener re-registers on state change and lands after the hotkey layer's, which
+is exactly what `ui/penDraft.ts` documents). So the chip now publishes its dismissal the same way the pen
+draft does (`ui/connSelection.ts`), and the Escape cascade answers it: real Escape dismisses the chip,
+keeps the layer selected, and leaves the interaction intact.
+
+Suite **242 pass / 0 fail** (10 new checks in §39), unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

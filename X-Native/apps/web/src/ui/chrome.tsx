@@ -29,6 +29,7 @@ import {
   subscribeNudge,
 } from "./nudgePrefs";
 import { finishPenDraft } from "./penDraft";
+import { dismissSelectedConnection } from "./connSelection";
 import { THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
@@ -2286,6 +2287,14 @@ export function bindHotkeys(
       // leaves it open, instead of deselecting out from under
       // the drawing. The tool stays the pen, so the next path starts at once.
       if (finishPenDraft()) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+      // A selected connection owns Escape next: the chip is canvas chrome, and
+      // the canvas's own listener registers after this one (ui/connSelection.ts),
+      // so the dismissal is published and answered here.
+      if (dismissSelectedConnection()) {
         e.preventDefault();
         e.stopImmediatePropagation();
         return;
