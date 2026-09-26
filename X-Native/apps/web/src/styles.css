@@ -1972,11 +1972,9 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   overflow: hidden;
   border: 1px solid var(--line);
 }
-.nudge-dialog {
-  width: 320px;
-}
+/* The nudge form now lives in the shared dialog body; only its layout is its
+   own (it used to inherit the shortcuts sheet's card chrome). */
 .nudge-body {
-  padding: 4px 16px 16px;
   display: grid;
   gap: 10px;
 }

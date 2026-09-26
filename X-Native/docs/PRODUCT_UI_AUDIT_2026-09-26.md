@@ -257,7 +257,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U1 (=FS-U2) | FIXED — same work: one XDialog-backed prompt/confirm/choice (no separate XConfirm component was needed; the bus is the wrapper). 32 headless checks on the bus (cancel values, queue order, double-settle, no-host fallback) + e2e §31 (no native dialog call recorded during rename, create, delete, style choice, dashboard project). PM-U6 (focus) covered for the new dialogs: primary action focused, prompt selects its value | FIXED (P1) | — |
 | PM-U2 | FIXED: the palette now has a dismissible scrim — click anywhere outside closes it, clicks inside keep working (the sheet is not dismiss-on-any-click), and the scrim swallows clicks so the canvas underneath does not take them. Verified that a click meant for the backdrop did not also touch the document (layer rows unchanged). | FIXED (P2) | — |
 | PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
-| PM-U4 | NudgeDialog wears help-pop/help-card styles (a prefs dialog in help clothing) | DRIFT (§29) | P2 |
+| PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
 | PM-U6 | ExportAssetsDialog has no initial focus (no autoFocus) — keyboard users start from top | PARTIAL | P2 |
 
@@ -588,6 +588,16 @@ dismiss-on-any-click would be hostile), and the backdrop swallows the press so t
 verified by clicking well clear of the sheet and finding the layer count unchanged.
 
 Suite **228 pass / 0 fail** (6 new checks in §37), unit 1621, tsc and build clean.
+
+## §4m. The nudge form stops dressing as help (PM-U4)
+
+Nudge amounts is a preferences form; it was built from the shortcuts sheet's chrome (`help-pop` /
+`help-card` / `shortcuts-head`), which is why it read as documentation rather than settings, and it carried
+its own capture-phase Escape handler — a second Escape owner fighting the editor's global one (the PM-U3
+family). It is now the shared `XDialog`: same chrome as every other modal, `aria-modal`, backdrop and
+close-button dismissal, Escape handled once, values and persistence unchanged.
+
+Suite **232 pass / 0 fail** (4 new checks in §38), unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

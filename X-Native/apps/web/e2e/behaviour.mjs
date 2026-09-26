@@ -2108,6 +2108,38 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 38. the nudge form is a dialog, not a help sheet (PM-U4) ------------------
+{
+  const p = await page();
+  await rows(p);
+  await p.evaluate(() => window.dispatchEvent(new CustomEvent("x-native-nudge-dialog")));
+  await sleep(500);
+  const look = await p.evaluate(() => ({
+    title: document.querySelector(".x-dialog-title")?.textContent ?? null,
+    label: document.querySelector(".x-dialog")?.getAttribute("aria-label") ?? null,
+    modal: document.querySelector(".x-dialog")?.getAttribute("aria-modal") ?? null,
+    helpChrome: !!document.querySelector(".help-card.nudge-dialog, .help-pop"),
+    fields: [...document.querySelectorAll(".x-dialog-body input")].map((i) => i.getAttribute("aria-label")),
+  }));
+  // It used to wear help-pop / help-card / shortcuts-head — a preferences form
+  // styled as documentation, with its own capture-phase Escape handler.
+  t(`the nudge form uses the shared dialog (${look.title})`,
+    look.title === "Nudge amount" && look.modal === "true" && look.helpChrome === false);
+  t(`both amounts are editable there (${look.fields.join(", ")})`,
+    look.fields.length === 2 && look.fields.includes("Small nudge") && look.fields.includes("Big nudge"));
+
+  await p.evaluate(() => { const i = document.querySelector('input[aria-label="Small nudge"]'); i.focus(); i.select(); });
+  await p.keyboard.type("7");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("x-native-nudge") || "{}").small);
+  t(`a committed nudge value is stored (${saved})`, saved === 7);
+  await p.keyboard.press("Escape");
+  await sleep(350);
+  t("and the shared dialog closes on Escape", await p.evaluate(() => !document.querySelector(".x-dialog")));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

@@ -40,7 +40,7 @@ import { clearDoc } from "../engine/persist";
 import { copyText, notePasteModifiers, pasteEventMissing } from "../engine/clipboard";
 import { armEyedrop, isNone } from "./color";
 import { getEngineInfo } from "../engine/wasmBridge";
-import { XSegmentedControl } from "./x-ui";
+import { XDialog, XSegmentedControl } from "./x-ui";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -3982,17 +3982,6 @@ export function NudgeDialog({ onClose }: { onClose: () => void }) {
   const [small, setSmall] = useState(String(prefs.small));
   const [big, setBig] = useState(String(prefs.big));
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
-
   const commit = (which: "small" | "big", raw: string) => {
     const n = parseNudge(raw);
     if (n == null) {
@@ -4008,51 +3997,41 @@ export function NudgeDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="help-pop" onClick={onClose}>
-      <div
-        className="help-card nudge-dialog"
-        role="dialog"
-        aria-label="Nudge amount"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="shortcuts-head">
-          <h3>Nudge amount</h3>
-          <button className="shortcuts-close" onClick={onClose} aria-label="Close">
-            <Icon name="close" size={14} />
-          </button>
-        </div>
-        <div className="nudge-body">
-          <label>
-            <span>Small nudge</span>
-            <input
-              aria-label="Small nudge"
-              value={small}
-              onChange={(e) => setSmall(e.target.value)}
-              onBlur={(e) => commit("small", e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commit("small", (e.target as HTMLInputElement).value);
-              }}
-            />
-          </label>
-          <label>
-            <span>Big nudge</span>
-            <input
-              aria-label="Big nudge"
-              value={big}
-              onChange={(e) => setBig(e.target.value)}
-              onBlur={(e) => commit("big", e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commit("big", (e.target as HTMLInputElement).value);
-              }}
-            />
-          </label>
-          <p className="hint">
-            Arrow keys move a layer by the small nudge, ⇧ with the arrow keys by the big one.
-            Defaults are {DEFAULT_NUDGE.small} and {DEFAULT_NUDGE.big}.
-          </p>
-        </div>
+    // A preferences form, not a help sheet: it used to wear the shortcuts
+    // sheet's chrome (help-pop / help-card / shortcuts-head), which is why a
+    // settings dialog read as documentation (PM-U4).
+    <XDialog title="Nudge amount" width={340} onClose={onClose}>
+      <div className="nudge-body">
+        <label>
+          <span>Small nudge</span>
+          <input
+            aria-label="Small nudge"
+            value={small}
+            onChange={(e) => setSmall(e.target.value)}
+            onBlur={(e) => commit("small", e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit("small", (e.target as HTMLInputElement).value);
+            }}
+          />
+        </label>
+        <label>
+          <span>Big nudge</span>
+          <input
+            aria-label="Big nudge"
+            value={big}
+            onChange={(e) => setBig(e.target.value)}
+            onBlur={(e) => commit("big", e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit("big", (e.target as HTMLInputElement).value);
+            }}
+          />
+        </label>
+        <p className="hint">
+          Arrow keys move a layer by the small nudge, ⇧ with the arrow keys by the big one.
+          Defaults are {DEFAULT_NUDGE.small} and {DEFAULT_NUDGE.big}.
+        </p>
       </div>
-    </div>
+    </XDialog>
   );
 }
 
