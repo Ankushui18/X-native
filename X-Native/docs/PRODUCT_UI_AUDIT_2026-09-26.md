@@ -236,6 +236,24 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U5 | FOUR tab/seg systems: left NavRail, inspector raw tabs (IN-U7), vars/styles bespoke seg w/ inline styles, qo-filters — XTabs unused. Fix: one tab/seg primitive; migrate inspector + vars/styles | DRIFT (§29) | P2 |
 | PM-U6 | ExportAssetsDialog has no initial focus (no autoFocus) — keyboard users start from top | PARTIAL | P2 |
 
+## §12. Left panel + states trace (prompts §§20, 23–25) — NavRail + LeftPanel + App screens
+
+CONNECTED: 5 panes on local nav state (memo'd panel); layers = search, pages (twist + Esc-cancel
+rename), tree w/ arrow nav, ⌥-fold, DnD, inline + ⌘R rename, reveal-on-select + scrollIntoView,
+masked/locked inheritance, context menus, collapse-all; assets = components/images w/ teaching empties;
+vars/styles subtab w/ guarded bind; tools = 7 quick actions; agent = keyword stub. States: missing-file
+screen, opening screen, corrupt→toast ("started a new one", 4s — no silent loss ✓), export-nothing +
+palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts.
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| LP-U1 | "Open variables & styles" (no-selection inspector) dispatches setLeftTab(tokens) — but NOTHING reads leftTab; the panel runs on local nav state → button does nothing visible. Fix: plumb onNav to RightPanel (App owns setNav) or unify panel on leftTab | DEAD UI | P1 |
+| LP-U2 | leftTab is write-only engine state (⌥1..3 writes it alongside the working onNav; zero readers) — remove or unify (same fix) | DEAD STATE | P2 |
+| LP-U3 | Empty page = blank tree, no teaching empty state (assets HAS one; layers doesn't) | MISSING UI | P2 |
+| LP-U4 | Zero first-run onboarding anywhere (no welcome/empty-canvas guidance) — §25 steps 1–3 fail cold. Fix: minimal dismissible empty-canvas hints | MISSING UI | P2 |
+| LP-U5 | ToolsPane: no disabled states/shortcuts; "Plugins" label with no plugins | PARTIAL | P2 |
+| LP-U6 | AgentPane: unmatched input silently ignored (chat appended, nothing happens); hardcoded geometry (390×844 frame at 120,80…). Fix: scope feedback | PARTIAL | P2 |
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
