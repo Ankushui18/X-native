@@ -98,7 +98,7 @@ token EXISTS (alias of --line) — divider renders; cleared.
 | Dev Mode toggle | `setRightTab` inspect/design + aria-pressed | CONNECTED | — |
 | VecEdit Done | `setVecEdit` null | CONNECTED (+P2: native title=) | P2 |
 | TB-U1 Resources + Actions | FIXED: Resources key retargeted to Assets pane via onNav (label "Assets", ⌥2); Actions key keeps the ⌘/ palette | FIXED (P1) | — |
-| TB-U2 tool flyouts | no arrows/Esc/focus mgmt; global Esc skips toolbar `open` | PARTIAL (mouse-only menu) | P1 |
+| TB-U2 tool flyouts | FIXED: full menu pattern on tool + boolean flyouts (arrows/Home/End/Esc/Tab, focus-in on keyboard open, focus return, blur-close); open flyouts arm the shared popover guard so global Esc yields | FIXED (P1) | — |
 | TB-U3 Prototype entry | FIXED: toolbar Prototype toggle (flow glyph, mirrors DevMode toggle + ⇧E both-ways); palette rows show ⇧E | FIXED (P1) | — |
 | TB-U4 caret + Done tooltips | native `title=` inside a Tooltip-using component | PARTIAL (§2.3) | P2 |
 | TB-U5 boolean flyout styles | inline styles (width/divider/label) bypass tokens | DRIFT (§29) | P2 |

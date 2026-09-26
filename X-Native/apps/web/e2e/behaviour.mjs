@@ -1176,6 +1176,71 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 27. toolbar flyouts: full keyboard menu -----------------------------------
+{
+  const p = await page();
+  await rows(p);
+  const flyOpen = (g) => p.evaluate((g) =>
+    !!document.querySelector(`.dock .tool[data-group="${g}"].open`), g);
+  const focused = () => p.evaluate(() => ({
+    role: document.activeElement?.getAttribute("role"),
+    label: (document.activeElement?.getAttribute("aria-label") || document.activeElement?.textContent || "").trim(),
+  }));
+  // arrows open the move-group flyout and land on the current tool
+  await p.evaluate(() => document.querySelector('.dock .tool[data-group="move"] .hit').focus());
+  await p.keyboard.press("ArrowDown");
+  await sleep(300);
+  t("arrow opens the tool flyout", await flyOpen("move"));
+  t("focus lands on the current tool", (await focused()).role === "menuitemradio");
+  // arrows move, esc closes and returns focus without touching the selection
+  const first = (await focused()).label;
+  await p.keyboard.press("ArrowDown");
+  await sleep(200);
+  t("arrow moves between tools", (await focused()).label !== first);
+  const selBefore = await rows(p);
+  await p.keyboard.press("Escape");
+  await sleep(300);
+  t("esc closes the flyout", !(await flyOpen("move")));
+  t("esc returns focus to the trigger",
+    await p.evaluate(() => document.activeElement?.classList?.contains("hit")));
+  t("esc keeps the selection", JSON.stringify(await rows(p)) === JSON.stringify(selBefore));
+  // enter on a menu item switches tools
+  await p.keyboard.press("ArrowDown");
+  await sleep(300);
+  await p.keyboard.press("ArrowDown");
+  await sleep(200);
+  await p.keyboard.press("Enter");
+  await sleep(300);
+  t("enter switches to the chosen tool",
+    await p.evaluate(() => document.querySelector('.dock .tool[data-group="move"] .hit').getAttribute("aria-label")) === "Hand");
+  // the boolean menu takes the same path once two layers are selected
+  await p.keyboard.press("r");
+  await p.mouse.move(820, 620); await p.mouse.down();
+  await p.mouse.move(960, 720, { steps: 6 }); await p.mouse.up();
+  await sleep(300);
+  await p.keyboard.press("r");
+  await p.mouse.move(1000, 620); await p.mouse.down();
+  await p.mouse.move(1140, 720, { steps: 6 }); await p.mouse.up();
+  await sleep(300);
+  await p.keyboard.press("v");
+  await p.mouse.move(800, 600); await p.mouse.down();
+  await p.mouse.move(1160, 740, { steps: 8 }); await p.mouse.up();
+  await sleep(400);
+  const hasBool = await p.evaluate(() => !!document.querySelector('.dock .tool[data-group="bool"] .hit'));
+  t("two selected layers show the boolean menu", hasBool);
+  if (hasBool) {
+    await p.evaluate(() => document.querySelector('.dock .tool[data-group="bool"] .hit').focus());
+    await p.keyboard.press("ArrowDown");
+    await sleep(300);
+    t("arrow opens the boolean menu",
+      (await flyOpen("bool")) && (await focused()).role === "menuitem");
+    await p.keyboard.press("Escape");
+    await sleep(300);
+    t("esc closes the boolean menu", !(await flyOpen("bool")));
+  }
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

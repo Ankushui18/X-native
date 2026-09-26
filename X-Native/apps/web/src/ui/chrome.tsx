@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
 import { coerceVariableValue, fallbackForType, isAlias, resolveVariable, wouldCycle } from "../engine/variables";
 import { collectColors, find, findInstanceRoot, findParent, isInstanceMember } from "../engine/memory";
@@ -12,7 +13,7 @@ import { rankSearch, loadRecents, saveRecent } from "./search";
 import type { RecentEntry, SearchEntry, SearchKind } from "./search";
 import { useRestoreFocus } from "./a11y";
 import { selectInverse, selectMatching } from "./selectSame";
-import { popoverArmed } from "./popoverGuard";
+import { armPopover, popoverArmed } from "./popoverGuard";
 import {
   DEFAULT_NUDGE,
   getNudgePrefs,
@@ -1019,6 +1020,65 @@ export function Toolbar({
   const [open, setOpen] = useState<string | null>(null);
   const [boolOpen, setBoolOpen] = useState(false);
   const hold = useRef<number | null>(null);
+  // Keyboard menu support for the tool + boolean flyouts: arrows open and
+  // move, Esc closes, focus returns to the trigger. An open flyout arms
+  // the shared popover guard so the capture-phase global Esc yields to it
+  // instead of clearing the selection behind it.
+  const kbEdge = useRef<"first" | "last" | null>(null);
+  useEffect(() => {
+    if (open == null && !boolOpen) return;
+    return armPopover();
+  }, [open, boolOpen]);
+  const openId = open ?? (boolOpen ? "bool" : null);
+  useEffect(() => {
+    if (openId == null || kbEdge.current == null) return;
+    const edge = kbEdge.current;
+    kbEdge.current = null;
+    const menu = document.querySelector(`.dock .tool[data-group="${openId}"] .fly`);
+    const items = menu
+      ? (Array.from(menu.querySelectorAll('button[role^="menuitem"]')) as HTMLElement[])
+      : [];
+    const current = menu?.querySelector('button[role^="menuitem"].on') as HTMLElement | null;
+    (edge === "last" ? items[items.length - 1] : (current ?? items[0]))?.focus();
+  }, [openId]);
+  const refocusTrigger = (id: string) => {
+    (document.querySelector(`.dock .tool[data-group="${id}"] .hit`) as HTMLElement | null)?.focus();
+  };
+  const closeFly = (id: string, refocus: boolean) => {
+    if (id === "bool") setBoolOpen(false);
+    else setOpen(null);
+    if (refocus) refocusTrigger(id);
+  };
+  const menuKeys = (e: ReactKeyboardEvent, id: string) => {
+    if (e.key === "Tab") {
+      closeFly(id, false);
+      return;
+    }
+    if (e.key !== "Escape" && e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    if (e.key === "Escape") {
+      closeFly(id, true);
+      return;
+    }
+    const items = Array.from(e.currentTarget.querySelectorAll('button[role^="menuitem"]')) as HTMLElement[];
+    if (!items.length) return;
+    const ix = items.indexOf(e.target as HTMLElement);
+    if (e.key === "ArrowDown") (items[ix + 1] ?? items[0])?.focus();
+    else if (e.key === "ArrowUp") (items[ix - 1] ?? items[items.length - 1])?.focus();
+    else if (e.key === "Home") items[0]?.focus();
+    else if (e.key === "End") items[items.length - 1]?.focus();
+  };
+  const triggerKeys = (e: ReactKeyboardEvent, id: string, isOpen: boolean) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      kbEdge.current = e.key === "ArrowUp" ? "last" : "first";
+      if (id === "bool") setBoolOpen(true);
+      else setOpen(id);
+    } else if (e.key === "Escape" && isOpen) {
+      e.preventDefault();
+      closeFly(id, false); // focus is already on the trigger
+    }
+  };
   // Each group remembers its last-used tool across switches: pick the ellipse,
   // draw (which drops back to Move), and the shape group still offers the
   // ellipse — not the rectangle it defaults to. The live tool always wins
@@ -1042,10 +1102,15 @@ export function Toolbar({
         return (
           <div
             key={g.id}
+            data-group={g.id}
             className={`tool${active ? " active" : ""}${open === g.id ? " open" : ""}${multi ? " split" : ""}`}
             onMouseLeave={() => {
               if (hold.current) window.clearTimeout(hold.current);
               setOpen((o) => (o === g.id ? null : o));
+            }}
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                setOpen((o) => (o === g.id ? null : o));
             }}
           >
             <Tooltip label={cur?.label ?? ""} shortcut={cur?.shortcut}>
@@ -1055,6 +1120,7 @@ export function Toolbar({
               aria-haspopup={multi ? "menu" : undefined}
               aria-expanded={multi ? open === g.id : undefined}
               onClick={() => engine.dispatch({ type: "setTool", tool: current })}
+              onKeyDown={multi ? (e) => triggerKeys(e, g.id, open === g.id) : undefined}
               onPointerDown={() => {
                 if (!multi) return;
                 hold.current = window.setTimeout(() => setOpen(g.id), 280);
@@ -1083,7 +1149,7 @@ export function Toolbar({
             </button>
             </Tooltip>
             {multi && (
-              <div className="fly" role="menu">
+              <div className="fly" role="menu" aria-label="More tools" onKeyDown={(e) => menuKeys(e, g.id)}>
                 {g.tools.map((t) => (
                   <button
                     key={t.id}
@@ -1093,6 +1159,7 @@ export function Toolbar({
                     onClick={() => {
                       engine.dispatch({ type: "setTool", tool: t.id });
                       setOpen(null);
+                      refocusTrigger(g.id);
                     }}
                   >
                     <Icon name={TOOL_ICON[t.id]} size={16} />
@@ -1126,13 +1193,20 @@ export function Toolbar({
               </Tooltip>
             </div>
             <div
+              data-group="bool"
               className={`tool${boolOpen ? " open" : ""}`}
               onMouseLeave={() => setBoolOpen(false)}
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setBoolOpen(false);
+              }}
             >
               <Tooltip label="Boolean groups">
                 <button
                   className="hit"
                   style={{ width: "auto", padding: "0 6px", gap: 3 }}
+                  aria-haspopup="menu"
+                  aria-expanded={boolOpen}
+                  onKeyDown={(e) => triggerKeys(e, "bool", boolOpen)}
                   aria-label="Boolean groups"
                   onClick={() => setBoolOpen((v) => !v)}
                 >
@@ -1141,12 +1215,13 @@ export function Toolbar({
                 </button>
               </Tooltip>
               {boolOpen && (
-                <div className="fly" role="menu" style={{ width: 180, left: 0 }}>
+                <div className="fly" role="menu" aria-label="Boolean operations" style={{ width: 180, left: 0 }} onKeyDown={(e) => menuKeys(e, "bool")}>
                   <button
                     role="menuitem"
                     onClick={() => {
                       engine.dispatch({ type: "boolean", op: "union" });
                       setBoolOpen(false);
+                      refocusTrigger("bool");
                     }}
                   >
                     <Icon name="boolean-union" size={14} />
@@ -1158,6 +1233,7 @@ export function Toolbar({
                     onClick={() => {
                       engine.dispatch({ type: "boolean", op: "subtract" });
                       setBoolOpen(false);
+                      refocusTrigger("bool");
                     }}
                   >
                     <Icon name="boolean-subtract" size={14} />
@@ -1169,6 +1245,7 @@ export function Toolbar({
                     onClick={() => {
                       engine.dispatch({ type: "boolean", op: "intersect" });
                       setBoolOpen(false);
+                      refocusTrigger("bool");
                     }}
                   >
                     <Icon name="boolean-intersect" size={14} />
@@ -1180,6 +1257,7 @@ export function Toolbar({
                     onClick={() => {
                       engine.dispatch({ type: "boolean", op: "exclude" });
                       setBoolOpen(false);
+                      refocusTrigger("bool");
                     }}
                   >
                     <Icon name="boolean-exclude" size={14} />
@@ -1192,6 +1270,7 @@ export function Toolbar({
                     onClick={() => {
                       engine.dispatch({ type: "flatten" });
                       setBoolOpen(false);
+                      refocusTrigger("bool");
                     }}
                   >
                     <Icon name="vector" size={14} />
