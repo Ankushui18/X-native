@@ -154,6 +154,31 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 | IN-U6 | Flip buttons + assorted icon-only buttons use native title= amid Tooltip siblings | PARTIAL (§2.3) | P2 |
 | IN-U7 | Design/Prototype/Inspect tabs are raw buttons, not XTabs; no arrow-key nav (§19 evidence) | DRIFT | P2 |
 
+## §8. Fill/Stroke/Effects + variables/styles trace (prompts §§13, 15, 18)
+
+CONNECTED: Fill + (base re-add/stacking), reorderable extras (drag + bring/send), base+extras via
+ColorRow → patch; swatch → anchored FillPicker (viewport-clamped + flip, role=dialog, Esc + outside-
+click close w/o dropping selection) → onValueChange → patch; hex draft-commit, opacity, eye,
+export-eye, remove. Stroke: ColorRow(stroke, honestly solid-only) + width Field (+custom 4-side) +
+align seg w/ hover AND focus preview + sides seg; empty-add/remove. Effects: addKind menu w/ limits +
+hover preview; rows + EffectPopover; remove. Variables: variable-first bind from VarsPane w/ guard
+toasts (text/layout/instance checks); BindingChip + unbind; styles: tokens→styles subtab, create from
+selection, apply (click=fill/shift-click=stroke) w/ bound ring + toasts, delete; direct patch DETACHES
+styles (memory ~2482, Figma-correct). Engine has ONLY fill+stroke style slots.
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| FS-U1 | NO property-first variable binding: ColorRow/type/layout rows have zero bind affordance; binding requires leaving the inspector for the left Variables tab (variable-first only). §13 expects variable in the picker flow | MISSING UI | P1 |
+| FS-U6 | Bound fill/stroke edits are SILENTLY OVERWRITTEN: BindingChip promises "editing the value directly unbinds it", but `patch` (memory:2432) never clears variableBindings.fill/strokePaint — next evaluation re-applies the binding and the edit vanishes. Engine already does "explicit edit wins" for w/h (resize), layout keys, AND styles — fill/stroke bindings were missed | BROKEN (state lie + lost edit) | P1 |
+| FS-U5 | BindingChip renders ONLY for fill + strokePaint: all other bindable props (opacity? fontSize? layoutGap? w/h?) show no indicator when bound, so FS-U6-class surprises are invisible there too | PARTIAL | P1 |
+| FS-U2 | Native window.prompt/confirm in ≥10 UI sites (variable/collection/mode rename+create, mode+style delete/create, new-file confirm, offset distance, project name) — blocking browser dialogs instead of X-Native modals (§17) | DRIFT | P1 |
+| FS-U3 | Text/effect styles don't exist in engine (only fill+stroke slots) — OUT OF SCOPE per §3/§35, not missing UI | OOS | — |
+| FS-U4 | Plus/eye/minus/export buttons use native title= throughout ColorRow/fill/stroke/effects | PARTIAL (§2.3) | P2 |
+
+Fix directions: FS-U6 → clear the patched prop's binding key in `patch` (mirror the resize/layout/
+style precedents; smallest correct layer = engine); FS-U1 → bind affordance on rows + in-picker entry;
+FS-U5 → chip/indicator wherever a binding can land.
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
