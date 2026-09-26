@@ -81,7 +81,33 @@ effects flows §§13–15 · Prototype mode §16 · Modals §17 · Popovers §18
 Context menus §22 · Left-panel IA §23 · Responsive §24 (code-only: panel drag mins exist 180–420/
 200–420) · First-run §25 (code walk of clean-state components).
 
-## §3. Plan
+## §4. Toolbar trace (prompt §9) — chrome.tsx Toolbar:1005–1245 + GROUPS:943–983
+
+All 20 engine Tool values have toolbar UI (move group: select/hand/scale/zoom; region: frame/section/
+slice; shape: rect/line/arrow/ellipse/poly/star/image; pen: pen/pencil/brush/eraser; text; comment) —
+each dispatches `setTool`. Group buttons carry Tooltip+shortcut, last-used memory, active state; a11y
+roles (toolbar/menu/menuitemradio, aria-checked/expanded/pressed) present. Multi-select section (≥2):
+count label, makeComponent ⌥⌘K, boolean flyout + flatten. Dev Mode toggle mirrors rightTab. `--border`
+token EXISTS (alias of --line) — divider renders; cleared.
+
+| # | UI | Handler→State→Engine→Undo | Status | Pri |
+|---|---|---|---|---|
+| 20 tool buttons | click/hold/caret → local open → `setTool` | CONNECTED | — |
+| Multi-select: make/boolean/flatten | dispatch makeComponent/boolean/flatten | CONNECTED | — |
+| Dev Mode toggle | `setRightTab` inspect/design + aria-pressed | CONNECTED | — |
+| VecEdit Done | `setVecEdit` null | CONNECTED (+P2: native title=) | P2 |
+| TB-U1 Resources + Actions | BOTH call onActions; BOTH claim ⌘/; adjacent | DUPLICATE + misleading label | P1 |
+| TB-U2 tool flyouts | no arrows/Esc/focus mgmt; global Esc skips toolbar `open` | PARTIAL (mouse-only menu) | P1 |
+| TB-U3 Prototype entry | rightTab via ⇧E/palette only; no toolbar button; palette shows no sc | MISSING UI (undiscoverable) | P1 |
+| TB-U4 caret + Done tooltips | native `title=` inside a Tooltip-using component | PARTIAL (§2.3) | P2 |
+| TB-U5 boolean flyout styles | inline styles (width/divider/label) bypass tokens | DRIFT (§29) | P2 |
+| TB-U6 palette Prototype/Design rows | `sc: ""` though ⇧E exists | PARTIAL | P2 |
+
+Fix directions: U1 → Resources opens left Assets pane (or palette w/ resources filter), not the same
+palette; U2 → arrow/Esc/focus discipline on `.fly` menus; U3 → toolbar Prototype toggle w/ active state
+(mirror Dev Mode button) + ⇧E in palette row.
+
+## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
    migrations/fixes (shared components, tooltip unification, inspector row clarity, toolbar hierarchy,
