@@ -179,6 +179,27 @@ Fix directions: FS-U6 → clear the patched prop's binding key in `patch` (mirro
 style precedents; smallest correct layer = engine); FS-U1 → bind affordance on rows + in-picker entry;
 FS-U5 → chip/indicator wherever a binding can land.
 
+## §9. Typography trace (prompt §14) — renderTypographySection:3442–3727 + textarea overlay
+
+CONNECTED: font family (11 built-ins + Local Font Access enumeration + "Load system fonts" fallback w/
+toasts; unknown family preserved); weight select; size/leading/tracking Fields (leading label toggles
+Auto, click resets to Auto); resize-mode seg w/ Tooltips; align + valign segs; type-pop (underline/
+strike toggles, case incl. small caps, truncate + maxLines gated w/ reason, ¶ spacing, ⇥ indent, wrap,
+lists) — all dispatch patchType→patch + hug refit. Canvas: real textarea overlay, commit-on-blur w/
+hug refit, edit-switch chaining (Y-010), Esc/⌘↵ commit. Frame-name inline edit: Enter commits,
+Esc cancels, empty→"Frame". Tooltip.tsx itself verified solid (380ms delay + 500ms chaining, portal,
+viewport clamp, role=tooltip; empty shortcut renders nothing).
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| TY-U1 | ITALIC has zero inspector UI: ⌘I chord + `italic` model exist (KB-002) but "italic" appears nowhere in inspector.tsx — keyboard-only, undiscoverable. Fix: toggle in type row/popover | MISSING UI | P1 |
+| TY-U2 | Align (4) + valign (3) + underline + strike buttons carry NO tooltip/aria/label of any kind — icon-only, undiscoverable, screen-reader invisible; the resize-mode seg directly above HAS Tooltips | MISSING LABELS | P1 |
+| TY-U3 | Multi-select type metrics (size/leading/tracking/¶ + family/weight selects) show FIRST-layer values, no Mixed — IN-U1 sibling (§29) | PARTIAL | P1 |
+| FS-U6 scope+ | patchType→patch, so bound type/layout props share the silent-overwrite bug (fix in `patch` covers all) | (fold into FS-U6) | P1 |
+| TY-U4 | Round-to-pixels button has BOTH Tooltip wrapper AND native title= → double tooltip | DRIFT | P2 |
+| TY-U5 | Hidden x-ui "wiring" div (`display:none` PropertyField to force bundling) — dead UI + bundling hack; one of only 3 x-ui usages | DEAD UI | P2 |
+| TY-U6 | Tooltip is pointer-only (no focus trigger) — keyboard users never see tooltips (§32) | PARTIAL | P2 |
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
