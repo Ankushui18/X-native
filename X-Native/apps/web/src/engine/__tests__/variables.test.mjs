@@ -4,7 +4,7 @@
  *
  * Run with:  npx vite-node src/engine/__tests__/variables.test.mjs
  */
-import { MemoryEngine, find, defaultLayout } from "../memory.ts";
+import { MemoryEngine, bindBlockReason, find, defaultLayout } from "../memory.ts";
 import {
   BINDABLE_PROPS,
   applyBinding,
@@ -464,6 +464,46 @@ console.log("§18 pin hygiene:");
   t("hideSel detaches the visible binding", byId(e, id).variableBindings?.visible === undefined);
   e.dispatch({ type: "select", ids: [id] });
   t("toggle survives the next relayout", byId(e, id).visible === false);
+}
+
+console.log("FS-U1 bindBlockReason (engine + every bind UI share one refusal table):");
+{
+  const e = new MemoryEngine(false);
+  const rt = () => snapOf(e).pages[snapOf(e).page].root;
+  e.dispatch({ type: "addVariable", variable: { id: "v-n", name: "n", type: "number", value: 1, collection: "N" } });
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 50, h: 50 });
+  const r = snapOf(e).selection[0];
+  t("w on a plain layer passes", bindBlockReason(rt(), r, "w") === null);
+  t("fill on a plain layer passes", bindBlockReason(rt(), r, "fill") === null);
+  t("fontSize on a rect is refused", bindBlockReason(rt(), r, "fontSize") === "That property needs a text layer");
+  t("layoutGap without a layout is refused", bindBlockReason(rt(), r, "layoutGap") === "That property needs auto layout");
+  t("missing layer asks for a selection", bindBlockReason(rt(), "nope", "fill") === "Select a layer first");
+  const legacy = rt();
+  delete find(legacy, r).cornerRadii;
+  t("legacy layer without corners is refused", bindBlockReason(legacy, r, "cornerRadii") === "This layer has no corner radius");
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 0 });
+  const tx = snapOf(e).selection[0];
+  t("fontSize on text passes", bindBlockReason(rt(), tx, "fontSize") === null);
+  // The engine agrees with the table.
+  e.dispatch({ type: "bindVariable", id: r, prop: "fontSize", variableId: "v-n" });
+  t("bindVariable refuses what the table refuses", byId(e, r).variableBindings?.fontSize === undefined);
+  e.dispatch({ type: "bindVariable", id: tx, prop: "fontSize", variableId: "v-n" });
+  t("bindVariable allows what the table allows", byId(e, tx).variableBindings?.fontSize === "v-n");
+  // Instances: members keep no geometry bindings, roots keep no layout bindings.
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 100 });
+  const f = snapOf(e).selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 40, h: 40, parent: f });
+  e.dispatch({ type: "autoLayout", id: f, layout: { ...defaultLayout(), gap: 8 } });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "makeComponent" });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "duplicate" });
+  const inst = snapOf(e).selection[0];
+  const member = byId(e, inst).children[0].id;
+  t("member geometry is refused", bindBlockReason(rt(), member, "w") === "That property belongs to the main component");
+  t("member fill passes", bindBlockReason(rt(), member, "fill") === null);
+  t("root layout is refused", bindBlockReason(rt(), inst, "layoutGap") === "Layout belongs to the main component");
+  t("root width passes", bindBlockReason(rt(), inst, "w") === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

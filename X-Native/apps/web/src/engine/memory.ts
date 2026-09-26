@@ -234,6 +234,43 @@ function findParent(root: XNode, id: string): XNode | null {
   return null;
 }
 
+const TEXT_BINDS = new Set([
+  "text",
+  "fontSize",
+  "letterSpacing",
+  "lineHeight",
+  "paragraphSpacing",
+  "paragraphIndent",
+  "fontWeight",
+  "fontFamily",
+]);
+
+/**
+ * Why `bindVariable` would refuse this prop on this layer: the text-only
+ * props, corner radii without corners, layout props without a layout,
+ * and the instance geometry rules (members take no size/radii/layout
+ * bindings; roots take no layout bindings — C-001). One source of truth
+ * for the command and every bind UI, so a refusal always says why.
+ */
+export function bindBlockReason(root: XNode, id: string, prop: string): string | null {
+  const n = find(root, id);
+  if (!n) return "Select a layer first";
+  if (TEXT_BINDS.has(prop) && n.kind !== "text") return "That property needs a text layer";
+  if (prop === "cornerRadii" && !n.cornerRadii) return "This layer has no corner radius";
+  if ((prop === "layoutGap" || prop === "layoutPadding") && !n.layout)
+    return "That property needs auto layout";
+  const memberGeometry =
+    prop === "w" ||
+    prop === "h" ||
+    prop === "cornerRadii" ||
+    prop === "layoutGap" ||
+    prop === "layoutPadding";
+  if (memberGeometry && isInstanceMember(root, id)) return "That property belongs to the main component";
+  if ((prop === "layoutGap" || prop === "layoutPadding") && findInstanceRoot(root, id))
+    return "Layout belongs to the main component";
+  return null;
+}
+
 /**
  * Figma lock inheritance: locking a frame/group locks its whole subtree, and
  * a child cannot be unlocked while an ancestor stays locked. All canvas
@@ -4164,33 +4201,7 @@ export class MemoryEngine implements Engine {
         if (!n || !v || !need) break;
         // Numbers render as text content (Figma tip for calculated copy).
         if (v.type !== need && !(cmd.prop === "text" && v.type === "number")) break;
-        const TEXT_BINDS = new Set([
-          "text",
-          "fontSize",
-          "letterSpacing",
-          "lineHeight",
-          "paragraphSpacing",
-          "paragraphIndent",
-          "fontWeight",
-          "fontFamily",
-        ]);
-        if (TEXT_BINDS.has(cmd.prop) && n.kind !== "text") break;
-        if (cmd.prop === "cornerRadii" && !n.cornerRadii) break;
-        if ((cmd.prop === "layoutGap" || cmd.prop === "layoutPadding") && !n.layout) break;
-        // Instance geometry belongs to the master: members take no size,
-        // radii, or layout bindings, and even roots take no layout
-        // bindings (layout belongs to the main component, C-001).
-        const rt = this.root();
-        const memberGeometry =
-          cmd.prop === "w" ||
-          cmd.prop === "h" ||
-          cmd.prop === "cornerRadii" ||
-          cmd.prop === "layoutGap" ||
-          cmd.prop === "layoutPadding";
-        if (memberGeometry && isInstanceMember(rt, cmd.id)) break;
-        if ((cmd.prop === "layoutGap" || cmd.prop === "layoutPadding") && findInstanceRoot(rt, cmd.id)) {
-          break;
-        }
+        if (bindBlockReason(this.root(), cmd.id, cmd.prop)) break;
         if (!n.variableBindings) n.variableBindings = {};
         n.variableBindings[cmd.prop] = cmd.variableId;
         // Bound on the instance itself (not flowed from the master): pin it.

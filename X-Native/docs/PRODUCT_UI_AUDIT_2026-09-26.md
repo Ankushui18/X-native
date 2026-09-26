@@ -168,10 +168,10 @@ styles (memory ~2482, Figma-correct). Engine has ONLY fill+stroke style slots.
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| FS-U1 | NO property-first variable binding: ColorRow/type/layout rows have zero bind affordance; binding requires leaving the inspector for the left Variables tab (variable-first only). §13 expects variable in the picker flow | MISSING UI | P1 |
+| FS-U1 | FIXED: shared BindControl on all 16 inspector rows with a binding (fill/stroke/width/opacity/7 type props/corners/w/h/gap/padding) — ghost button opens a type-filtered variable picker with live resolved values (XPopover), one pick binds the row's full target set; refuses via the engine's shared bindBlockReason table so they say why. Engine + VarRow + BindControl consume one table (headless ×13). e2e §30 (bind/pick/unbind/mixed-multi). NOT done: variables listed inside the FillPicker itself — deferred as a second surface | FIXED (P1) | — |
 | FS-U6 | RETRACTED as filed: `patch` DOES generically detach (memory:2489–2499 — my earlier grep was head-truncated). Fill/stroke/type/radii/text edits correctly unbind. The chip text is TRUE. Remnants below (verified by full read + handler-by-handler check) | RETRACTED | — |
 | FS-U6′ | REAL remnant, FIXED: `hideSel` toggled `visible` without detaching a `visible` binding (the only bindable prop outside patch/resize/autoLayout, all verified covered) → toggle silently reverted on next relayout. Fix: detach visible + ownBindings.visible in hideSel (mirrors precedents). Tests: +4 in variables.test.mjs (100/0) | FIXED | P2 |
-| FS-U5 | BindingChip renders ONLY for fill + strokePaint: all other bindable props (opacity? fontSize? layoutGap? w/h?) show no indicator when bound, so FS-U6-class surprises are invisible there too | PARTIAL | P1 |
+| FS-U5 | FIXED: BindingChip replaced by the pill state of the same BindControl — every bound row shows its variable name (+ re-pick/unbind), multi divergent shows a lit Mixed ghost, structurally unbindable rows show a disabled ghost with the reason. visible/text have no inspector row (unchanged). Known tradeoff: 4 independent-corner fields each show the one cornerRadii pill | FIXED (P1) | — |
 | FS-U2 | Native window.prompt/confirm in ≥10 UI sites (variable/collection/mode rename+create, mode+style delete/create, new-file confirm, offset distance, project name) — blocking browser dialogs instead of X-Native modals (§17) | DRIFT | P1 |
 | FS-U3 | Text/effect styles don't exist in engine (only fill+stroke slots) — OUT OF SCOPE per §3/§35, not missing UI | OOS | — |
 | FS-U4 | Plus/eye/minus/export buttons use native title= throughout ColorRow/fill/stroke/effects | PARTIAL (§2.3) | P2 |
@@ -248,7 +248,7 @@ palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| LP-U1 | FIXED: RightPanel/PageDesign take onOpenVariables from App (setNav("variables")); legacy setLeftTab kept as fallback only | FIXED (P1) | — |
+| LP-U1 | FIXED: RightPanel/PageDesign take onOpenVariables from App (setNav("variables")); legacy setLeftTab kept as fallback only. FS-U1 pass: DesignHealth's variable-issue jump + Design's empty-picker CTA threaded the same way (same fallback) | FIXED (P1) | — |
 | LP-U2 | leftTab is write-only engine state (⌥1..3 writes it alongside the working onNav; zero readers) — remove or unify (same fix) | DEAD STATE | P2 |
 | LP-U3 | Empty page = blank tree, no teaching empty state (assets HAS one; layers doesn't) | MISSING UI | P2 |
 | LP-U4 | Zero first-run onboarding anywhere (no welcome/empty-canvas guidance) — §25 steps 1–3 fail cold. Fix: minimal dismissible empty-canvas hints | MISSING UI | P2 |

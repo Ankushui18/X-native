@@ -1339,6 +1339,89 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 30. property-first binding: bind from the row, pill, mixed multi ---------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  const full = async (id) => (await api("getNode", { id, full: true })).data.full;
+  const tab = async (re) => {
+    await p.evaluate((rx) => [...document.querySelectorAll(".panel.left .nav, .rail .nav")]
+      .find(el => new RegExp(rx, "i").test(el.textContent || ""))?.click(), re);
+    await sleep(400);
+  };
+  const addVar = async (name, type, value) => {
+    await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"]').click());
+    await sleep(300);
+    await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Variable name"]'); el.focus(); el.select(); });
+    await p.keyboard.type(name);
+    await p.select('.panel.left select[aria-label="Variable type"]', type);
+    await sleep(200);
+    await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Value"]'); el.focus(); el.select(); });
+    await p.keyboard.type(value);
+    await p.evaluate(() => [...document.querySelectorAll(".panel.left button")].find(b => b.textContent === "Save")?.click());
+    await sleep(400);
+  };
+  const pickVar = async (name) => {
+    const rows = await p.$$(".x-popover .bind-row");
+    for (const r of rows) {
+      const text = await p.evaluate(el => el.textContent, r);
+      if (text.includes(name)) { await r.click(); await sleep(400); return true; }
+    }
+    return false;
+  };
+  const clickRow = async (k, shift = false) => {
+    const rs = await p.$$(".panel.left .row");
+    if (shift) await p.keyboard.down("Shift");
+    await rs[k].click();
+    if (shift) await p.keyboard.up("Shift");
+    await sleep(350);
+  };
+  await tab("vars");
+  await addVar("e2e-red", "color", "#ff0000");
+  await addVar("e2e-size", "number", "24");
+  await tab("file");
+  await drawRect(p);
+  const id1 = (await api("getSelection", {})).data.ids[0];
+  t("rect selected", !!id1);
+  // fill: ghost button -> picker -> pill
+  t("fill row carries a bind ghost",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Bind fill to a variable"]')));
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Bind fill to a variable"]').click());
+  await sleep(400);
+  t("picker lists the colour variable", await pickVar("e2e-red"));
+  t("pill names the bound variable",
+    await p.evaluate(() => document.querySelector(".inspector .bind-pill-name")?.textContent) === "e2e-red");
+  t("fill binding lands on the layer", !!(await full(id1)).variableBindings?.fill);
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Remove fill binding"]').click());
+  await sleep(400);
+  t("unbind detaches the fill binding", (await full(id1)).variableBindings?.fill === undefined);
+  // opacity: picker filters by type; multi shows mixed then binds all
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Bind opacity to a variable"]').click());
+  await sleep(400);
+  const names = await p.evaluate(() => [...document.querySelectorAll(".x-popover .bind-row")].map(el => el.textContent));
+  t(`opacity picker lists numbers not colours (${names.join("|")})`,
+    names.some(x => x.includes("e2e-size")) && !names.some(x => x.includes("e2e-red")));
+  t("number bind lands", await pickVar("e2e-size"));
+  await drawRect(p, 1000, 640);
+  await clickRow(1);
+  await clickRow(0, true);
+  const ids = (await api("getSelection", {})).data.ids;
+  t("both rects selected", ids.length === 2);
+  t("half-bound multi shows a mixed bind indicator",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label^="Mixed bindings"]')));
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label^="Mixed bindings"]').click());
+  await sleep(400);
+  t("mixed bind resolves through the picker", await pickVar("e2e-size"));
+  const bound = [(await full(ids[0])).variableBindings?.opacity, (await full(ids[1])).variableBindings?.opacity];
+  t(`one pick binds every layer (${bound.join(",")})`, bound.every(Boolean) && bound[0] === bound[1]);
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Remove opacity binding"]').click());
+  await sleep(400);
+  const cleared = [(await full(ids[0])).variableBindings?.opacity, (await full(ids[1])).variableBindings?.opacity];
+  t("one unbind clears every layer", cleared.every(v => v === undefined));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

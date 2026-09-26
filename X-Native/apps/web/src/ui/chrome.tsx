@@ -2,7 +2,13 @@ import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
 import { coerceVariableValue, fallbackForType, isAlias, resolveVariable, wouldCycle } from "../engine/variables";
-import { collectColors, find, findInstanceRoot, findParent, isInstanceMember } from "../engine/memory";
+import {
+  bindBlockReason,
+  collectColors,
+  find,
+  findParent,
+  isInstanceMember,
+} from "../engine/memory";
 import { shapePoly, shiftPoints } from "../engine/geometry";
 import { alignKey } from "../engine/layout";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
@@ -3003,30 +3009,11 @@ function VarRow({
       toast("Select a layer first");
       return;
     }
-    if (
-      ["text", "fontSize", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent", "fontWeight", "fontFamily"].includes(p) &&
-      selNode.kind !== "text"
-    ) {
-      toast("That property needs a text layer");
-      return;
-    }
-    if (p === "cornerRadii" && !selNode.cornerRadii) {
-      toast("This layer has no corner radius");
-      return;
-    }
-    if ((p === "layoutGap" || p === "layoutPadding") && !selNode.layout) {
-      toast("That property needs auto layout");
-      return;
-    }
-    if (
-      isInstanceMember(root, sel) &&
-      (p === "w" || p === "h" || p === "cornerRadii" || p === "layoutGap" || p === "layoutPadding")
-    ) {
-      toast("That property belongs to the main component");
-      return;
-    }
-    if (findInstanceRoot(root, sel) && (p === "layoutGap" || p === "layoutPadding")) {
-      toast("Layout belongs to the main component");
+    // One source of truth with the engine's bindVariable: the same
+    // refusal reasons, so the UI and the command can never disagree.
+    const blocked = bindBlockReason(root, sel, p);
+    if (blocked) {
+      toast(blocked);
       return;
     }
     engine.dispatch({ type: "bindVariable", id: sel, prop: p, variableId: v.id });

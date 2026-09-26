@@ -36,15 +36,14 @@ import type {
   LayoutGrid,
   GridAlignment,
   GridPattern,
-  VariableItem,
   XNode,
   CodeMapping,
   CodePropMapping,
   ComponentMaster,
 } from "../engine/types";
 import type { Modifier } from "../engine/modifierStack";
-import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, isEffectivelyLocked, isInstanceMember, worldPos } from "../engine/memory";
-import { isAlias, resolveVariable } from "../engine/variables";
+import { bindBlockReason, collectColors, defaultEffect, find, findParent, framesOf, insideInstance, isEffectivelyLocked, isInstanceMember, worldPos } from "../engine/memory";
+import { BINDABLE_PROPS, isAlias, resolveVariable } from "../engine/variables";
 import { lintDocument, type LintFix, type LintIssue } from "../engine/lint";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
 import { evalField, evalFieldMany, hasExpression } from "./fieldExpr";
@@ -244,11 +243,11 @@ export function RightPanel({
         {snap.rightTab === "design" && !inspect && !n && (
           <>
             <PageDesign engine={engine} tool={snap.tool} onOpenVariables={onOpenVariables} />
-            <DesignHealth engine={engine} snap={snap} />
+            <DesignHealth engine={engine} snap={snap} onOpenVariables={onOpenVariables} />
           </>
         )}
         {snap.rightTab === "design" && !inspect && n && wp && (
-          <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} />
+          <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} onOpenVariables={onOpenVariables} />
         )}
       </div>
       {exportOpen && (
@@ -499,7 +498,15 @@ const PRESET_GROUPS: PresetCategory[] = [
  * Design health, live from the snapshot: score, issue list, click-to-select,
  * and one-click fixes. Recomputes every render, so feedback is real-time.
  */
-function DesignHealth({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+function DesignHealth({
+  engine,
+  snap,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onOpenVariables?: () => void;
+}) {
   const report = useMemo(() => lintDocument(snap), [snap]);
   const [open, setOpen] = useState(true);
   const scoreColor = report.score >= 90 ? "var(--accent)" : report.score >= 70 ? "var(--amber)" : "var(--red)";
@@ -510,7 +517,11 @@ function DesignHealth({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       engine.dispatch({ type: "select", ids: [issue.nodeIds[0]] });
       zoomTo(engine, "selection");
     } else if (issue.variableIds.length) {
-      engine.dispatch({ type: "setLeftTab", tab: "tokens" });
+      // The left panel follows App-owned nav, not the engine's leftTab, so a
+      // bare setLeftTab dispatch would not switch the visible pane: opening
+      // Variables goes through the App callback like the bridge row below.
+      if (onOpenVariables) onOpenVariables();
+      else engine.dispatch({ type: "setLeftTab", tab: "tokens" });
     }
   };
 
@@ -3087,12 +3098,14 @@ function Design({
   y,
   engine,
   snap,
+  onOpenVariables,
 }: {
   n: XNode;
   x: number;
   y: number;
   engine: Engine;
   snap: Snapshot;
+  onOpenVariables?: () => void;
 }) {
   const [typeOpen, setTypeOpen] = useState(false);
   const [offsetDist, setOffsetDist] = useState(8);
@@ -3610,6 +3623,7 @@ function Design({
                   );
                 })()}
               </select>
+              <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontFamily" onOpenVariables={onOpenVariables} />
               {localFonts.length === 0 && (
                 <button
                   type="button"
@@ -3660,9 +3674,11 @@ function Design({
                   <option value={800}>Extra Bold (800)</option>
                   <option value={900}>Black (900)</option>
                 </select>
+                <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontWeight" onOpenVariables={onOpenVariables} />
               </div>
               <Field
                 label="S"
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="fontSize" onOpenVariables={onOpenVariables} />}
                 value={n.fontSize}
                 onChange={(v) => num("fontSize", v)}
                 mixed={mixedProp((m) => m.fontSize, textTargets)}
@@ -3671,6 +3687,7 @@ function Design({
               />
               <Field
                 label={n.lineHeight ? "↑" : "Auto"}
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="lineHeight" onOpenVariables={onOpenVariables} />}
                 value={n.lineHeight || n.fontSize * 1.2}
                 onLabelClick={() => (multi ? patchTypeMany({ lineHeight: 0 }) : num("lineHeight", 0))}
                 onChange={(v) => num("lineHeight", v)}
@@ -3680,6 +3697,7 @@ function Design({
               />
               <Field
                 label="↔"
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="letterSpacing" onOpenVariables={onOpenVariables} />}
                 value={n.letterSpacing}
                 onChange={(v) => num("letterSpacing", v)}
                 mixed={mixedProp((m) => m.letterSpacing, textTargets)}
@@ -3848,6 +3866,7 @@ function Design({
               <div className="insp-pad">
                 <Field
                   label="¶"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="paragraphSpacing" onOpenVariables={onOpenVariables} />}
                   value={n.paragraphSpacing}
                   onChange={(v) => num("paragraphSpacing", v)}
                   aria="Space after each paragraph"
@@ -3857,6 +3876,7 @@ function Design({
                 />
                 <Field
                   label="⇥"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="paragraphIndent" onOpenVariables={onOpenVariables} />}
                   value={n.paragraphIndent}
                   onChange={(v) => patchType({ paragraphIndent: Math.max(0, v) })}
                   aria="First-line indent of each paragraph"
@@ -4271,6 +4291,7 @@ function Design({
               else patch({ sizingW });
               setSizingAxis("width", sizingW);
             }}
+            bind={<BindControl engine={engine} snap={snap} targets={multi ? movers : [n]} prop="w" onOpenVariables={onOpenVariables} />}
           />
           <Field
             label="H"
@@ -4287,6 +4308,7 @@ function Design({
               else patch({ sizingH });
               setSizingAxis("height", sizingH);
             }}
+            bind={<BindControl engine={engine} snap={snap} targets={multi ? movers : [n]} prop="h" onOpenVariables={onOpenVariables} />}
           />
           <button
             className={`icon-btn${n.aspectLocked ? " on" : ""}`}
@@ -5167,6 +5189,7 @@ function Design({
                 <Field
                   icon="gap"
                   aria="Gap between items"
+                  bind={<BindControl engine={engine} snap={snap} targets={[n]} prop="layoutGap" onOpenVariables={onOpenVariables} />}
                   value={n.layout.gap}
                   disabled={layoutMemberLocked}
                   disabledTitle={layoutMemberTitle}
@@ -5241,6 +5264,7 @@ function Design({
                 <PadField
                   icon="padding-horizontal"
                   aria="Horizontal padding"
+                  bind={<BindControl engine={engine} snap={snap} targets={[n]} prop="layoutPadding" onOpenVariables={onOpenVariables} />}
                   disabled={layoutMemberLocked}
                   disabledTitle={layoutMemberTitle}
                   value={n.layout.padding[0]}
@@ -5612,6 +5636,7 @@ function Design({
           </div>
           <Field
             label="%"
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="opacity" onOpenVariables={onOpenVariables} />}
             value={Math.round(n.opacity * 100)}
             disabled={boolChild}
             onChange={(v) => num("opacity", v / 100)}
@@ -5633,6 +5658,7 @@ function Design({
               <Field
                 key={lab}
                 label={lab}
+                bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="cornerRadii" onOpenVariables={onOpenVariables} />}
                 disabled={inInstance}
                 value={n.cornerRadii[i]}
                 onChange={(v) => {
@@ -5661,6 +5687,7 @@ function Design({
             <Field
               icon="radius"
               aria="Corner radius"
+              bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="cornerRadii" onOpenVariables={onOpenVariables} />}
               value={n.cornerRadii[0]}
               mixed={
                 (multi
@@ -5959,17 +5986,9 @@ function Design({
       })}
       {(!isNone(n.fill) || n.fillVisible) && (
         <div className="insp-pad">
-          {n.variableBindings?.fill && (
-            <BindingChip
-              engine={engine}
-              nodeId={n.id}
-              prop="fill"
-              variableId={n.variableBindings.fill}
-              vars={snap.variables ?? []}
-            />
-          )}
           <ColorRow
             value={n.fill}
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="fill" onOpenVariables={onOpenVariables} />}
             mixed={!!mixedProp((m) => `${m.fillType}:${m.fill}`)}
             opacity={Math.round((n.fillOpacity ?? 1) * 100)}
             visible={n.fillVisible}
@@ -6067,19 +6086,11 @@ function Design({
       )}
       {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
         <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
-          {n.variableBindings?.strokePaint && (
-            <BindingChip
-              engine={engine}
-              nodeId={n.id}
-              prop="strokePaint"
-              variableId={n.variableBindings.strokePaint}
-              vars={snap.variables ?? []}
-            />
-          )}
           <ColorRow
             title="Stroke"
             stroke
             value={n.strokePaint}
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="strokePaint" onOpenVariables={onOpenVariables} />}
             mixed={!!mixedProp((m) => m.strokePaint)}
             opacity={Math.round((n.strokeOpacity ?? 1) * 100)}
             visible={n.strokeVisible}
@@ -6115,6 +6126,7 @@ function Design({
             <Field
               label="W"
               aria="Stroke weight"
+              bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="strokeWidth" onOpenVariables={onOpenVariables} />}
               value={n.strokeWidth}
               onChange={(strokeWidth) => {
                 // In Custom mode the four fields carry the weight, so typing a
@@ -7863,6 +7875,7 @@ function PadField({
   onShorthand,
   disabled,
   disabledTitle,
+  bind,
 }: {
   label?: string;
   icon?: IconName;
@@ -7875,6 +7888,8 @@ function PadField({
   onShorthand?: (p: [number, number, number, number]) => void;
   disabled?: boolean;
   disabledTitle?: string;
+  /** Property-first binding affordance (BindControl) trailing the value. */
+  bind?: ReactNode;
 }) {
   const [shorthand, setShorthand] = useState(false);
   const [draft, setDraft] = useState("");
@@ -7941,6 +7956,7 @@ function PadField({
         }}
       />
       {!shorthand && mixed && <span className="hint">{mixed[0].toUpperCase()}</span>}
+      {bind}
     </div>
   );
 }
@@ -7960,6 +7976,7 @@ function Field({
   disabledTitle,
   values,
   onChangeMany,
+  bind,
 }: {
   label?: string;
   icon?: IconName;
@@ -7990,6 +8007,8 @@ function Field({
   disabled?: boolean;
   /** Why the field is disabled, shown on hover instead of the usual hint. */
   disabledTitle?: string;
+  /** Property-first binding affordance (BindControl) trailing the value. */
+  bind?: ReactNode;
 }) {
   const [draft, setDraft] = useState(() => mixed ?? fmt(value));
   const focused = useRef(false);
@@ -8147,6 +8166,7 @@ function Field({
         }}
       />
       {hint && hint !== "fixed" && <span className="hint">{hint[0].toUpperCase()}</span>}
+      {bind}
     </div>
   );
 }
@@ -8833,39 +8853,229 @@ function Section({
   );
 }
 
-/** A bound layer prop shows its variable with an unbind button. Unbinding
- *  keeps the current value — it only stops future variable updates. */
-function BindingChip({
-  engine,
-  nodeId,
+/** Short labels for the bind picker, one per bindable prop. */
+const BIND_PROP_LABELS: Record<string, string> = {
+  fill: "Fill",
+  strokePaint: "Stroke",
+  strokeWidth: "Stroke width",
+  opacity: "Opacity",
+  fontSize: "Font size",
+  fontWeight: "Font weight",
+  fontFamily: "Font family",
+  letterSpacing: "Letter spacing",
+  lineHeight: "Line height",
+  paragraphSpacing: "Paragraph spacing",
+  paragraphIndent: "Paragraph indent",
+  cornerRadii: "Corner radius",
+  w: "Width",
+  h: "Height",
+  layoutGap: "Gap",
+  layoutPadding: "Padding",
+  visible: "Visibility",
+  text: "Text content",
+};
+
+/** The variable picker behind every BindControl: same-type variables with
+ *  their live resolved values, plus an unbind footer when bound. */
+function VariablePickerPopover({
+  anchor,
   prop,
-  variableId,
-  vars,
+  label,
+  snap,
+  currentId,
+  someBound,
+  onPick,
+  onUnbind,
+  onClose,
+  onOpenVariables,
+}: {
+  anchor: DOMRect;
+  prop: string;
+  label: string;
+  snap: Snapshot;
+  currentId?: string;
+  someBound: boolean;
+  onPick: (variableId: string) => void;
+  onUnbind: () => void;
+  onClose: () => void;
+  onOpenVariables?: () => void;
+}) {
+  const need = BINDABLE_PROPS[prop];
+  const all = snap.variables ?? [];
+  // Numbers render as text content too (the Figma tip) — the engine's
+  // bindVariable accepts them, so the picker lists them.
+  const vars = all.filter((x) => x.type === need || (prop === "text" && x.type === "number"));
+  return (
+    <XPopover anchor={anchor} title={`Bind ${label}`} onClose={onClose} ariaLabel={`Bind ${label} to a variable`}>
+      {vars.length === 0 ? (
+        <div className="bind-empty">
+          <p>No {need} variables yet.</p>
+          {onOpenVariables ? (
+            <button
+              className="link"
+              onClick={() => {
+                onClose();
+                onOpenVariables();
+              }}
+            >
+              Open Variables to create one
+            </button>
+          ) : (
+            <p>Create one in the Variables tab.</p>
+          )}
+        </div>
+      ) : (
+        <div className="bind-list" role="listbox" aria-label={`${label} variables`}>
+          {vars.map((x) => {
+            const res = resolveVariable(all, snap.variableCollections ?? [], snap.activeModes ?? {}, x.id);
+            const val = !res || res.broken ? "⚠ broken" : String(res.value);
+            return (
+              <button
+                key={x.id}
+                role="option"
+                aria-selected={x.id === currentId}
+                className={`bind-row${x.id === currentId ? " on" : ""}`}
+                onClick={() => onPick(x.id)}
+              >
+                {x.type === "color" && val.startsWith("#") && <span className="bind-swatch" style={{ background: val }} />}
+                <span className="bind-row-name">{x.name}</span>
+                <span className="bind-row-val">{val}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {someBound && (
+        <button className="bind-unbind" title="Remove binding (keeps the current value)" onClick={onUnbind}>
+          <Icon name="link-broken" size={12} />
+          Remove binding
+        </button>
+      )}
+    </XPopover>
+  );
+}
+
+/** Property-first variable binding: one control for every bindable row.
+ *  Bound shows the variable pill (re-pick or unbind); unbound shows a ghost
+ *  button; a multi-selection with divergent bindings shows the ghost lit.
+ *  Refusals reuse the engine's table so they always say why. Unbinding keeps
+ *  the current value — it only stops future variable updates. */
+function BindControl({
+  engine,
+  snap,
+  targets,
+  prop,
+  onOpenVariables,
 }: {
   engine: Engine;
-  nodeId: string;
+  snap: Snapshot;
+  /** Every layer the bind acts on: the selection on rows that edit the
+   *  selection, the row's own subset (text, movers) where narrower. */
+  targets: XNode[];
   prop: string;
-  variableId: string;
-  vars: VariableItem[];
+  onOpenVariables?: () => void;
 }) {
-  const v = vars.find((x) => x.id === variableId);
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 10 }}>
-      <Icon name="variable" size={12} />
-      <span
-        style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--dim)" }}
-        title={v ? `Bound to variable "${v.name}" — editing the value directly unbinds it` : "Bound variable is missing"}
-      >
-        {v ? v.name : "Missing variable"}
-      </span>
-      <button
-        className="icon-btn"
-        title="Remove binding (keeps the current value)"
-        onClick={() => engine.dispatch({ type: "unbindVariable", id: nodeId, prop })}
-      >
-        <Icon name="link-broken" size={12} />
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const need = BINDABLE_PROPS[prop];
+  const label = BIND_PROP_LABELS[prop] ?? prop;
+  const root = snap.pages[snap.page].root;
+  const vars = snap.variables ?? [];
+  const boundIds = targets.map((t) => t.variableBindings?.[prop]);
+  const sameId =
+    boundIds.length > 0 && boundIds.every((id) => id != null && id === boundIds[0]) ? boundIds[0]! : undefined;
+  const someBound = boundIds.some((id) => id != null);
+  const mixed = targets.length > 1 && someBound && !sameId;
+  const blockedEverywhere = targets.length > 0 && targets.every((t) => bindBlockReason(root, t.id, prop) != null);
+  const what = label.charAt(0).toLowerCase() + label.slice(1);
+  const pick = (variableId: string) => {
+    const v = vars.find((x) => x.id === variableId);
+    if (!v) return;
+    const fits = targets.filter((t) => bindBlockReason(root, t.id, prop) == null);
+    if (!fits.length) {
+      toast(bindBlockReason(root, targets[0].id, prop) ?? `Cannot bind ${what} here`);
+      return;
+    }
+    engine.dispatch({ type: "begin" });
+    for (const t of fits) engine.dispatch({ type: "bindVariable", id: t.id, prop, variableId });
+    engine.dispatch({ type: "end" });
+    toast(
+      targets.length > 1
+        ? `Bound ${v.name} to ${what} on ${fits.length} of ${targets.length} layers`
+        : `Bound ${v.name} to ${what}`,
+    );
+    setAnchor(null);
+  };
+  const unbind = () => {
+    engine.dispatch({ type: "begin" });
+    for (const t of targets) engine.dispatch({ type: "unbindVariable", id: t.id, prop });
+    engine.dispatch({ type: "end" });
+    toast(
+      targets.length > 1 ? `Removed ${what} bindings from ${targets.length} layers` : `Removed ${what} binding`,
+    );
+    setAnchor(null);
+  };
+  if (!need || !targets.length) return null;
+  if (blockedEverywhere && !someBound) {
+    const reason = targets.length ? bindBlockReason(root, targets[0].id, prop) : null;
+    const title = reason ? `${label}: ${reason}` : label;
+    return (
+      <button className="icon-btn bind-btn" disabled title={title} aria-label={title}>
+        <Icon name="variable" size={12} />
       </button>
-    </div>
+    );
+  }
+  const v = sameId ? vars.find((x) => x.id === sameId) : undefined;
+  return (
+    <>
+      {sameId ? (
+        <span className="bind-pill">
+          <button
+            className="bind-pill-btn"
+            title={
+              v
+                ? `Bound to variable "${v.name}" — editing the value directly unbinds it`
+                : "Bound variable is missing"
+            }
+            aria-label={`Change ${what} variable (bound to ${v ? v.name : "a missing variable"})`}
+            onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+          >
+            <Icon name="variable" size={12} />
+            <span className="bind-pill-name">{v ? v.name : "Missing"}</span>
+          </button>
+          <button
+            className="icon-btn bind-x"
+            title="Remove binding (keeps the current value)"
+            aria-label={`Remove ${what} binding`}
+            onClick={unbind}
+          >
+            <Icon name="link-broken" size={12} />
+          </button>
+        </span>
+      ) : (
+        <button
+          className={`icon-btn bind-btn${mixed ? " on" : ""}`}
+          title={mixed ? `Mixed bindings — bind ${what} to one variable` : `Bind ${what} to a variable`}
+          aria-label={mixed ? `Mixed bindings — bind ${what} to one variable` : `Bind ${what} to a variable`}
+          onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+        >
+          <Icon name="variable" size={12} />
+        </button>
+      )}
+      {anchor && (
+        <VariablePickerPopover
+          anchor={anchor}
+          prop={prop}
+          label={label}
+          snap={snap}
+          currentId={sameId}
+          someBound={someBound}
+          onPick={pick}
+          onUnbind={unbind}
+          onClose={() => setAnchor(null)}
+          onOpenVariables={onOpenVariables}
+        />
+      )}
+    </>
   );
 }
 
@@ -8908,6 +9118,7 @@ function ColorRow({
   onMeta,
   onValueChange,
   onCrop,
+  bind,
 }: {
   title?: string;
   value: string;
@@ -8931,6 +9142,8 @@ function ColorRow({
   imageShadows?: number;
   imageTile?: number;
   onCrop?: () => void;
+  /** Property-first binding affordance (BindControl) after the row buttons. */
+  bind?: ReactNode;
   gx?: number;
   gy?: number;
   hx?: number;
@@ -9047,6 +9260,7 @@ function ColorRow({
           <Icon name="minus" size={14} />
         </button>
       )}
+      {bind}
       {open && anchor && (
         <FillPicker
           title={title}
