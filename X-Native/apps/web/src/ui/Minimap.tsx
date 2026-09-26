@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Engine, XNode } from "../engine/types";
 import { cssRgba, isNone } from "./color";
+import { canvasChrome } from "./canvasChrome";
 
 /**
  * Document minimap with a draggable viewport rectangle.
@@ -100,11 +101,14 @@ export function Minimap({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
-    const dark = theme === "dark";
+    // Chrome comes from the sheet, not from a hand-maintained dark/light pair
+    // (FR-U2). `theme` stays in the deps below: it is what re-reads the tokens
+    // when the appearance flips.
+    const chrome = canvasChrome();
     // Without a canvas-coloured backdrop the document's white frames are
     // invisible against the white panel — the thumbnail read as a few dark
     // bars floating in space.
-    ctx.fillStyle = dark ? "#171c22" : "#eef1f4";
+    ctx.fillStyle = chrome.well;
     ctx.fillRect(0, 0, W, H);
     const { boxes, bounds } = collect(root);
     // Fit the union of the document and the current viewport, not the document
@@ -133,10 +137,10 @@ export function Minimap({
     const vy = oy + (-panY / zoom) * scale;
     const vw = (viewW / zoom) * scale;
     const vh = (viewH / zoom) * scale;
-    ctx.strokeStyle = dark ? "#10b981" : "#0e9f6e";
+    ctx.strokeStyle = chrome.accent;
     ctx.lineWidth = 1;
     ctx.strokeRect(Math.round(vx) + 0.5, Math.round(vy) + 0.5, Math.round(vw), Math.round(vh));
-    ctx.fillStyle = dark ? "rgba(16, 185, 129, 0.20)" : "rgba(14, 159, 110, 0.16)";
+    ctx.fillStyle = chrome.accentWash;
     ctx.fillRect(vx, vy, vw, vh);
   }, [root, zoom, panX, panY, viewW, viewH, theme]);
 

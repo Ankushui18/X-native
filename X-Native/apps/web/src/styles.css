@@ -55,6 +55,30 @@ html[data-theme="light"] {
   --help-fg: #ffffff;
   --grid: rgba(16, 185, 129, 0.07);
   --canvas-label: rgba(17, 24, 39, 0.5);
+  /* Canvas chrome roles (FR-U2): the ink the 2D surfaces paint with — selection
+     ring and handles, guides, drop targets, mask outlines, on-canvas cards, and
+     the minimap/ruler backing. These are deliberately NOT --accent: the control
+     accent is contrast-tuned for panel surfaces, while selection ink sits on the
+     document canvas. Until now they were literals in Canvas.tsx / Minimap.tsx /
+     Rulers.tsx, with a comment asking a human to "keep both in step"; the
+     canvasChrome.ts reader reads these instead, and a contract test pins its
+     fallbacks to the light column below, so the sheet and the canvas cannot
+     drift apart silently. Changing selection chrome is now one sheet edit. */
+  --cv-sel: #10b981;
+  --cv-sel-wash: rgba(16, 185, 129, 0.14);
+  --cv-sel-glow: rgba(16, 185, 129, 0.35);
+  --cv-ink: #ffffff;
+  --cv-lock: #9aa0a6;
+  --cv-guide: #ff3b6b;
+  --cv-target: #0d99ff;
+  --cv-mask: #00c853;
+  --cv-chip: rgba(15, 23, 42, 0.95);
+  --cv-chip-line: rgba(255, 255, 255, 0.15);
+  --cv-chip-ink: #f8fafc;
+  --cv-well: #eef1f4;
+  --cv-line: #e5e5e5;
+  --cv-dim: #8c8c8c;
+  --cv-scrim: rgba(13, 20, 38, 0.45);
   --dot: #cbd5d1;
   --shadow: 0 6px 22px rgba(16, 30, 24, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05);
   /* Elevation scale — every floating surface uses one of these, not ad-hoc shadow */
@@ -123,6 +147,27 @@ html[data-theme="dark"] {
   --help-fg: #ffffff;
   --grid: rgba(16, 185, 129, 0.09);
   --canvas-label: rgba(241, 245, 243, 0.5);
+  /* Canvas chrome (FR-U2). Only the well/line/dim trio differs from the light
+     column today, because those were already theme-split as literals in
+     Minimap.tsx/Rulers.tsx. The selection ink is deliberately identical in both
+     themes so this change alters no pixel anyone has approved — the dark column
+     exists so a designer can retune chrome for the dark canvas in the sheet
+     (tracked as FR-U2b, needs eyes). */
+  --cv-sel: #10b981;
+  --cv-sel-wash: rgba(16, 185, 129, 0.14);
+  --cv-sel-glow: rgba(16, 185, 129, 0.35);
+  --cv-ink: #ffffff;
+  --cv-lock: #9aa0a6;
+  --cv-guide: #ff3b6b;
+  --cv-target: #0d99ff;
+  --cv-mask: #00c853;
+  --cv-chip: rgba(15, 23, 42, 0.95);
+  --cv-chip-line: rgba(255, 255, 255, 0.15);
+  --cv-chip-ink: #f8fafc;
+  --cv-well: #171c22;
+  --cv-line: rgba(255, 255, 255, 0.08);
+  --cv-dim: rgba(241, 245, 243, 0.56);
+  --cv-scrim: rgba(13, 20, 38, 0.45);
   --dot: #2d3a33;
   --shadow: 0 10px 36px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --elev-flat: none;

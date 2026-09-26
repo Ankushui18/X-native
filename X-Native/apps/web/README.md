@@ -58,6 +58,7 @@ npm run test:e2e  # behaviour suite — needs a Chromium and a running dev serve
 | --- | --- | --- |
 | Engine / model | commands, geometry, layout, undo, importers, exporters | `src/engine/__tests__/*.test.mjs` |
 | Headless UI | a real DOM: which node renders, with what class, name, role and state, and what a click dispatches | `src/ui/__tests__/*.dom.test.mjs` over `domEnv.mjs` (jsdom) |
+| Source contract | what a file may *contain*: which literals survived triage, which classes a component names, and whether a module's fallbacks still equal the sheet | `src/ui/__tests__/{drift,vectorcard,canvasChrome}.test.mjs` |
 | Browser | computed styles, geometry, focus, hover, canvas pixels, keyboard chords | `e2e/behaviour.mjs` (puppeteer-core) |
 
 `domEnv.mjs` mounts `RightPanel` / `Toolbar` on an engine document the way

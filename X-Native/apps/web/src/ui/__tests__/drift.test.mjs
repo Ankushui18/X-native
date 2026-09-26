@@ -46,10 +46,19 @@ import { fileURLToPath } from "url";
 const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The ceilings, measured 2026-09-26 after the vector card (IN-U4) and the dock
- *  (TB-U5) were rebuilt. Lower a row in the same commit that earns it. */
+ *  (TB-U5) were rebuilt, and lowered again the same day when the canvas chrome
+ *  moved into the `--cv-*` token family (FR-U2). Lower a row in the same commit
+ *  that earns it.
+ *
+ *  Canvas.tsx's remaining colours are the triaged half of the pile: document ink
+ *  — the `DOC_*` constants, a glass effect's default tint, `#00000000` fills for
+ *  newly created sections/slices, a noise renderer's black, a boolean mask's
+ *  white. Those are written into saved files and their SVG exports, so they must
+ *  NOT answer the theme; canvasChrome.test.mjs pins that boundary instead.
+ *  Minimap.tsx and Rulers.tsx are at zero: they have no literals left to drift. */
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [5, 68, 10, 10, 0],
+  "Canvas.tsx": [5, 13, 10, 10, 0],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   "Dashboard.tsx": [1, 0, 11, 33, 1],
@@ -57,10 +66,10 @@ const CEILING = {
   "FigInspectorModal.tsx": [113, 10, 2, 8, 1],
   "FillPicker.tsx": [12, 2, 15, 19, 1],
   "Guides.tsx": [0, 0, 2, 0, 0],
-  "Minimap.tsx": [0, 4, 0, 0, 0],
+  "Minimap.tsx": [0, 0, 0, 0, 0],
   "PresentationPlayer.tsx": [5, 0, 12, 9, 2],
   "RadialMenu.tsx": [3, 6, 0, 0, 0],
-  "Rulers.tsx": [0, 5, 0, 0, 0],
+  "Rulers.tsx": [0, 0, 0, 0, 0],
   "Tooltip.tsx": [1, 0, 0, 0, 0],
   "ZenHUD.tsx": [16, 14, 9, 6, 0],
   "chrome.tsx": [51, 4, 40, 64, 2],

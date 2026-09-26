@@ -1085,9 +1085,11 @@ for (const [label, payload] of [
   });
   await p.mouse.click(Math.round(mm.x + mm.w / 2), Math.round(mm.y + mm.h / 2));
   await sleep(700);
-  // The viewport rectangle is drawn in the accent green (#0e9f6e light /
-  // #10b981 dark); the old predicate was blue, which is document ink - so it
-  // tracked the thumbnail's fit changing, not the viewport.
+  // The viewport rectangle is drawn in the accent green: Minimap.tsx reads
+  // `--accent` per paint (FR-U2), so it is #0e9f6e light and #10b981 dark and
+  // this predicate stays green-ish rather than pinning either value. The old
+  // predicate was blue, which is document ink - so it tracked the thumbnail's
+  // fit changing, not the viewport.
   const rect = await p.evaluate(() => {
     const c = document.querySelector(".minimap canvas");
     const dpr = window.devicePixelRatio || 1;
@@ -2668,6 +2670,145 @@ for (const [label, payload] of [
   t(`its separator is a hairline from the sheet (${dock.divH})`, dock.divH === "1px" && dock.divInline === null);
   t(`and the whole dock is inline-free (${dock.dockStrays.length} stray: ${dock.dockStrays.join(" ") || "none"})`,
     dock.dockStrays.length === 0);
+  await p.close();
+}
+
+// 43. FR-U2: canvas chrome is the sheet's, and document ink is not -----------
+{
+  const p = await page();
+  await rows(p);
+
+  /** A custom property as the browser resolves it, as [r, g, b]. The canvases
+   *  paint whatever the sheet says, so the check has to ask the sheet too: a
+   *  literal here would be exactly the drift it is looking for. */
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw; // normalises any colour the sheet used to #rrggbb
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+
+  /** Opaque pixels of the main canvas within `tol` of a colour. */
+  const countNear = (rgb, tol) =>
+    p.evaluate((r, g, b, t2) => {
+      const c = document.querySelector("canvas");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol);
+
+  const nudge = async () => { await p.keyboard.press("ArrowRight"); await sleep(350); };
+
+  const sel = await tokenRgb("--cv-sel");
+  const lock = await tokenRgb("--cv-lock");
+  t(`the sheet declares the canvas chrome roles (--cv-sel ${JSON.stringify(sel)}, --cv-lock ${JSON.stringify(lock)})`,
+    Array.isArray(sel) && Array.isArray(lock));
+
+  // The demo document paints the accent itself (a #10b981 toggle), so chrome is
+  // measured as the difference from an idle canvas, as §26 does.
+  const idle = await countNear(sel, 24);
+  await drawRect(p);
+  const chrome = (await countNear(sel, 24)) - idle;
+  t(`selection chrome paints --cv-sel (+${chrome}px over an idle ${idle}px)`, chrome > 500);
+
+  // The part that could not pass before FR-U2: retheme the role under the
+  // running app and the chrome has to follow, while the document's own emerald
+  // stays put. The ring used to be `const BRAND_ACCENT = "#10b981"`, so the
+  // sheet had nothing to say about it.
+  await p.evaluate(() => document.documentElement.style.setProperty("--cv-sel", "#ff8800"));
+  await nudge();
+  const moved = await countNear([255, 136, 0], 24);
+  const stayed = await countNear(sel, 24);
+  t(`rethemeing --cv-sel repaints the chrome (${moved}px of orange)`, moved > 500);
+  t(`and the document's own emerald does not follow it (${stayed}px, idle was ${idle}px)`, Math.abs(stayed - idle) < 150);
+
+  await p.evaluate(() => document.documentElement.style.removeProperty("--cv-sel"));
+  await nudge();
+  const back = (await countNear(sel, 24)) - idle;
+  t(`removing the override paints the token again (+${back}px)`, back > 500);
+
+  // The lock role, measured the same way §26 measures it - but against the
+  // token, so a retuned --cv-lock cannot quietly desync from the canvas.
+  const lockBefore = await countNear(lock, 20);
+  await p.keyboard.down("Meta"); await p.keyboard.down("Shift");
+  await p.keyboard.press("l");
+  await p.keyboard.up("Shift"); await p.keyboard.up("Meta");
+  await sleep(500);
+  const lockAfter = await countNear(lock, 20);
+  const selAfterLock = (await countNear(sel, 24)) - idle;
+  t(`locked chrome paints --cv-lock (+${lockAfter - lockBefore}px)`, lockAfter - lockBefore > 100);
+  t(`and drops the selection role (${selAfterLock}px)`, selAfterLock < 60);
+  await p.close();
+}
+
+// 43b. the same contract in the dark theme -----------------------------------
+{
+  // Boot dark through the app's own path (ThemeProvider reads this key before
+  // first paint, and page() deliberately spares it) rather than by setting the
+  // attribute: only the real thing puts React's `theme` in the paint deps, and
+  // the canvases re-read their tokens on that paint.
+  const seed = await page();
+  await seed.evaluate(() => localStorage.setItem("x-native-theme", "dark"));
+  await seed.close();
+
+  const p = await page();
+  await rows(p);
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+  const countNear = (rgb, tol, scope = "canvas") =>
+    p.evaluate((r, g, b, t2, s) => {
+      const c = document.querySelector(s);
+      if (!c) return -1;
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol, scope);
+
+  const theme = await p.evaluate(() => document.documentElement.dataset.theme);
+  const accent = await tokenRgb("--accent");
+  const sel = await tokenRgb("--cv-sel");
+  t(`the app booted dark (data-theme=${theme}, --accent ${JSON.stringify(accent)})`, theme === "dark" && Array.isArray(accent));
+
+  const idle = await countNear(sel, 24);
+  await drawRect(p);
+  const chrome = (await countNear(sel, 24)) - idle;
+  t(`dark selection chrome paints the dark --cv-sel (+${chrome}px)`, chrome > 500);
+
+  await p.evaluate(() => document.documentElement.style.setProperty("--cv-sel", "#ff8800"));
+  await p.keyboard.press("ArrowRight"); await sleep(350);
+  const moved = await countNear([255, 136, 0], 24);
+  t(`and follows a retheme in dark too (${moved}px of orange)`, moved > 500);
+  await p.evaluate(() => document.documentElement.style.removeProperty("--cv-sel"));
+
+  // The minimap viewport wears --accent, the one chrome colour whose two theme
+  // values genuinely differ (#0e9f6e light / #10b981 dark), so this is the pixel
+  // a visitor can see answer the theme. Tolerance 16 keeps the two apart (their
+  // green channels are 26 apart) while the document's own #10b981 toggle still
+  // shows up in the thumbnail - hence no "zero emerald" assertion in light.
+  await p.keyboard.down("Shift"); await p.keyboard.press("M"); await p.keyboard.up("Shift");
+  await sleep(600);
+  const darkAccent = await countNear(accent, 16, ".minimap canvas");
+  const lightAccent = await countNear([14, 159, 110], 16, ".minimap canvas");
+  t(`the minimap viewport wears the dark accent (${darkAccent}px) and not the light one (${lightAccent}px)`,
+    darkAccent > 30 && lightAccent < 25);
+
+  await p.evaluate(() => localStorage.setItem("x-native-theme", "light"));
   await p.close();
 }
 

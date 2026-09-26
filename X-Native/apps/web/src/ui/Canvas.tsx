@@ -74,6 +74,7 @@ import { alignKey, flowGapLine, flowInsertIndex, wrapLines as flowWrapLines, wra
 import { ContextToolbar } from "./x-ui";
 import { addAutoLayout, removeAutoLayout } from "./layoutActions";
 import { align } from "./inspector";
+import { readCanvasChrome, withAlpha } from "./canvasChrome";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -92,17 +93,19 @@ function effClosed(n: { path: unknown[]; closed?: boolean; kind?: string }): boo
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
 
-/** X-Native signature brand accents (Graphite & Signal Emerald). */
-const BRAND_ACCENT = "#10b981";
-/** Component/prototype identity on canvas. Paired with `--comp` in styles.css
- *  (layer rows); canvas literals can't read CSS vars per-frame, so the two
- *  are kept in step by hand — change both. */
-const COMP_PURPLE = "#a855f7";
-/** Locked-selection chrome: ring, pill and grab guards share one grey so
- *  "selected but not grabbable" reads instantly against the brand accent. */
-const LOCK_GREY = "#9aa0a6";
-const BRAND_ACCENT_WASH = "rgba(16, 185, 129, 0.14)";
-const BRAND_ACCENT_GLOW = "rgba(16, 185, 129, 0.35)";
+/* Canvas chrome — everything these canvases *paint* over the document — is no
+ * longer literals in this file. It lives in styles.css as the `--cv-*` role
+ * family and is read once per paint through canvasChrome.ts (FR-U2), so the
+ * canvas follows the theme and the sheet stays the only place a colour is
+ * chosen. What remains below is DOCUMENT ink: values written into the file
+ * itself. Those must not follow the theme, or a saved document — and its SVG
+ * export — would change colour with the viewer's appearance setting. */
+/** A new Slice's dashed stroke, written into the layer on creation. */
+const DOC_SLICE_STROKE = "#10b981";
+/** Paint-bucket defaults: a region's fill when the node has none, and the
+ *  brand emerald it gets when its fill was hidden. Both land in the document. */
+const DOC_FILL_NONE = "#d9d9d9";
+const DOC_FILL_BRAND = "#10b981";
 
 const CREATE: Tool[] = [
   "frame",
@@ -1106,9 +1109,26 @@ export function Canvas({
     let cachingBlur = false;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const css = getComputedStyle(document.documentElement);
-    const canvasBg = css.getPropertyValue("--canvas").trim() || "#e5e5e5";
-    const grid = css.getPropertyValue("--grid").trim() || "rgba(0,0,0,0.06)";
-    const themeLabel = css.getPropertyValue("--canvas-label").trim() || "rgba(0,0,0,0.45)";
+    // One style resolution per frame buys every canvas chrome role (FR-U2).
+    // Fallbacks live in canvasChrome.ts and are contract-tested against the
+    // light column of styles.css.
+    const chrome = readCanvasChrome((token) => css.getPropertyValue(token));
+    const canvasBg = chrome.canvas;
+    const grid = chrome.grid;
+    const themeLabel = chrome.label;
+    const SEL = chrome.sel;
+    const SEL_WASH = chrome.selWash;
+    const SEL_GLOW = chrome.selGlow;
+    const INK = chrome.ink;
+    const COMP = chrome.comp;
+    const LOCK = chrome.lock;
+    const GUIDE = chrome.guide;
+    const TARGET = chrome.target;
+    const MASK = chrome.mask;
+    const CHIP = chrome.chip;
+    const CHIP_LINE = chrome.chipLine;
+    const CHIP_INK = chrome.chipInk;
+    const SCRIM = chrome.scrim;
     ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, w, h);
     const pageRoot = snap.pages[snap.page].root;
@@ -1388,7 +1408,7 @@ export function Canvas({
       traceShape();
       if (snap.outlineMode) {
         ctx.save();
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1;
         ctx.setLineDash([]);
         traceShape();
@@ -1496,6 +1516,7 @@ export function Canvas({
         ctx.save();
         ctx.clip();
         ctx.globalAlpha *= 0.28;
+        // Document ink: an effect's own default tint, not chrome (FR-U2).
         ctx.fillStyle = glass.color || "#ffffff";
         ctx.fill();
         ctx.restore();
@@ -1956,7 +1977,7 @@ export function Canvas({
       }
       if (snap.showMaskOutlines && n.isMask && n.visible) {
         ctx.save();
-        ctx.strokeStyle = "#00c853";
+        ctx.strokeStyle = MASK;
         ctx.lineWidth = Math.max(1, z);
         ctx.setLineDash([]);
         ctx.beginPath();
@@ -2127,7 +2148,7 @@ export function Canvas({
         const active = snap.selection.includes(n.id) || hoverId === n.id || panelHover === n.id;
         ctx.save();
         ctx.font = active ? "600 11px Inter, system-ui" : "500 11px Inter, system-ui";
-        ctx.fillStyle = active ? BRAND_ACCENT : canvasLabel;
+        ctx.fillStyle = active ? SEL : canvasLabel;
         ctx.textBaseline = "alphabetic";
         ctx.fillText(n.name, screenX, screenY - 8);
         ctx.restore();
@@ -2148,7 +2169,7 @@ export function Canvas({
       if (anchorNode && v) {
         const ax = snap.panX + (anchorNode.x + v.x) * z;
         const ay = snap.panY + (anchorNode.y + v.y) * z;
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1.5;
         if (ghost) {
           ctx.beginPath();
@@ -2159,7 +2180,7 @@ export function Canvas({
         ctx.beginPath();
         ctx.arc(ax, ay, 7, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.fillStyle = "#fff";
+        ctx.fillStyle = INK;
         ctx.beginPath();
         ctx.arc(ax, ay, 3.5, 0, Math.PI * 2);
         ctx.fill();
@@ -2167,7 +2188,7 @@ export function Canvas({
       }
     }
     if (draft.length) {
-      ctx.strokeStyle = BRAND_ACCENT;
+      ctx.strokeStyle = SEL;
       ctx.lineWidth = 1.5;
       const preview = ghost ? [...draft, ghost] : draft;
       tracePath(ctx, preview, snap.panX, snap.panY, z, false);
@@ -2177,7 +2198,7 @@ export function Canvas({
         const px = snap.panX + p.x * z;
         const py = snap.panY + p.y * z;
         if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
-          ctx.strokeStyle = BRAND_ACCENT;
+          ctx.strokeStyle = SEL;
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
@@ -2187,15 +2208,15 @@ export function Canvas({
             [px + (p.ix || 0) * z, py + (p.iy || 0) * z],
             [px + (p.ox || 0) * z, py + (p.oy || 0) * z],
           ] as const) {
-            ctx.fillStyle = "#fff";
+            ctx.fillStyle = INK;
             ctx.beginPath();
             ctx.arc(hx, hy, 3, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
           }
         }
-        ctx.fillStyle = "#fff";
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.fillStyle = INK;
+        ctx.strokeStyle = SEL;
         ctx.beginPath();
         ctx.arc(px, py, 3.5, 0, Math.PI * 2);
         ctx.fill();
@@ -2228,7 +2249,7 @@ export function Canvas({
           const px = fx;
           const py = fy - ph - 8;
 
-          ctx.fillStyle = BRAND_ACCENT;
+          ctx.fillStyle = SEL;
           ctx.beginPath();
           if (typeof ctx.roundRect === "function") {
             ctx.roundRect(px, py, pw, ph, 11);
@@ -2238,7 +2259,7 @@ export function Canvas({
           ctx.fill();
 
           // Play icon
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = INK;
           ctx.beginPath();
           ctx.moveTo(px + 8, py + 6);
           ctx.lineTo(px + 16, py + 11);
@@ -2246,7 +2267,7 @@ export function Canvas({
           ctx.closePath();
           ctx.fill();
 
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = INK;
           ctx.fillText(badgeText, px + 20, py + 15);
           ctx.restore();
         }
@@ -2281,7 +2302,7 @@ export function Canvas({
 
         ctx.save();
         if (isSelected) {
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = INK;
           ctx.lineWidth = 4.5;
           ctx.beginPath();
           ctx.moveTo(sax, say);
@@ -2289,7 +2310,7 @@ export function Canvas({
           ctx.stroke();
         }
 
-        ctx.strokeStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
+        ctx.strokeStyle = isOverlay ? COMP : SEL;
         ctx.lineWidth = isSelected ? 2.5 : 1.8;
         if (isOverlay) ctx.setLineDash([5, 4]);
 
@@ -2299,11 +2320,11 @@ export function Canvas({
         ctx.stroke();
 
         // Source circular anchor dot
-        ctx.fillStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
+        ctx.fillStyle = isOverlay ? COMP : SEL;
         ctx.beginPath();
         ctx.arc(sax, say, isSelected ? 5.5 : 4.5, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = "#ffffff";
+        ctx.strokeStyle = INK;
         ctx.lineWidth = isSelected ? 2 : 1.25;
         ctx.stroke();
 
@@ -2311,7 +2332,7 @@ export function Canvas({
         ctx.save();
         ctx.translate(sbx, sby);
         ctx.rotate(noodle.angle);
-        ctx.fillStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
+        ctx.fillStyle = isOverlay ? COMP : SEL;
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.lineTo(-8, -4.5);
@@ -2344,15 +2365,15 @@ export function Canvas({
             ctx.save();
             ctx.beginPath();
             ctx.arc(h.x, h.y, 6.5, 0, Math.PI * 2);
-            ctx.fillStyle = BRAND_ACCENT;
+            ctx.fillStyle = SEL;
             ctx.fill();
-            ctx.strokeStyle = "#ffffff";
+            ctx.strokeStyle = INK;
             ctx.lineWidth = 1.5;
             ctx.stroke();
 
             // Plus symbol inside handle
             ctx.beginPath();
-            ctx.strokeStyle = "#ffffff";
+            ctx.strokeStyle = INK;
             ctx.lineWidth = 1.5;
             ctx.moveTo(h.x - 3, h.y);
             ctx.lineTo(h.x + 3, h.y);
@@ -2391,7 +2412,7 @@ export function Canvas({
         const sby = snap.panY + noodle.by * z;
 
         ctx.save();
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 2.2;
         ctx.beginPath();
         ctx.moveTo(sax, say);
@@ -2399,11 +2420,11 @@ export function Canvas({
         ctx.stroke();
 
         // Source circle
-        ctx.fillStyle = BRAND_ACCENT;
+        ctx.fillStyle = SEL;
         ctx.beginPath();
         ctx.arc(sax, say, 5, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = "#ffffff";
+        ctx.strokeStyle = INK;
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
@@ -2412,7 +2433,7 @@ export function Canvas({
           ctx.save();
           ctx.translate(sbx, sby);
           ctx.rotate(noodle.angle);
-          ctx.fillStyle = BRAND_ACCENT;
+          ctx.fillStyle = SEL;
           ctx.beginPath();
           ctx.moveTo(0, 0);
           ctx.lineTo(-9, -5);
@@ -2422,18 +2443,18 @@ export function Canvas({
           ctx.fill();
           ctx.restore();
         } else {
-          ctx.fillStyle = BRAND_ACCENT;
+          ctx.fillStyle = SEL;
           ctx.beginPath();
           ctx.arc(sbx, sby, 5, 0, Math.PI * 2);
           ctx.fill();
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = INK;
           ctx.lineWidth = 1.5;
           ctx.stroke();
         }
 
         // Highlight candidate destination frame
         if (twp) {
-          ctx.strokeStyle = BRAND_ACCENT;
+          ctx.strokeStyle = SEL;
           ctx.lineWidth = 2.5;
           ctx.strokeRect(
             snap.panX + twp.x * z,
@@ -2459,13 +2480,13 @@ export function Canvas({
           ctx.save();
           ctx.beginPath();
           ctx.arc(ax, ay, 9, 0, Math.PI * 2);
-          ctx.fillStyle = "#10b981";
+          ctx.fillStyle = SEL;
           ctx.fill();
           ctx.lineWidth = 1.5;
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = INK;
           ctx.stroke();
 
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = INK;
           ctx.font = "bold 10px Inter, system-ui, sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
@@ -2481,8 +2502,8 @@ export function Canvas({
             const textWidth = Math.min(240, Math.max(130, ctx.measureText(text).width + 24));
             const cardH = 36;
 
-            ctx.fillStyle = "rgba(15, 23, 42, 0.95)";
-            ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+            ctx.fillStyle = CHIP;
+            ctx.strokeStyle = CHIP_LINE;
             ctx.lineWidth = 1;
             if (typeof ctx.roundRect === "function") {
               ctx.beginPath();
@@ -2493,13 +2514,13 @@ export function Canvas({
               ctx.fillRect(cardX, cardY, textWidth, cardH);
             }
 
-            ctx.fillStyle = "#10b981";
+            ctx.fillStyle = SEL;
             ctx.font = "bold 9px Inter, system-ui, sans-serif";
             ctx.textAlign = "left";
             ctx.textBaseline = "top";
             ctx.fillText(`SPEC #${idx + 1} · ${ann.author || "Dev"}`, cardX + 8, cardY + 6);
 
-            ctx.fillStyle = "#f8fafc";
+            ctx.fillStyle = CHIP_INK;
             ctx.font = "11px Inter, system-ui, sans-serif";
             const displayStr = text.length > 30 ? text.slice(0, 28) + "…" : text;
             ctx.fillText(displayStr, cardX + 8, cardY + 18);
@@ -2526,7 +2547,7 @@ export function Canvas({
           ctx.rotate((hp.node.rotation * Math.PI) / 180);
           ctx.translate(-(hx + hw / 2), -(hy + hh / 2));
         }
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1;
         ctx.strokeRect(hx + 0.5, hy + 0.5, hw, hh);
         ctx.restore();
@@ -2546,9 +2567,9 @@ export function Canvas({
         for (const cx of [qx, qx + qw]) {
           ctx.beginPath();
           ctx.arc(cx, cy, 9, 0, Math.PI * 2);
-          ctx.fillStyle = BRAND_ACCENT;
+          ctx.fillStyle = SEL;
           ctx.fill();
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = INK;
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.moveTo(cx - 4, cy);
@@ -2571,7 +2592,7 @@ export function Canvas({
       const sy = snap.panY + nb.y * z;
       const sw = nb.w * z;
       const sh = nb.h * z;
-      const accent = wp.node.isComponent || wp.node.componentId ? COMP_PURPLE : BRAND_ACCENT;
+      const accent = wp.node.isComponent || wp.node.componentId ? COMP : SEL;
       const lockedSel = isEffectivelyLocked(root, wp.node.id);
       // P0-A contextual chrome: frame/section/group vs shape vs vector vs text
       const kind = wp.node.kind;
@@ -2589,7 +2610,7 @@ export function Canvas({
       // A locked layer keeps its outline but loses the editable accent: the
       // grey dashed ring says "selected, not grabbable" (move/resize refuse
       // it; the resize handles below are suppressed for the same reason).
-      ctx.strokeStyle = lockedSel ? LOCK_GREY : accent;
+      ctx.strokeStyle = lockedSel ? LOCK : accent;
       ctx.lineWidth = 1;
       if (lockedSel) ctx.setLineDash([4, 3]);
       ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
@@ -2611,7 +2632,7 @@ export function Canvas({
       }
       if (lockedSel) hs = [];
       for (const [hx, hy] of hs) {
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = INK;
         ctx.strokeStyle = accent;
         ctx.lineWidth = 1;
         if (isVectorLike && !isFrame) {
@@ -2646,7 +2667,7 @@ export function Canvas({
       const bh = 20;
       const bx = sx + sw / 2 - bw / 2;
       const by = sy + sh + 8;
-      ctx.fillStyle = lockedSel && !isRotating ? LOCK_GREY : accent;
+      ctx.fillStyle = lockedSel && !isRotating ? LOCK : accent;
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
         ctx.roundRect(bx, by, bw, bh, 4);
@@ -2654,7 +2675,7 @@ export function Canvas({
       } else {
         ctx.fillRect(bx, by, bw, bh);
       }
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = INK;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(dim, bx + bw / 2, by + bh / 2);
@@ -2666,7 +2687,7 @@ export function Canvas({
         const ay = sy + gt.gy * sh;
         const bx = sx + gt.hx * sw;
         const by = sy + gt.hy * sh;
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
@@ -2695,8 +2716,8 @@ export function Canvas({
         const hy = cy + Math.sin(a) * ry * k;
 
         // Ratio handle (valley)
-        ctx.fillStyle = "#ffffff";
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.fillStyle = INK;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
@@ -2731,8 +2752,8 @@ export function Canvas({
         const aCount = (2 * Math.PI) / pts - Math.PI / 2;
         const cxCount = cx + Math.cos(aCount) * rx;
         const cyCount = cy + Math.sin(aCount) * ry;
-        ctx.fillStyle = "#ffffff";
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.fillStyle = INK;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.arc(cxCount, cyCount, 4.5, 0, Math.PI * 2);
@@ -2757,8 +2778,8 @@ export function Canvas({
         const hx = cx + Math.cos(ea) * rx;
         const hy = cy + Math.sin(ea) * ry;
 
-        ctx.fillStyle = "#ffffff";
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.fillStyle = INK;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
@@ -2894,9 +2915,9 @@ export function Canvas({
         ctx.save();
         ctx.beginPath();
         ctx.arc(tx, ty, 7, 0, Math.PI * 2);
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = INK;
         ctx.fill();
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1.5;
         ctx.stroke();
         ctx.beginPath();
@@ -2921,15 +2942,15 @@ export function Canvas({
         const sh = bb.h * z;
         ctx.save();
         const allLocked = snap.selection.every((id) => isEffectivelyLocked(root, id));
-        ctx.strokeStyle = allLocked ? LOCK_GREY : BRAND_ACCENT;
+        ctx.strokeStyle = allLocked ? LOCK : SEL;
         ctx.lineWidth = 1;
         if (allLocked) ctx.setLineDash([4, 3]);
         ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
         ctx.setLineDash([]);
         const hsMulti: [number, number][] = allLocked ? [] : handles(sx, sy, sw, sh);
         for (const [hx, hy] of hsMulti) {
-          ctx.fillStyle = "#ffffff";
-          ctx.strokeStyle = BRAND_ACCENT;
+          ctx.fillStyle = INK;
+          ctx.strokeStyle = SEL;
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
@@ -2938,13 +2959,13 @@ export function Canvas({
         const bw = ctx.measureText(dim).width + 16;
         const bx = sx + sw / 2 - bw / 2;
         const by = sy + sh + 8;
-        ctx.fillStyle = allLocked ? LOCK_GREY : BRAND_ACCENT;
+        ctx.fillStyle = allLocked ? LOCK : SEL;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(bx, by, bw, 20, 4);
           ctx.fill();
         } else ctx.fillRect(bx, by, bw, 20);
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = INK;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(dim, bx + bw / 2, by + 10);
@@ -2957,7 +2978,7 @@ export function Canvas({
     // Smart guides + equal-spacing badges, drawn on top of the selection chrome.
     if (guides.length) {
       ctx.save();
-      ctx.strokeStyle = "#ff3b6b";
+      ctx.strokeStyle = GUIDE;
       ctx.lineWidth = 1;
       for (const g of guides) {
         ctx.setLineDash(g.center ? [4, 3] : []);
@@ -2985,13 +3006,13 @@ export function Canvas({
         const cy = g.axis === "x" ? snap.panY + g.cross * z : snap.panY + g.at * z;
         const label = `${Math.round(g.size)}`;
         const bw = ctx.measureText(label).width + 10;
-        ctx.fillStyle = "#ff3b6b";
+        ctx.fillStyle = GUIDE;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(cx - bw / 2, cy - 8, bw, 16, 3);
           ctx.fill();
         } else ctx.fillRect(cx - bw / 2, cy - 8, bw, 16);
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = INK;
         ctx.fillText(label, cx, cy);
       }
       ctx.textAlign = "left";
@@ -3002,7 +3023,7 @@ export function Canvas({
     // insertion line in a flow - the same gap the drop would land in.
     if (dropHint) {
       ctx.save();
-      ctx.strokeStyle = "#0d99ff";
+      ctx.strokeStyle = TARGET;
       ctx.lineWidth = 1.5;
       ctx.strokeRect(
         snap.panX + dropHint.fx * z,
@@ -3035,9 +3056,9 @@ export function Canvas({
       if (prev && prev.path.length >= 3) {
         ctx.save();
         tracePath(ctx, prev.path, snap.panX + prev.x * z, snap.panY + prev.y * z, z, true);
-        ctx.fillStyle = "rgba(16, 185, 129, 0.14)"; // BRAND_ACCENT at 14%
+        ctx.fillStyle = SEL_WASH;
         ctx.fill();
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([6, 4]);
         ctx.stroke();
@@ -3059,10 +3080,10 @@ export function Canvas({
             for (const d of dots) {
               ctx.beginPath();
               ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 3.5, 0, Math.PI * 2);
-              ctx.fillStyle = "#ffffff";
+              ctx.fillStyle = INK;
               ctx.fill();
               ctx.lineWidth = 1.5;
-              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.strokeStyle = SEL;
               ctx.stroke();
             }
             ctx.restore();
@@ -3086,7 +3107,7 @@ export function Canvas({
           if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
           ctx.translate(-(vsx + vsw / 2), -(vsy + vsh / 2));
         }
-        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.strokeStyle = SEL;
         ctx.lineWidth = 1;
         const vn = wp.node.vectorNetwork;
         for (let i = 0; i < pts.length; i++) {
@@ -3098,7 +3119,7 @@ export function Canvas({
           // Bézier tangent handles: only show for selected vertices (or when dragging) to keep canvas clean
           if (isSelected) {
             ctx.save();
-            ctx.strokeStyle = "rgba(16, 185, 129, 0.75)";
+            ctx.strokeStyle = withAlpha(SEL, 0.75);
             ctx.lineWidth = 1;
             if (p.ix != null && p.iy != null && (p.ix !== 0 || p.iy !== 0)) {
               const hx = px + p.ix * z;
@@ -3107,8 +3128,8 @@ export function Canvas({
               ctx.moveTo(px, py);
               ctx.lineTo(hx, hy);
               ctx.stroke();
-              ctx.fillStyle = "#ffffff";
-              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.fillStyle = INK;
+              ctx.strokeStyle = SEL;
               ctx.lineWidth = 1.25;
               ctx.beginPath();
               ctx.arc(hx, hy, 3.5, 0, Math.PI * 2);
@@ -3122,8 +3143,8 @@ export function Canvas({
               ctx.moveTo(px, py);
               ctx.lineTo(hx, hy);
               ctx.stroke();
-              ctx.fillStyle = "#ffffff";
-              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.fillStyle = INK;
+              ctx.strokeStyle = SEL;
               ctx.lineWidth = 1.25;
               ctx.beginPath();
               ctx.arc(hx, hy, 3.5, 0, Math.PI * 2);
@@ -3137,12 +3158,12 @@ export function Canvas({
           if (deg >= 3) {
             // Branching node indicator (Vector Network Degree >= 3)
             ctx.save();
-            ctx.fillStyle = isSelected ? BRAND_ACCENT_GLOW : "rgba(16, 185, 129, 0.25)";
+            ctx.fillStyle = isSelected ? SEL_GLOW : withAlpha(SEL, 0.25);
             ctx.beginPath();
             ctx.arc(px, py, 9, 0, Math.PI * 2);
             ctx.fill();
-            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#10b981";
-            ctx.strokeStyle = "#ffffff";
+            ctx.fillStyle = SEL;
+            ctx.strokeStyle = INK;
             ctx.lineWidth = 1.5;
             ctx.beginPath();
             ctx.moveTo(px, py - 5);
@@ -3155,8 +3176,8 @@ export function Canvas({
             ctx.restore();
           } else {
             // Vector anchor point: clean circular anchor point
-            ctx.fillStyle = isSelected ? BRAND_ACCENT : "#ffffff";
-            ctx.strokeStyle = isSelected ? "#ffffff" : BRAND_ACCENT;
+            ctx.fillStyle = isSelected ? SEL : INK;
+            ctx.strokeStyle = isSelected ? INK : SEL;
             ctx.lineWidth = isSelected ? 1.5 : 1.25;
             ctx.beginPath();
             ctx.arc(px, py, 3.5, 0, Math.PI * 2);
@@ -3178,8 +3199,8 @@ export function Canvas({
               const hx = snap.panX + (wp.x + pr.x) * z;
               const hy = snap.panY + (wp.y + pr.y) * z;
               ctx.save();
-              ctx.fillStyle = BRAND_ACCENT;
-              ctx.strokeStyle = "#ffffff";
+              ctx.fillStyle = SEL;
+              ctx.strokeStyle = INK;
               ctx.lineWidth = 1.5;
               ctx.beginPath();
               ctx.arc(hx, hy, 4, 0, Math.PI * 2);
@@ -3210,8 +3231,8 @@ export function Canvas({
           const sw = selWp.node.w * z;
           const sh = selWp.node.h * z;
           ctx.save();
-          ctx.fillStyle = "rgba(16, 185, 129, 0.08)";
-          ctx.strokeStyle = "rgba(16, 185, 129, 0.4)";
+          ctx.fillStyle = withAlpha(SEL, 0.08);
+          ctx.strokeStyle = withAlpha(SEL, 0.4);
           ctx.lineWidth = 1;
           ctx.setLineDash([2, 2]);
           if (pt > 0) ctx.fillRect(sx, sy, sw, pt * z);
@@ -3228,8 +3249,8 @@ export function Canvas({
       const A = worldPos(root, snap.selection[0]);
       if (A) {
         ctx.save();
-        ctx.strokeStyle = "#ff3b6b";
-        ctx.fillStyle = "#ff3b6b";
+        ctx.strokeStyle = GUIDE;
+        ctx.fillStyle = GUIDE;
         ctx.lineWidth = 1;
         ctx.font = "500 10px Inter, system-ui";
         ctx.textAlign = "center";
@@ -3237,15 +3258,15 @@ export function Canvas({
 
         const drawBadge = (label: string, x: number, y: number) => {
           const bw = ctx.measureText(label).width + 8;
-          ctx.fillStyle = "#ff3b6b";
+          ctx.fillStyle = GUIDE;
           if (typeof ctx.roundRect === "function") {
             ctx.beginPath();
             ctx.roundRect(x - bw / 2, y - 7, bw, 14, 3);
             ctx.fill();
           } else ctx.fillRect(x - bw / 2, y - 7, bw, 14);
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = INK;
           ctx.fillText(label, x, y);
-          ctx.fillStyle = "#ff3b6b";
+          ctx.fillStyle = GUIDE;
         };
 
         const drawMeasLine = (x1: number, y1: number, x2: number, y2: number, label: string) => {
@@ -3318,8 +3339,8 @@ export function Canvas({
     }
 
     if (band) {
-      ctx.fillStyle = BRAND_ACCENT_WASH;
-      ctx.strokeStyle = BRAND_ACCENT;
+      ctx.fillStyle = SEL_WASH;
+      ctx.strokeStyle = SEL;
       ctx.lineWidth = 1;
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
@@ -3332,7 +3353,7 @@ export function Canvas({
 
       if (snap.tool === "eraser") {
         ctx.save();
-        ctx.strokeStyle = "#ffffff";
+        ctx.strokeStyle = INK;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
@@ -3359,7 +3380,7 @@ export function Canvas({
           ctx.fillStyle = hex;
           ctx.fill();
           ctx.lineWidth = 3;
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = INK;
           ctx.stroke();
           ctx.lineWidth = 1;
           ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
@@ -3376,7 +3397,7 @@ export function Canvas({
           ctx.stroke();
 
           // HEX readout pill
-          ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+          ctx.fillStyle = CHIP;
           const tw = 60;
           const th = 20;
           const bx = loupeX - tw / 2;
@@ -3388,7 +3409,7 @@ export function Canvas({
           } else {
             ctx.fillRect(bx, by, tw, th);
           }
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = INK;
           ctx.font = "bold 10px monospace";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
@@ -3428,7 +3449,7 @@ export function Canvas({
         // Dimmed surround with the window cut out (a huge rect covers the
         // viewport under any rotation), then the faded full image.
         const dd = Math.hypot(w, h);
-        ctx.fillStyle = "rgba(13, 20, 38, 0.45)";
+        ctx.fillStyle = SCRIM;
         ctx.beginPath();
         ctx.rect(ccx - dd, ccy - dd, dd * 2, dd * 2);
         ctx.rect(bsx, bsy, bsw, bsh);
@@ -3445,13 +3466,13 @@ export function Canvas({
           ctx.drawImage(cim, full.x, full.y, full.w, full.h);
         }
         ctx.restore();
-        ctx.strokeStyle = "#0d99ff";
+        ctx.strokeStyle = TARGET;
         ctx.lineWidth = 1.5;
         ctx.strokeRect(bsx, bsy, bsw, bsh);
         for (const hh of cropHandleRects({ x: bsx, y: bsy, w: bsw, h: bsh }, 8)) {
-          ctx.fillStyle = "#0d99ff";
+          ctx.fillStyle = TARGET;
           ctx.fillRect(hh.x, hh.y, 8, 8);
-          ctx.strokeStyle = "#ffffff";
+          ctx.strokeStyle = INK;
           ctx.lineWidth = 1;
           ctx.strokeRect(hh.x, hh.y, 8, 8);
         }
@@ -3469,13 +3490,13 @@ export function Canvas({
         const tw = ctx.measureText(label).width + 16;
         const bx = cursorPos.x - r.left + 14;
         const by = cursorPos.y - r.top + 14;
-        ctx.fillStyle = "rgba(13, 20, 38, 0.92)";
+        ctx.fillStyle = CHIP;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(bx, by, tw, 22, 5);
           ctx.fill();
         } else ctx.fillRect(bx, by, tw, 22);
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = CHIP_INK;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         ctx.fillText(label, bx + 8, by + 11);
@@ -4275,7 +4296,7 @@ export function Canvas({
           }
           const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
           if (vecSubTool === "paint") {
-            const nextFill = wp.node.fillVisible ? (wp.node.fill || "#d9d9d9") : "#10b981";
+            const nextFill = wp.node.fillVisible ? (wp.node.fill || DOC_FILL_NONE) : DOC_FILL_BRAND;
             const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path.length ? wp.node.path : shapePoly(wp.node), effClosed(wp.node));
             const updatedVn = fillNetworkRegionAtPoint(vn, local.x, local.y, nextFill);
             engine.dispatch({ type: "patchVectorNetwork", id: wp.node.id, network: updatedVn });
@@ -5594,7 +5615,7 @@ export function Canvas({
                 name: "Slice",
                 fill: "#00000000",
                 fillVisible: false,
-                strokePaint: BRAND_ACCENT,
+                strokePaint: DOC_SLICE_STROKE,
                 strokeVisible: true,
                 strokeWidth: 1,
                 strokeDash: 4,
@@ -6605,12 +6626,12 @@ export function Canvas({
             style={{
               font: "600 11px Inter, system-ui",
               padding: "2px 6px",
-              border: "1px solid var(--accent, #10b981)",
+              border: "1px solid var(--accent)",
               borderRadius: 4,
-              background: "#ffffff",
-              color: "#0f172a",
+              background: "var(--elevated)",
+              color: "var(--text)",
               minWidth: 80,
-              boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+              boxShadow: "var(--elev-floating)",
             }}
           />
         </div>

@@ -75,8 +75,10 @@ engine comments). Dead Ends from prior phases retained: no browser/Rust; E2E unw
   in a table that a new surface has to join and a fix has to lower. Same instrument as
   `DEAD_CODE_CEILING`; see `docs/KNOWN_DEBT.md` §12 for what it costs and what it does not gate.
 - Dark theme: token-driven and checked in the browser suite for the dock (§4n), the player (§4o) and
-  the vector card + Done button (§42 — written, not run in the sandbox that produced it). The
-  exception is still FR-U2: the canvas chrome constants, which no token reaches.
+  the vector card + Done button (§42 — written, not run in the sandbox that produced it). The canvas
+  was the exception (FR-U2: chrome constants no token reached); since §4r it reads a `--cv-*` role
+  family that both themes declare, and §43b checks a dark-booted app against the dark tokens. What
+  the dark column does not yet do is *differ* for most canvas roles — that is FR-U2b, a design call.
 
 ### §2.3 FINDING: two tooltip systems (§21) — FIXED (P1)
 - `Tooltip.tsx` imported by Dashboard/chrome/inspector, but native `title=` still dominated: chrome 40,
@@ -241,7 +243,8 @@ on-canvas gradient handles, star/poly param handles, frame-tool + badges, smart 
 | # | Finding | Status | Pri |
 |---|---|---|---|
 | FR-U1 | FIXED: locked selection renders a grey dashed ring, no resize handles, and a "Locked" pill (single + all-locked multi; mixed groups keep working handles); dead grab zones toast "Locked · ⇧⌘L to unlock". Patch-based affordances (rotate/gradient/corners) intentionally kept — they work on locked layers | FIXED (P1) | — |
-| FR-U2 | Chrome colors hardcoded in Canvas consts (#10b981 accent ≠ --accent #0e9f6e token; #a855f7, #fff, #ff3b6b) — bypass theme, can't adapt to dark mode; two different "accent" greens | DRIFT (§6) | P2 |
+| FR-U2 | FIXED: canvas chrome is a token family now. `styles.css` declares 15 `--cv-*` roles in **both** themes (selection ink / wash / glow, chrome ink, lock, guide, target, mask, on-canvas card + hairline + text, scrim, well, line, dim) and `ui/canvasChrome.ts` reads all 22 of them — the 15 plus the seven the canvases already read ad hoc (`--panel --canvas --grid --canvas-label --comp --accent --accent-wash`) — once per paint: `readCanvasChrome(get)` is pure and testable, `canvasChrome()` does the style read for the minimap and rulers, and `withAlpha()` thins a role so the five incidental `rgba(16,185,129,…)` alphas do not have to be literals either. `COMP_PURPLE`'s "kept in step by hand — change both" comment is gone because the canvas now reads `--comp` itself. The two greens are answered by naming them: `--accent` is the control accent (#0e9f6e light / #10b981 dark, contrast-tuned for panel surfaces) and `--cv-sel` is selection ink on the document canvas (#10b981 in both themes today, i.e. the same pixels as before — retuning it per theme is FR-U2b and needs eyes). What stays literal is **document ink**, named `DOC_*` where it is a constant: a new slice's stroke, paint-bucket defaults, a glass effect's tint, `#00000000` creation fills, the noise renderer's black, a boolean mask's white — values written into saved files and their SVG exports, which must not move with the viewer's appearance. Canvas.tsx 68 → 13 colour literals, Minimap.tsx 4 → 0, Rulers.tsx 5 → 0 (workspace colour drift 195 → 131, ceiling lowered in the same commit). `canvasChrome.test.mjs` (50 checks) is the ratchet: fallbacks ≡ the sheet's light column key-for-key, the dark block declares every role, no chrome literal may come back, and every emerald left in Canvas.tsx is a `DOC_*`. §4r | FIXED (P2) | — |
+| FR-U2b | The dark theme now *can* retune canvas chrome — it does not yet. `--cv-sel`, `--cv-ink`, `--cv-guide`, `--cv-target`, `--cv-mask`, `--cv-chip*` and `--cv-scrim` carry the same value in both columns, because changing them is a visible design decision on the one surface this sandbox cannot look at. Only `--cv-well` / `--cv-line` / `--cv-dim` differ (they were already theme-split as literals). One sheet edit each, with eyes, closes this | OPEN (needs eyes) | P3 |
 | FR-U3 | Rotate affordance invisible (zone-only = Figma parity, but zero first-time discoverability) — roadmap: subtle corner affordance on hover | ROADMAP | P2 |
 | FR-U4 | Size/angle badge has no viewport clamp (by = sy+sh+8 can run off-screen at viewport bottom) | PARTIAL (§18 class) | P2 |
 
@@ -312,7 +315,9 @@ palette (max-width/max-height/scroll).
 - DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wastes its density on
   7 shortcut-less buttons (LP-U5).
 - CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), two Esc owners (PM-U3),
-  `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens (FR-U2).
+  `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens — since §4r two
+  *named roles* (`--accent` for controls, `--cv-sel` for selection ink on the canvas) rather than one
+  literal and one token that happened to disagree (FR-U2).
 - DISCOVERABILITY: prototype tab (TB-U3), italic (TY-U1), property-first binding (FS-U1), ⇧E/⌘⌥↩ chords
   (TB-U6/PT-U7), rotate zone (FR-U3), and the entire product for first-run users (LP-U4) are
   unreachable without prior knowledge.
@@ -783,12 +788,102 @@ the file's conventions; it needs `npm run test:e2e` with a Chromium to be believ
 **Still open after this round:** MOTION-U1 (the four popover surfaces with no entrance animation, rule
 written down above — needs eyes on it), FR-U2 (the canvas chrome constants — `BRAND_ACCENT #10b981` vs
 the `--accent` token `#0e9f6e`, `#a855f7`, `#ff3b6b`, `#18181b` — the largest remaining token gap, and
-it needs the same token-feeding the canvas already does for `--canvas`/`--grid`/`--canvas-label`),
-IN-U6/FS-U4 (native `title=` on the flip and ColorRow buttons: behaviourally equivalent since §2.3's
+it needs the same token-feeding the canvas already does for `--canvas`/`--grid`/`--canvas-label`;
+**closed in §4r**), IN-U6/FS-U4 (native `title=` on the flip and ColorRow buttons: behaviourally equivalent since §2.3's
 bridge, stylistically split, and frozen by the drift ratchet rather than fixed), PM-U3 (two Escape
 ownership patterns), PM-U6 (export sheet's initial focus), LP-U3–U6, RW-U1, FR-U3/U4 — and the
 `inspector.tsx` / `FigInspectorModal.tsx` rows of the drift table, which are where the next rounds'
 numbers come from.
+
+## §4r. P2 round 5 — the canvas stops keeping its own palette (FR-U2)
+
+**What the census found.** The finding named five constants; the file had more. `BRAND_ACCENT` was
+used 40 times, `COMP_PURPLE` 5, `LOCK_GREY` 5, the wash and glow 2 each — and around them, inline
+where nobody had bothered to name them: `#ff3b6b` ×6 (smart guides and the equal-spacing badges),
+`#0d99ff` ×3 (drop target, crop handles), `#00c853` (mask outline), `#f8fafc`, three near-identical
+dark card backings (`rgba(15,23,42,.95)` for the spec note, `rgba(15,23,42,.90)` for the hex pill,
+`rgba(13,20,38,.92)` for the cursor tooltip), a crop scrim, five incidental `rgba(16,185,129,α)`
+alphas (0.08/0.14/0.25/0.4/0.75) for the boolean preview, bézier tangents, branching vertices and
+the padding ghosts, and 36 chrome whites. `Minimap.tsx` told the same story in four `dark ? … : …`
+pairs and `Rulers.tsx` in four more: **77 colour literals across the three 2D surfaces**, none of
+them reachable from the sheet, with a comment on `COMP_PURPLE` asking a human to keep it in step
+with `--comp` "by hand — change both".
+
+**The decision the finding was really asking for: two greens, or one?** Two *roles*, named. `--accent`
+is the control accent (#0e9f6e light / #10b981 dark), contrast-tuned for panel surfaces; `--cv-sel` is
+selection ink on the document canvas. Two reasons to keep them apart rather than collapse them: the
+sibling Rust workspace made the same call (`REFINEMENT_V1_PLAN` P0-7 derives `C_SEL` from a
+`selection` role, distinct from `accent`/`focus_ring`), and the ring sits on `--canvas`, not on
+`--panel`, so its contrast budget is a different problem. There is also an honest constraint, recorded
+so it is not mistaken for a preference: light-mode selection ink stays `#10b981`, which is what the
+browser suite's §26 counts (pixels near rgb(16,185,129) ± 24). Repainting the ring with `--accent`
+would have moved every light-mode selection pixel to #0e9f6e — a visible identity change that no one
+in this sandbox can look at, verified by a suite that cannot be run here. So the round moves *where
+the value lives*, not the value: the same pixels, one door, and a dark column that a designer can now
+retune in the sheet. That retune is **FR-U2b**, and it is the only part of this finding left open.
+
+**The boundary that makes the rest safe: chrome vs document ink.** `Canvas.tsx` keeps 13 colour
+literals and every one is triaged. Three are named `DOC_*` constants — a new slice's dashed stroke,
+and the paint bucket's two defaults — because they are written into the file on creation. The rest
+are a glass effect's default tint, five `#00000000` creation fills, the loupe's sampled-colour
+default, the noise renderer's black, a boolean mask's white, and an `Icon` default prop. None of them
+may answer the theme, or a saved document — and its SVG export — would change colour with the
+viewer's appearance setting. `canvasChrome.test.mjs` holds the line: the only emerald literals
+allowed in `Canvas.tsx` are the ones on a `const DOC_*` line, and the chrome record may only contain
+`--cv-*` roles plus an allowlist of the seven surface/identity tokens the canvases already read, so
+nobody smuggles a panel or document value into the canvas palette later.
+
+**What the family buys.** One read per paint — `readCanvasChrome((token) => css.getPropertyValue(token))`
+extends the `--canvas`/`--grid`/`--canvas-label` resolution that was already happening, so a frame
+still costs one style resolution for all 22 roles; `withAlpha(role, α)` thins a role instead of
+hardcoding another emerald rgba; the minimap and rulers read the same record and keep `theme` in
+their paint deps, which is what makes them re-read on a flip. Two deliberate unifications, with the
+numbers so nobody has to guess what moved: the three dark on-canvas card backings are now one
+`--cv-chip` at .95, and the minimap viewport fill (.20 dark / .16 light) plus the rulers' selection
+range (.22 / .16) are now `--accent-wash` (.16 / .14) — a 2–4% alpha change on two small translucent
+rectangles, four spellings of one idea reduced to one. **Everything else is byte-identical to the
+literal it replaced**, so this round is NOT VERIFIED visually in the same sense the others are: there
+is nothing new to see, by construction, and the two alpha unifications are the whole of the visible
+delta.
+
+**The contracts.** `canvasChrome.test.mjs`, 50 checks, needing neither a DOM nor a canvas: the
+fallback record equals the sheet's light column key-for-key (parsed out of `styles.css` with comments
+stripped first — the sheet's own prose mentions `--accent:` and a naive declaration scan reads it as
+a value, which is precisely how the first run of this test failed); the dark block declares all 22;
+`readCanvasChrome` trims, falls back per key, survives a lookup returning `undefined`, and never hands
+back the fallback object itself; `withAlpha` handles 3/6/8-digit hex and `rgb()`/`rgba()`, clamps its
+alpha, and returns anything unparseable untouched so a mis-shaped sheet degrades instead of throwing
+mid-paint; `canvasChrome()` survives having no document; and no chrome literal may reappear in any of
+the three sources. The drift ratchet was lowered in the same commit: **Canvas.tsx 68 → 13 colour,
+Minimap.tsx 4 → 0, Rulers.tsx 5 → 0; workspace colour drift 195 → 131.** (The literals that remain
+elsewhere are a different pile: `devices.tsx` 35 are device bezels, `ZenHUD.tsx` 14 and
+`RadialMenu.tsx` 6 are DOM surfaces that want classes, not canvas tokens.)
+
+**Browser suite §43 + §43b — written, NOT RUN here** (no Chromium in this sandbox), 11 checks. The one
+that could not have passed before this round: set `--cv-sel` to `#ff8800` on the running app, nudge
+the selection to force a paint, and the chrome has to turn orange while the demo document's own
+emerald toggle stays within ±150px of the idle baseline — the difference between reading the sheet and
+remembering a literal, measured. Then remove the override and it has to come back. §43b boots dark
+through the app's own path (the `x-native-theme` key that `page()` deliberately spares, so
+`ThemeProvider` resolves it before first paint and React's `theme` lands in the paint deps — setting
+the attribute alone restyles the DOM and leaves the canvases painting stale tokens), re-measures the
+chrome against the dark tokens, rethemes again in dark, and checks the minimap viewport wears the dark
+`--accent` and not the light one (tolerance 16, since the two values sit 26 apart in the green
+channel). §20's minimap predicate needed no change: it was already green-ish rather than a literal.
+
+**Also fixed in passing:** the on-canvas frame-rename field, which carried `background: "#ffffff"` and
+`color: "#0f172a"` inline — white-on-white in the dark theme — and now uses `var(--elevated)`,
+`var(--text)`, `var(--accent)` and `var(--elev-floating)`.
+
+**Numbers.** Unit suite **2016 checks, 0 failed** across 28 suites (+50 this round). The counting rule
+is written down because earlier rounds in this file quoted lower figures that summed only the suites
+printing the `N passed, M failed` form:
+`npm test 2>&1 | grep -o "[0-9]* passed" | awk '{s+=$1} END {print s}'`. `tsc -b` clean; `vite build`
+clean and warning-free, the sheet at 96.88 kB (17.86 kB gzip) with the new tokens.
+
+**Still open after this round:** FR-U2b (the dark column exists for every canvas role and retunes
+three of them — the rest is a design call that needs eyes), MOTION-U1, IN-U6/FS-U4, PM-U3, PM-U6,
+LP-U3–U6, RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

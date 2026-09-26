@@ -17,14 +17,31 @@
 | Fields | --input/--field-focus (+aliases) | #f3f7f4/#fff | #1e2a22/#171c22 |
 | Dock/tool | --dock/--tool-* | white .94 | dark .92 |
 | Canvas aids | --grid/--canvas-label/--dot | emerald .07/grey/#cbd5d1 | emerald .09/grey/#2d3a33 |
+| Canvas chrome | --cv-sel/-wash/-glow, --cv-ink, --cv-lock, --cv-guide, --cv-target, --cv-mask, --cv-chip/-line/-ink, --cv-scrim, --cv-well, --cv-line, --cv-dim | #10b981 / .14 / .35, white, #9aa0a6, #ff3b6b, #0d99ff, #00c853, slate .95, #eef1f4, #e5e5e5, #8c8c8c | same except well #171c22, line white .08, dim #f1f5f3 .56 |
 | Semantic | --green/--red/--amber | #12a150/#d92d20/#d97706 | #34d399/#f87171/#fbbf24 |
 
-Debt: `--blue` is a legacy alias OF the green accent (rename, don't reuse); canvas consts
-(`BRAND_ACCENT #10b981`, `#a855f7`, `#ff3b6b`, chip `#18181b`) bypass tokens incl. dark mode (FR-U2).
+The canvas chrome row is the `--cv-*` family (§4r of `PRODUCT_UI_AUDIT_2026-09-26.md`): the roles the
+2D surfaces paint with, read once per frame by `apps/web/src/ui/canvasChrome.ts` — `readCanvasChrome`
+is pure, `canvasChrome()` does the style read, `withAlpha(role, α)` thins a role instead of
+hardcoding another `rgba(16,185,129,…)`. Two rules make it hold. **Selection ink is not the control
+accent**: `--accent` is contrast-tuned for panel surfaces, `--cv-sel` sits on `--canvas`, and the two
+are allowed to disagree — that is what the Rust workspace's `selection` role does too (P0-7). **The
+family carries chrome only**: a value written into the document (a slice's stroke, a paint-bucket
+default, a glass tint, a boolean mask) stays a named `DOC_*` literal at its call site, because it must
+not move with the viewer's theme or the SVG export would. `canvasChrome.test.mjs` enforces both, and
+pins the module's fallbacks to the light column key-for-key, which is the ratchet that replaced
+`COMP_PURPLE`'s "kept in step by hand — change both" comment.
 
-Debt, measured and ratcheted (2026-09-26): `src/ui/*.tsx` still carries **414 inline `style={{`
-objects, 195 quoted hex literals, 340 native `title=`, 363 raw `<button` and 49 raw `<select`** —
-`inspector.tsx` alone is 179/44/221/192/41. `src/ui/__tests__/drift.test.mjs` pins those per file and
+Debt: `--blue` is a legacy alias OF the green accent (rename, don't reuse). The dark column declares
+every `--cv-*` role but only retunes three of them (`--cv-well`/`--cv-line`/`--cv-dim`, which were
+already theme-split as literals); the rest match light because changing them is a visible call nobody
+has made with eyes on the canvas yet — **FR-U2b**, one sheet edit per role.
+
+Debt, measured and ratcheted (2026-09-26, colours re-measured after §4r): `src/ui/*.tsx` still
+carries **414 inline `style={{` objects, 131 quoted hex literals, 340 native `title=`, 363 raw
+`<button` and 49 raw `<select`** — `inspector.tsx` alone is 179/44/221/192/41. The colour row fell from
+195 when the three 2D surfaces were tokenised: `Canvas.tsx` 68 → 13 (all thirteen triaged as document
+ink), `Minimap.tsx` 4 → 0, `Rulers.tsx` 5 → 0. `src/ui/__tests__/drift.test.mjs` pins those per file and
 fails if any grows, so rules 1 and 2 below are enforced rather than aspirational; each round lowers a
 row. The dock and the inspector's vector card are the two surfaces already at zero inline layout
 (§4q of `PRODUCT_UI_AUDIT_2026-09-26.md`), which is what a finished surface looks like: classes in the

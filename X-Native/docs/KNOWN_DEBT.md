@@ -196,7 +196,7 @@ resting **field** uses (`C_FIELD`), while the state language says hover is
 `surface_hover` — as inputs already do. Either a row hover is its own wash step
 or the contract needs a second hover entry.
 
-## 12. Web chrome drift: 414 inline style objects, 195 literal colours (ratcheted, not gated by CI)
+## 12. Web chrome drift: 414 inline style objects, 131 literal colours (ratcheted, not gated by CI)
 
 `apps/web` is the product UI (`apps/web/README.md`), and its chrome grew the way
 immediate-mode chrome does not: every surface that needed a layout wrote one.
@@ -205,7 +205,7 @@ Measured 2026-09-26 over `apps/web/src/ui/*.tsx`:
 | Metric | Total | Worst surface | Why it is still there |
 |---|---|---|---|
 | inline `style={{` | 414 | `inspector.tsx` 179, `FigInspectorModal.tsx` 113 | Layout written per call site. Some of it is irreducible (a measured width, a colour fed from the document); most is a class nobody wrote. |
-| quoted `#rrggbb` | 195 | `Canvas.tsx` 68, `inspector.tsx` 44, `devices.tsx` 35 | Partly chrome that bypasses the tokens — and so bypasses the dark theme — and partly *document* ink (a default fill, a device bezel) that no token should own. The split is the triage a round owes before lowering a row. |
+| quoted `#rrggbb` | 131 | `inspector.tsx` 44, `devices.tsx` 35, `ZenHUD.tsx` 14 | Partly chrome that bypasses the tokens — and so bypasses the dark theme — and partly *document* ink (a default fill, a device bezel) that no token should own. The split is the triage a round owes before lowering a row: the three 2D surfaces paid it in §4r of `PRODUCT_UI_AUDIT_2026-09-26.md`, going 68 → 13 (`Canvas.tsx`, every one of the thirteen triaged as document ink), 4 → 0 (`Minimap.tsx`) and 5 → 0 (`Rulers.tsx`) once chrome moved into the `--cv-*` family that `ui/canvasChrome.ts` reads per paint. |
 | native `title=` | 340 | `inspector.tsx` 221, `chrome.tsx` 40 | A style debt, not a behaviour one: `ui/tooltipBridge.ts` adopts every native title into the shared pill (§2.3), so the labels render correctly and reach keyboard users. New code composes `<Tooltip>`; the ceiling is what makes that stick. |
 | raw `<button` | 363 | `inspector.tsx` 192, `chrome.tsx` 64, `Dashboard.tsx` 33 | `XButton` and the sheet's `.hit` / `.icon-btn` / `.seg` recipes exist and are adopted in only 14 places. |
 | raw `<select` | 49 | `inspector.tsx` 41 | Same, for `XSelect` — and the browser's own 12px default is why two selects one row apart could look unrelated (§4p). |
@@ -226,14 +226,20 @@ be committed apart). Reproduce the totals instead of trusting this file:
 cd apps/web && npx vite-node src/ui/__tests__/drift.test.mjs
 ```
 
-This ratchet and the 1,610 checks around it run in CI as the `web` job of
+This ratchet and the 2,016 checks around it run in CI as the `web` job of
 `.github/workflows/ci.yml` (`npm ci && npm test && npm run build`); before
-2026-09-26 nothing outside a Rust workspace was gated at all. Two caveats stay
+2026-09-26 nothing outside a Rust workspace was gated at all. That total is the
+sum of every `N passed` line the suites print, which is reproducible with
+`npm test 2>&1 | grep -o "[0-9]* passed" | awk '{s+=$1} END {print s}'` —
+earlier revisions of this file quoted a lower figure that summed only the
+suites printing the `N passed, M failed` form. Two caveats stay
 open. `scripts/check.sh` — the script the repo calls the single definition of
 green — is still Rust-only, so a local `check.sh` run does not cover the product
 UI. And the **browser tier is not in CI**: `apps/web/e2e/behaviour.mjs` needs a
-Chromium and a running dev server, so its 268 checks (computed geometry, focus,
-hover, canvas pixels, keyboard chords) run only where someone provides both.
+Chromium and a running dev server, so its 279 checks (computed geometry, focus,
+hover, canvas pixels, keyboard chords) run only where someone provides both —
+including the eleven added by §43/§43b of `PRODUCT_UI_AUDIT_2026-09-26.md`,
+which retheme a canvas token under the running app and watch the chrome follow.
 Everything a browser cannot reach is covered by the headless DOM tier instead
 (`apps/web/src/ui/__tests__/domEnv.mjs`, jsdom), which is why a UI finding is
 recorded as closed by *both* halves — and why the ledger names which tier closed
