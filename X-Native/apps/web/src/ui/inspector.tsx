@@ -3315,7 +3315,7 @@ function Design({
   // show Mixed while the layers disagree, and a commit applies to every layer
   // that may move — locked layers and instance members sit out, the same pair
   // the engine's `move` refuses. Each layer keeps its own aspect lock, ratio,
-  // rotation origin and hug refit; opacity and the type metrics stay first-layer.
+  // rotation origin and hug refit.
   const dRoot = snap.pages[snap.page].root;
   const selNodes = snap.selection
     .map((id) => find(dRoot, id))
@@ -3379,6 +3379,75 @@ function Design({
         patch: { x: turned.x, y: turned.y, rotation: turned.rotation },
       });
     });
+    engine.dispatch({ type: "end" });
+  };
+  // Multi-select scalars beyond geometry (IN-U1/TY-U3): the type metrics,
+  // opacity, stroke weight, corners, blend and the base fill/stroke rows
+  // show Mixed while the selection disagrees, and a commit applies to
+  // every selected layer. Unlike geometry these are plain patches, which
+  // the engine applies to locked layers and instance members exactly as
+  // it does for a single selection — so all of them take the edit, and a
+  // multi-edit means the same thing a single-edit does. Structural lists
+  // (fill/stroke/effect stacks) keep showing the first layer's, the same
+  // compromise the Export block documents for its presets.
+  const textTargets = selNodes.filter((m) => m.kind === "text");
+  const mixedProp = <T,>(get: (m: XNode) => T, pool: XNode[] = selNodes): string | undefined => {
+    if (!multi) return undefined;
+    return new Set(pool.map(get)).size > 1 ? "Mixed" : undefined;
+  };
+  const manyVals = (get: (m: XNode) => number, pool: XNode[] = selNodes): number[] =>
+    pool.map(get);
+  // A committed number per layer, with num()'s floors, then a hug refit
+  // for the metrics that change how much room the copy needs.
+  const patchNumMany = (
+    key: "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing" | "paragraphIndent" | "strokeWidth",
+    vals: number[],
+    pool: XNode[] = selNodes,
+    extra?: (m: XNode, v: number) => Partial<XNode>,
+  ) => {
+    if (!pool.length) return;
+    engine.dispatch({ type: "begin" });
+    pool.forEach((m, i) => {
+      const raw = vals[i];
+      if (raw == null || !Number.isFinite(raw)) return;
+      const v =
+        key === "opacity"
+          ? Math.max(0, Math.min(1, raw))
+          : key === "fontSize"
+            ? Math.max(1, raw)
+            : key === "lineHeight" || key === "paragraphSpacing"
+              ? Math.max(0, raw)
+              : raw;
+      engine.dispatch({ type: "patch", id: m.id, patch: { [key]: v, ...extra?.(m, v) } });
+      if (
+        key === "fontSize" ||
+        key === "letterSpacing" ||
+        key === "lineHeight" ||
+        key === "paragraphSpacing" ||
+        key === "paragraphIndent"
+      )
+        refitHugFor(m, { [key]: v });
+    });
+    engine.dispatch({ type: "end" });
+  };
+  // One patch fragment for every selected layer — fixed values (a picked
+  // colour, a corner toggle) or per-layer fragments via a function.
+  const patchMany = (p: Partial<XNode> | ((m: XNode, i: number) => Partial<XNode>)) => {
+    if (!selNodes.length) return;
+    engine.dispatch({ type: "begin" });
+    selNodes.forEach((m, i) =>
+      engine.dispatch({ type: "patch", id: m.id, patch: typeof p === "function" ? p(m, i) : p }),
+    );
+    engine.dispatch({ type: "end" });
+  };
+  // patchType for every text layer in the selection, with the same refit.
+  const patchTypeMany = (over: Partial<XNode>) => {
+    if (!textTargets.length) return;
+    engine.dispatch({ type: "begin" });
+    for (const m of textTargets) {
+      engine.dispatch({ type: "patch", id: m.id, patch: over });
+      refitHugFor(m, over);
+    }
     engine.dispatch({ type: "end" });
   };
   const kindLabel = n.imageSrc
@@ -3447,6 +3516,23 @@ function Design({
      and the empty-state row so both paths do exactly the same thing. */
   const addStroke = () => {
     openSection("stroke");
+    if (multi) {
+      patchMany((m) =>
+        m.strokeWidth > 0 && (!isNone(m.strokePaint) || m.strokeVisible)
+          ? {
+              strokes: [
+                ...(m.strokes ?? []),
+                { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: m.strokeAlign },
+              ],
+            }
+          : {
+              strokePaint: isNone(m.strokePaint) ? "#1e1e1e" : m.strokePaint,
+              strokeVisible: true,
+              strokeWidth: m.strokeWidth || 1,
+            },
+      );
+      return;
+    }
     const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
     if (!hasBase) {
       patch({
@@ -3478,11 +3564,14 @@ function Design({
             <div className="field">
               <select
                 aria-label="Font family"
-                value={n.fontFamily}
-                onChange={(e) =>
-                  patchType({ fontFamily: e.target.value })
-                }
+                value={mixedProp((m) => m.fontFamily, textTargets) ? "__mixed" : n.fontFamily}
+                onChange={(e) => {
+                  if (e.target.value === "__mixed") return;
+                  if (multi) patchTypeMany({ fontFamily: e.target.value });
+                  else patchType({ fontFamily: e.target.value });
+                }}
               >
+                {mixedProp((m) => m.fontFamily, textTargets) && <option value="__mixed">Mixed</option>}
                 {(() => {
                   const base = [
                     "Inter",
@@ -3552,9 +3641,15 @@ function Design({
               <div className="field">
                 <select
                   aria-label="Font weight"
-                  value={n.fontWeight}
-                  onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
+                  value={mixedProp((m) => m.fontWeight, textTargets) ? "mixed" : n.fontWeight}
+                  onChange={(e) => {
+                    if (e.target.value === "mixed") return;
+                    const fontWeight = parseInt(e.target.value, 10);
+                    if (multi) patchTypeMany({ fontWeight });
+                    else patchType({ fontWeight });
+                  }}
                 >
+                  {mixedProp((m) => m.fontWeight, textTargets) && <option value="mixed">Mixed</option>}
                   <option value={100}>Thin (100)</option>
                   <option value={200}>Extra Light (200)</option>
                   <option value={300}>Light (300)</option>
@@ -3566,14 +3661,31 @@ function Design({
                   <option value={900}>Black (900)</option>
                 </select>
               </div>
-              <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
+              <Field
+                label="S"
+                value={n.fontSize}
+                onChange={(v) => num("fontSize", v)}
+                mixed={mixedProp((m) => m.fontSize, textTargets)}
+                values={multi ? manyVals((m) => m.fontSize, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("fontSize", vs, textTargets) : undefined}
+              />
               <Field
                 label={n.lineHeight ? "↑" : "Auto"}
                 value={n.lineHeight || n.fontSize * 1.2}
-                onLabelClick={() => num("lineHeight", 0)}
+                onLabelClick={() => (multi ? patchTypeMany({ lineHeight: 0 }) : num("lineHeight", 0))}
                 onChange={(v) => num("lineHeight", v)}
+                mixed={mixedProp((m) => m.lineHeight, textTargets)}
+                values={multi ? manyVals((m) => m.lineHeight, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("lineHeight", vs, textTargets) : undefined}
               />
-              <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
+              <Field
+                label="↔"
+                value={n.letterSpacing}
+                onChange={(v) => num("letterSpacing", v)}
+                mixed={mixedProp((m) => m.letterSpacing, textTargets)}
+                values={multi ? manyVals((m) => m.letterSpacing, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("letterSpacing", vs, textTargets) : undefined}
+              />
             </div>
             <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
               <Tooltip label="Auto width" shortcut="">
@@ -3739,12 +3851,18 @@ function Design({
                   value={n.paragraphSpacing}
                   onChange={(v) => num("paragraphSpacing", v)}
                   aria="Space after each paragraph"
+                  mixed={mixedProp((m) => m.paragraphSpacing, textTargets)}
+                  values={multi ? manyVals((m) => m.paragraphSpacing, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("paragraphSpacing", vs, textTargets) : undefined}
                 />
                 <Field
                   label="⇥"
                   value={n.paragraphIndent}
                   onChange={(v) => patchType({ paragraphIndent: Math.max(0, v) })}
                   aria="First-line indent of each paragraph"
+                  mixed={mixedProp((m) => m.paragraphIndent, textTargets)}
+                  values={multi ? manyVals((m) => m.paragraphIndent, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("paragraphIndent", vs, textTargets) : undefined}
                 />
               </div>
               <div className="dir-row">
@@ -5471,11 +5589,14 @@ function Design({
           <div className="field">
             <select
               aria-label="Blend mode"
-              value={n.blendMode}
-              onChange={(e) =>
-                engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } })
-              }
+              value={mixedProp((m) => m.blendMode) ? "mixed" : n.blendMode}
+              onChange={(e) => {
+                if (e.target.value === "mixed") return;
+                if (multi) patchMany({ blendMode: e.target.value });
+                else engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } });
+              }}
             >
+              {mixedProp((m) => m.blendMode) && <option value="mixed">Mixed</option>}
               {(n.kind === "frame" || n.kind === "group"
                 ? ["Pass through", ...BLENDS]
                 : BLENDS
@@ -5494,6 +5615,9 @@ function Design({
             value={Math.round(n.opacity * 100)}
             disabled={boolChild}
             onChange={(v) => num("opacity", v / 100)}
+            mixed={mixedProp((m) => m.opacity)}
+            values={multi ? manyVals((m) => Math.round(m.opacity * 100)) : undefined}
+            onChangeMany={multi ? (vs) => patchNumMany("opacity", vs.map((v) => v / 100)) : undefined}
           />
         </div>
       </div>
@@ -5516,6 +5640,19 @@ function Design({
                   r[i] = v;
                   patch({ cornerRadii: r, cornerIndependent: true });
                 }}
+                mixed={mixedProp((m) => m.cornerRadii[i])}
+                values={multi ? manyVals((m) => m.cornerRadii[i]) : undefined}
+                onChangeMany={
+                  multi
+                    ? (vs) =>
+                        patchMany((m, j) => {
+                          const r = [...m.cornerRadii] as [number, number, number, number];
+                          const v = vs[j];
+                          if (v != null && Number.isFinite(v)) r[i] = v;
+                          return { cornerRadii: r, cornerIndependent: true };
+                        })
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -5525,8 +5662,27 @@ function Design({
               icon="radius"
               aria="Corner radius"
               value={n.cornerRadii[0]}
-              mixed={new Set(n.cornerRadii).size > 1 ? "Mixed" : undefined}
+              mixed={
+                (multi
+                  ? new Set(selNodes.flatMap((m) => m.cornerRadii)).size > 1
+                  : new Set(n.cornerRadii).size > 1)
+                  ? "Mixed"
+                  : undefined
+              }
               onChange={(v) => patch({ cornerRadii: [v, v, v, v], cornerIndependent: false })}
+              values={multi ? manyVals((m) => m.cornerRadii[0]) : undefined}
+              onChangeMany={
+                multi
+                  ? (vs) =>
+                      patchMany((m, i) => {
+                        const v = vs[i] ?? m.cornerRadii[0];
+                        return {
+                          cornerRadii: [v, v, v, v] as [number, number, number, number],
+                          cornerIndependent: false,
+                        };
+                      })
+                  : undefined
+              }
             />
             <span />
             <button
@@ -5535,7 +5691,8 @@ function Design({
               title="Independent corners"
               onClick={() => {
                 setCornersOpen(true);
-                patch({ cornerIndependent: true });
+                if (multi) patchMany({ cornerIndependent: true });
+                else patch({ cornerIndependent: true });
               }}
             >
               <Icon name="independent" size={14} />
@@ -5548,7 +5705,17 @@ function Design({
             title="Uniform corners"
             onClick={() => {
               setCornersOpen(false);
-              patch({ cornerIndependent: false, cornerRadii: [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]] });
+              if (multi)
+                patchMany((m) => ({
+                  cornerIndependent: false,
+                  cornerRadii: [m.cornerRadii[0], m.cornerRadii[0], m.cornerRadii[0], m.cornerRadii[0]] as [
+                    number,
+                    number,
+                    number,
+                    number,
+                  ],
+                }));
+              else patch({ cornerIndependent: false, cornerRadii: [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]] });
             }}
           >
             <Icon name="independent" size={14} />
@@ -5627,6 +5794,19 @@ function Design({
           disabled={boolChild}
           onClick={() => {
             openSection("fill");
+            if (multi) {
+              patchMany((m) =>
+                isNone(m.fill) && !m.fillVisible
+                  ? { fill: "#d9d9d9", fillVisible: true, fillOpacity: m.fillOpacity ?? 1 }
+                  : {
+                      fills: [
+                        ...(m.fills ?? []),
+                        { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                      ],
+                    },
+              );
+              return;
+            }
             // First press turns the base fill back on; after that each press
             // stacks another fill on top, the way Fill "+" behaves.
             if (isNone(n.fill) && !n.fillVisible) {
@@ -5790,6 +5970,7 @@ function Design({
           )}
           <ColorRow
             value={n.fill}
+            mixed={!!mixedProp((m) => `${m.fillType}:${m.fill}`)}
             opacity={Math.round((n.fillOpacity ?? 1) * 100)}
             visible={n.fillVisible}
             exportVisible={n.fillExportVisible !== false}
@@ -5816,25 +5997,49 @@ function Design({
             recents={collectColors(snap.pages[snap.page].root)}
             background={fillBackground(snap.pages[snap.page].root, n)}
             largeText={isLargeText(n)}
-            onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
-            onOpacity={(v) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
+            onChange={(fill) =>
+              multi
+                ? patchMany({ fill, fillVisible: true })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })
             }
-            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })}
-            onExportVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillExportVisible: v } })}
-            onRemove={() =>
+            onOpacity={(v) =>
+              multi
+                ? patchMany({ fillOpacity: v / 100 })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
+            }
+            onVisible={(v) =>
+              multi
+                ? patchMany({ fillVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })
+            }
+            onExportVisible={(v) =>
+              multi
+                ? patchMany({ fillExportVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillExportVisible: v } })
+            }
+            onRemove={() => {
               // Minus removes the base fill outright (same none+hidden pair
               // the stroke row uses), leaving the section empty; Fill "+"
               // then re-adds the default fill instead of stacking over a
               // hidden one.
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { fill: "#00000000", fillVisible: false },
-              })
+              if (multi) patchMany({ fill: "#00000000", fillVisible: false });
+              else
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { fill: "#00000000", fillVisible: false },
+                });
+            }}
+            onMeta={(p) =>
+              multi
+                ? patchMany(p)
+                : engine.dispatch({ type: "patch", id: n.id, patch: p })
             }
-            onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
-            onValueChange={(v) => engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })}
+            onValueChange={(v) =>
+              multi
+                ? patchMany(fillValuePatch(v))
+                : engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })
+            }
           />
         </div>
       )}
@@ -5875,24 +6080,35 @@ function Design({
             title="Stroke"
             stroke
             value={n.strokePaint}
+            mixed={!!mixedProp((m) => m.strokePaint)}
             opacity={Math.round((n.strokeOpacity ?? 1) * 100)}
             visible={n.strokeVisible}
             recents={collectColors(snap.pages[snap.page].root)}
             background={fillBackground(snap.pages[snap.page].root, n)}
             largeText={isLargeText(n)}
             onChange={(strokePaint) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeVisible: true } })
+              multi
+                ? patchMany({ strokePaint, strokeVisible: true })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeVisible: true } })
             }
             onOpacity={(v) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { strokeOpacity: v / 100 } })
+              multi
+                ? patchMany({ strokeOpacity: v / 100 })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokeOpacity: v / 100 } })
             }
-            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { strokeVisible: v } })}
+            onVisible={(v) =>
+              multi
+                ? patchMany({ strokeVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokeVisible: v } })
+            }
             onRemove={() =>
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 },
-              })
+              multi
+                ? patchMany({ strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 })
+                : engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 },
+                  })
             }
           />
           <div className="stroke-width">
@@ -5906,6 +6122,16 @@ function Design({
                 if ((n.strokeSides ?? "all") === "custom") patch({ strokeWidth, strokeSideW: [strokeWidth, strokeWidth, strokeWidth, strokeWidth] });
                 else patch({ strokeWidth });
               }}
+              mixed={mixedProp((m) => m.strokeWidth)}
+              values={multi ? manyVals((m) => m.strokeWidth) : undefined}
+              onChangeMany={
+                multi
+                  ? (vs) =>
+                      patchNumMany("strokeWidth", vs, selNodes, (m, v) =>
+                        (m.strokeSides ?? "all") === "custom" ? { strokeSideW: [v, v, v, v] } : {},
+                      )
+                  : undefined
+              }
             />
             {(n.kind !== "line" && n.kind !== "arrow") && (
             <div className="seg icons" title="Stroke position">
@@ -6253,7 +6479,7 @@ function Design({
       )}
 
       <div className="hr" />
-      <Effects n={n} engine={engine} locked={boolChild} />
+      <Effects n={n} engine={engine} locked={boolChild} root={dRoot} ids={snap.selection} />
       <ModifiersSection n={n} engine={engine} />
       <ExpressionsSection n={n} engine={engine} />
       <SelectionColors
@@ -6581,7 +6807,21 @@ const EFFECT_LABEL: Record<string, string> = {
   texture: "Texture",
 };
 
-function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boolean }) {
+function Effects({
+  n,
+  engine,
+  locked,
+  root,
+  ids,
+}: {
+  n: XNode;
+  engine: Engine;
+  locked?: boolean;
+  root: XNode;
+  /** The whole selection: Add lands on every layer with room, the listed
+   *  rows stay the first layer's (the Export block's compromise). */
+  ids?: string[];
+}) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<{ i: number; rect: DOMRect } | null>(null);
   const kinds: { id: EffectKind; label: string }[] = [
@@ -6607,12 +6847,21 @@ function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boo
   const addKind = (kind: EffectKind) => {
     openSection("effects");
     engine.dispatch({ type: "previewEffect", id: null });
-    if (!room(kind)) {
+    const targets = (ids ?? [n.id])
+      .map((id) => (id === n.id ? n : find(root, id)))
+      .filter((t): t is XNode => !!t);
+    const fits = targets.filter((t) => canAddEffect(t.effects ?? [], kind));
+    if (!fits.length) {
       toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
       setOpen(false);
       return;
     }
-    engine.dispatch({ type: "patch", id: n.id, patch: { effects: [...effects, defaultEffect(kind)] } });
+    engine.dispatch({ type: "begin" });
+    for (const t of fits)
+      engine.dispatch({ type: "patch", id: t.id, patch: { effects: [...(t.effects ?? []), defaultEffect(kind)] } });
+    engine.dispatch({ type: "end" });
+    if (fits.length < targets.length)
+      toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
     setOpen(false);
   };
   const [drag, setDrag] = useState<number | null>(null);
@@ -8650,6 +8899,7 @@ function ColorRow({
   largeText,
   noImage,
   stroke,
+  mixed,
   onChange,
   onOpacity,
   onVisible,
@@ -8693,6 +8943,10 @@ function ColorRow({
   noImage?: boolean;
   /** Stroke paint: solid only, no blend — gradient/image/blend strokes are unimplemented. */
   stroke?: boolean;
+  /** Multi-select disagreement: the swatch splits between this layer's
+   *  colour and grey, the hex reads Mixed, and a commit applies to every
+   *  selected layer (the call site wires the apply-to-all). */
+  mixed?: boolean;
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
   onVisible?: (v: boolean) => void;
@@ -8712,7 +8966,7 @@ function ColorRow({
   // the control impossible to type into. Commit only complete hex values,
   // matching how FillPicker already handles the same input.
   const [draft, setDraft] = useState<string | null>(null);
-  const shown = hidden ? "" : isImage ? "Image" : hex.replace("#", "");
+  const shown = mixed ? "Mixed" : hidden ? "" : isImage ? "Image" : hex.replace("#", "");
   return (
     <div className="color-row">
       <button
@@ -8721,7 +8975,9 @@ function ColorRow({
         style={
           isImage && image
             ? { backgroundImage: `url(${image})`, backgroundSize: "cover", backgroundPosition: "center" }
-            : { background: hidden ? "transparent" : hex }
+            : mixed
+              ? { background: `linear-gradient(135deg, ${hex} 50%, var(--dim) 50%)` }
+              : { background: hidden ? "transparent" : hex }
         }
         title="Color picker"
         onClick={(e) => {
@@ -8734,6 +8990,7 @@ function ColorRow({
         aria-label={title ? `${title} colour hex` : "Colour hex"}
         value={draft ?? shown}
         placeholder="None"
+        title={mixed ? "Mixed — a typed colour applies to every selected layer" : undefined}
         spellCheck={false}
         readOnly={isImage}
         onChange={(e) => {

@@ -1241,6 +1241,104 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 28. multi-select scalars: Mixed display + apply to all ----------------------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  const setField = async (sel, v) => {
+    await p.evaluate((s) => {
+      const el = document.querySelector(s);
+      el.focus(); el.select();
+    }, sel);
+    await p.keyboard.type(String(v));
+    await p.keyboard.press("Enter");
+    await sleep(400);
+  };
+  const setHex = async (v) => {
+    await p.evaluate(() => { const el = document.querySelectorAll(".inspector .color-row .hex")[0]; el.focus(); el.select(); });
+    await p.keyboard.type(v);
+    await sleep(400);
+  };
+  const clickRow = async (k, shift = false) => {
+    const rs = await p.$$(".panel.left .row");
+    if (shift) await p.keyboard.down("Shift");
+    await rs[k].click();
+    if (shift) await p.keyboard.up("Shift");
+    await sleep(350);
+  };
+  const full = async (id) => (await api("getNode", { id, full: true })).data.full;
+  // two rects, divergent opacity + fill (newest layers sit atop the tree)
+  await drawRect(p);
+  await setField('.inspector input[aria-label="%"]', "30");
+  await setHex("ff0000");
+  await drawRect(p, 1000, 640);
+  await setField('.inspector input[aria-label="%"]', "60");
+  await setHex("0000ff");
+  await clickRow(1);
+  await clickRow(0, true);
+  const ids = (await api("getSelection", {})).data.ids;
+  t("both rects selected", ids.length === 2);
+  t("opacity reads Mixed",
+    await p.evaluate(() => document.querySelector('.inspector input[aria-label="%"]').value) === "Mixed");
+  t("fill reads Mixed",
+    await p.evaluate(() => document.querySelectorAll(".inspector .color-row .hex")[0].value) === "Mixed");
+  await setField('.inspector input[aria-label="%"]', "80");
+  const ops = [(await full(ids[0])).opacity, (await full(ids[1])).opacity];
+  t(`opacity commits to every layer (${ops.join(",")})`, ops.every(v => v === 0.8));
+  await setHex("00ff00");
+  const fills = [(await full(ids[0])).fill, (await full(ids[1])).fill];
+  t(`fill commits to every layer (${fills.join(",")})`,
+    fills.every(f => f.toLowerCase().startsWith("#00ff00")));
+  await p.close();
+}
+
+// 29. multi-select type metrics: Mixed size + apply to all -------------------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  const clickRow = async (k, shift = false) => {
+    const rs = await p.$$(".panel.left .row");
+    if (shift) await p.keyboard.down("Shift");
+    await rs[k].click();
+    if (shift) await p.keyboard.up("Shift");
+    await sleep(350);
+  };
+  const setSize = async (v) => {
+    await p.evaluate(() => { const el = document.querySelector('.inspector input[aria-label="S"]'); el.focus(); el.select(); });
+    await p.keyboard.type(String(v));
+    await p.keyboard.press("Enter");
+    await sleep(400);
+  };
+  const dragText = async (x, y) => {
+    await p.keyboard.press("t");
+    await p.mouse.move(x, y); await p.mouse.down();
+    await p.mouse.move(x + 120, y + 30, { steps: 6 }); await p.mouse.up();
+    await sleep(400);
+    await p.keyboard.press("Escape");
+    await sleep(300);
+  };
+  await dragText(820, 640);
+  await dragText(820, 720);
+  await clickRow(1);
+  await setSize("20");
+  await clickRow(0);
+  await setSize("32");
+  await clickRow(1);
+  await clickRow(0, true);
+  const ids = (await api("getSelection", {})).data.ids;
+  t("two text layers selected", ids.length === 2);
+  t("size reads Mixed",
+    await p.evaluate(() => document.querySelector('.inspector input[aria-label="S"]').value) === "Mixed");
+  await setSize("24");
+  const sizes = [];
+  for (const id of (await api("getSelection", {})).data.ids)
+    sizes.push((await api("getNode", { id, full: true })).data.full.fontSize);
+  t(`size commits to every text layer (${sizes.join(",")})`, sizes.every(v => v === 24));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

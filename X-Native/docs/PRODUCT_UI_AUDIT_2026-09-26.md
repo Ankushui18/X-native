@@ -146,7 +146,7 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| IN-U1 | MULTI-SELECT: fill/stroke/appearance/effects show FIRST-layer values with NO Mixed (only corner radii has it); edits patch first layer only — exactly the §29 violation (controls masquerading as shared). Fix: Mixed display + apply-to-all via the numMany/onChangeMany pattern | PARTIAL | P1 |
+| IN-U1 | FIXED: shared patchMany/mixedProp/manyVals/patchNumMany helpers; Mixed display + apply-to-all for opacity/blend/corners(+toggles)/stroke weight/base fill+stroke rows (incl gradient/image/meta/remove/visibility) and Fill/Stroke/Effect Add; ColorRow gains a mixed swatch+hex. REMAINING (follow-up): fill/stroke/effect stack ROW edits, effect row ops, visibility-toggle display states (all: first-layer display kept, Export-precedent documented) | FIXED (P1) | — |
 | IN-U2 | FIXED: seg entry shows only when the vector card is absent (exactly one entry always); both use id+toast+⇧⌘O title; card refuses the stroke-less no-op with a teaching toast; labels unified | FIXED (P1) | — |
 | IN-U3 | Component/Instance, Boolean, Poly/Star headers use h-row, not Section (no collapse/persist, different chrome) | DRIFT (§29) | P2 |
 | IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
@@ -195,7 +195,7 @@ viewport clamp, role=tooltip; empty shortcut renders nothing).
 |---|---|---|---|
 | TY-U1 | FIXED: Italic toggle in Type settings popover (patchType fontStyle + rehug, = ⌘I path), new `italic` glyph, Tooltip ⌘I | FIXED (P1) | — |
 | TY-U2 | FIXED: all 9 type buttons wrapped in Tooltip + aria-label/aria-pressed (Underline shows ⌘U) | FIXED (P1) | — |
-| TY-U3 | Multi-select type metrics (size/leading/tracking/¶ + family/weight selects) show FIRST-layer values, no Mixed — IN-U1 sibling (§29) | PARTIAL | P1 |
+| TY-U3 | FIXED: Mixed + per-layer values + apply-to-all (with hug refit) for size/leading/tracking/paragraph-spacing/indent, Mixed options + patchTypeMany for family/weight, Auto-reset applies to all. REMAINING (follow-up): align/decoration segs, type-pop selects, min/max fields | FIXED (P1) | — |
 | FS-U6 scope+ | RETRACTED with FS-U6: patchType→patch detaches correctly (verified) | — | — |
 | TY-U4 | Round-to-pixels button has BOTH Tooltip wrapper AND native title= → double tooltip | DRIFT | P2 |
 | TY-U5 | Hidden x-ui "wiring" div (`display:none` PropertyField to force bundling) — dead UI + bundling hack; one of only 3 x-ui usages | DEAD UI | P2 |
