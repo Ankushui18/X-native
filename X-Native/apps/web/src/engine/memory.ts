@@ -23,9 +23,11 @@ import {
   BINDABLE_PROPS,
   applyBinding,
   fallbackForType,
+  isAlias,
   migrateCollections,
   resolveAllForMode,
   resolveVariable,
+  wouldCycle,
 } from "./variables";
 import { clipPlainText, copyText, nativeClipHtml, writeClipboard } from "./clipboard";
 import { dehydrateNode } from "./assets";
@@ -340,6 +342,45 @@ const MEMBER_REFUSED_KEYS = new Set([
   "imageCrop", "kind", "booleanOp",
 ]);
 
+/**
+ * On instance roots and members a style is a paint override: mirror it
+ * into the override record, or the next master sync restores the master's
+ * own style link. Plain layers need no record (nothing syncs them back).
+ */
+function recordStyleOverride(root: XNode, n: XNode, kind: "fill" | "stroke"): void {
+  if (!findInstanceRoot(root, n.id)) return;
+  n.overrides =
+    kind === "fill"
+      ? { ...(n.overrides || {}), fill: n.fill, fillStyle: n.fillStyle }
+      : { ...(n.overrides || {}), strokePaint: n.strokePaint, strokeStyle: n.strokeStyle };
+}
+
+/**
+ * Dropping a style link inside an instance records the absence, or sync
+ * re-binds the master's link. The `undefined` value survives the assign
+ * spread (it is the value that wins), not just the key check.
+ */
+function recordStyleDetach(root: XNode, n: XNode, kind: "fill" | "stroke"): void {
+  if (!findInstanceRoot(root, n.id)) return;
+  n.overrides =
+    kind === "fill"
+      ? { ...(n.overrides || {}), fillStyle: undefined }
+      : { ...(n.overrides || {}), strokeStyle: undefined };
+}
+
+/**
+ * Merge a live-link map (variable bindings, expressions) across a master
+ * sync or variant swap: the master's map supplies new keys, the
+ * instance's own entries win per prop — the same rule as overrides.
+ */
+function mergeLinkMaps<T>(
+  master: Record<string, T> | undefined,
+  local: Record<string, T> | undefined,
+): Record<string, T> | undefined {
+  const out = { ...(master ?? {}), ...(local ?? {}) };
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** Strip member-refused keys; null when nothing overridable remains. */
 function stripMemberPatch(patch: Partial<XNode>): Partial<XNode> | null {
   const out: Record<string, unknown> = {};
@@ -366,6 +407,17 @@ export function stripLayout(n: XNode): void {
   if (n.kind === "instance") return;
   // The model stores "no auto layout" as null, the same value the panel sends.
   n.layout = null;
+  // Gap/padding bindings die with the layout they pointed into.
+  if (n.variableBindings) {
+    delete n.variableBindings.layoutGap;
+    delete n.variableBindings.layoutPadding;
+    if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+  }
+  if (n.ownBindings) {
+    delete n.ownBindings.layoutGap;
+    delete n.ownBindings.layoutPadding;
+    if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+  }
   for (const c of n.children) stripLayout(c);
 }
 
@@ -1860,6 +1912,18 @@ export class MemoryEngine implements Engine {
           n.y = snapOn(this.state, s.page) ? Math.round(cmd.y) : cmd.y;
           n.w = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.w) : cmd.w);
           n.h = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.h) : cmd.h);
+          // An explicit resize wins over w/h bindings (Figma detaches on
+          // on-canvas edits); otherwise the next relayout snaps it back.
+          if (n.variableBindings) {
+            delete n.variableBindings.w;
+            delete n.variableBindings.h;
+            if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+          }
+          if (n.ownBindings) {
+            delete n.ownBindings.w;
+            delete n.ownBindings.h;
+            if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+          }
           if (n.kind === "text" && !cmd.scaleProps) {
             if (askedW !== oldW) n.sizingW = "fixed";
             if (askedH !== oldH) n.sizingH = "fixed";
@@ -2025,6 +2089,9 @@ export class MemoryEngine implements Engine {
           if (n.isComponent) {
             copy.isComponent = false;
             copy.componentId = masterId;
+            walk(copy, (m) => {
+              delete m.ownBindings;
+            });
           }
           // Put the duplicate directly above the one it came from, and
           // "the new frames will fill the subsequent cells" - so a copy of an
@@ -2067,9 +2134,11 @@ export class MemoryEngine implements Engine {
           // silently reverting the user's edit. Re-binding is explicit.
           if (incoming.fill !== undefined && incoming.fillStyle === undefined && n.fillStyle) {
             delete n.fillStyle;
+            recordStyleDetach(this.root(), n, "fill");
           }
           if (incoming.strokePaint !== undefined && incoming.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
+            recordStyleDetach(this.root(), n, "stroke");
           }
           // Same detach rule for variables: editing a bound prop by hand
           // clears that binding, otherwise the next relayout would revert
@@ -2079,6 +2148,10 @@ export class MemoryEngine implements Engine {
               if (k in n.variableBindings) delete n.variableBindings[k];
             }
             if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+          }
+          if (n.ownBindings) {
+            for (const k of Object.keys(incoming)) delete n.ownBindings[k];
+            if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
           }
           // Text rule: a text layer cannot hold a max height and a max
           // line count at once - setting either clears the other - so the pair
@@ -2118,6 +2191,18 @@ export class MemoryEngine implements Engine {
         // instance root as well as its members (masters publish through).
         if (n && !insideInstance(this.root(), cmd.id)) {
           n.layout = cmd.layout;
+          // A fresh preset wins over gap/padding bindings; without the
+          // detach the next relayout would snap the preset back.
+          if (n.variableBindings) {
+            delete n.variableBindings.layoutGap;
+            delete n.variableBindings.layoutPadding;
+            if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+          }
+          if (n.ownBindings) {
+            delete n.ownBindings.layoutGap;
+            delete n.ownBindings.layoutPadding;
+            if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+          }
           this.publishMaster(n);
         }
         break;
@@ -2627,6 +2712,7 @@ export class MemoryEngine implements Engine {
             n.strokeVisible = true;
             if (!(n.strokeWidth > 0)) n.strokeWidth = 1;
           }
+          recordStyleOverride(this.root(), n, cmd.kind);
         }
         break;
       }
@@ -2646,6 +2732,7 @@ export class MemoryEngine implements Engine {
             n.strokeVisible = true;
             if (!(n.strokeWidth > 0)) n.strokeWidth = 1;
           }
+          recordStyleOverride(this.root(), n, cmd.kind);
         }
         break;
       }
@@ -2656,6 +2743,7 @@ export class MemoryEngine implements Engine {
           if (!n) continue;
           if (cmd.kind === "fill") delete n.fillStyle;
           else delete n.strokeStyle;
+          recordStyleDetach(this.root(), n, cmd.kind === "fill" ? "fill" : "stroke");
         }
         break;
       }
@@ -2723,6 +2811,11 @@ export class MemoryEngine implements Engine {
         }
         const n = find(this.root(), s.selection[0]);
         if (!n) break;
+        // Fresh master content carries no ownership pins: bindings cloned
+        // in are the master's own, and instances must flow with them.
+        walk(n, (m) => {
+          delete m.ownBindings;
+        });
         // A component from an instance is a NEW master: reusing the old id
         // would hijack the library entry every sibling syncs from. Only an
         // existing master republishes under its own id.
@@ -2819,6 +2912,9 @@ export class MemoryEngine implements Engine {
               const y = n.y;
               const id = n.id;
               const props = clone(n.componentProperties);
+              const oldBindings = n.variableBindings;
+              const oldExpr = n.expressions;
+              const oldOwn = n.ownBindings;
               // Fresh child ids: without the reid every instance on this
               // variant would share the library's node ids, and the next
               // patch would land on whichever instance `find` meets first.
@@ -2833,6 +2929,9 @@ export class MemoryEngine implements Engine {
                 variant: String(cmd.value),
                 componentProperties: props,
               });
+              n.variableBindings = mergeLinkMaps(n.variableBindings, oldBindings);
+              n.expressions = mergeLinkMaps(n.expressions, oldExpr);
+              n.ownBindings = oldOwn;
               // By-name preservation plus Figma's size rule: a manual size
               // survives only when the new variant measures the same.
               carryNestedOverrides(beforeKids, n.children);
@@ -2876,6 +2975,9 @@ export class MemoryEngine implements Engine {
         copy.y = cmd.y;
         copy.isComponent = false;
         copy.componentId = lib.id;
+        walk(copy, (m) => {
+          delete m.ownBindings;
+        });
         copy.name = lib.name;
         copy.componentProperties = {};
         for (const p of lib.properties ?? []) {
@@ -3411,6 +3513,9 @@ export class MemoryEngine implements Engine {
         const oldKids = n.children;
         const oldW = n.w;
         const oldH = n.h;
+        const oldBindings = n.variableBindings;
+        const oldExpr = n.expressions;
+        const oldOwn = n.ownBindings;
         Object.assign(n, swapped, {
           x,
           y,
@@ -3419,6 +3524,9 @@ export class MemoryEngine implements Engine {
           componentId: n.componentId,
           variant: cmd.name,
         });
+        n.variableBindings = mergeLinkMaps(n.variableBindings, oldBindings);
+        n.expressions = mergeLinkMaps(n.expressions, oldExpr);
+        n.ownBindings = oldOwn;
         carryNestedOverrides(oldKids, n.children);
         if (n.overrides && (n.w !== oldW || n.h !== oldH)) {
           delete n.overrides.w;
@@ -3487,7 +3595,10 @@ export class MemoryEngine implements Engine {
             copy.componentProperties = { ...copy.componentProperties, Variant: n.variant };
           }
           copy.overrides = undefined;
-          walk(copy, (c) => { c.overrides = undefined; });
+          walk(copy, (c) => {
+            c.overrides = undefined;
+            delete c.ownBindings;
+          });
           Object.assign(n, copy);
         }
         break;
@@ -3498,6 +3609,23 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "addVariable": {
+        // Duplicate ids would silently shadow a variable in resolution.
+        if (s.variables.some((x) => x.id === cmd.variable.id)) break;
+        // Cyclic aliases are refused at author (Figma: "that selection
+        // would create an infinite loop of variables").
+        const newSlots = cmd.variable.values ?? {};
+        const newEdges: { target: string; modeId?: string }[] = [];
+        if (isAlias(cmd.variable.value)) newEdges.push({ target: cmd.variable.value.alias });
+        for (const [mid, slot] of Object.entries(newSlots)) {
+          if (isAlias(slot)) newEdges.push({ target: slot.alias, modeId: mid });
+        }
+        if (
+          newEdges.some((e) =>
+            wouldCycle(s.variables, s.variableCollections, cmd.variable.id, e.target, e.modeId),
+          )
+        ) {
+          break;
+        }
         s.variables.push(cmd.variable);
         this.ensureCollection(cmd.variable.collection);
         break;
@@ -3506,12 +3634,46 @@ export class MemoryEngine implements Engine {
         const v = s.variables.find((x) => x.id === cmd.id);
         if (v) {
           const { values, ...rest } = cmd.patch;
+          // Cyclic aliases are refused at author (Figma: "that selection
+          // would create an infinite loop of variables").
+          const edges: { target: string; modeId?: string }[] = [];
+          if (isAlias(rest.value)) edges.push({ target: rest.value.alias });
+          if (values) {
+            for (const [mid, slot] of Object.entries(values)) {
+              if (isAlias(slot)) edges.push({ target: slot.alias, modeId: mid });
+            }
+          }
+          if (
+            edges.some((e) => wouldCycle(s.variables, s.variableCollections, v.id, e.target, e.modeId))
+          ) {
+            break;
+          }
           // A type change invalidates every stored slot: keep the raw
           // values and bindings would silently mis-resolve, so reset to
           // the new type's fallback instead.
           if (rest.type && rest.type !== v.type) {
             v.value = fallbackForType(rest.type);
             v.values = {};
+            // Bindings that no longer match the new type are scrubbed: a
+            // fill still pointing at a number would sit silently dead.
+            // (number→text stays valid: numbers render as text content.)
+            const keep = (prop: string) =>
+              BINDABLE_PROPS[prop] === rest.type || (prop === "text" && rest.type === "number");
+            for (const pg of s.pages) {
+              walk(pg.root, (n) => {
+                if (!n.variableBindings) return;
+                for (const prop of Object.keys(n.variableBindings)) {
+                  if (n.variableBindings[prop] === v.id && !keep(prop)) {
+                    delete n.variableBindings[prop];
+                    if (n.ownBindings) {
+                      delete n.ownBindings[prop];
+                      if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+                    }
+                  }
+                }
+                if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+              });
+            }
           }
           Object.assign(v, rest);
           // Per-mode values merge slot by slot; a wholesale replace would
@@ -3555,7 +3717,15 @@ export class MemoryEngine implements Engine {
         const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
         const name = cmd.name.trim();
         if (!c || !name || c.modes.some((m) => m.name === name)) break;
-        c.modes.push({ id: uid("mode"), name });
+        const id = uid("mode");
+        c.modes.push({ id, name });
+        // Figma duplicates the first column into the new mode: later
+        // default edits must not leak into it (fallback would leak).
+        for (const v of s.variables) {
+          if (v.collection !== c.name) continue;
+          if (!v.values) v.values = {};
+          if (v.values[id] === undefined) v.values[id] = clone(v.value);
+        }
         break;
       }
       case "renameMode": {
@@ -3588,14 +3758,48 @@ export class MemoryEngine implements Engine {
         const n = find(this.root(), cmd.id);
         const v = s.variables.find((x) => x.id === cmd.variableId);
         const need = BINDABLE_PROPS[cmd.prop];
-        if (!n || !v || !need || v.type !== need) break;
-        if ((cmd.prop === "text" || cmd.prop === "fontSize") && n.kind !== "text") break;
+        if (!n || !v || !need) break;
+        // Numbers render as text content (Figma tip for calculated copy).
+        if (v.type !== need && !(cmd.prop === "text" && v.type === "number")) break;
+        const TEXT_BINDS = new Set([
+          "text",
+          "fontSize",
+          "letterSpacing",
+          "lineHeight",
+          "paragraphSpacing",
+          "paragraphIndent",
+          "fontWeight",
+          "fontFamily",
+        ]);
+        if (TEXT_BINDS.has(cmd.prop) && n.kind !== "text") break;
         if (cmd.prop === "cornerRadii" && !n.cornerRadii) break;
+        if ((cmd.prop === "layoutGap" || cmd.prop === "layoutPadding") && !n.layout) break;
+        // Instance geometry belongs to the master: members take no size,
+        // radii, or layout bindings, and even roots take no layout
+        // bindings (layout belongs to the main component, C-001).
+        const rt = this.root();
+        const memberGeometry =
+          cmd.prop === "w" ||
+          cmd.prop === "h" ||
+          cmd.prop === "cornerRadii" ||
+          cmd.prop === "layoutGap" ||
+          cmd.prop === "layoutPadding";
+        if (memberGeometry && isInstanceMember(rt, cmd.id)) break;
+        if ((cmd.prop === "layoutGap" || cmd.prop === "layoutPadding") && findInstanceRoot(rt, cmd.id)) {
+          break;
+        }
         if (!n.variableBindings) n.variableBindings = {};
         n.variableBindings[cmd.prop] = cmd.variableId;
+        // Bound on the instance itself (not flowed from the master): pin it.
+        if (findInstanceRoot(this.root(), cmd.id)) {
+          if (!n.ownBindings) n.ownBindings = {};
+          n.ownBindings[cmd.prop] = cmd.variableId;
+        }
         // Apply immediately so the canvas updates before the next relayout.
         const r = resolveVariable(s.variables, s.variableCollections, s.activeModes, cmd.variableId);
         if (r && !r.broken) applyBinding(n, cmd.prop, r.value);
+        // A master bind is master content: publish so instances receive it.
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "unbindVariable": {
@@ -3604,6 +3808,12 @@ export class MemoryEngine implements Engine {
           delete n.variableBindings[cmd.prop];
           if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
         }
+        if (n?.ownBindings) {
+          delete n.ownBindings[cmd.prop];
+          if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+        }
+        // A master unbind propagates; instance-own entries stay pinned.
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "swapInstance": {
@@ -3748,6 +3958,7 @@ export class MemoryEngine implements Engine {
           if (!n.expressions) n.expressions = {};
           n.expressions[cmd.property] = cmd.expression;
           this.evaluateExpressionsInTree(this.root());
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
@@ -3756,6 +3967,7 @@ export class MemoryEngine implements Engine {
         if (n && n.expressions) {
           delete n.expressions[cmd.property];
           this.evaluateExpressionsInTree(this.root());
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
@@ -3786,6 +3998,9 @@ export class MemoryEngine implements Engine {
     const oldKids = n.children;
     const oldW = n.w;
     const oldH = n.h;
+    const oldBindings = n.variableBindings;
+    const oldExpr = n.expressions;
+    const oldOwn = n.ownBindings;
     Object.assign(n, fresh, {
       x: n.x,
       y: n.y,
@@ -3796,6 +4011,9 @@ export class MemoryEngine implements Engine {
       variant: undefined,
       componentProperties: props,
     });
+    n.variableBindings = mergeLinkMaps(n.variableBindings, oldBindings);
+    n.expressions = mergeLinkMaps(n.expressions, oldExpr);
+    n.ownBindings = oldOwn;
     carryNestedOverrides(oldKids, n.children);
     if (n.overrides && (n.w !== oldW || n.h !== oldH)) {
       delete n.overrides.w;
@@ -3953,6 +4171,20 @@ function syncInstances(pages: Page[], edited: XNode, defaultDef: XNode, variants
     const id = instNode.id;
     const interactions = instNode.interactions;
     const localOverrides = instNode.overrides ? { ...instNode.overrides } : {};
+    const localBindings = instNode.variableBindings;
+    const localExpr = instNode.expressions;
+    // Own bindings (bound on the instance itself) pin their props against
+    // the master's map; flowed bindings follow the master, so a master
+    // unbind propagates. Nested instances pin their whole map: their
+    // binding state is owned by their own master, the outer sync only adds.
+    const pinned: Record<string, string> = {};
+    if (nestedLink) {
+      Object.assign(pinned, localBindings ?? {});
+    } else if (instNode.ownBindings) {
+      for (const k of Object.keys(instNode.ownBindings)) {
+        if (localBindings?.[k] !== undefined) pinned[k] = localBindings[k];
+      }
+    }
 
     const masterKids = masterDef.children ?? [];
     const instKids = instNode.children ?? [];
@@ -3997,6 +4229,9 @@ function syncInstances(pages: Page[], edited: XNode, defaultDef: XNode, variants
       } else {
         const newKid = clone(mk);
         reid(newKid);
+        walk(newKid, (m) => {
+          delete m.ownBindings;
+        });
         syncedKids.push(newKid);
       }
     }
@@ -4017,6 +4252,12 @@ function syncInstances(pages: Page[], edited: XNode, defaultDef: XNode, variants
       // stamps left by older syncs.
       componentId: nestedLink ?? (isRoot ? cid : ""),
       children: nestedLink ? instNode.children : syncedKids,
+      // Bindings and expressions are live links, not synced content: the
+      // master's maps supply new keys, the instance's own entries win.
+      // The pin set itself passes through untouched.
+      variableBindings: mergeLinkMaps(masterProps.variableBindings, pinned),
+      expressions: mergeLinkMaps(masterProps.expressions, localExpr),
+      ownBindings: instNode.ownBindings,
       overrides: localOverrides,
       ...localOverrides,
     });

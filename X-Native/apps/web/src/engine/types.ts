@@ -600,10 +600,17 @@ export interface XNode {
    * Variable bindings: layer prop name -> variable id. Bound props are
    * re-applied from the resolved variable (under the active mode) on every
    * relayout; editing a bound prop directly clears that entry (detach).
-   * Supported props: fill, strokePaint, strokeWidth, opacity, fontSize,
-   * cornerRadii, visible, text. Type-checked at bind time.
+   * Supported props: see BINDABLE_PROPS. Type-checked at bind time.
    */
   variableBindings?: Record<string, string>;
+  /**
+   * The subset of `variableBindings` bound on this instance node itself
+   * (root or member) rather than flowed down from its master. Own entries
+   * pin their props across master syncs; flowed entries follow the master,
+   * so a master bind — or unbind — propagates. Plain and master layers
+   * never carry it.
+   */
+  ownBindings?: Record<string, string>;
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;

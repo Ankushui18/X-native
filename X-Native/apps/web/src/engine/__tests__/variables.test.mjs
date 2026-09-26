@@ -4,7 +4,7 @@
  *
  * Run with:  npx vite-node src/engine/__tests__/variables.test.mjs
  */
-import { MemoryEngine, find } from "../memory.ts";
+import { MemoryEngine, find, defaultLayout } from "../memory.ts";
 import {
   BINDABLE_PROPS,
   applyBinding,
@@ -14,6 +14,7 @@ import {
   migrateCollections,
   resolveAllForMode,
   resolveVariable,
+  wouldCycle,
 } from "../variables.ts";
 import { saveDoc } from "../persist.ts";
 
@@ -67,6 +68,12 @@ console.log("collection + mode commands:");
   t("setActiveMode records", modesOf(e)[brand.id] === dark.id);
   e.dispatch({ type: "setActiveMode", collectionId: brand.id, modeId: "nope" });
   t("unknown mode rejected", modesOf(e)[brand.id] === dark.id);
+  e.dispatch({ type: "setActiveMode", collectionId: brand.id, modeId: dark.id });
+  const snap1 = resolveVariable(varsOf(e), colsOf(e), { [brand.id]: dark.id }, "var-1");
+  e.dispatch({ type: "patchVariable", id: "var-1", patch: { value: "#00ff00" } });
+  const snap2 = resolveVariable(varsOf(e), colsOf(e), { [brand.id]: dark.id }, "var-1");
+  const snapDefault = resolveVariable(varsOf(e), colsOf(e), {}, "var-1");
+  t("new mode snapshots defaults (no leak)", snap1.value === "#0d99ff" && snap2.value === "#0d99ff" && snapDefault.value === "#00ff00");
   e.dispatch({ type: "deleteMode", collectionId: brand.id, modeId: dark.id });
   t("deleteMode removes + resets active", colByName(e, "Brand").modes.length === 1);
   e.dispatch({ type: "deleteMode", collectionId: brand.id, modeId: colByName(e, "Brand").modes[0].id });
@@ -102,8 +109,21 @@ console.log("resolution (modes + aliases):");
   t("alias chain resolves", r("v-c").value === "#123456" && !r("v-c").broken);
   t("isAlias detects refs", isAlias(varByName(e, "b").value) && !isAlias(varByName(e, "a").value));
   e.dispatch({ type: "patchVariable", id: "v-a", patch: { value: { alias: "v-c" } } });
-  t("cycle reports broken + fallback", r("v-c").broken === true && r("v-c").reason === "cycle" && r("v-c").value === fallbackForType("color"));
-  e.dispatch({ type: "patchVariable", id: "v-a", patch: { value: "#123456" } });
+  t("cyclic alias refused at author", varByName(e, "a").value === "#123456");
+  t("wouldCycle spots loops + self",
+    wouldCycle(varsOf(e), colsOf(e), "v-a", "v-c") === true &&
+    wouldCycle(varsOf(e), colsOf(e), "v-a", "v-a") === true &&
+    wouldCycle(varsOf(e), colsOf(e), "v-c", "v-a") === false);
+  e.dispatch({ type: "addVariable", variable: { id: "v-self", name: "self", type: "color", value: { alias: "v-self" }, collection: "Brand" } });
+  t("self alias refused on create", !varByName(e, "self"));
+  e.dispatch({ type: "addVariable", variable: { id: "v-a", name: "dupe", type: "color", value: "#000000", collection: "Brand" } });
+  t("duplicate variable id refused", varsOf(e).filter((v) => v.id === "v-a").length === 1);
+  const legacy = [
+    { id: "lx", name: "lx", type: "color", value: { alias: "ly" }, collection: "Brand" },
+    { id: "ly", name: "ly", type: "color", value: { alias: "lx" }, collection: "Brand" },
+  ];
+  const rl = resolveVariable(legacy, colsOf(e), modesOf(e), "lx");
+  t("legacy cycle still reports broken", rl.broken === true && rl.reason === "cycle" && rl.value === fallbackForType("color"));
   e.dispatch({ type: "patchVariable", id: "v-b", patch: { value: { alias: "ghost" } } });
   t("missing target reports broken", r("v-b").broken === true && r("v-b").reason === "missing");
   e.dispatch({ type: "addVariable", variable: { id: "v-n", name: "n", type: "number", value: 7, collection: "Brand" } });
@@ -136,7 +156,7 @@ console.log("layer bindings:");
   const e = new MemoryEngine(false);
   e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 100, h: 100 });
   const id = snapOf(e).selection[0];
-  t("bindable prop table covers 8 props", Object.keys(BINDABLE_PROPS).length === 8 && BINDABLE_PROPS.fill === "color");
+  t("bindable prop table covers 18 props", Object.keys(BINDABLE_PROPS).length === 18 && BINDABLE_PROPS.fill === "color");
   e.dispatch({ type: "bindVariable", id, prop: "fill", variableId: "var-1" });
   t("bind applies immediately", byId(e, id).fill === "#0d99ff" && byId(e, id).variableBindings.fill === "var-1");
   // Mode switch re-applies the binding.
@@ -273,6 +293,162 @@ console.log("recursive constraints:");
   e.dispatch({ type: "resize", id: f, x: 0, y: 0, w: 300, h: 300 });
   t("stretch child follows parent", byId(e, c).w === 200 && byId(e, c).h === 200);
   t("stretch grandchild cascades", byId(e, g).w === 150 && byId(e, g).h === 150);
+}
+
+console.log("§18 number text + dimensions:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 0, w: 100, h: 30 });
+  const tid = snapOf(e).selection[0];
+  e.dispatch({ type: "addVariable", variable: { id: "v-num", name: "count", type: "number", value: 16, collection: "Brand" } });
+  e.dispatch({ type: "bindVariable", id: tid, prop: "text", variableId: "v-num" });
+  t("number binds text content", byId(e, tid).text === "16");
+  e.dispatch({ type: "patchVariable", id: "v-num", patch: { value: 42 } });
+  t("number text stays live", byId(e, tid).text === "42");
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 10, h: 10 });
+  const rid = snapOf(e).selection[0];
+  e.dispatch({ type: "bindVariable", id: rid, prop: "w", variableId: "v-num" });
+  t("number binds width", byId(e, rid).w === 42);
+  e.dispatch({ type: "resize", id: rid, x: 0, y: 0, w: 99, h: 10 });
+  t("resize detaches width + sticks", !byId(e, rid).variableBindings?.w && byId(e, rid).w === 99);
+}
+
+console.log("§18 type change scrub:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 50, h: 50 });
+  const id = snapOf(e).selection[0];
+  e.dispatch({ type: "bindVariable", id, prop: "fill", variableId: "var-1" });
+  e.dispatch({ type: "patchVariable", id: "var-1", patch: { type: "number" } });
+  t("type change scrubs mismatched bindings", !byId(e, id).variableBindings?.fill);
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 0, w: 100, h: 30 });
+  const tid = snapOf(e).selection[0];
+  e.dispatch({ type: "addVariable", variable: { id: "v-s", name: "s", type: "string", value: "hi", collection: "Brand" } });
+  e.dispatch({ type: "bindVariable", id: tid, prop: "text", variableId: "v-s" });
+  e.dispatch({ type: "patchVariable", id: "v-s", patch: { type: "number" } });
+  t("text binding survives string→number", byId(e, tid).variableBindings?.text === "v-s" && byId(e, tid).text === "0");
+}
+
+console.log("§18 text + layout bindings:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 0, w: 100, h: 30 });
+  const tid = snapOf(e).selection[0];
+  e.dispatch({ type: "addVariable", variable: { id: "v-ls", name: "ls", type: "number", value: 4, collection: "Brand" } });
+  e.dispatch({ type: "bindVariable", id: tid, prop: "letterSpacing", variableId: "v-ls" });
+  t("letterSpacing binds", byId(e, tid).letterSpacing === 4);
+  e.dispatch({ type: "addVariable", variable: { id: "v-ff", name: "ff", type: "string", value: "Inter", collection: "Brand" } });
+  e.dispatch({ type: "bindVariable", id: tid, prop: "fontFamily", variableId: "v-ff" });
+  t("fontFamily binds", byId(e, tid).fontFamily === "Inter");
+  e.dispatch({ type: "add", kind: "rect", x: 0, y: 0, w: 10, h: 10 });
+  const rid = snapOf(e).selection[0];
+  e.dispatch({ type: "bindVariable", id: rid, prop: "fontFamily", variableId: "v-ff" });
+  t("text bindings need a text layer", !byId(e, rid).variableBindings?.fontFamily);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 200 });
+  const fid = snapOf(e).selection[0];
+  e.dispatch({ type: "addVariable", variable: { id: "v-gap", name: "gap", type: "number", value: 12, collection: "Brand" } });
+  e.dispatch({ type: "bindVariable", id: fid, prop: "layoutGap", variableId: "v-gap" });
+  t("gap needs auto layout", !byId(e, fid).variableBindings?.layoutGap);
+  e.dispatch({ type: "autoLayout", id: fid, layout: defaultLayout() });
+  e.dispatch({ type: "bindVariable", id: fid, prop: "layoutGap", variableId: "v-gap" });
+  t("gap binds on auto layout", byId(e, fid).layout.gap === 12);
+  e.dispatch({ type: "bindVariable", id: fid, prop: "layoutPadding", variableId: "v-gap" });
+  t("padding binds", JSON.stringify(byId(e, fid).layout.padding) === "[12,12,12,12]");
+  e.dispatch({ type: "autoLayout", id: fid, layout: defaultLayout() });
+  t("fresh preset drops gap/padding", !byId(e, fid).variableBindings?.layoutGap && !byId(e, fid).variableBindings?.layoutPadding);
+  e.dispatch({ type: "bindVariable", id: fid, prop: "layoutGap", variableId: "v-gap" });
+  e.dispatch({ type: "removeAllLayout", id: fid });
+  t("stripLayout drops gap binding", !byId(e, fid).variableBindings?.layoutGap);
+}
+
+console.log("§18 instance binding rules:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 100 });
+  const f = snapOf(e).selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 40, h: 40, parent: f });
+  e.dispatch({ type: "patch", id: byId(e, f).children[0].id, patch: { name: "A" } });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "makeComponent" });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "duplicate" });
+  const inst = snapOf(e).selection[0];
+  const mA = byId(e, inst).children[0].id;
+  const mAmaster = byId(e, f).children[0].id;
+  e.dispatch({ type: "addVariable", variable: { id: "v-w", name: "vw", type: "number", value: 40, collection: "Brand" } });
+  e.dispatch({ type: "bindVariable", id: mA, prop: "w", variableId: "v-w" });
+  t("member takes no width binding", !byId(e, mA).variableBindings?.w);
+  e.dispatch({ type: "bindVariable", id: mA, prop: "fill", variableId: "var-1" });
+  t("member takes paint bindings", byId(e, mA).variableBindings?.fill === "var-1");
+  e.dispatch({ type: "patch", id: f, patch: { name: "M2" } });
+  t("own binding survives master sync", byId(e, inst).children[0].variableBindings?.fill === "var-1");
+  e.dispatch({ type: "bindVariable", id: mAmaster, prop: "strokeWidth", variableId: "var-3" });
+  t("master bind flows to live instances", byId(e, inst).children[0].variableBindings?.strokeWidth === "var-3");
+  e.dispatch({ type: "unbindVariable", id: mAmaster, prop: "strokeWidth" });
+  t("master unbind flows, own stays",
+    !byId(e, inst).children[0].variableBindings?.strokeWidth &&
+    byId(e, inst).children[0].variableBindings?.fill === "var-1");
+  e.dispatch({ type: "bindVariable", id: inst, prop: "layoutGap", variableId: "v-w" });
+  t("instance root takes no layout bindings", !byId(e, inst).variableBindings?.layoutGap);
+}
+
+console.log("§18 styles × instances:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 100 });
+  const f = snapOf(e).selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 40, h: 40, parent: f });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "makeComponent" });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "duplicate" });
+  const inst = snapOf(e).selection[0];
+  const mA = byId(e, inst).children[0].id;
+  e.dispatch({ type: "select", ids: [mA] });
+  e.dispatch({ type: "createStyle", kind: "fill", name: "MemberRed" });
+  const stId = snapOf(e).styles.find((x) => x.name === "MemberRed").id;
+  e.dispatch({ type: "patch", id: f, patch: { name: "M3" } });
+  t("member style survives master sync", byId(e, inst).children[0].fillStyle === stId);
+  e.dispatch({ type: "select", ids: [inst] });
+  e.dispatch({ type: "applyStyle", kind: "fill", styleId: stId });
+  e.dispatch({ type: "patch", id: f, patch: { name: "M4" } });
+  t("root style survives master sync", byId(e, inst).fillStyle === stId);
+  e.dispatch({ type: "patch", id: mA, patch: { fill: "#00ff00" } });
+  e.dispatch({ type: "patch", id: f, patch: { name: "M5" } });
+  t("member hand-edit drops style persistently",
+    byId(e, inst).children[0].fill === "#00ff00" && !byId(e, inst).children[0].fillStyle);
+}
+
+console.log("§18 pin hygiene:");
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 200, h: 100 });
+  const f = snapOf(e).selection[0];
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 40, h: 40, parent: f });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "makeComponent" });
+  e.dispatch({ type: "bindVariable", id: byId(e, f).children[0].id, prop: "fill", variableId: "var-1" });
+  e.dispatch({ type: "select", ids: [f] });
+  e.dispatch({ type: "duplicate" });
+  const inst = snapOf(e).selection[0];
+  t("fresh instances arrive unpinned", byId(e, inst).children[0].ownBindings === undefined);
+  t("flowed binding still applies", byId(e, inst).children[0].variableBindings?.fill === "var-1");
+  // Detach → recomponent resets ownership: the master unbind flows.
+  e.dispatch({ type: "select", ids: [inst] });
+  e.dispatch({ type: "detachInstance" });
+  e.dispatch({ type: "bindVariable", id: byId(e, inst).children[0].id, prop: "strokeWidth", variableId: "var-3" });
+  e.dispatch({ type: "select", ids: [inst] });
+  e.dispatch({ type: "makeComponent" });
+  e.dispatch({ type: "select", ids: [inst] });
+  e.dispatch({ type: "duplicate" });
+  const inst2 = snapOf(e).selection[0];
+  e.dispatch({ type: "unbindVariable", id: byId(e, inst).children[0].id, prop: "strokeWidth" });
+  t("recomponented masters flow unbinds", !byId(e, inst2).children[0].variableBindings?.strokeWidth);
+  // Reset clears pins: a later master unbind flows through.
+  e.dispatch({ type: "bindVariable", id: byId(e, inst2).children[0].id, prop: "fill", variableId: "var-1" });
+  e.dispatch({ type: "resetOverrides", id: inst2 });
+  e.dispatch({ type: "unbindVariable", id: byId(e, inst).children[0].id, prop: "fill" });
+  t("reset clears pins", !byId(e, inst2).children[0].variableBindings?.fill);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -24,8 +24,8 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 14 | Typography (+ phantom controls) | ✅ done | Y-001–Y-015 (39 tests) |
 | 15 | Vector / pen (object vs edit mode) | ✅ done | V-001–V-010 (28 tests) |
 | 16 | Layers / structure | ✅ done | L-001–L-007 (24 tests) |
-| 17 | Components | … | |
-| 18 | Variables / tokens / styles | … | |
+| 17 | Components | ✅ done | C-001–C-013 (55 tests) |
+| 18 | Variables / tokens / styles | ✅ done | VR-001–VR-014 (32 tests) |
 | 19 | Auto Layout UX | … | |
 | 20 | Contextual inspector | … | |
 | 21 | Context toolbar | … | |
@@ -860,3 +860,88 @@ push-to-main same-file only, never for nested-in-component), plus forum
   (per-property reset exists via the op); no phantom.
 - Undo-stack no-op pollution (dispatch pushes even when guards
   refuse): pre-existing, cross-cutting, left for the history section.
+
+## §18 — Variables / tokens / styles
+
+Evidence: Figma “Guide to variables” (15339657135383: article map),
+“Apply variables to designs” (15343107263511, fetched verbatim:
+number→font size/gap/guides/w-h/min-max/corner/effects/padding/
+opacity/letter-spacing/line-height/paragraph/stroke; number-on-text
+tip; string→text/font family+weight; boolean→visibility; detach
+gestures; on-canvas padding/gap edits detach), “Create and manage”
+(15145852043927: alias same-type + detach, duplicate ⇧Enter, scope
+lists, edit modal), “Modes” (15343816063383: new mode duplicates the
+first column, default = left-most), forum “Detach deleted variables”
+(delete leaves dangling bindings by design) and the alias
+infinite-loop refusal (“that selection would create an infinite loop
+of variables”).
+
+### Fixed (shipped in the §18 variables commit on this branch)
+
+- VR-001 Numbers bind to text content (Figma tip): bind guard + string
+  coercion on apply, picker entry.
+- VR-002 Width/height bindings; an explicit resize detaches them
+  (Figma: on-canvas edits detach), otherwise relayout snaps it back.
+- VR-003 Text bindings: letter-spacing, line-height, paragraph
+  spacing/indent, font weight, font family (text layers only).
+- VR-004 Gap/padding bindings on auto-layout frames (bind requires a
+  layout; a fresh preset or layout-strip drops the keys).
+- VR-005 Instance binding refusals: members take no size/radii/layout
+  bindings, roots take no layout bindings (C-001 geometry ownership).
+- VR-006 A variable type change scrubs bindings that no longer match
+  (was silently dead entries); number→text stays valid.
+- VR-007 `addVariable` refuses duplicate ids (was silent shadowing in
+  resolution).
+- VR-008 Cyclic and self aliases refused at author via `wouldCycle`
+  (engine backstop + UI toast with Figma's message); the resolver's
+  broken-cycle branch stays for legacy documents.
+- VR-009 Styles inside instances record overrides: apply/create on
+  roots and members survive master sync; detach and hand-edit
+  style-drops record the absence instead of being re-bound.
+- VR-010 Binding/expression preservation: sync merges maps with the
+  instance's own entries winning (`ownBindings` pins), so master
+  binds AND unbinds propagate while own bindings survive; nested
+  instances pin their whole map (owned by their own master);
+  variant switch, swap, and variant-props preserve pins; pin hygiene
+  on duplicate-of-master, place, fresh sync members, reset, and
+  makeComponent; bind/unbind/expression edits on master content
+  publish (C-010).
+- VR-011 Variable rename (double-click, same gesture as collections
+  and modes; engine op existed with no caller).
+- VR-012 Style rename (double-click; `editStyle` name existed with no
+  caller).
+- VR-013 Bind picker tables cover the Figma-supported props per type,
+  with layout/instance guards mirroring the engine.
+- VR-014 `addMode` snapshots the first column into the new mode
+  (Figma duplicates values); fallback used to leak later default
+  edits into the new mode.
+
+### Verified parity (traced, no fix needed)
+
+- Live canvas update on value edits (every dispatch relayouts);
+  default = modes[0] (left-most); mode/collection add/rename/delete
+  guards (dupes, last-mode protection, slot scrub, active reset);
+  collection rename moves members.
+- Delete-in-use dangles by design (matches Figma's “Detach deleted
+  variables” model): values freeze, aliases report broken, the
+  inspector shows “Missing variable” + unbind, and undo heals.
+- Alias authoring filters same-type + refuses self (pre-existing UI);
+  strict value coercion; detach-on-direct-edit; unbind keeps values.
+- Styles: create-from-selection (multi), apply, detach, live repaint
+  on edit, delete keeps colours; detach keeps variable links.
+
+### Deferred / out of scope
+
+- Per-layer/per-page modes with Auto inheritance (Figma core, big new
+  surface; X is correctly global-only throughout, no phantoms).
+- Scopes, descriptions, slash groups, picker search, code syntax,
+  publishing/hiding (new model + UI surface).
+- Duplicate variable/collection/mode, set-default/reorder modes
+  (convenience surface; no engine ops exist).
+- Effect-color, gradient-stop, and opacity-of-color bindings (nested
+  key schemes); boolean→variant-prop binding (§23-adjacent).
+- Nested-binding carry across variant switches (deep edge);
+  expression unbind-flow (X-only deviation, merge only);
+  paste-properties copying raw values instead of bindings.
+- Kept extras: cross-collection variable moves (Figma forbids),
+  engine-level type change (Figma immutable, UI-unreachable).

@@ -72,7 +72,14 @@ export function coerceVariableValue(
   }
 }
 
-/** Layer props that may bind to a variable, with the variable type each needs. */
+/**
+ * Layer props that may bind to a variable, with the variable type each
+ * needs. Mirrors Figma's scope lists (number: width/height, gap, padding,
+ * corner radius, font weight/size/line-height/letter-spacing/paragraph
+ * spacing/indent, stroke, opacity, text content; string: text, font
+ * family/weight-or-style; color: fill/stroke; boolean: visibility).
+ * `text` also accepts numbers (Figma renders them as content).
+ */
 export const BINDABLE_PROPS: Record<string, VariableType> = {
   fill: "color",
   strokePaint: "color",
@@ -82,6 +89,16 @@ export const BINDABLE_PROPS: Record<string, VariableType> = {
   cornerRadii: "number",
   visible: "boolean",
   text: "string",
+  w: "number",
+  h: "number",
+  letterSpacing: "number",
+  lineHeight: "number",
+  paragraphSpacing: "number",
+  paragraphIndent: "number",
+  fontWeight: "number",
+  fontFamily: "string",
+  layoutGap: "number",
+  layoutPadding: "number",
 };
 
 export interface ResolvedVariable {
@@ -180,12 +197,92 @@ export function applyBinding(node: XNode, prop: string, value: VariableLiteral):
       node.visible = value;
       return true;
     case "text":
-      if (node.kind !== "text" || typeof value !== "string") return false;
+      if (node.kind !== "text") return false;
+      // Numbers render as content (Figma tip for calculated copy).
+      if (typeof value === "number") {
+        node.text = String(value);
+        return true;
+      }
+      if (typeof value !== "string") return false;
       node.text = value;
+      return true;
+    case "w":
+      if (typeof value !== "number") return false;
+      node.w = Math.max(1, value);
+      return true;
+    case "h":
+      if (typeof value !== "number") return false;
+      node.h = Math.max(1, value);
+      return true;
+    case "letterSpacing":
+      if (node.kind !== "text" || typeof value !== "number") return false;
+      node.letterSpacing = value;
+      return true;
+    case "lineHeight":
+      if (node.kind !== "text" || typeof value !== "number") return false;
+      node.lineHeight = value;
+      return true;
+    case "paragraphSpacing":
+      if (node.kind !== "text" || typeof value !== "number") return false;
+      node.paragraphSpacing = value;
+      return true;
+    case "paragraphIndent":
+      if (node.kind !== "text" || typeof value !== "number") return false;
+      node.paragraphIndent = value;
+      return true;
+    case "fontWeight":
+      if (node.kind !== "text" || typeof value !== "number") return false;
+      node.fontWeight = value;
+      return true;
+    case "fontFamily":
+      if (node.kind !== "text" || typeof value !== "string") return false;
+      node.fontFamily = value;
+      return true;
+    case "layoutGap":
+      if (!node.layout || typeof value !== "number") return false;
+      node.layout.gap = Math.max(0, value);
+      return true;
+    case "layoutPadding":
+      if (!node.layout || typeof value !== "number") return false;
+      node.layout.padding = [value, value, value, value];
       return true;
     default:
       return false;
   }
+}
+
+/**
+ * True when aliasing `sourceId` to `targetId` in the given slot would close
+ * a reference loop. Figma refuses these at author ("that selection would
+ * create an infinite loop of variables"); the resolver's `broken: cycle`
+ * branch stays as the backstop for legacy documents.
+ */
+export function wouldCycle(
+  vars: VariableItem[],
+  collections: VariableCollection[],
+  sourceId: string,
+  targetId: string,
+  modeId?: string,
+): boolean {
+  if (sourceId === targetId) return true;
+  // The new edge lives in one slot; only that slot's chain can close.
+  const slotOf = (v: VariableItem): VariableValue => {
+    if (modeId && v.values && v.values[modeId] !== undefined) {
+      const col = collections.find((c) => c.name === v.collection);
+      if (col?.modes.some((m) => m.id === modeId)) return v.values[modeId];
+    }
+    return v.value;
+  };
+  const seen = new Set<string>();
+  let cur: string | undefined = targetId;
+  while (cur && !seen.has(cur)) {
+    if (cur === sourceId) return true;
+    seen.add(cur);
+    const v = vars.find((x) => x.id === cur);
+    const slot = v ? slotOf(v) : undefined;
+    cur = v && slot !== undefined && isAlias(slot) ? slot.alias : undefined;
+  }
+  return cur === sourceId;
 }
 
 /**

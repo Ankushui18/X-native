@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
-import { coerceVariableValue, fallbackForType, isAlias, resolveVariable } from "../engine/variables";
-import { collectColors, find, findParent, isInstanceMember } from "../engine/memory";
+import { coerceVariableValue, fallbackForType, isAlias, resolveVariable, wouldCycle } from "../engine/variables";
+import { collectColors, find, findInstanceRoot, findParent, isInstanceMember } from "../engine/memory";
 import { shapePoly, shiftPoints } from "../engine/geometry";
 import { alignKey } from "../engine/layout";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
@@ -2540,9 +2540,22 @@ const VAR_APPLY_PROPS: Record<VariableItem["type"], { prop: string; label: strin
     { prop: "strokeWidth", label: "Stroke width" },
     { prop: "opacity", label: "Opacity" },
     { prop: "fontSize", label: "Font size" },
+    { prop: "fontWeight", label: "Font weight" },
+    { prop: "letterSpacing", label: "Letter spacing" },
+    { prop: "lineHeight", label: "Line height" },
+    { prop: "paragraphSpacing", label: "Paragraph spacing" },
+    { prop: "paragraphIndent", label: "Paragraph indent" },
     { prop: "cornerRadii", label: "Corner radius" },
+    { prop: "w", label: "Width" },
+    { prop: "h", label: "Height" },
+    { prop: "layoutGap", label: "Gap" },
+    { prop: "layoutPadding", label: "Padding" },
+    { prop: "text", label: "Text content" },
   ],
-  string: [{ prop: "text", label: "Text content" }],
+  string: [
+    { prop: "text", label: "Text content" },
+    { prop: "fontFamily", label: "Font family" },
+  ],
   boolean: [{ prop: "visible", label: "Visibility" }],
 };
 
@@ -2556,6 +2569,7 @@ function VarRow({
   activeModeId,
   sel,
   selNode,
+  root,
 }: {
   engine: Engine;
   v: VariableItem;
@@ -2566,6 +2580,7 @@ function VarRow({
   activeModeId: string | undefined;
   sel: string | undefined;
   selNode: XNode | null | undefined;
+  root: XNode;
 }) {
   const options = VAR_APPLY_PROPS[v.type];
   const defaultProp = options[0]?.prop ?? "fill";
@@ -2611,6 +2626,10 @@ function VarRow({
         toast("A variable cannot alias itself");
         return;
       }
+      if (wouldCycle(vars, varCollections, v.id, target.id, isDefaultSlot ? undefined : activeModeId)) {
+        toast("Invalid — that selection would create an infinite loop of variables");
+        return;
+      }
       writeSlot({ alias: target.id });
       return;
     }
@@ -2627,12 +2646,30 @@ function VarRow({
       toast("Select a layer first");
       return;
     }
-    if ((p === "text" || p === "fontSize") && selNode.kind !== "text") {
+    if (
+      ["text", "fontSize", "letterSpacing", "lineHeight", "paragraphSpacing", "paragraphIndent", "fontWeight", "fontFamily"].includes(p) &&
+      selNode.kind !== "text"
+    ) {
       toast("That property needs a text layer");
       return;
     }
     if (p === "cornerRadii" && !selNode.cornerRadii) {
       toast("This layer has no corner radius");
+      return;
+    }
+    if ((p === "layoutGap" || p === "layoutPadding") && !selNode.layout) {
+      toast("That property needs auto layout");
+      return;
+    }
+    if (
+      isInstanceMember(root, sel) &&
+      (p === "w" || p === "h" || p === "cornerRadii" || p === "layoutGap" || p === "layoutPadding")
+    ) {
+      toast("That property belongs to the main component");
+      return;
+    }
+    if (findInstanceRoot(root, sel) && (p === "layoutGap" || p === "layoutPadding")) {
+      toast("Layout belongs to the main component");
       return;
     }
     engine.dispatch({ type: "bindVariable", id: sel, prop: p, variableId: v.id });
@@ -2719,6 +2756,12 @@ function VarRow({
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
+        }}
+        title="Double-click to rename"
+        onDoubleClick={() => {
+          const name = window.prompt("Rename variable", v.name);
+          if (!name?.trim() || name.trim() === v.name) return;
+          engine.dispatch({ type: "patchVariable", id: v.id, patch: { name: name.trim() } });
         }}
       >
         {v.name}
@@ -3111,6 +3154,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                 activeModeId={activeModeId}
                 sel={sel}
                 selNode={selNode}
+                root={snap.pages[snap.page].root}
               />
             ))}
           </div>
@@ -3171,7 +3215,16 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                       if (kind === "stroke") toast(`Applied ${st.name} to the stroke`);
                     }}
                   />
-                  <span className="hex" style={{ flex: 1 }}>
+                  <span
+                    className="hex"
+                    style={{ flex: 1 }}
+                    title="Double-click to rename"
+                    onDoubleClick={() => {
+                      const name = window.prompt("Rename style", st.name);
+                      if (!name?.trim() || name.trim() === st.name) return;
+                      engine.dispatch({ type: "editStyle", id: st.id, name: name.trim() });
+                    }}
+                  >
                     {st.name}
                   </span>
                   {(bound || boundStroke) && (
