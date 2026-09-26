@@ -122,7 +122,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
-import { PropertyField, XPopover } from "./x-ui";
+import { XPopover } from "./x-ui";
 
 /** "Round to Pixel" is only shown when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -166,9 +166,9 @@ export function RightPanel({
   /** ⇧⌘E's bulk sheet. App owns the flag so Escape can be handled centrally. */
   exportOpen?: boolean;
   onCloseExport?: () => void;
-  /** App-owned nav switch to the Variables pane. Without it the "Open
-   *  variables & styles" row falls back to the legacy setLeftTab dispatch,
-   *  which no panel reads. */
+  /** App-owned nav switch to the Variables pane. The pane follows App nav, so
+   *  without it there is nothing to switch; the entry points say so instead of
+   *  dispatching into dead state (LP-U2). */
   onOpenVariables?: () => void;
 }) {
   const tabs: { id: RightTab; label: string }[] = [
@@ -518,11 +518,10 @@ function DesignHealth({
       engine.dispatch({ type: "select", ids: [issue.nodeIds[0]] });
       zoomTo(engine, "selection");
     } else if (issue.variableIds.length) {
-      // The left panel follows App-owned nav, not the engine's leftTab, so a
-      // bare setLeftTab dispatch would not switch the visible pane: opening
-      // Variables goes through the App callback like the bridge row below.
+      // The left panel follows App-owned nav: opening Variables goes through
+      // the App callback, like the bridge row below.
       if (onOpenVariables) onOpenVariables();
-      else engine.dispatch({ type: "setLeftTab", tab: "tokens" });
+      else toast("Variables and styles live in the left rail");
     }
   };
 
@@ -720,13 +719,11 @@ function PageDesign({
             through the App-owned nav the panel actually reads. */}
         <button
           className="link"
-          onClick={() => {
-            if (onOpenVariables) {
-              onOpenVariables();
-              return;
-            }
-            engine.dispatch({ type: "setLeftTab", tab: "tokens" });
-          }}
+          onClick={() =>
+            onOpenVariables
+              ? onOpenVariables()
+              : toast("Variables and styles live in the left rail")
+          }
         >
           Open variables &amp; styles
         </button>
@@ -3954,10 +3951,6 @@ function Design({
         >
           <Icon name="more" size={14} />
         </button>
-      </div>
-      {/* x-ui wired: ensures shared Popover/PropertyField/elevation are bundled */}
-      <div style={{ display: "none" }}>
-        <PropertyField label="x"><span /></PropertyField>
       </div>
       {more && (
         <ContextMenu

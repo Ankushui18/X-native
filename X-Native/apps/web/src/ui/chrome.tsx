@@ -134,10 +134,7 @@ export function NavRail({
           key={it.id}
           className={`nav${nav === it.id ? " on" : ""}`}
           title={it.label}
-          onClick={() => {
-            setNav(it.id);
-            if (it.tab) engine.dispatch({ type: "setLeftTab", tab: it.tab });
-          }}
+          onClick={() => setNav(it.id)}
         >
           <Icon name={it.icon} size={16} />
           <span>{it.label}</span>
@@ -1382,6 +1379,7 @@ export function Actions({
   onMinimize,
   onInspectFig,
   onNewFile,
+  onNav,
 }: {
   engine: Engine;
   onPresent?: () => void;
@@ -1392,6 +1390,9 @@ export function Actions({
   /** Handed to the "New file…" command once it is confirmed. The editor owns
    *  the file's stored copy, so replacing it belongs there, not in the panel. */
   onNewFile?: () => void;
+  /** Switch the left pane. The panel reads App-owned nav, so this is the only
+   *  way a command inside the palette can actually open a pane. */
+  onNav?: (n: NavId) => void;
 }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | SearchKind>("all");
@@ -1640,8 +1641,10 @@ export function Actions({
       });
       toast(`Placed ${e.label}`);
     } else if (e.kind === "variable") {
-      engine.dispatch({ type: "setLeftTab", tab: "tokens" });
-      toast(`“${e.label}” lives in the Tokens tab`);
+      // The left panel follows App-owned nav; the engine's old leftTab state was
+      // write-only, so this row opened nothing (LP-U2).
+      onNav?.("variables");
+      toast(`“${e.label}” lives in the Variables tab`);
     } else if (e.kind === "flow") {
       if (e.pageIndex !== undefined) engine.dispatch({ type: "setPage", index: e.pageIndex });
       engine.dispatch({ type: "presentStart", id: e.id });
@@ -1909,18 +1912,9 @@ export function bindHotkeys(
     }
     // ⌥1..3 / ⌃1..3 switch navigation panes
     if ((e.altKey || (e.ctrlKey && !meta && !e.shiftKey)) && extra.onNav) {
-      if (e.key === "1") {
-        extra.onNav("file");
-        engine.dispatch({ type: "setLeftTab", tab: "layers" });
-      }
-      if (e.key === "2") {
-        extra.onNav("assets");
-        engine.dispatch({ type: "setLeftTab", tab: "assets" });
-      }
-      if (e.key === "3") {
-        extra.onNav("variables");
-        engine.dispatch({ type: "setLeftTab", tab: "tokens" });
-      }
+      if (e.key === "1") extra.onNav("file");
+      if (e.key === "2") extra.onNav("assets");
+      if (e.key === "3") extra.onNav("variables");
     }
     // ⌥W/A/S/D/H/V align. e.code, not e.key: with ⌥ held macOS types dead-key
     // characters (å, ∑) instead of letters, which left these chords working on
@@ -1975,7 +1969,8 @@ export function bindHotkeys(
       const id = engine.snapshot().selection[0];
       if (id) {
         e.preventDefault();
-        engine.dispatch({ type: "setLeftTab", tab: "layers" });
+        // The rename UI lives in the layers pane; the panel follows App nav.
+        extra.onNav?.("file");
         window.dispatchEvent(new CustomEvent("x-rename-layer", { detail: id }));
         return;
       }

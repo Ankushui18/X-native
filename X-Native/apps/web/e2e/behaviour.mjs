@@ -1912,6 +1912,41 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 34. one nav truth: every entry point switches the visible pane ------------
+{
+  const p = await page();
+  await rows(p);
+  const pane = () => p.evaluate(() => document.querySelector(".nav.on")?.textContent?.trim() ?? null);
+  // The engine's leftTab was write-only: the palette's variable row and the
+  // ⌥1..3 chords "worked" (they dispatched) but no panel read the value, so
+  // nothing moved. They now go through the App-owned nav the panel reads.
+  await p.keyboard.down("Alt"); await p.keyboard.press("3"); await p.keyboard.up("Alt");
+  await sleep(400);
+  const vars = await pane();
+  t(`⌥3 opens the Variables pane (${vars})`, vars === "Vars");
+  await p.keyboard.down("Alt"); await p.keyboard.press("1"); await p.keyboard.up("Alt");
+  await sleep(350);
+  t(`⌥1 returns to the layers pane (${await pane()})`, (await pane()) === "File");
+
+  // a variable result in the palette must land on the pane that lists it
+  const name = (await p.evaluate(() => window.__xNativeDesignApi.call("getVariables", { limit: 1 }))).data.items[0].name;
+  await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta");
+  await sleep(400);
+  await p.keyboard.type(name);
+  await sleep(600);
+  const opened = await p.evaluate(() => {
+    const rows2 = [...document.querySelectorAll("[role=option], .act-row")];
+    const hit = rows2[rows2.length - 1];
+    hit?.click();
+    return hit?.textContent?.trim().slice(0, 30) ?? null;
+  });
+  await sleep(500);
+  t(`a palette variable opens the Variables pane (${opened} → ${await pane()})`, opened !== null && (await pane()) === "Vars");
+  t("and the toast points at the pane it opened",
+    await p.evaluate(() => /Variables tab/.test(document.querySelector(".toast")?.textContent ?? "")));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

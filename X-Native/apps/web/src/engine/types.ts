@@ -91,7 +91,6 @@ export interface VariableWidthProfile {
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
-export type LeftTab = "layers" | "assets" | "tokens";
 export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
 export type ImageFit = "fill" | "fit" | "crop" | "tile";
 export type EffectKind =
@@ -864,7 +863,6 @@ export interface Snapshot {
   panX: number;
   panY: number;
   rightTab: RightTab;
-  leftTab: LeftTab;
   canUndo: boolean;
   canRedo: boolean;
   components: ComponentMaster[];
@@ -958,7 +956,6 @@ export type Command =
   | { type: "deleteComment"; id: string }
   | { type: "moveComment"; id: string; x: number; y: number }
   | { type: "openComment"; id: string }
-  | { type: "setLeftTab"; tab: LeftTab }
   | { type: "setPage"; index: number }
   | { type: "setFileName"; name: string }
   | { type: "addPage" }

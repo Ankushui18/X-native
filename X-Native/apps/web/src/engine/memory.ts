@@ -1006,7 +1006,6 @@ interface Internal {
   panX: number;
   panY: number;
   rightTab: Snapshot["rightTab"];
-  leftTab: Snapshot["leftTab"];
   components: ComponentMaster[];
   styles: SharedStyle[];
   presentFrame: string;
@@ -1242,7 +1241,6 @@ export class MemoryEngine implements Engine {
       panX: doc?.panX ?? 40,
       panY: doc?.panY ?? 20,
       rightTab: "design",
-      leftTab: "layers",
       components: doc?.components ?? [],
       styles: doc?.styles ?? [],
       presentFrame: "",
@@ -1589,7 +1587,6 @@ export class MemoryEngine implements Engine {
       "pan",
       "setPan",
       "setRightTab",
-      "setLeftTab",
       "setPage",
       "setFileName",
       "undo",
@@ -1789,7 +1786,6 @@ export class MemoryEngine implements Engine {
       panX: this.state.panX,
       panY: this.state.panY,
       rightTab: this.state.rightTab,
-      leftTab: this.state.leftTab,
       canUndo: this.undo.length > 0,
       canRedo: this.redo.length > 0,
       components: this.state.components,
@@ -2123,9 +2119,6 @@ export class MemoryEngine implements Engine {
         break;
       case "setRightTab":
         s.rightTab = cmd.tab;
-        break;
-      case "setLeftTab":
-        s.leftTab = cmd.tab;
         break;
       case "setFileName":
         s.fileName = cmd.name;

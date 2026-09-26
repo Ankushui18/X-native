@@ -631,6 +631,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
             engine={engine}
             onPresent={present}
             onNewFile={startBlankFile}
+            onNav={setNav}
             onClose={() => setActions(false)}
             onHide={() => {
               setHideUi((v) => !v);

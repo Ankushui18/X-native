@@ -217,8 +217,8 @@ viewport clamp, role=tooltip; empty shortcut renders nothing).
 | TY-U3 | FIXED: Mixed + per-layer values + apply-to-all (with hug refit) for size/leading/tracking/paragraph-spacing/indent, Mixed options + patchTypeMany for family/weight, Auto-reset applies to all. REMAINING (follow-up): align/decoration segs, type-pop selects, min/max fields | FIXED (P1) | — |
 | FS-U6 scope+ | RETRACTED with FS-U6: patchType→patch detaches correctly (verified) | — | — |
 | TY-U4 | Round-to-pixels button has BOTH Tooltip wrapper AND native title= → double tooltip | DRIFT | P2 |
-| TY-U5 | Hidden x-ui "wiring" div (`display:none` PropertyField to force bundling) — dead UI + bundling hack; one of only 3 x-ui usages | DEAD UI | P2 |
-| TY-U6 | Tooltip is pointer-only (no focus trigger) — keyboard users never see tooltips (§32) | PARTIAL | P2 |
+| TY-U5 | FIXED: hidden wiring div deleted (XPopover is used for real in the effect and bind popovers, so x-ui is in the bundle on merit). | FIXED (P2) | — |
+| TY-U6 | FIXED in §4f: the shared component shows its pill on `:focus-visible`, and the `title` bridge does the same for title-only controls. | FIXED (P2) | — |
 
 ## §10. Frame/Selection canvas trace (prompts §§6, 8, 27–28) — Canvas render ~2085–2960
 
@@ -273,7 +273,7 @@ palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts
 | # | Finding | Status | Pri |
 |---|---|---|---|
 | LP-U1 | FIXED: RightPanel/PageDesign take onOpenVariables from App (setNav("variables")); legacy setLeftTab kept as fallback only. FS-U1 pass: DesignHealth's variable-issue jump + Design's empty-picker CTA threaded the same way (same fallback) | FIXED (P1) | — |
-| LP-U2 | leftTab is write-only engine state (⌥1..3 writes it alongside the working onNav; zero readers) — remove or unify (same fix) | DEAD STATE | P2 |
+| LP-U2 | FIXED: `leftTab` deleted outright (type, snapshot field, command, engine state, undo list) and all 8 writers re-pointed at the App nav the panel actually reads. ⌥1..3 now switch panes, ⌘R opens the layers pane before dispatching rename, and the palette's variable row opens the Variables pane (it dispatched into dead state before, so the row did nothing). Inspector entry points without the callback toast where to look instead of dispatching into the void. ⚠️ Worth noting: this dual truth is exactly what produced the LP-U1 P1 bug, so removing it is the fix, not cleanup. | FIXED (P2) | — |
 | LP-U3 | Empty page = blank tree, no teaching empty state (assets HAS one; layers doesn't) | MISSING UI | P2 |
 | LP-U4 | Zero first-run onboarding anywhere (no welcome/empty-canvas guidance) — §25 steps 1–3 fail cold. Fix: minimal dismissible empty-canvas hints | MISSING UI | P2 |
 | LP-U5 | ToolsPane: no disabled states/shortcuts; "Plugins" label with no plugins | PARTIAL | P2 |
@@ -511,6 +511,22 @@ chrome a plain title would drop: `Design health` (score + issues) and the Dev Mo
 
 Suite **202 pass / 0 fail** (7 new checks in §33: the boolean block folds and restores, all three prototype
 blocks are sections, fold/reopen round-trips). Unit 1621, tsc and build clean.
+
+## §4h. P2 round 3 — dead state and dead UI (LP-U2, TY-U5, TY-U6)
+
+`leftTab` was engine state that eight call sites wrote and nobody read: the left panel had already moved to
+App-owned `nav`, so the palette's variable row and ⌥1..3 switched "nothing" while the working `onNav` path
+sat next to them. That is the same dual truth that produced the LP-U1 P1 bug, so it was deleted rather than
+documented — type, snapshot field, command, engine state and undo list — and each writer re-pointed at the
+nav the panel reads. Now ⌥1/2/3 switch panes, ⌘R opens the layers pane before dispatching rename, and a
+palette variable result opens the Variables pane (verified in the browser: typing the file's first variable
+and picking the row lands on `Vars` with the toast naming that tab). Inspector entry points that have no
+callback now toast where to look rather than dispatching into dead state.
+
+Also removed: a `display:none` div whose only job was to force `PropertyField` into the bundle (TY-U5) —
+`XPopover` is used for real in the effect and bind popovers, so the shared layer ships on merit.
+
+Suite **206 pass / 0 fail** (4 new checks in §34), unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
