@@ -75,6 +75,24 @@ const drawRect = async (p, x = 820, y = 640) => {
   await sleep(400);
 };
 
+// Address a layer row by the id the engine gave it (rows carry data-row-id).
+// The panel groups children under their parent and orders newest-first inside
+// each group, so an index means a different layer as soon as anything is drawn
+// — which is how a check ends up asserting on the wrong layer while passing.
+// `add` extends the selection with ctrl (⌘/Ctrl toggle, as the panel implements
+// it) rather than a shift range: a range spans every row *between* two layers,
+// which is the whole tree when one of them nested into a frame.
+const clickRowById = async (p, id, add = false) => {
+  const hit = await p.evaluate((target, withAdd) => {
+    const row = document.querySelector(`.panel.left .row[data-row-id="${target}"]`);
+    if (!row) return false;
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: withAdd }));
+    return true;
+  }, id, add);
+  await sleep(400);
+  return hit;
+};
+
 // 1. rename ---------------------------------------------------------------
 {
   const p = await page();
@@ -1292,29 +1310,21 @@ for (const [label, payload] of [
     await p.keyboard.type(v);
     await sleep(400);
   };
-  // Layer rows only: the Pages list sits above the tree in the same panel and
-  // its rows share the .row class, so index 0 would be a page — clicking one
-  // switches page, and shift-clicking one clears the selection instead of
-  // extending it. Layer rows carry an inline indent; page rows do not.
-  const clickRow = async (k, shift = false) => {
-    const rs = await p.$$('.panel.left .row[style*="padding-left"]');
-    if (shift) await p.keyboard.down("Shift");
-    await rs[k].click();
-    if (shift) await p.keyboard.up("Shift");
-    await sleep(350);
-  };
   const full = async (id) => (await api("getNode", { id, full: true })).data.full;
-  // two rects, divergent opacity + fill (newest layers sit atop the tree)
+  // two rects, divergent opacity + fill
   await drawRect(p);
+  const firstId = (await api("getSelection", {})).data.ids[0];
   await setField('.inspector input[aria-label="%"]', "30");
   await setHex("ff0000");
   await drawRect(p, 1000, 640);
+  const secondId = (await api("getSelection", {})).data.ids[0];
   await setField('.inspector input[aria-label="%"]', "60");
   await setHex("0000ff");
-  await clickRow(1);
-  await clickRow(0, true);
+  await clickRowById(p, firstId);
+  await clickRowById(p, secondId, true);
   const ids = (await api("getSelection", {})).data.ids;
-  t("both rects selected", ids.length === 2);
+  t(`both rects selected (${ids.length})`,
+    ids.length === 2 && ids.includes(firstId) && ids.includes(secondId));
   t("opacity reads Mixed",
     await p.evaluate(() => document.querySelector('.inspector input[aria-label="%"]').value) === "Mixed");
   t("fill reads Mixed",
@@ -1334,17 +1344,6 @@ for (const [label, payload] of [
   const p = await page();
   await rows(p);
   const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
-  // Layer rows only: the Pages list sits above the tree in the same panel and
-  // its rows share the .row class, so index 0 would be a page — clicking one
-  // switches page, and shift-clicking one clears the selection instead of
-  // extending it. Layer rows carry an inline indent; page rows do not.
-  const clickRow = async (k, shift = false) => {
-    const rs = await p.$$('.panel.left .row[style*="padding-left"]');
-    if (shift) await p.keyboard.down("Shift");
-    await rs[k].click();
-    if (shift) await p.keyboard.up("Shift");
-    await sleep(350);
-  };
   // Returns false when the field is missing so a bad setup fails as a check
   // instead of crashing the rest of the suite.
   const setSize = async (v) => {
@@ -1361,6 +1360,8 @@ for (const [label, payload] of [
   // each creation starts from an empty selection. The two boxes are also far
   // apart: a drag that lands inside the previous box edits its text instead of
   // creating a second layer.
+  // Returns the new layer's id, so the checks below can address it directly
+  // instead of guessing where it landed in the tree.
   const dragText = async (x, y) => {
     await p.keyboard.press("v");
     await p.mouse.click(300, 200);
@@ -1372,20 +1373,20 @@ for (const [label, payload] of [
     await sleep(400);
     await p.keyboard.press("Escape");
     await sleep(300);
-    return (await layerCount()) === before + 1;
+    const id = (await api("getSelection", {})).data.ids[0];
+    return (await layerCount()) === before + 1 ? id : null;
   };
-  // Both boxes go to canvas the sample document leaves empty: a drag inside a
-  // frame nests the new text layer, and then the tree order below is not the
-  // creation order.
-  t("the text tool makes one layer per drag", (await dragText(820, 640)) && (await dragText(1020, 640)));
-  await clickRow(1);
-  t("a text layer is selected", await setSize("20"));
-  await clickRow(0);
-  t("the second text layer is selected", await setSize("32"));
-  await clickRow(1);
-  await clickRow(0, true);
+  const textA = await dragText(820, 640);
+  const textB = await dragText(1020, 640);
+  t("the text tool makes one layer per drag", !!textA && !!textB && textA !== textB);
+  t("the first text layer can be selected from the tree", await clickRowById(p, textA));
+  t("its size field is editable", await setSize("20"));
+  t("the second text layer can be selected from the tree", await clickRowById(p, textB));
+  t("its size field is editable", await setSize("32"));
+  await clickRowById(p, textA);
+  await clickRowById(p, textB, true); // ctrl-toggle: exactly these two
   const ids = (await api("getSelection", {})).data.ids;
-  t("two text layers selected", ids.length === 2);
+  t(`two text layers selected (${ids.length})`, ids.length === 2);
   t("size reads Mixed",
     await p.evaluate(() => document.querySelector('.inspector input[aria-label="S"]')?.value) === "Mixed");
   await setSize("24");
@@ -1427,17 +1428,6 @@ for (const [label, payload] of [
     }
     return false;
   };
-  // Layer rows only: the Pages list sits above the tree in the same panel and
-  // its rows share the .row class, so index 0 would be a page — clicking one
-  // switches page, and shift-clicking one clears the selection instead of
-  // extending it. Layer rows carry an inline indent; page rows do not.
-  const clickRow = async (k, shift = false) => {
-    const rs = await p.$$('.panel.left .row[style*="padding-left"]');
-    if (shift) await p.keyboard.down("Shift");
-    await rs[k].click();
-    if (shift) await p.keyboard.up("Shift");
-    await sleep(350);
-  };
   await tab("vars");
   await addVar("e2e-red", "color", "#ff0000");
   await addVar("e2e-size", "number", "24");
@@ -1465,10 +1455,12 @@ for (const [label, payload] of [
     names.some(x => x.includes("e2e-size")) && !names.some(x => x.includes("e2e-red")));
   t("number bind lands", await pickVar("e2e-size"));
   await drawRect(p, 1000, 640);
-  await clickRow(1);
-  await clickRow(0, true);
+  const id2 = (await api("getSelection", {})).data.ids[0];
+  await clickRowById(p, id1);
+  await clickRowById(p, id2, true); // ctrl-toggle: exactly these two
   const ids = (await api("getSelection", {})).data.ids;
-  t("both rects selected", ids.length === 2);
+  t(`both rects selected (${ids.sort().join(",")})`,
+    ids.length === 2 && ids.includes(id1) && ids.includes(id2));
   t("half-bound multi shows a mixed bind indicator",
     await p.evaluate(() => !!document.querySelector('.inspector button[aria-label^="Mixed bindings"]')));
   await p.evaluate(() => document.querySelector('.inspector button[aria-label^="Mixed bindings"]').click());

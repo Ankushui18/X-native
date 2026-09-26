@@ -337,10 +337,18 @@ pixel/canvas assertions (stamped/unstamped fills and strokes read 0px under the 
 §"Card keeps radius 8 and stroke 2", sketch/.fig fills, stroke stack, style repaint + reload), "every
 inspector section is collapsible", "creating a style lists it", "three effects do not overflow the panel"
 (1164 > 912 — the popover refactor's own budget), the boolean-menu marquee, "locked selection drops the
-accent", the corrupt-save toast, and the TY-U3 text-size section — that one is a **product finding**:
-dragging with the text tool creates the layer at a position unrelated to the drag (three runs: (497,968),
-(-43,800), (228,800) for drags at (820,640)/(1020,640)), and inside the sample document's frame, so the
-new rows are nested and the section cannot address them.
+accent", and the corrupt-save toast.
+
+**CORRECTION to this section's earlier claim.** The TY-U3 text-size failure was reported here as a product
+finding — "dragging with the text tool creates the layer at a position unrelated to the drag". That was
+wrong, and the error was mine, not the app's. Dragging with the text tool places the layer correctly:
+clicking back at the drag point re-selects the layer it just made — for a top-level draw, for a draw over
+the sample document's "Success" frame, and for a rect drawn the same way — and rect and text land on
+identical coordinates (three browser runs). What actually failed was the *test*: it selected rows by
+index, and the panel groups children under their parent and orders newest-first inside each group, so the
+rows it clicked were the sample document's own layers. Rows carry `data-row-id`; the suite now addresses
+them by id and extends a selection with ⌘/Ctrl-toggle rather than a shift range (a range spans every row
+*between* two layers — the whole tree when one of them nested into a frame).
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
