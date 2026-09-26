@@ -25,7 +25,7 @@ import { THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align } from "./inspector";
 import { hugSize } from "./textLayout";
-import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo } from "./zoom";
+import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo, zoomToRect } from "./zoom";
 import { roundToPixel } from "./round";
 
 import { clearDoc } from "../engine/persist";
@@ -399,6 +399,54 @@ function LayerRowImpl({
       <div
         ref={rowRef}
         data-row-id={n.id}
+        tabIndex={renaming ? -1 : 0}
+        onKeyDown={(e) => {
+          // §26 KB-018: the tree walks with the keyboard — ↑/↓ move the
+          // selection across visible rows, →/← fold and unfold. Keystrokes
+          // from the rename field bubble through here too; those keep their
+          // caret keys. (The global nudge handler yields arrows struck on a
+          // row — see bindHotkeys.)
+          if ((e.target as HTMLElement).tagName === "INPUT") return;
+          const order = (): string[] =>
+            Array.from(document.querySelectorAll(".tree [data-row-id]"), (el) =>
+              el.getAttribute("data-row-id"),
+            ).filter((id): id is string => !!id);
+          const focusRow = (id: string) => {
+            const el = document.querySelector(`.tree [data-row-id="${CSS.escape(id)}"]`) as HTMLElement | null;
+            el?.focus();
+          };
+          if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            const ids = order();
+            const to = e.key === "ArrowDown" ? ids[ids.indexOf(n.id) + 1] : ids[ids.indexOf(n.id) - 1];
+            if (to) {
+              engine.dispatch({ type: "select", ids: [to] });
+              rangeAnchor.current = to;
+              focusRow(to);
+            }
+          } else if (e.key === "ArrowRight") {
+            if (n.children.length && !open) setOpen(true);
+            else if (open && n.children.length) {
+              const first = n.children.find((c) => matchesLayer(c, q)) ?? n.children[0];
+              engine.dispatch({ type: "select", ids: [first.id] });
+              rangeAnchor.current = first.id;
+              focusRow(first.id);
+            }
+          } else {
+            if (n.children.length && open) setOpen(false);
+            else {
+              const rt = engine.snapshot().pages[engine.snapshot().page].root;
+              const par = findParent(rt, n.id);
+              if (par && par !== rt) {
+                engine.dispatch({ type: "select", ids: [par.id] });
+                rangeAnchor.current = par.id;
+                focusRow(par.id);
+              }
+            }
+          }
+        }}
         className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}${
           isOver ? ` drop-${drag!.zone}` : ""
         }${drag?.ids.includes(n.id) ? " dragging" : ""}`}
@@ -660,6 +708,13 @@ function LeftPanelImpl({
   // One counter for the whole tree: bumping it tells every row to fold, and the
   // rows answer by themselves so no open-state has to be lifted up here.
   const [collapseTick, setCollapseTick] = useState(0);
+  // §26 KB-011: the ⌥L chord reaches the button's counter through an event,
+  // the same shape as the ⌘R rename request below.
+  useEffect(() => {
+    const on = () => setCollapseTick((v) => v + 1);
+    window.addEventListener("x-collapse-all", on);
+    return () => window.removeEventListener("x-collapse-all", on);
+  }, []);
   const rangeAnchor = useRef("");
   const root = snap.pages[snap.page].root;
 
@@ -1331,9 +1386,9 @@ export function Actions({
     { label: "Intersect", sc: "⌥⇧I", run: () => engine.dispatch({ type: "boolean", op: "intersect" }) },
     { label: "Exclude", sc: "⌥⇧E", run: () => engine.dispatch({ type: "boolean", op: "exclude" }) },
     { label: "Flatten", sc: "⌘E", run: () => engine.dispatch({ type: "flatten" }) },
-    { label: "Outline stroke", sc: "⌥⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
+    { label: "Outline stroke", sc: "⇧⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
     { label: "Wrap in section", sc: "", run: () => engine.dispatch({ type: "wrapSection" }) },
-    { label: "Use as mask", sc: "⌘⌥M", run: () => runMenu(engine, "useAsMask") },
+    { label: "Use as mask", sc: "⌃⌘M", run: () => runMenu(engine, "useAsMask") },
     { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },
     { label: "Send to back", sc: "⇧⌘[", run: () => engine.dispatch({ type: "arrange", dir: "back" }) },
     {
@@ -1341,7 +1396,7 @@ export function Actions({
       sc: "⌥⇧⌘C",
       run: () => window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } })),
     },
-    { label: "Copy as PNG", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-copy-png")) },
+    { label: "Copy as PNG", sc: "⇧⌘C", run: () => window.dispatchEvent(new CustomEvent("x-native-copy-png")) },
     { label: "Add auto layout", sc: "⇧A", run: () => addAutoLayout(engine, engine.snapshot()) },
     { label: "Remove auto layout", sc: "⌥⇧A", run: () => removeAutoLayout(engine, engine.snapshot()) },
     // "Select Suggest auto layout from the Actions menu."
@@ -1573,6 +1628,11 @@ export function bindHotkeys(
     onEscapeOverlay?: () => boolean;
   },
 ) {
+  // §26 KB-014: opacity-digit chaining — the last digit, when it was tapped,
+  // and the document revision right after it applied.
+  let lastDigit = 0;
+  let lastDigitAt = 0;
+  let lastDigitRev = -1;
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
     const typing =
@@ -1652,6 +1712,14 @@ export function bindHotkeys(
     if (meta && !e.shiftKey && !e.altKey && e.code === "Slash") {
       e.preventDefault();
       extra.onActions();
+      return;
+    }
+    // §26 KB-012: ⌃⇧? opens the shortcuts sheet itself — Figma's panel chord,
+    // verbatim from the "Use Figma products with a keyboard" article. A bare
+    // Control, never ⌘: ⌘? is unbound on both platforms.
+    if (!e.metaKey && e.ctrlKey && e.shiftKey && !e.altKey && e.key === "?") {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("x-native-shortcuts"));
       return;
     }
     // Keyed off `code`, not `key`: holding Shift turns this keyboard's
@@ -1769,6 +1837,14 @@ export function bindHotkeys(
       engine.dispatch({ type: e.shiftKey ? "redo" : "undo" });
       return;
     }
+    // §26 KB-001: Ctrl+Y redoes — the Windows redo chord (§25 deferred it
+    // here), placed before the outline toggle below so ⌃Y never reaches it.
+    // No ⌘: on a Mac this is a bare-Control extra, and ⌘Y keeps outlining.
+    if (!e.metaKey && e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyY") {
+      e.preventDefault();
+      engine.dispatch({ type: "redo" });
+      return;
+    }
     if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
       const id = engine.snapshot().selection[0];
       if (id) {
@@ -1788,14 +1864,20 @@ export function bindHotkeys(
       window.dispatchEvent(new CustomEvent("x-native-find"));
       return;
     }
-    if ((!meta && e.shiftKey && e.key.toLowerCase() === "o") || (meta && e.key.toLowerCase() === "y")) {
+    // §26 KB-001: outline mode is ⇧O, or ⌘Y with a true ⌘ — the old `meta`
+    // test swallowed Ctrl+Y on Windows, where that chord redoes (above).
+    if (
+      (!meta && e.shiftKey && e.key.toLowerCase() === "o") ||
+      (e.metaKey && (e.key.toLowerCase() === "y" || e.code === "KeyY"))
+    ) {
       e.preventDefault();
       engine.dispatch({ type: "toggleOutlines" });
       return;
     }
-    const isEyedrop =
-      (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "i") ||
-      (e.ctrlKey && !meta && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "c");
+    // §26 KB-015: the eyedropper is bare I (Figma). A second disjunct once
+    // offered Ctrl+C, but `meta` already includes Ctrl, so `e.ctrlKey &&
+    // !meta` could never hold — dead code, removed. (Ctrl+C stays Copy.)
+    const isEyedrop = !meta && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "i";
     if (isEyedrop) {
       e.preventDefault();
       armEyedrop((c) => {
@@ -1808,6 +1890,19 @@ export function bindHotkeys(
     if (!meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "x") {
       e.preventDefault();
       engine.dispatch({ type: "swapFillStroke" });
+      return;
+    }
+    // §26 KB-004: `/` removes the stroke, `⌥/` removes the fill (Figma; §11
+    // deferred the pair here). e.code for the ⌥ half: macOS types ÷ for it,
+    // so e.key never reads "/". Typing in a field never reaches this far.
+    if (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && (e.code === "Slash" || e.key === "/")) {
+      e.preventDefault();
+      engine.dispatch({ type: "removeStroke" });
+      return;
+    }
+    if (!e.metaKey && !e.ctrlKey && e.altKey && !e.shiftKey && (e.code === "Slash" || e.key === "÷")) {
+      e.preventDefault();
+      engine.dispatch({ type: "removeFill" });
       return;
     }
     // ⇧B toggles stroke / border
@@ -1825,6 +1920,13 @@ export function bindHotkeys(
     if (meta && e.key.toLowerCase() === "d") {
       e.preventDefault();
       engine.dispatch({ type: "duplicate" });
+      return;
+    }
+    // §26 KB-008: ⌘⇧C copies the selection as a PNG (Figma) — ahead of Copy,
+    // which takes every ⌘C regardless of ⇧.
+    if (meta && !e.altKey && e.shiftKey && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("x-native-copy-png"));
       return;
     }
     if (meta && !e.altKey && e.key.toLowerCase() === "c") {
@@ -1910,15 +2012,24 @@ export function bindHotkeys(
       return;
     }
     // Front/back take ⌥ (what the shortcut sheet advertises) or ⇧ (what the
-    // Arrange menu shows) — both chords reach the same command.
-    if (meta && e.key === "]") {
+    // Arrange menu shows) — both chords reach the same command. §26 KB-003:
+    // matched on e.code too, because on a Mac ⌥] types a dead-key character
+    // instead of "]", which left the ⌥ half of the pair silently dead there.
+    if (meta && (e.key === "]" || e.code === "BracketRight")) {
       e.preventDefault();
       engine.dispatch({ type: "arrange", dir: e.shiftKey || e.altKey ? "front" : "forward" });
       return;
     }
-    if (meta && e.key === "[") {
+    if (meta && (e.key === "[" || e.code === "BracketLeft")) {
       e.preventDefault();
       engine.dispatch({ type: "arrange", dir: e.shiftKey || e.altKey ? "back" : "backward" });
+      return;
+    }
+    // §26 KB-011: ⌥L collapses all layers (Figma) — the button's chord twin.
+    // e.code: ⌥L types ¬ on a Mac, so e.key never reads "l" for it.
+    if (!e.metaKey && !e.ctrlKey && e.altKey && !e.shiftKey && e.code === "KeyL") {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent("x-collapse-all"));
       return;
     }
     // ⌘L adds stack layout, ⌥⌘L removes stack layout
@@ -1944,6 +2055,14 @@ export function bindHotkeys(
       e.preventDefault();
       const snap = engine.snapshot();
       const root = snap.pages[snap.page].root;
+      // §26 KB-006: Figma parks Tidy up on this same chord — it centres text,
+      // but with no text selected and 2+ layers it tidies instead.
+      const tnodes = snap.selection.map((id) => find(root, id)).filter((n): n is XNode => !!n);
+      if (tnodes.length >= 2 && !tnodes.some((n) => n.kind === "text")) {
+        engine.dispatch({ type: "tidyUp" });
+        toast("Tidied up selection");
+        return;
+      }
       for (const id of snap.selection) {
         const n = find(root, id);
         if (n && n.kind === "text") engine.dispatch({ type: "patch", id, patch: { textAlign: "center" } });
@@ -2117,7 +2236,15 @@ export function bindHotkeys(
       engine.dispatch({ type: "outlineStroke" });
       return;
     }
-    if ((e.ctrlKey || meta) && e.altKey && e.key.toLowerCase() === "m") {
+    // §26 KB-005: Use-as-mask is ⌃⌘M on the Mac, Ctrl+Alt+M on Windows —
+    // Figma's Masks article, verbatim (§13 deferred the chord here). Exactly
+    // one of ⌘/⌥ rides along, so the old ⌘⌥M no longer fires; e.code, because
+    // ⌥M types µ on a Mac and e.key never reads "m" for it.
+    if (
+      e.ctrlKey &&
+      (e.code === "KeyM" || e.key.toLowerCase() === "m") &&
+      (e.metaKey ? !e.altKey : e.altKey)
+    ) {
       e.preventDefault();
       runMenu(engine, "useAsMask");
       return;
@@ -2146,6 +2273,21 @@ export function bindHotkeys(
             id,
             patch: { textDecoration: n.textDecoration === "underline" ? "none" : "underline" },
           });
+        }
+      }
+      return;
+    }
+    // §26 KB-002: ⌘I italicises (Figma) — the one text-style chord the set
+    // was missing. After the boolean block, so ⌘⌥I still intersects.
+    if (meta && !e.shiftKey && !e.altKey && (e.key.toLowerCase() === "i" || e.code === "KeyI")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          const fontStyle = n.fontStyle === "italic" ? "normal" : "italic";
+          engine.dispatch({ type: "patch", id, patch: { fontStyle } });
+          rehugText(engine, id, { fontStyle });
         }
       }
       return;
@@ -2238,12 +2380,13 @@ export function bindHotkeys(
     }
     // Step through the zoom presets so the readout lands on round values
     // (25/50/100/200...) instead of compounding into 94% / 117% / 146%.
-    if (!meta && !e.altKey && e.shiftKey && (e.key === "=" || e.key === "+")) {
+    // §26 KB-013: bare + / - step too (Figma) — ⇧ keeps working.
+    if (!meta && !e.altKey && (e.key === "=" || e.key === "+")) {
       e.preventDefault();
       zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, 1));
       return;
     }
-    if (!meta && !e.altKey && e.shiftKey && (e.key === "-" || e.key === "_")) {
+    if (!meta && !e.altKey && (e.key === "-" || e.key === "_")) {
       e.preventDefault();
       zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
       return;
@@ -2256,6 +2399,18 @@ export function bindHotkeys(
     if (meta && e.key === "-") {
       e.preventDefault();
       zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
+      return;
+    }
+    // §26 KB-010: PgUp / PgDn flip pages (Figma). stopImmediatePropagation:
+    // the browser would scroll the panel behind the canvas as well.
+    if (!meta && !e.altKey && !e.ctrlKey && (e.key === "PageUp" || e.key === "PageDown")) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const s = engine.snapshot();
+      engine.dispatch({
+        type: "setPage",
+        index: s.page + (e.key === "PageDown" ? 1 : -1),
+      });
       return;
     }
     // ⇧F — "View > Prototype flows": hide the noodles and hotspot
@@ -2353,6 +2508,72 @@ export function bindHotkeys(
       window.dispatchEvent(new CustomEvent("x-native-place-image"));
       return;
     }
+    // §26 KB-014: bare digits set opacity (Figma) — 1 is 10%, 0 is 100%.
+    // Two quick taps type an exact value (2 then 5 is 25%, 0 then 0 is 0%):
+    // the chain breaks when anything edits the document between the taps.
+    if (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-9]$/.test(e.key)) {
+      if (engine.snapshot().selection.length) {
+        e.preventDefault();
+        const d = Number(e.key);
+        const s = engine.snapshot();
+        const chained = s.treeRev === lastDigitRev && performance.now() - lastDigitAt < 900;
+        const pct = chained ? lastDigit * 10 + d : d === 0 ? 100 : d * 10;
+        lastDigit = d;
+        lastDigitAt = performance.now();
+        for (const id of s.selection) engine.dispatch({ type: "patch", id, patch: { opacity: pct / 100 } });
+        lastDigitRev = engine.snapshot().treeRev;
+        return;
+      }
+    }
+    // §26 KB-009: N / ⇧N zoom to the next / previous top-level frame (Figma).
+    // Order is canvas order (top to bottom, then left to right); a frameless
+    // page ignores the chord.
+    if (!meta && !e.altKey && !e.ctrlKey && (e.key.toLowerCase() === "n" || e.code === "KeyN")) {
+      const s = engine.snapshot();
+      const frames = s.pages[s.page].root.children.filter((c) => c.kind === "frame" && c.visible);
+      if (frames.length) {
+        e.preventDefault();
+        const ordered = [...frames].sort((a, b) => a.y - b.y || a.x - b.x);
+        const root = s.pages[s.page].root;
+        const topOf = (id: string): string | null => {
+          let cur: XNode | null = find(root, id);
+          let top: XNode | null = null;
+          while (cur && cur !== root) {
+            if (root.children.includes(cur)) top = cur;
+            cur = findParent(root, cur.id);
+          }
+          return top ? top.id : null;
+        };
+        let idx = -1;
+        if (s.selection.length) {
+          const top = topOf(s.selection[0]);
+          if (top) idx = ordered.findIndex((f) => f.id === top);
+        }
+        if (idx < 0) {
+          // No frame under the selection: start from the one nearest the
+          // middle of the screen, so N always lands somewhere sensible. The
+          // pan is canvas-local (see zoomTo), hence widths, never page x/y.
+          const el = document.querySelector(".canvas-wrap") as HTMLElement | null;
+          const r = el?.getBoundingClientRect();
+          const vw = r && r.width > 40 ? r.width : window.innerWidth - 520;
+          const vh = r && r.height > 40 ? r.height : window.innerHeight - 96;
+          const cx = (vw / 2 - s.panX) / s.zoom;
+          const cy = (vh / 2 - s.panY) / s.zoom;
+          let best = Infinity;
+          ordered.forEach((f, i) => {
+            const d = Math.abs(f.x + f.w / 2 - cx) + Math.abs(f.y + f.h / 2 - cy);
+            if (d < best) {
+              best = d;
+              idx = i;
+            }
+          });
+        }
+        const next = ordered[(idx + (e.shiftKey ? -1 : 1) + ordered.length) % ordered.length];
+        engine.dispatch({ type: "select", ids: [next.id] });
+        zoomToRect(engine, { x: next.x, y: next.y, w: next.w, h: next.h });
+        return;
+      }
+    }
     if (!meta && e.shiftKey) {
       const shifted: Record<string, Tool> = {
         s: "section",
@@ -2393,6 +2614,14 @@ export function bindHotkeys(
     // distance is a request, while a drag is a gesture the grid may round.
     const prefs = getNudgePrefs();
     const step = e.shiftKey ? prefs.big : prefs.small;
+    // §26 KB-017/KB-018: an open context menu and a focused layer row own the
+    // arrow keys — nudging underneath the menu, or while walking the tree,
+    // would move the artwork behind the user's back.
+    if (
+      (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") &&
+      t.closest?.(".ctx, [data-row-id]")
+    )
+      return;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
@@ -3443,7 +3672,12 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "annotate", name: "Annotate selection", keys: ["⇧", "T"] },
       { id: "measure", name: "Measure distance", keys: ["⌥ (hold)"] },
       { id: "export-all", name: "Export assets", keys: ["⇧", "⌘", "E"] },
-      { id: "export-all", name: "Export assets", keys: ["⇧", "⌘", "E"] },
+      { id: "copy-png", name: "Copy selection as PNG", keys: ["⇧", "⌘", "C"] },
+      { id: "remove-stroke", name: "Remove stroke", keys: ["/"] },
+      { id: "remove-fill", name: "Remove fill", keys: ["⌥", "/"] },
+      { id: "opacity", name: "Set opacity (tap twice for exact %)", keys: ["1", "…", "0"] },
+      { id: "collapse-all", name: "Collapse all layers", keys: ["⌥", "L"] },
+      { id: "shortcuts-panel", name: "This shortcuts panel", keys: ["⌃", "⇧", "?"] },
     ],
   },
   {
@@ -3472,19 +3706,19 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
     items: [
       { id: "zoom-in", name: "Zoom in", keys: ["⌘", "+"] },
       { id: "zoom-out", name: "Zoom out", keys: ["⌘", "-"] },
-      { id: "zoom-100", name: "Zoom to 100%", keys: ["⌘", "0"] },
+      { id: "zoom-100", name: "Zoom to 100%", keys: ["⇧", "0"] },
       { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
       { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
+      { id: "frame-next", name: "Zoom to next frame", keys: ["N"] },
+      { id: "frame-prev", name: "Zoom to previous frame", keys: ["⇧", "N"] },
       { id: "rulers", name: "Rulers", keys: ["⇧", "R"] },
       { id: "pixel-grid", name: "Pixel grid", keys: ["⌘", "'"] },
       { id: "pixel-snap", name: "Snap to pixel grid", keys: ["⌘", "⇧", "'"] },
       { id: "pixel-preview", name: "Pixel preview 1×", keys: ["⌃", "P"] },
       { id: "pixel-preview-2", name: "Pixel preview 2×", keys: ["⌃", "⌥", "P"] },
       { id: "zoom-tool", name: "Zoom tool", keys: ["Z"] },
-      { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
-      { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
       { id: "zoom-center", name: "Center selection", keys: ["⌘", "3"] },
-      { id: "round-pixel", name: "Round to whole pixels", keys: ["⇧", "", "P"] },
+      { id: "round-pixel", name: "Round to whole pixels", keys: ["⇧", "⌘", "P"] },
       { id: "layout-grids", name: "Layout grids", keys: ["⇧", "G"] },
       { id: "outline", name: "Outline mode", keys: ["⌘", "Y"] },
       { id: "present", name: "Present", keys: ["⌘", "⌥", "↩"] },
@@ -3494,6 +3728,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
     tab: "Text",
     items: [
       { id: "bold", name: "Bold", keys: ["⌘", "B"] },
+      { id: "italic", name: "Italic", keys: ["⌘", "I"] },
       { id: "underline", name: "Underline", keys: ["⌘", "U"] },
       { id: "underline-opt", name: "Underline", keys: ["⌥", "U"] },
       { id: "strike", name: "Strikethrough", keys: ["⌘", "⇧", "X"] },
@@ -3530,6 +3765,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "align-h", name: "Align horizontal centers", keys: ["⌥", "H"] },
       { id: "align-v", name: "Align vertical centers", keys: ["⌥", "V"] },
       { id: "rot-origin", name: "Change the rotation origin", keys: ["⌥", "R"] },
+      { id: "tidy-up", name: "Tidy up selection (no text selected)", keys: ["⌘", "⌥", "T"] },
     ],
   },
   {
@@ -3545,7 +3781,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "align-box-baseline", name: "Alignment box: text baseline alignment on and off", keys: ["B"] },
       { id: "align-box-gap", name: "Alignment box: switch the gap between a number and Auto", keys: ["X"] },
       { id: "pad-shorthand", name: "Padding field: ⌘-click, then type CSS shorthand (1,2,3 or 1,2,3,4)", keys: ["⌘", "click"] },
-      { id: "mask", name: "Use as mask", keys: ["⌘", "⌥", "M"] },
+      { id: "mask", name: "Use as mask", keys: ["⌃", "⌘", "M"] },
       { id: "flatten", name: "Flatten selection", keys: ["⌘", "E"] },
       { id: "union", name: "Union selection", keys: ["⌥", "⇧", "U"] },
       { id: "heal", name: "Delete & heal vector point", keys: ["⇧", "⌫"] },
@@ -3673,7 +3909,7 @@ export function HelpBtn() {
       const k = e.key.toLowerCase();
       let matchedId: string | null = null;
       if (meta && k === "z") matchedId = e.shiftKey ? "redo" : "undo";
-      else if (meta && k === "c") matchedId = "copy";
+      else if (meta && k === "c") matchedId = e.shiftKey && !e.altKey ? "copy-png" : "copy";
       else if (meta && k === "v") matchedId = "paste";
       else if (meta && k === "d") matchedId = "duplicate";
       else if (meta && e.altKey && k === "a") matchedId = "select-matching";
@@ -3707,6 +3943,17 @@ export function HelpBtn() {
         };
         matchedId = toolMap[k] ?? null;
       }
+      // §26: highlight the chords this section added or moved.
+      else if (!e.metaKey && e.ctrlKey && !e.altKey && !e.shiftKey && k === "y") matchedId = "redo";
+      else if (meta && !e.shiftKey && !e.altKey && k === "i") matchedId = "italic";
+      else if (e.ctrlKey && e.code === "KeyM" && (e.metaKey ? !e.altKey : e.altKey)) matchedId = "mask";
+      else if (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && (e.code === "Slash" || k === "/"))
+        matchedId = "remove-stroke";
+      else if (!e.metaKey && !e.ctrlKey && e.altKey && !e.shiftKey && e.code === "Slash") matchedId = "remove-fill";
+      else if (!meta && !e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-9]$/.test(e.key)) matchedId = "opacity";
+      else if (!meta && !e.altKey && !e.ctrlKey && k === "n") matchedId = e.shiftKey ? "frame-prev" : "frame-next";
+      else if (!e.metaKey && !e.ctrlKey && e.altKey && !e.shiftKey && e.code === "KeyL") matchedId = "collapse-all";
+      else if (!e.metaKey && e.ctrlKey && e.shiftKey && !e.altKey && e.key === "?") matchedId = "shortcuts-panel";
       if (matchedId) {
         setUsedKeys((prev) => {
           if (prev.has(matchedId!)) return prev;

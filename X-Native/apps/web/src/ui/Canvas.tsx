@@ -808,6 +808,9 @@ export function Canvas({
         return;
       }
       if (e.type === "keydown" && e.key === "Tab" && !edit && !draft.length) {
+        // §26 KB-018: Tab on a focused layer row walks the rows natively —
+        // it must not also cycle the canvas selection's siblings.
+        if ((e.target as HTMLElement).closest?.("[data-row-id]")) return;
         const root = snap.pages[snap.page].root;
         const id = snap.selection[0];
         if (id) {
@@ -7472,7 +7475,7 @@ function paintText(
   // Small caps rides the font's own small-cap glyphs (with the copy lowered
   // so every letter takes part), not full-height capitals.
   const smallCaps = n.textCase === "small-caps";
-  ctx.font = `${smallCaps ? "small-caps " : ""}${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
+  ctx.font = `${smallCaps ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
   ctx.textBaseline = "top";
   ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
   const clipped = n.truncate;

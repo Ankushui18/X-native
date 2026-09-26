@@ -33,7 +33,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 23 | Prototyping | ✅ done | PT-001–PT-019 (13 tests) |
 | 24 | Import / export | ✅ done | EX-001–EX-014 (43 tests) |
 | 25 | Undo / redo (per category) | ✅ done | HI-001–HI-007 (24 tests) |
-| 26 | Keyboard behavior | … | |
+| 26 | Keyboard behavior | ✅ done | KB-001–KB-018 + sheet hygiene (21 tests) |
 
 ## Findings log
 
@@ -1540,3 +1540,139 @@ via secondary refs).
 - Named versions / checkpoints / restore: a product
   surface (Figma's version history), not a behavior fix.
 - Multiplayer undo scoping: no collaboration runtime in X.
+
+## §26 — Keyboard behavior
+
+Evidence: this section owns every chord (§7 order, §11 `/`
++ `⌥/`, §13 mask, §22 menu arrows, §25 Ctrl+Y all deferred
+here). Official: "Masks" (360040450253: ⌃⌘M Mac /
+Ctrl+Alt+M Win, a toggle), "Use Figma products with a
+keyboard" (360040328653: shortcuts panel ⌃⇧?, box-select,
+Tab-family nav), "Flatten layers" (30101373312279: ⌥⇧F),
+"Frames in Figma Design" (360041539473: frame tool F or A),
+"Select layers and objects" (360040449873: Enter / ⇧Enter /
+Tab / ⇧Tab / ⌥⌘A / ⌘A / Esc), sidebar (360039831974: ⌥1/2/3,
+⇧⌘\). Third-party: dualite.dev 2026 reference,
+keyboardista, tutorialtactic, innotech, imagy, quickref.me,
+domestika, educba, forum.figma.com fill/stroke thread.
+
+### Fixed (shipped in the §26 keyboard commit on this branch)
+
+- KB-001 — Ctrl+Y redo on Windows (§25): the outline
+  toggle's `meta` test swallowed Ctrl+Y into outline mode;
+  bare-Ctrl+Y now redoes and outlines keep ⇧O plus a
+  true-⌘ ⌘Y.
+- KB-002 — ⌘I italic (Figma): the one missing text-style
+  chord. New optional `fontStyle` model field, canvas +
+  SVG export render it, sheet row added, used-key
+  highlight wired.
+- KB-003 — Bring-to-front/back (§7): the handler already
+  took ⌥ and ⇧, but matched `e.key`, and on a Mac ⌥]
+  types a dead-key character — the ⌥ half was silently
+  dead there. Matched on `e.code` too.
+- KB-004 — `/` removes the stroke, `⌥/` removes the fill
+  (Figma; §11): new one-way engine actions, paint kept
+  underneath so ⇧B / the panel eye restores it, undoable,
+  locked-safe.
+- KB-005 — Use-as-mask is ⌃⌘M / Ctrl+Alt+M (Figma's Masks
+  article; §13): the old ⌘⌥M no longer fires, all four
+  labels (menu, both context menus, sheet) updated.
+- KB-006 — ⌥⌘T tidies when no text is selected and 2+
+  layers are (Figma parks Tidy up on the align-center
+  chord); text selections still centre, legacy ⌃⌥⇧T kept.
+- KB-007 — Zoom-to-100% sheet row claimed ⌘0; Figma's is
+  ⇧0 (both fire, ⌘0 stays an alias).
+- KB-008 — ⌘⇧C copies the selection as a PNG (Figma),
+  ahead of Copy in the chain; the menu row finally shows
+  its chord; empty selection flashes the hint.
+- KB-009 — N / ⇧N zoom to the next / previous top-level
+  frame (Figma): canvas order, anchored on the
+  selection's frame or the one nearest the viewport
+  centre; frameless pages ignore it.
+- KB-010 — PgUp / PgDn flip pages (Figma), clamped at
+  both ends, browser scroll suppressed.
+- KB-011 — ⌥L collapses all layers (Figma), via the
+  collapse button's own counter; `e.code`, since ⌥L types
+  ¬ on a Mac.
+- KB-012 — ⌃⇧? opens the shortcuts sheet (Figma's panel
+  chord, verbatim); the sheet previously had no chord.
+- KB-013 — Bare + / - step the zoom presets (Figma);
+  ⇧ and ⌘ forms keep working.
+- KB-014 — Bare digits set opacity (Figma): 1 is 10%, 0
+  is 100%, two quick taps type an exact value (0-0 is
+  0%); the chain breaks on any document edit between.
+- KB-015 — Removed a dead eyedropper disjunct: `e.ctrlKey
+  && !meta` can never hold (`meta` includes Ctrl), so the
+  Ctrl+C half never fired. Bare I stays the chord.
+- KB-016 — Outline-stroke labels said ⌥⌘O; Figma's is
+  ⇧⌘O (three sources). Both still fire; menu, context
+  menu, and inspector tooltip relabelled.
+- KB-017 — ArrowUp/Down roving inside open menus (§22):
+  arrows + Home/End walk the rows once focus is inside
+  (Tab reaches them), ← backs out of a submenu,
+  keyboard-opened submenus take focus, the menu arms the
+  popover guard so Esc closes it without clearing the
+  selection, and the global handler yields menu-struck
+  arrows so the canvas never nudges underneath.
+- KB-018 — The layers tree walks with the keyboard:
+  ↑/↓ move the selection across visible rows, →/← fold
+  and unfold (matching the twistie), rename keeps its
+  caret keys, Tab walks rows natively via a canvas gate,
+  and the global nudge handler yields row-struck arrows.
+- Sheet hygiene: duplicate Export-assets and Zoom-fit/sel
+  rows removed, Round-to-pixels keys fixed (⌘ was a blank
+  chip), mask row moved to ⌃⌘M, new rows for italic,
+  remove stroke/fill, copy-as-PNG, collapse-all, opacity,
+  frame cycling, tidy-up, and the panel chord itself —
+  all wired into the used-key highlight with the mask
+  and redo chords.
+
+After: `1776 passed, 0 failed` (21 new keyboard26 checks:
+removal flags + undo + locked-skip, italic toggle + SVG
+attr, three menu labels, page clamps, opacity patch; the
+capture-phase chords and React roving are verified by
+code tracing against the cited Figma chords).
+
+### Adjudicated, kept as is (verified matches, no change)
+
+- Front/back superset kept: menu says ⇧⌘]/[, sheet says
+  ⌥⌘]/[, both fire — and the sources split 2-2, so the
+  superset is the honest answer either way.
+- Flatten ⌘E kept as an alias: four third-party lists
+  against the newer official ⌥⇧F article; both fire.
+- Distribute takes ⌃⌥H/V with or without ⇧ (quickref vs
+  dualite split); the handler already accepted both.
+- ⇧I stays the image tool: Figma's ⇧I inserts from
+  Resources, but this is X-native vocabulary (like ⇧G
+  grids for Figma's ⌃G, §8) and the tool's only chord.
+- ⌃P/⌃⌥P pixel-preview cycling kept: Figma claims
+  conflict (⌘⇧P ×2 vs ⌘⌥Y ×1); ⇧⌘P stays round-to-pixel.
+- ⇧⌘A is genuinely Figma's invert-selection (keyboardista),
+  not an X extra; ⌘⌥C/V copy/paste properties match
+  Figma's copy/paste style verbatim.
+- Boolean chords, ⌘0/⌘1/2/3 zoom extras, ⌘K actions,
+  ⌘F find, ⌥R rotation origin, ⌘⌫ ungroup, Esc
+  parent-walk, ⌘⌥⇧C copy-as-code: X-native, kept.
+- Verified Figma-shaped throughout: tool letters
+  (incl. F/A frames, I eyedropper), zoom set, text set,
+  align ⌥WASD/HV, select family (⌘A/⌥⌘A/⇧⌘A/Enter/Tab),
+  order ⌘]/⌘[, flip, group triad, autolayout triad,
+  component/detach, hide/lock, grid+snap, rulers, ⇧D/E/C,
+  place, export, present, panes, nudge, steppers, ⇧⌫
+  heal, ⇧X swap.
+
+### Deferred / out of scope
+
+- ⌘J join / ⇧⌘J smooth-join: no engine path-join op — a
+  feature, not a chord.
+- Paint bucket B (Figma vector): no X equivalent; B
+  stays the brush.
+- ⌘K AI bar (Figma 2026), ⌥⌘S versions, ⌥⌘O libraries,
+  ⌥Space box-select: no X surface behind the chord.
+- Vectorize-italic: text-to-vector traces upright glyphs
+  (textVector style passthrough is a §15 follow-up).
+- Menus don't take focus on open (Figma does): X keeps
+  canvas focus so Space still pans; arrows rove once
+  Tabbed in — a documented delta, not a gap.
+- Layers Enter keeps canvas drill semantics; rename
+  stays ⌘R / double-click (no Figma source found).

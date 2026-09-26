@@ -56,6 +56,8 @@ export type TextWrap = "auto" | "balance" | "pretty";
  */
 export type ListStyle = "none" | "bulleted" | "numbered";
 export type TextDecoration = "none" | "underline" | "strikethrough";
+/** §26 KB-002: node-level italic for the ⌘I chord (absent = "normal"). */
+export type FontStyle = "normal" | "italic";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
 export type StrokeCap =
@@ -753,6 +755,8 @@ export interface XNode {
   /** First-line offset of every paragraph, in points (x-core's paragraph_indent). */
   paragraphIndent: number;
   textDecoration: TextDecoration;
+  /** §26 KB-002: italic toggle (⌘I). Optional: older docs lack it (= normal). */
+  fontStyle?: FontStyle;
   textCase: TextCase;
   truncate: boolean;
   maxLines: number;
@@ -1038,6 +1042,9 @@ export type Command =
   | { type: "tidyUp"; axis?: "auto" | "h" | "v" }
   | { type: "swapFillStroke" }
   | { type: "toggleStroke" }
+  /** §26 KB-004: one-way removals for `/` (stroke) and `⌥/` (fill). */
+  | { type: "removeStroke" }
+  | { type: "removeFill" }
   | { type: "toggleOutlines" }
   | { type: "toggleMaskOutlines" }
   | { type: "boolean"; op: BooleanOp }

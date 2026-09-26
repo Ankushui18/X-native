@@ -1899,6 +1899,23 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      // §26 KB-004: `/` removes the stroke, `⌥/` removes the fill (Figma).
+      // One way, like Figma's: the paint underneath survives, so the stroke
+      // panel's eye (or ⇧B) brings it back.
+      case "removeStroke": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) n.strokeVisible = false;
+        }
+        break;
+      }
+      case "removeFill": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) n.fillVisible = false;
+        }
+        break;
+      }
       case "tidyUp": {
         const rt = this.root();
         // Same footing as distribute: world coordinates, locked layers and

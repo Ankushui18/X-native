@@ -7,6 +7,7 @@ import { Icon, caretSize, kindIcon, type IconName } from "./icons";
 import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
+import { armPopover } from "./popoverGuard";
 
 export type MenuItem =
   | { kind: "action"; id: string; label: string; shortcut?: string; icon?: IconName; enabled?: boolean }
@@ -27,6 +28,9 @@ export function ContextMenu({
   onClose: () => void;
 }) {
   const [openSub, setOpenSub] = useState<number | null>(null);
+  // §26 KB-017: an open menu is a popover — Escape closes it (below) instead
+  // of clearing the canvas selection behind it.
+  useEffect(() => armPopover(), []);
   useEffect(() => {
     const on = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest(".ctx")) onClose();
@@ -65,7 +69,44 @@ export function ContextMenu({
   const top = Math.max(4, Math.min(y, window.innerHeight - h - 8));
 
   return createPortal(
-    <div className="ctx" ref={ref} style={{ left, top, width: w }} role="menu">
+    <div
+      className="ctx"
+      ref={ref}
+      style={{ left, top, width: w }}
+      role="menu"
+      onKeyDown={(e) => {
+        // §26 KB-017: arrows rove the rows once focus is inside the menu —
+        // Tab reaches them natively, and from there ↑/↓/Home/End walk,
+        // ← backs out of a submenu. The global hotkey handler yields
+        // arrows struck here (see bindHotkeys), so the canvas never nudges
+        // underneath. Focus stays on the canvas while the menu is
+        // mouse-driven, so Space still pans instead of firing a row.
+        const rows = Array.from(
+          e.currentTarget.querySelectorAll(".ctx-row:not([disabled]), .fly-sub button:not([disabled])"),
+        ) as HTMLElement[];
+        const at = rows.indexOf(document.activeElement as HTMLElement);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!rows.length) return;
+          const to =
+            e.key === "ArrowDown"
+              ? rows[(at + 1 + rows.length) % rows.length]
+              : rows[(at - 1 + rows.length) % rows.length];
+          to.focus();
+        } else if (e.key === "Home" || e.key === "End") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!rows.length) return;
+          (e.key === "Home" ? rows[0] : rows[rows.length - 1]).focus();
+        } else if (e.key === "ArrowLeft" && (e.target as HTMLElement).closest?.(".fly-sub")) {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpenSub(null);
+          ((e.target as HTMLElement).closest(".fly-sub")?.parentElement as HTMLElement | null)?.focus();
+        }
+      }}
+    >
       {items.map((it, i) => {
         if (it.kind === "sep") return <hr key={i} />;
         if (it.kind === "sub") {
@@ -86,6 +127,12 @@ export function ContextMenu({
                 if (e.key === "ArrowRight" || e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   setOpenSub(i);
+                  // §26 KB-017: keyboard-opened, so land focus on the first
+                  // item — arrows continue into the submenu, not past it.
+                  const row = e.currentTarget;
+                  window.setTimeout(() => {
+                    (row.querySelector(".fly-sub button:not([disabled])") as HTMLElement | null)?.focus();
+                  }, 0);
                 }
                 if (e.key === "ArrowLeft" || e.key === "Escape") {
                   e.preventDefault();
@@ -245,7 +292,7 @@ export function canvasMenu(
   items.push({ kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" });
   items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true });
   items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true });
-  items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" });
+  items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌃⌘M", icon: "mask" });
   items.push(...layoutMenuItems(hasLayout));
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
   items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
@@ -282,7 +329,7 @@ export function canvasMenu(
   // §22 MN-002: multi-select already gets Flatten inside the Boolean submenu
   // above, so the standalone row is single-select only — no twin rows.
   if (sel < 2) items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
-  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⌥⌘O", enabled: caps.outline ?? true });
+  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O", enabled: caps.outline ?? true });
   items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
   items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });
   items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths", enabled: caps.vectorize ?? true });
@@ -335,7 +382,7 @@ export function layerMenu(isGroup: boolean, hasLayout = false, caps: MenuCaps = 
     { kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" },
     { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true },
     { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true },
-    { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" },
+    { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌃⌘M", icon: "mask" },
     ...layoutMenuItems(hasLayout),
     { kind: "sep" },
     ...(isGroup

@@ -4525,7 +4525,7 @@ function Design({
                   engine.dispatch({ type: "outlineStroke", id: n.id });
                   toast("Outlined stroke");
                 }}
-                title="Convert stroke to vector path (⌥⌘O)"
+                title="Convert stroke to vector path (⇧⌘O)"
               >
                 Outline Stroke
               </button>
