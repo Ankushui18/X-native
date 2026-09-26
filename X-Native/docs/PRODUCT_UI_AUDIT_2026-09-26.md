@@ -284,8 +284,8 @@ palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts
 |---|---|---|---|
 | LP-U1 | FIXED: RightPanel/PageDesign take onOpenVariables from App (setNav("variables")); legacy setLeftTab kept as fallback only. FS-U1 pass: DesignHealth's variable-issue jump + Design's empty-picker CTA threaded the same way (same fallback) | FIXED (P1) | — |
 | LP-U2 | FIXED: `leftTab` deleted outright (type, snapshot field, command, engine state, undo list) and all 8 writers re-pointed at the App nav the panel actually reads. ⌥1..3 now switch panes, ⌘R opens the layers pane before dispatching rename, and the palette's variable row opens the Variables pane (it dispatched into dead state before, so the row did nothing). Inspector entry points without the callback toast where to look instead of dispatching into the void. ⚠️ Worth noting: this dual truth is exactly what produced the LP-U1 P1 bug, so removing it is the fix, not cleanup. | FIXED (P2) | — |
-| LP-U3 | Empty page = blank tree, no teaching empty state (assets HAS one; layers doesn't) | MISSING UI | P2 |
-| LP-U4 | Zero first-run onboarding anywhere (no welcome/empty-canvas guidance) — §25 steps 1–3 fail cold. Fix: minimal dismissible empty-canvas hints | MISSING UI | P2 |
+| LP-U3 | FIXED: the layers tree now has the two sentences it was missing. An empty page renders the inspector's own `.empty-state` recipe inside `.tree` — icon, "No layers on this page", what a row will let you do (name, group, hide, lock, reorder) and the real chords (`F` frame · `R` rectangle · `T` text, `⌘K` for every command) — and a search with no hits renders `.empty` with the term quoted ("No layer matches “q”. Clear the search to see the whole page."), which is the palette's `.actions-empty` sentence in the panel that filters. The two are told apart by the panel asking `matchesLayer`, the same predicate each row uses to hide itself, so the tree and its rows cannot disagree. No new CSS recipe and no new control: 25 checks in `leftpanel.dom.test.mjs` (jsdom, mounted `LeftPanel` on an emptied document) plus §44 in the browser. §4s | FIXED (P2) | — |
+| LP-U4 | FIXED, at the scope the finding asked for ("minimal dismissible empty-canvas hints"): one card over an empty canvas — "Draw your first layer", the three chords as `<kbd>`, and what the Layers list will do with the result — that retires the moment the page holds a layer and is dismissed for good by its own `XButton` ("Don't show this again"), persisted by `ui/firstRun.ts` under `x-native-hint-empty-canvas`. The card takes `pointer-events: none` with only its button opted back in, so it cannot eat the drag it is describing (the `.cm-layer`/`.cm-pin` recipe); it is seeded from the persisted dismissal before first paint, so it never flashes for someone who has already closed it; and every localStorage access is guarded and injectable, because it throws in private mode and does not exist in node. No entrance animation — that is MOTION-U1's round, with eyes. 24 checks in `firstRun.test.mjs` (hostile stores, the key's namespace, the source contract) plus §44's draw-through-it, dismiss, reload, empty-again sequence. §4s | FIXED (P2) | — |
 | LP-U5 | ToolsPane: no disabled states/shortcuts; "Plugins" label with no plugins | PARTIAL | P2 |
 | LP-U6 | AgentPane: unmatched input silently ignored (chat appended, nothing happens); hardcoded geometry (390×844 frame at 120,80…). Fix: scope feedback | PARTIAL | P2 |
 
@@ -319,8 +319,8 @@ palette (max-width/max-height/scroll).
   *named roles* (`--accent` for controls, `--cv-sel` for selection ink on the canvas) rather than one
   literal and one token that happened to disagree (FR-U2).
 - DISCOVERABILITY: prototype tab (TB-U3), italic (TY-U1), property-first binding (FS-U1), ⇧E/⌘⌥↩ chords
-  (TB-U6/PT-U7), rotate zone (FR-U3), and the entire product for first-run users (LP-U4) are
-  unreachable without prior knowledge.
+  (TB-U6/PT-U7) and the rotate zone (FR-U3) are unreachable without prior knowledge; the empty canvas
+  and the empty layers tree taught nothing at all until §4s (LP-U3/LP-U4).
 - AFFORDANCE: locked selections show editable handles that refuse (FR-U1); "Edit vector" flattens
   (IN-U5); Resources opens the command palette (TB-U1); duplicate Outline-stroke buttons diverge (IN-U2).
 - FEEDBACK: bound-value edits vanish without notice (FS-U6); AgentPane swallows unmatched input (LP-U6);
@@ -501,9 +501,9 @@ read `title` *or* `data-tip` (5 sites, inline) so a resting pointer cannot hide 
    exists and is documented; the surfaces just do not use it). Highest value-per-change: each is a
    mechanical swap to XButton/XSelect/XSection/XTabs with no behaviour change.
 2. **Two dead affordances (PT-U1 no-op handler, TY-U5 dead UI, LP-U2 dead state)** — cheap, visible.
-3. **IA / missing UI (PT-U6 view menu inside the inspector tab bar, LP-U3/LP-U4 first-run and empty
-   states, FR-U3 rotate zone, RW-U1/RW-U2 unverified visual states)** — needs a design decision, not a
-   sweep.
+3. **IA / missing UI (PT-U6 view menu inside the inspector tab bar, ~~LP-U3/LP-U4 first-run and empty
+   states~~ — done in §4s, FR-U3 rotate zone, RW-U1/RW-U2 unverified visual states)** — needs a design
+   decision, not a sweep.
 
 ## §4g. P2 round 2 — one inspector header chrome (IN-U3, PT-U1)
 
@@ -883,7 +883,88 @@ clean and warning-free, the sheet at 96.88 kB (17.86 kB gzip) with the new token
 
 **Still open after this round:** FR-U2b (the dark column exists for every canvas role and retunes
 three of them — the rest is a design call that needs eyes), MOTION-U1, IN-U6/FS-U4, PM-U3, PM-U6,
-LP-U3–U6, RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows.
+LP-U3–U6, RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows. (LP-U3 and
+LP-U4 closed in §4s; LP-U5/U6 remain.)
+
+## §4s. P2 round 6 — the empty page says something (LP-U3, LP-U4)
+
+**Two blanks, not one.** LP-U3 was filed as a single line — "empty page = blank tree, no teaching empty
+state (assets HAS one; layers doesn't)" — but the layers tree has two different blanks and they are not
+the same sentence. A page with nothing on it renders `<div class="tree">` with no children; a search
+with no hits renders the *same* empty div, because each `LayerRow` returns `null` when it does not
+match. So "you have nothing yet" and "you found nothing" were one indistinguishable screen, and the
+second is the worse of the two: a filter that looks like data loss.
+
+**Nothing new was invented for it.** The sheet already had three empty-state recipes and the panel now
+uses two of them. The empty page gets the inspector's `.empty-state` verbatim — icon, `.empty-title`,
+`.empty-body`, `.empty-hint` with `<kbd>` chips — so the left and right panels teach in one voice and
+one recipe; a visitor with nothing selected sees "Nothing selected" on the right and "No layers on this
+page" on the left, laid out identically. The search's blank gets `.empty` (the Assets pane's recipe)
+carrying the command palette's sentence: *No layer matches “q”. Clear the search to see the whole
+page.* No new CSS class, no new control, no new copy voice.
+
+**Telling them apart honestly.** The panel derives `emptyPage` and `noMatch` from the document and the
+query — and for the query it calls `matchesLayer`, the very predicate each row uses to hide itself,
+rather than counting rendered rows. Counting rows is the easy version and it drifts the first time a
+row hides for any other reason (a folded parent, a future filter); asking the predicate means the tree
+and its rows cannot disagree about whether anything matched. The two states are mutually exclusive by
+construction (`noMatch` requires `!emptyPage`).
+
+**LP-U4, at the scope it was filed at.** The finding asked for "minimal dismissible empty-canvas
+hints", and §25's steps 1–3 did fail cold: an empty canvas renders a dock, two panels and an inspector,
+and not one of them says what to do. So: one card, three chords, one button. The decisions worth
+recording are the ones a reviewer would otherwise have to guess at.
+
+- It is **DOM, not canvas paint** — real text, a real button in the tab order, the theme for free, and
+  a dismissal that does not need a repaint.
+- The card is `pointer-events: none` and **only its button gets them back**, because the card is
+  describing a drag and must not eat one. That is the `.cm-layer` / `.cm-pin` recipe the comment pins
+  already use, and §44 proves it by dragging a rectangle out *through* the card.
+- It **retires by itself** the moment the page holds a layer, and stays out of the way while presenting
+  or mid-pen-stroke (`!snap.presentFrame && !draft.length`).
+- The dismissal is **read before first paint** (`useState(() => !emptyCanvasHintDismissed())`), so it
+  never flashes for someone who has already closed it.
+- `ui/firstRun.ts` is its own module because `localStorage` throws in private mode, is absent in node
+  and absent in SSR: the guard belongs in one place, not inside a 7,000-line canvas component. It takes
+  an injected store, which is why 24 checks cover hostile stores, a simulated next session and the
+  key's namespace without a browser.
+- The key is `x-native-`namespaced on purpose — the e2e's `page()` wipes every `x-native` key except the
+  theme, so §44 always starts as a first-time visitor.
+- What it deliberately is **not**: a tour, a checklist, a modal, or a per-tool hint framework. If the
+  product ever wants onboarding proper, that is a new finding with a new design, not an extension of
+  this card.
+
+**Verification.** jsdom, mounted for real: `leftpanel.dom.test.mjs` (25) renders `LeftPanel` on an
+emptied document and asserts both states, their copy, their `<kbd>` chords, that drawing a rectangle
+retires the teaching state and puts a row in its place, and that the search's sentence quotes the term
+and clears with it. Two harness fixes were needed and are worth naming because they unblock every
+future row-mounting test: `mountSurface` learned the `left` surface (and that its pane prop is
+`nav: "file"`, not `"layers"` — `NavId` has no layers member), and `installDom` now stubs
+`scrollIntoView`/`scrollTo`, since a selected layer row scrolls itself into view and jsdom has no layout
+to scroll; without the stub the row's effect threw on mount. `domEnv` also gained an `empty` fixture
+that empties a page the way a visitor does (select all → delete), because a fresh `MemoryEngine` seeds a
+starter page rather than an empty one. `firstRun.test.mjs` (24) covers the persistence and the card's
+source contract: rendered from classes, dismissed through `XButton`, click-through in the sheet, painted
+with tokens and no literals, and its `kbd` chips sharing the empty-state rule rather than starting a
+second one.
+
+**Browser suite §44 — written, NOT RUN here** (16 checks, 295 total): both empty states and their
+computed layout (flex, centred, 28px top padding, no stray inline styles), the inspector showing the
+same recipe at the same moment, the card's `pointer-events` pair and its centring over the canvas, the
+drag through the card producing exactly one row, the no-match sentence and its recovery, and the full
+dismissal sequence — click, `localStorage` reads `"1"`, reload, empty the page again, card stays gone
+while the layers panel still teaches, because that one is a state and not a nudge.
+
+**Numbers.** Unit suite **2065 checks, 0 failed** (2016 → 2065: +25 jsdom, +24 contract). `tsc -b`
+clean; `vite build` clean and warning-free, the sheet at 97.42 kB (17.93 kB gzip). The drift ratchet is
+**unchanged at 414 / 131 / 340 / 363 / 49** — a round that added two new surfaces of UI and moved no
+number added no inline style, no colour literal, no `title=` and no raw `<button>` (the dismiss control
+is `XButton`), which is the ratchet earning its keep: the new UI had to arrive through the primitives.
+
+**Still open after this round:** LP-U5 (ToolsPane: no disabled states or shortcuts, and a "Plugins"
+label with no plugins), LP-U6 (AgentPane silently ignores input it cannot match, and hardcodes a
+390×844 frame at 120,80), MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6, RW-U1, FR-U3/U4, and the
+`inspector.tsx` / `FigInspectorModal.tsx` drift rows.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

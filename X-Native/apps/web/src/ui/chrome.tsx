@@ -724,6 +724,15 @@ function LeftPanelImpl({
   }, []);
   const rangeAnchor = useRef("");
   const root = snap.pages[snap.page].root;
+  // LP-U3: the tree has two different blanks and they are not the same sentence
+  // — a page with nothing on it (teach what to do first) and a search nothing
+  // answers (say so, or it reads as an empty page). `matchesLayer` is the same
+  // predicate each row uses to hide itself, so the panel and the rows cannot
+  // disagree about whether anything matched.
+  const searchTerm = q.trim();
+  const emptyPage = root.children.length === 0;
+  const noMatch =
+    !emptyPage && !!searchTerm && !root.children.some((n) => matchesLayer(n, searchTerm));
 
   /**
    * Translate a drop (target row + zone) into a concrete parent + child index.
@@ -897,7 +906,32 @@ function LeftPanelImpl({
             }}
             onDrop={() => setDrag(null)}
           >
-            {withMaskedAbove(root.children).map(({ n, maskedAbove }) => (
+            {emptyPage ? (
+              /* Assets teaches ("Create a component (⌘⌥K) to see it here") and so
+                 does the inspector ("Nothing selected"); the layers tree was the
+                 one panel that rendered nothing at all. This is the inspector's
+                 `.empty-state` recipe, not a new one. */
+              <div className="empty-state">
+                <Icon name="frame" size={20} />
+                <p className="empty-title">No layers on this page</p>
+                <p className="empty-body">
+                  Draw on the canvas and everything you make lands here as a row you can
+                  name, group, hide, lock and reorder.
+                </p>
+                <p className="empty-hint">
+                  <kbd>F</kbd> frame &middot; <kbd>R</kbd> rectangle &middot; <kbd>T</kbd> text
+                  &mdash; press, then drag. <kbd>&#8984;</kbd><kbd>K</kbd> finds every command.
+                </p>
+              </div>
+            ) : noMatch ? (
+              /* The search's own blank. The command palette already says "No match
+                 for …"; this is the same sentence in the panel that filters. */
+              <p className="empty">
+                No layer matches &ldquo;{searchTerm}&rdquo;. Clear the search to see the whole
+                page.
+              </p>
+            ) : (
+              withMaskedAbove(root.children).map(({ n, maskedAbove }) => (
               <LayerRow
                 key={n.id}
                 rangeAnchor={rangeAnchor}
@@ -914,7 +948,8 @@ function LeftPanelImpl({
                 onDrop={onDrop}
                 collapseTick={collapseTick}
               />
-            ))}
+              ))
+            )}
           </div>
         </>
       )}

@@ -2603,7 +2603,8 @@ html[data-theme="dark"] .tip { background: #383838; }
    (measured ~50%), which rendered the pill washed out over the panel. */
 .tip[data-static] { animation: none; }
 
-/* Empty state for the right panel with nothing selected. */
+/* Empty states: the right panel with nothing selected (inspector.tsx) and the
+   layers tree with nothing on the page (chrome.tsx, LP-U3) share this recipe. */
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -2617,7 +2618,8 @@ html[data-theme="dark"] .tip { background: #383838; }
 .empty-title { margin: 0; font-size: 12px; font-weight: 500; color: var(--text); }
 .empty-body { margin: 2px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .empty-hint { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: var(--dim); }
-.empty-hint kbd {
+.empty-hint kbd,
+.canvas-hint kbd {
   display: inline-block;
   min-width: 16px;
   padding: 1px 4px;
@@ -2628,6 +2630,35 @@ html[data-theme="dark"] .tip { background: #383838; }
   font-size: 10px;
   color: var(--text);
 }
+
+/* LP-U4: the first-run card over an empty canvas. It floats above the canvas and
+   the rulers (z 4) and under the comment pins (6) and the minimap (7), and it
+   must not intercept the drag it is describing — so the card takes no pointer
+   events and only its own button gets them back, the `.cm-layer` / `.cm-pin`
+   recipe. No entrance animation: MOTION-U1 is the round that adds motion to
+   surfaces like this one, with eyes on it. */
+.canvas-hint {
+  position: absolute;
+  top: 16%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 340px;
+  padding: 14px 18px 12px;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--elev-floating);
+  pointer-events: none;
+}
+.canvas-hint-title { margin: 0; font: var(--t-section); color: var(--text); }
+.canvas-hint-body { margin: 0; font: var(--t-body); line-height: 1.6; color: var(--muted); }
+.canvas-hint-x { pointer-events: auto; margin-top: 2px; }
 
 /* Keyboard focus. Only `:focus-visible`, so mouse users never see a ring but
    keyboard users can always tell where they are. Previously fields showed a

@@ -92,6 +92,13 @@ export function installDom() {
       disconnect() {}
     };
   set("ResizeObserver", window.ResizeObserver);
+  // A selected layer row scrolls itself into view (chrome.tsx), and jsdom has no
+  // layout to scroll: without the stub the row's effect throws on mount, so no
+  // test could ever mount a panel that renders rows.
+  if (!window.Element.prototype.scrollIntoView)
+    window.Element.prototype.scrollIntoView = function scrollIntoView() {};
+  if (!window.Element.prototype.scrollTo)
+    window.Element.prototype.scrollTo = function scrollTo() {};
   // React 18 warns on every render unless the environment says it is a test one.
   set("IS_REACT_ACT_ENVIRONMENT", true);
 
@@ -107,14 +114,14 @@ async function load() {
   const { createRoot } = await import("react-dom/client");
   const { MemoryEngine } = await import("../../engine/memory.ts");
   const { RightPanel } = await import("../inspector.tsx");
-  const { Toolbar } = await import("../chrome.tsx");
+  const { Toolbar, LeftPanel } = await import("../chrome.tsx");
   mods = {
     React: React.default,
     act: React.act,
     useSyncExternalStore: React.useSyncExternalStore,
     createRoot,
     MemoryEngine,
-    surfaces: { inspector: RightPanel, toolbar: Toolbar },
+    surfaces: { inspector: RightPanel, toolbar: Toolbar, left: LeftPanel },
   };
   return mods;
 }
@@ -141,6 +148,19 @@ const LAYERS = {
   rect(engine) {
     engine.dispatch({ type: "add", kind: "rect", x: 40, y: 40, w: 120, h: 80 });
     return engine.snapshot().selection[0];
+  },
+  /** Nothing at all. A fresh engine seeds a starter page, so "empty" is built
+   *  the way a visitor makes it: select every top-level layer and delete. This
+   *  is the state the layers tree's and the canvas's empty answers answer to
+   *  (LP-U3 / LP-U4). No id comes back because there is nothing to select. */
+  empty(engine) {
+    const snap = engine.snapshot();
+    const kids = snap.pages[snap.page].root.children.map((n) => n.id);
+    if (kids.length) {
+      engine.dispatch({ type: "select", ids: kids });
+      engine.dispatch({ type: "delete" });
+    }
+    return null;
   },
   /** Two shapes, both selected: what the dock's multi-selection end needs
    *  before it shows the component and boolean actions at all. */
@@ -184,7 +204,12 @@ export async function mountSurface(surface = "inspector", { layer = "vector", pr
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const defaults = surface === "toolbar" ? { onActions: () => {} } : {};
+  const defaults =
+    surface === "toolbar"
+      ? { onActions: () => {} }
+      : surface === "left"
+        ? { nav: "file", onMinimize: () => {} }
+        : {};
   await act(async () => {
     root.render(React.createElement(Host, { engine, ...defaults, ...props }));
   });
@@ -317,4 +342,10 @@ export function mountPanel(opts) {
  *  document. */
 export function mountToolbar(opts) {
   return mountSurface("toolbar", { layer: "pair", ...opts });
+}
+
+/** The layers-and-pages panel (`LeftPanel`), on an empty page by default: that
+ *  is the state LP-U3 is about, and a test that wants rows asks for a fixture. */
+export function mountLeftPanel(opts) {
+  return mountSurface("left", { layer: "empty", ...opts });
 }

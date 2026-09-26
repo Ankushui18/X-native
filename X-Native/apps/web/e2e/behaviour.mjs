@@ -2812,6 +2812,145 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 44. LP-U3 + LP-U4: an empty page teaches, and only until you dismiss it -----
+{
+  const p = await page();
+  await rows(p);
+  // Empty the sample document the way a visitor would: select everything, delete.
+  const emptyIt = async () => {
+    await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+    await sleep(300);
+    await p.keyboard.press("Delete");
+    await sleep(500);
+  };
+  await emptyIt();
+
+  // LP-U3: the layers tree used to render an empty <div class="tree"> here.
+  const taught = await p.evaluate(() => {
+    const tree = document.querySelector(".panel.left .tree");
+    const state = tree?.querySelector(".empty-state") ?? null;
+    const cs = state ? getComputedStyle(state) : null;
+    return {
+      rows: tree ? tree.querySelectorAll("[data-row-id]").length : -1,
+      title: state?.querySelector(".empty-title")?.textContent.trim() ?? null,
+      body: (state?.querySelector(".empty-body")?.textContent || "").trim(),
+      kbds: [...(state?.querySelectorAll(".empty-hint kbd") ?? [])].map((k) => k.textContent.trim()),
+      icon: !!state?.querySelector("svg"),
+      strays: [...(state?.querySelectorAll("[style]") ?? [])]
+        .map((e) => e.getAttribute("style"))
+        .filter((v) => !/^(width|height): \d+px/.test(v || "")),
+      display: cs?.display ?? null,
+      align: cs?.textAlign ?? null,
+      padTop: cs?.paddingTop ?? null,
+      // the inspector's own empty state, for the "one recipe" claim
+      inspectorUsesSameRecipe: !!document.querySelector(".inspector .empty-state, .panel.right .empty-state"),
+    };
+  });
+  t(`an empty page teaches in the layers tree (${taught.title})`,
+    taught.rows === 0 && taught.title === "No layers on this page" && taught.icon && taught.body.length > 40);
+  t(`with the chords it names (${taught.kbds.join(" ")})`,
+    ["F", "R", "T", "⌘", "K"].every((k) => taught.kbds.includes(k)));
+  t(`laid out by the sheet, not inline (${taught.display}/${taught.align}, ${taught.strays.length} stray)`,
+    taught.display === "flex" && taught.align === "center" && taught.strays.length === 0 && taught.padTop !== "0px");
+  // With nothing selected the inspector shows its own `.empty-state` at the same
+  // moment, so the two panels are visibly one recipe rather than two lookalikes.
+  t("and the inspector is showing the same recipe at the same time", taught.inspectorUsesSameRecipe);
+
+  // LP-U4: the card over the empty canvas.
+  const hint = await p.evaluate(() => {
+    const c = document.querySelector(".canvas-hint");
+    const wrap = document.querySelector(".canvas-wrap");
+    if (!c || !wrap) return null;
+    const r = c.getBoundingClientRect();
+    const w = wrap.getBoundingClientRect();
+    const btn = c.querySelector("button");
+    return {
+      title: c.querySelector(".canvas-hint-title")?.textContent.trim() ?? null,
+      kbds: [...c.querySelectorAll("kbd")].map((k) => k.textContent.trim()),
+      label: btn?.textContent.trim() ?? null,
+      pe: getComputedStyle(c).pointerEvents,
+      btnPe: btn ? getComputedStyle(btn).pointerEvents : null,
+      bg: getComputedStyle(c).backgroundColor,
+      centred: Math.abs((r.x + r.width / 2) - (w.x + w.width / 2)),
+      box: { x: r.x, y: r.y, w: r.width, h: r.height },
+    };
+  });
+  t(`the empty canvas carries the first-run card (${hint?.title})`,
+    !!hint && hint.title === "Draw your first layer" && ["F", "R", "T"].every((k) => hint.kbds.includes(k)));
+  t(`click-through card, live button (${hint?.pe}/${hint?.btnPe})`,
+    hint?.pe === "none" && hint?.btnPe === "auto");
+  t(`its control says what it does (${hint?.label})`, (hint?.label || "").includes("show this again"));
+  t(`and it sits centred over the canvas (${Math.round(hint?.centred ?? -1)}px off)`, (hint?.centred ?? 99) < 4);
+
+  // The card describes a drag, so a drag through it has to work.
+  const hx = hint.box.x + hint.box.w / 2;
+  const hy = hint.box.y + hint.box.h / 2;
+  await p.keyboard.press("r");
+  await p.mouse.move(hx - 70, hy - 45); await p.mouse.down();
+  await p.mouse.move(hx + 70, hy + 45, { steps: 6 }); await p.mouse.up();
+  await sleep(500);
+  const drawn = await p.evaluate(() => ({
+    rows: document.querySelectorAll(".panel.left .tree [data-row-id]").length,
+    hint: !!document.querySelector(".canvas-hint"),
+    taught: !!document.querySelector(".panel.left .tree .empty-state"),
+  }));
+  t(`a drag straight through the card draws (${drawn.rows} row)`, drawn.rows === 1);
+  t("and one layer retires both empty states", !drawn.hint && !drawn.taught);
+
+  // The layer search's own blank is a different sentence (LP-U3's second half).
+  const search = await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left .search input")]
+      .find((i) => i.getAttribute("aria-label") === "Find layers");
+    if (!el) return null;
+    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    set.call(el, "zzz-no-such-layer");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  });
+  await sleep(400);
+  const noMatch = await p.evaluate(() => ({
+    rows: document.querySelectorAll(".panel.left .tree [data-row-id]").length,
+    msg: document.querySelector(".panel.left .tree .empty")?.textContent.trim() ?? null,
+    taught: !!document.querySelector(".panel.left .tree .empty-state"),
+  }));
+  t(`a search nothing answers says so instead of going blank (${noMatch.msg})`,
+    !!search && noMatch.rows === 0 && (noMatch.msg || "").includes("No layer matches") &&
+    (noMatch.msg || "").includes("zzz-no-such-layer") && !noMatch.taught);
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left .search input")]
+      .find((i) => i.getAttribute("aria-label") === "Find layers");
+    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    set.call(el, "");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(400);
+  t("and clearing it brings the page back",
+    (await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length)) === 1);
+
+  // Dismissal is permanent: empty the page again, dismiss, reload, empty again.
+  await emptyIt();
+  const back = await p.evaluate(() => !!document.querySelector(".canvas-hint"));
+  t("the card is back while the page is empty and it has not been dismissed", back);
+  await p.evaluate(() => document.querySelector(".canvas-hint button")?.click());
+  await sleep(400);
+  const dismissed = await p.evaluate(() => ({
+    hint: !!document.querySelector(".canvas-hint"),
+    key: localStorage.getItem("x-native-hint-empty-canvas"),
+  }));
+  t(`dismissing hides it and records it (${dismissed.key})`, !dismissed.hint && dismissed.key === "1");
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(500);
+  await rows(p);
+  await emptyIt();
+  const afterReload = await p.evaluate(() => ({
+    hint: !!document.querySelector(".canvas-hint"),
+    taught: !!document.querySelector(".panel.left .tree .empty-state"),
+  }));
+  t("the dismissal outlives the reload", !afterReload.hint);
+  t("but the layers panel still teaches — it is a state, not a nudge", afterReload.taught);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

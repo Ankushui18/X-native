@@ -71,10 +71,11 @@ import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
 import { getNudgePrefs } from "./nudgePrefs";
 import { alignKey, flowGapLine, flowInsertIndex, wrapLines as flowWrapLines, wraps } from "../engine/layout";
-import { ContextToolbar } from "./x-ui";
+import { ContextToolbar, XButton } from "./x-ui";
 import { addAutoLayout, removeAutoLayout } from "./layoutActions";
 import { align } from "./inspector";
 import { readCanvasChrome, withAlpha } from "./canvasChrome";
+import { dismissEmptyCanvasHint, emptyCanvasHintDismissed } from "./firstRun";
 
 /** Snap radius in screen pixels; divided by zoom to get world tolerance. */
 const SNAP_PX = 6;
@@ -428,6 +429,9 @@ export function Canvas({
   );
   const [vecSubTool, setVecSubTool] = useState<"select" | "bend" | "paint" | "shapeBuilder" | "eraser" | "lasso">("select");
   const [draft, setDraft] = useState<PathPoint[]>([]);
+  // LP-U4: the dismissal outlives the session (firstRun.ts), so the card is
+  // shown once per visitor rather than once per mount.
+  const [firstRun, setFirstRun] = useState(() => !emptyCanvasHintDismissed());
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
   const [panelHover, setPanelHover] = useState("");
@@ -6499,6 +6503,11 @@ export function Canvas({
     } as CSSProperties;
   })();
 
+  const docRoot = snap.pages[snap.page].root;
+  // An empty page, not presenting, and not mid-stroke: the moment a layer exists
+  // the card has nothing left to teach and goes away by itself.
+  const showFirstRun =
+    firstRun && docRoot.children.length === 0 && !snap.presentFrame && !draft.length;
   return (
     <div
       className="canvas-wrap"
@@ -6577,6 +6586,34 @@ export function Canvas({
           viewH={box.h}
           theme={theme}
         />
+      )}
+      {showFirstRun && (
+        /* LP-U4: the coldest screen in the product is an empty canvas — the dock,
+           the panels and the inspector are all there and not one of them says
+           what to do first. One card, until the page has a layer or the visitor
+           dismisses it. It must not eat the drag it is describing, so the sheet
+           gives the card `pointer-events: none` and only its button gets them
+           back — the `.cm-layer` / `.cm-pin` recipe the comment pins already use. */
+        <div className="canvas-hint">
+          <p className="canvas-hint-title">Draw your first layer</p>
+          <p className="canvas-hint-body">
+            Press <kbd>F</kbd> and drag on the canvas for a frame, <kbd>R</kbd> for a
+            rectangle, <kbd>T</kbd> for text. Whatever you draw lands in the Layers list,
+            where you can name it, group it and hand it to the inspector.
+          </p>
+          <XButton
+            variant="ghost"
+            size="sm"
+            icon="close"
+            className="canvas-hint-x"
+            onClick={() => {
+              dismissEmptyCanvasHint();
+              setFirstRun(false);
+            }}
+          >
+            Don&rsquo;t show this again
+          </XButton>
+        </div>
       )}
       {transition && <div className={`proto-transition ${transition}`} aria-hidden="true" />}
       {edit && editBox && (
