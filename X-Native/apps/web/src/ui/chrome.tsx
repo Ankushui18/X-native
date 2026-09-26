@@ -621,7 +621,12 @@ function LayerRowImpl({
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={layerMenu(isGroupNode(n), !!n.layout)}
+          items={layerMenu(isGroupNode(n), !!n.layout, {
+            // §22 MN-004: same grey-out rules as the canvas menu, for the
+            // single row-node instead of the multi-selection.
+            detach: !!n.componentId && !n.isComponent,
+            reset: !!n.overrides && Object.keys(n.overrides).length > 0,
+          })}
           onRun={(id) => runMenu(engine, id, { onRename: () => setRenaming(true) })}
           onClose={() => setMenu(null)}
         />
@@ -1226,8 +1231,10 @@ export function Actions({
   useRestoreFocus();
   const commands = [
     {
+      // §22 MN-008: palette-only — ⇧⌘F is Find (the ⌘F branch takes all
+      // shifts), so advertising it here lied. Launched from here or the button.
       label: "Inspect file (.fig)",
-      sc: "⇧⌘F",
+      sc: "",
       run: () => onInspectFig?.(),
     },
     { label: "Move tool", sc: "V", run: () => engine.dispatch({ type: "setTool", tool: "select" }) },
@@ -1283,8 +1290,10 @@ export function Actions({
     { label: "Frame selection", sc: "⌥⌘G", run: () => engine.dispatch({ type: "frameSelection" }) },
     { label: "Resize to fit", sc: "⌥⇧⌘R", run: () => engine.dispatch({ type: "resizeToFit" }) },
     { label: "Hide UI", sc: "⌘\\", run: onHide },
-    { label: "Zen Mode (full canvas HUD)", sc: "Z", run: () => window.dispatchEvent(new CustomEvent("x-native-zen-mode")) },
-    { label: "Marking / Radial menu", sc: "Q", run: () => window.dispatchEvent(new CustomEvent("x-native-radial-menu")) },
+    // §22 MN-006/007: both palette-only — Z arms the zoom tool and Q is
+    // unbound, so the old sc labels pointed at chords that do other things.
+    { label: "Zen Mode (full canvas HUD)", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-zen-mode")) },
+    { label: "Marking / Radial menu", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-radial-menu")) },
     { label: "Clean up vector (sketch to Bézier)", sc: "", run: () => engine.dispatch({ type: "vectorCleanup" }) },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
     { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },

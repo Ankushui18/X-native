@@ -6881,6 +6881,25 @@ export function Canvas({
             // A child of an auto layout frame has a layout to remove too: its
             // parent's, which is what that entry takes away.
             hasLayout(snap),
+            // §22 MN-004: grey out rows that would silently no-op — Detach on
+            // non-instances, Reset with no overrides recorded, vectorize/outline
+            // on layers they cannot touch.
+            (() => {
+              const root = snap.pages[snap.page].root;
+              const nodes = snap.selection
+                .map((id) => worldPos(root, id)?.node)
+                .filter((n): n is NonNullable<typeof n> => !!n);
+              const hasOverrides = (n: { overrides?: object }) =>
+                !!n.overrides && Object.keys(n.overrides).length > 0;
+              return {
+                detach: nodes.some((n) => !!n.componentId && !n.isComponent),
+                reset: nodes.some(hasOverrides),
+                vectorize: nodes[0]?.kind === "text",
+                outline: nodes.some(
+                  (n) => n.kind === "text" || n.kind === "line" || n.kind === "arrow" || n.strokeWidth > 0,
+                ),
+              };
+            })(),
           )}
           onRun={(id) => runMenu(engine, id, { x: menu.wx, y: menu.wy })}
           onClose={() => setMenu(null)}

@@ -29,7 +29,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 19 | Auto Layout UX | ✅ done | AL-001–AL-014 (42 tests) |
 | 20 | Contextual inspector | ✅ done | IN-001–IN-009 (40 tests) |
 | 21 | Context toolbar | ✅ done | TB-001–TB-006 (12 tests) |
-| 22 | Popups / popovers / menus | … | |
+| 22 | Popups / popovers / menus | ✅ done | MN-001–MN-008 (13 tests) |
 | 23 | Prototyping | … | |
 | 24 | Import / export | … | |
 | 25 | Undo / redo (per category) | … | |
@@ -1202,3 +1202,73 @@ bottom, non-destructive member geometry, ungroup to break up).
 - Bare-I image shortcut is undocumented (⇧I/⇧⌘K advertised,
   both wired to their own place flow); kept, conflicts with
   nothing.
+
+## §22 — Popups / popovers / menus
+
+Evidence: Figma "Boolean operations" (360039957534, from §21:
+right-click a boolean group and Ungroup breaks it up) for
+MN-005; the Figma grouping docs carry no citable single-object
+statement, so MN-003 rests on X's own engine (wrapSel min-1)
+plus the §21 floating toolbar (Group unconditional) agreeing
+with Figma's "Group selection" naming. Every other checklist
+item below was verified against the binding it advertises in
+`chrome.tsx` — the audit's main yield is label-vs-binding
+honesty, Figma's menus never print a chord that fires
+something else.
+
+### Fixed (shipped in the §22 menus commit on this branch)
+
+- MN-001 — "Select matching layers" printed ⌥A while the
+  binding is ⌥⌘A (bare ⌥A belongs to the align family);
+  label corrected on both canvas menus.
+- MN-002 — Multi-select showed "Flatten selection" twice
+  (Boolean submenu + standalone); the standalone row is now
+  single-select only.
+- MN-003 — "Group selection" was gated on sel>1 although the
+  engine wraps a lone layer and the floating toolbar offers
+  it unconditionally; the menu does too now.
+- MN-004 — New `MenuCaps` greys out rows that would silently
+  no-op (Detach on non-instances, Reset with no overrides
+  recorded, vectorize off text, outline off un-stroked
+  shapes), on the canvas menu and the layers-panel menu,
+  instead of running them into a misleading success toast.
+- MN-005 — `isGroupNode` now counts booleans with members,
+  so they get the Ungroup row Figma's boolean article
+  promises; childless booleans stay excluded (engine skips).
+- MN-006/007/008 — Actions palette printed Z (zen), Q
+  (radial), ⇧⌘F (inspect .fig); Z arms zoom, Q is unbound,
+  ⇧⌘F opens Find. All three are palette-only now (sc "").
+
+### Verified parity (traced, no fix needed)
+
+- Every other canvas/layers/palette shortcut label matches
+  its `chrome.tsx` branch: select-inverse ⇧⌘A, select-all
+  ⌘A, copy/paste properties ⌥⌘C/V, lock/hide ⇧⌘L/H, ⌘R
+  rename (selection-guarded), ⌘⌥K/⌥⌘B/⌘⌥M component rows,
+  ⌥⇧U/S/I/E + ⌘E booleans, ⌥⇧⌘C code, AL ⇧A/⌥⇧A/⌃⇧A,
+  ⇧⌘]/[/⌘]/⌘[ arrange, ⇧0/1/2 zoom, ⇧⌘E export, ⇧⌘P round,
+  ⇧⌘K place-image, view toggles ⇧R/M/G/F, ⌃P/⌃⌥P pixel.
+- ContextMenu: viewport-clamped, hover-intent (150 ms) /
+  click-toggle submenus, Esc + outside-mousedown close,
+  right-click re-targets Figma-style (hit selects, empty
+  clears).
+- Popovers (XPopover, fill/fx pickers): Esc + outside close,
+  popoverArmed blocks the global ladder, viewport-clamped.
+- Dialogs (nudge, export, shortcuts, FigInspector, actions):
+  all Esc-closable (central `closeOverlay` ladder in App:
+  find → nudge → export → actions → inspector), backdrop
+  click + close button on each.
+- Toast single-slot replaces (§20), palette `useRestoreFocus`
+  returns focus to the canvas.
+
+### Deferred / out of scope
+
+- ArrowUp/Down roving focus inside open menus (rows are
+  buttons: Tab/Enter work natively); keyboard-section (§26)
+  material, not a §22 break.
+- Palette "Pixel preview: off/2×" sc labels describe the
+  cycle chords ⌃P/⌃⌥P loosely (rows set absolute, chords
+  toggle); both readings honest, left as is.
+- XDialog (x-ui) has no callers — every dialog is bespoke
+  but each carries its own Esc/backdrop/close; unifying
+  them is refactor churn with no behavior delta.

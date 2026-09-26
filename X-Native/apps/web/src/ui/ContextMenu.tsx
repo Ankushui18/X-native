@@ -168,11 +168,25 @@ function selectItems(under: XNode[]): MenuItem[] {
     label: "Select all with same",
     items: SAME_KINDS.map((k) => ({ kind: "action" as const, id: `select-same:${k.id}`, label: k.label })),
   });
-  out.push({ kind: "action", id: "selectMatching", label: "Select matching layers", shortcut: "⌥A", icon: "rect" });
+  // §22 MN-001: the binding is ⌥⌘A (meta+alt+A); bare ⌥A never fired this
+  // (⌥+letter is the align family), so the old "⌥A" label lied.
+  out.push({ kind: "action", id: "selectMatching", label: "Select matching layers", shortcut: "⌥⌘A", icon: "rect" });
   out.push({ kind: "action", id: "selectInverse", label: "Select inverse", shortcut: "⇧⌘A" });
   out.push({ kind: "sep" });
   return out;
 }
+
+/** §22 MN-004: which context-menu rows can actually act on the current
+ * selection. Figma greys out inapplicable rows instead of running silent
+ * no-ops (with a misleading success toast, in our case); the call sites
+ * compute these from the selected nodes and the menus default to enabled
+ * so palette-style callers without a selection keep working. */
+export type MenuCaps = {
+  detach?: boolean;
+  reset?: boolean;
+  vectorize?: boolean;
+  outline?: boolean;
+};
 
 export function canvasMenu(
   sel: number,
@@ -180,6 +194,7 @@ export function canvasMenu(
   hasImage: boolean,
   under: XNode[] = [],
   hasLayout = false,
+  caps: MenuCaps = {},
 ): MenuItem[] {
   if (sel === 0) {
     return [
@@ -222,12 +237,14 @@ export function canvasMenu(
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
   ];
-  if (sel > 1) items.push({ kind: "action", id: "group", label: "Group selection", shortcut: "⌘G", icon: "group" });
+  // §22 MN-003: grouping is a wrap (engine min-1, floating toolbar offers
+  // it for any selection), so the menu does too — not just multi-select.
+  items.push({ kind: "action", id: "group", label: "Group selection", shortcut: "⌘G", icon: "group" });
   if (isGroup) items.push({ kind: "action", id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" });
   items.push({ kind: "action", id: "wrapSection", label: "Wrap in new section", icon: "section" });
   items.push({ kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" });
-  items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" });
-  items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" });
+  items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true });
+  items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true });
   items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" });
   items.push(...layoutMenuItems(hasLayout));
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
@@ -262,11 +279,13 @@ export function canvasMenu(
     });
   }
   items.push({ kind: "sep" });
-  items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
-  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⌥⌘O" });
+  // §22 MN-002: multi-select already gets Flatten inside the Boolean submenu
+  // above, so the standalone row is single-select only — no twin rows.
+  if (sel < 2) items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
+  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⌥⌘O", enabled: caps.outline ?? true });
   items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
   items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });
-  items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths" });
+  items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths", enabled: caps.vectorize ?? true });
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" });
   items.push({ kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye-off" });
@@ -301,7 +320,7 @@ function layoutMenuItems(hasLayout: boolean): MenuItem[] {
   ];
 }
 
-export function layerMenu(isGroup: boolean, hasLayout = false): MenuItem[] {
+export function layerMenu(isGroup: boolean, hasLayout = false, caps: MenuCaps = {}): MenuItem[] {
   return [
     { kind: "action", id: "rename", label: "Rename", shortcut: "⌘R", icon: "text" },
     { kind: "sep" },
@@ -314,8 +333,8 @@ export function layerMenu(isGroup: boolean, hasLayout = false): MenuItem[] {
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
     { kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" },
-    { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" },
-    { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" },
+    { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true },
+    { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true },
     { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" },
     ...layoutMenuItems(hasLayout),
     { kind: "sep" },
@@ -566,5 +585,8 @@ export function runMenu(
 }
 
 export function isGroupNode(n?: XNode | null): boolean {
-  return !!n && (n.kind === "group" || (n.kind === "frame" && n.name === "Group"));
+  // §22 MN-005: a boolean with members unwraps like a group (engine ungroup
+  // takes any node with children; Figma's boolean article says to Ungroup it),
+  // so it gets the Ungroup row too. Childless booleans stay excluded.
+  return !!n && (n.kind === "group" || (n.kind === "frame" && n.name === "Group") || (n.kind === "boolean" && n.children.length > 0));
 }
