@@ -1124,6 +1124,30 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 25. outline stroke: exactly one entry, honest feedback ----------------------
+{
+  const p = await page();
+  await rows(p);
+  await drawRect(p);
+  const outlines = () => p.evaluate(() =>
+    [...document.querySelectorAll(".inspector button")]
+      .map(b => (b.textContent || "").trim()).filter(t => /outline stroke/i.test(t)));
+  t("no Outline entry before a stroke exists", (await outlines()).length === 0);
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .empty-add-btn")]
+    .find(b => /add stroke/i.test(b.textContent || "")).click());
+  await sleep(400);
+  t("one Outline entry on a stroked shape", (await outlines()).length === 1);
+  await p.keyboard.down("Meta"); await p.keyboard.press("e"); await p.keyboard.up("Meta");
+  await sleep(500);
+  t("one Outline entry after flatten to vector", (await outlines()).length === 1);
+  await p.evaluate(() => [...document.querySelectorAll(".inspector button")]
+    .find(b => /outline stroke/i.test(b.textContent || "")).click());
+  await sleep(400);
+  t("outlining toasts",
+    await p.evaluate(() => (document.querySelector(".toast")?.textContent || "").includes("Outlined stroke")));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

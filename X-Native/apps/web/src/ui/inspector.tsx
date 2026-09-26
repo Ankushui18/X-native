@@ -4346,9 +4346,18 @@ function Design({
             Edit vector
           </button>
           <button onClick={() => engine.dispatch({ type: "flatten" })}>Flatten</button>
-          {n.strokeWidth > 0 && (
-            <button onClick={() => engine.dispatch({ type: "outlineStroke" })}>Outline stroke</button>
-          )}
+          {n.strokeWidth > 0 &&
+            !(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
+              <button
+                onClick={() => {
+                  engine.dispatch({ type: "outlineStroke", id: n.id });
+                  toast("Outlined stroke");
+                }}
+                title="Convert stroke to vector path (⇧⌘O)"
+              >
+                Outline stroke
+              </button>
+            )}
         </div>
       </div>
       {(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
@@ -4571,12 +4580,16 @@ function Design({
                 className="export-run"
                 style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
+                  if (!(n.kind === "text" || n.strokeWidth > 0 || n.kind === "line" || n.kind === "arrow")) {
+                    toast("Add a stroke to outline it");
+                    return;
+                  }
                   engine.dispatch({ type: "outlineStroke", id: n.id });
                   toast("Outlined stroke");
                 }}
                 title="Convert stroke to vector path (⇧⌘O)"
               >
-                Outline Stroke
+                Outline stroke
               </button>
             </div>
 

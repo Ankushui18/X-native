@@ -147,7 +147,7 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 | # | Finding | Status | Pri |
 |---|---|---|---|
 | IN-U1 | MULTI-SELECT: fill/stroke/appearance/effects show FIRST-layer values with NO Mixed (only corner radii has it); edits patch first layer only — exactly the §29 violation (controls masquerading as shared). Fix: Mixed display + apply-to-all via the numMany/onChangeMany pattern | PARTIAL | P1 |
-| IN-U2 | DUPLICATE "Outline stroke": seg button ~4300 (no id, no toast, no title) + vector-card button ~4525 (id + toast + ⇧⌘O) — both render on vectors with stroke, divergent behavior | DUPLICATE | P1 |
+| IN-U2 | FIXED: seg entry shows only when the vector card is absent (exactly one entry always); both use id+toast+⇧⌘O title; card refuses the stroke-less no-op with a teaching toast; labels unified | FIXED (P1) | — |
 | IN-U3 | Component/Instance, Boolean, Poly/Star headers use h-row, not Section (no collapse/persist, different chrome) | DRIFT (§29) | P2 |
 | IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
 | IN-U5 | "Edit vector" label dispatches `flatten` (misleading); seg buttons raw/unclassed | LABEL + DRIFT | P2 |
