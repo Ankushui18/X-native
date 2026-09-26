@@ -270,6 +270,42 @@ palette (max-width/max-height/scroll).
 | RW-U1 | Bottom toolbar dock has NO narrow-width protection (fixed content row, no max-width/scroll/wrap) → tools clip off-screen on narrow windows while minUi saves only the panels. Fix: max-width + scroll or overflow flyout | PARTIAL | P2 |
 | RW-U2 | All window-size behavior code-verified ONLY (1280/1440/1920/2560 + narrow/wide need a browser) | NOT VERIFIED visually | P2 |
 
+## §14. Senior designer critique (prompt §26) — evidence-linked, no subjective language
+
+- INFORMATION ARCHITECTURE: two nav truths coexist (local `nav` drives the panel; engine `leftTab` is
+  write-only) which made the "Open variables & styles" button dead (LP-U1); the view menu lives inside
+  the inspector tab bar (PT-U6), so canvas-display toggles are found by accident, not by structure.
+- VISUAL HIERARCHY: inspector `Section` vs ad-hoc `h-row` headers (IN-U3) give identical-rank content
+  two different weights; the vector card's `<strong>` header is a third.
+- DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wastes its density on
+  7 shortcut-less buttons (LP-U5).
+- CONSISTENCY: four tab systems (PM-U5), two tooltip systems (§2.3), two Esc owners (PM-U3),
+  `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens (FR-U2).
+- DISCOVERABILITY: prototype tab (TB-U3), italic (TY-U1), property-first binding (FS-U1), ⇧E/⌘⌥↩ chords
+  (TB-U6/PT-U7), rotate zone (FR-U3), and the entire product for first-run users (LP-U4) are
+  unreachable without prior knowledge.
+- AFFORDANCE: locked selections show editable handles that refuse (FR-U1); "Edit vector" flattens
+  (IN-U5); Resources opens the command palette (TB-U1); duplicate Outline-stroke buttons diverge (IN-U2).
+- FEEDBACK: bound-value edits vanish without notice (FS-U6); AgentPane swallows unmatched input (LP-U6);
+  multi-select shows first-layer values as shared (IN-U1/TY-U3).
+- ERROR PREVENTION: guard toasts on binding (good); native confirm() for destructive mode delete (PM-U1);
+  corrupt→toast + fresh doc (honest, minimal).
+- ACCESSIBILITY: align/valign/decoration buttons have no accessible name at all (TY-U2); tooltips are
+  pointer-only (TY-U6); tool flyouts/menu-less popovers lack keyboard paths (TB-U2); dialogs lack initial
+  focus (PM-U6); canvas chrome is color-only for lock state (would-be FR-U1 fix must not be color-only).
+- KEYBOARD WORKFLOW: palette/tree/menus have arrows; flyouts, tabs, orientation segs, and the dock have
+  none; shortcuts exist but are advertised inconsistently (⌘/ claimed twice, ⇧E/⇧F hidden).
+- CANVAS/INSPECTOR/TOOLBAR/POPUP/MODAL: canvas chrome is the strongest surface (type-aware, culled,
+  badged); inspector has the best primitives (Section/Field) with the worst multi-select honesty;
+  toolbar has a duplicate + mouse-only flyouts; popovers are individually good but unshared; modals are
+  bespoke + native-dialog-backed.
+- TYPOGRAPHY/ICONOGRAPHY/SPACING/COLOR: type scale + icon scale disciplined (12/14/16); spacing and
+  radius have NO token scales (ad-hoc gaps/radii everywhere); color tokens complete incl. dark theme +
+  green/red/amber, but canvas + chips bypass them with hardcoded values.
+- MOTION/PERFORMANCE PERCEPTION: motion restrained and non-blocking (pass); memo'd panel/tree + hover
+  guards show perf intent; full-snapshot subscriptions remain the structural risk (§33 — not measured
+  here for lack of a browser).
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
