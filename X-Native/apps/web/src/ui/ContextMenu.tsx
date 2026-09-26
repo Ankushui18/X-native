@@ -186,6 +186,7 @@ export function canvasMenu(
       ...selectItems(under),
       { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
       { kind: "action", id: "selectAll", label: "Select all", shortcut: "⌘A", icon: "rect" },
+      { kind: "action", id: "placeImage", label: "Place image…", shortcut: "⇧⌘K", icon: "image" },
       // Right-clicking an empty canvas is the second way to get
       // to the UI-state commands, for people who never look at the menu bar.
       { kind: "sep" },
@@ -232,7 +233,7 @@ export function canvasMenu(
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
   items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
   if (hasImage) {
-    /* image-specific items already covered by flip */
+    items.push({ kind: "action", id: "cropImage", label: "Crop image", icon: "image" });
   }
   items.push({ kind: "sep" });
   items.push({
@@ -534,6 +535,17 @@ export function runMenu(
       engine.dispatch({ type: "convertTextToVector" });
       toast("Converted text to vector paths");
       break;
+    case "cropImage": {
+      // The canvas owns the crop tool (overlay, handles, Esc semantics); the
+      // menu just rings the bell with the first selected layer.
+      const id0 = engine.snapshot().selection[0];
+      if (id0) window.dispatchEvent(new CustomEvent("x-native-crop-image", { detail: { id: id0 } }));
+      break;
+    }
+    case "placeImage": {
+      window.dispatchEvent(new CustomEvent("x-native-place-image"));
+      break;
+    }
     case "useAsMask": {
       const s = engine.snapshot();
       if (s.selection.length >= 2) engine.dispatch({ type: "group" });

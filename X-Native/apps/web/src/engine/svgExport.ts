@@ -53,6 +53,10 @@ export const alphaOf = (value: string | undefined): number =>
  * made of several contours (an icon, a donut with a hole) exports whole rather
  * than as its first contour.
  */
+/** Kinds whose image fill the canvas clips to the layer outline: export
+ *  wraps the bitmap in the same path so rounded and polygonal shapes keep
+ *  their silhouette. Frames and groups fill the whole box unclipped. */
+const SHAPE_CLIP = new Set(["rect", "ellipse", "poly", "star", "vector", "boolean"]);
 export function svgPath(n: XNode) {
   const loops = networkLoops(n);
   if (loops) {
@@ -437,11 +441,21 @@ export function svgNode(n: XNode, top = false): string {
     body.push(
       `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}" letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${filter}>${content}</text>`,
     );
-  } else if (n.imageSrc) {
-    const preserve = n.imageFit === "fit" ? "xMidYMid meet" : n.imageFit === "crop" ? "xMidYMid slice" : n.imageFit === "tile" ? "none" : "none";
-    body.push(
-      `<image href="${escXml(n.imageSrc)}" x="0" y="0" width="${round(n.w)}" height="${round(n.h)}" preserveAspectRatio="${preserve}" opacity="${Math.max(0, Math.min(1, n.fillOpacity))}"${filter}/>`,
-    );
+  } else if (n.fillType === "image" && n.imageSrc) {
+    // Fill covers like the canvas does (slice, not stretch); the stored crop
+    // rect and tile geometry need the bitmap's dimensions, which export does
+    // not load, so crop falls back to a centred cover and tile to a stretch.
+    const preserve =
+      n.imageFit === "fit" ? "xMidYMid meet" : n.imageFit === "tile" ? "none" : "xMidYMid slice";
+    const img = `<image href="${escXml(n.imageSrc)}" x="0" y="0" width="${round(n.w)}" height="${round(n.h)}" preserveAspectRatio="${preserve}" opacity="${Math.max(0, Math.min(1, n.fillOpacity))}"${filter}/>`;
+    const d = SHAPE_CLIP.has(n.kind) ? svgPath(n) : "";
+    if (d) {
+      const clip = safeId("imgclip", n);
+      body.push(`<defs><clipPath id="${clip}"><path d="${d}"/></clipPath></defs>`);
+      body.push(`<g clip-path="url(#${clip})">${img}</g>`);
+    } else {
+      body.push(img);
+    }
   } else if (n.kind !== "group" && n.kind !== "frame" && n.kind !== "component" && n.kind !== "instance") {
     body.push(svgShape(n, paint, stroke, filter));
   } else if (fill !== "none" || stroke !== "none") {

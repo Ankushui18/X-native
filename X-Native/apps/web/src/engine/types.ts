@@ -410,6 +410,19 @@ export interface Paint {
   hx?: number;
   hy?: number;
   stops?: GradientStop[];
+  /** Image fill: source plus its own fit/rotation/tile/adjustments, so a
+   *  stacked image never inherits the base fill's image settings. */
+  image?: string;
+  imageFit?: ImageFit;
+  imageRot?: number;
+  imageTile?: number;
+  imageExposure?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageTemperature?: number;
+  imageTint?: number;
+  imageHighlights?: number;
+  imageShadows?: number;
 }
 
 /**
@@ -656,6 +669,13 @@ export interface XNode {
   imageSrc: string;
   imageFit: ImageFit;
   imageRot: number;
+  /** Tile mode only: tile size as a percent of the image's original
+   *  dimensions. 100 when unset. */
+  imageTile?: number;
+  /** Crop mode only: the visible portion of the (rotated) image in normalised
+   *  0..1 coordinates, stretched to fill the layer. Unset means the whole
+   *  image, rendered as cover so switching modes never distorts. */
+  imageCrop?: { x: number; y: number; w: number; h: number };
   imageExposure: number;
   imageContrast: number;
   imageSaturation: number;
@@ -841,6 +861,8 @@ export interface Snapshot {
   showRulers: boolean;
   /** View > Minimap. Off by default; it costs its own render pass. */
   showMinimap: boolean;
+  /** View > Mask outlines: masks drawn with a green outline. */
+  showMaskOutlines: boolean;
   /** "Pixel preview" in the Zoom/view options menu: vectors drawn as
    *  the raster they would export as, at 1x or 2x device pixels. */
   pixelPreview: PixelPreview;
@@ -974,6 +996,7 @@ export type Command =
   | { type: "swapFillStroke" }
   | { type: "toggleStroke" }
   | { type: "toggleOutlines" }
+  | { type: "toggleMaskOutlines" }
   | { type: "boolean"; op: BooleanOp }
   /** Arm (`op`) or clear (`null`) the boolean live preview overlay. View-only. */
   | { type: "setBooleanPreview"; op: BooleanOp | null }

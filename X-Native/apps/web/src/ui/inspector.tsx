@@ -2261,7 +2261,8 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   }
   if (n.opacity < 1) L("Opacity", `${Math.round(n.opacity * 100)}%`, "Layer");
   if (n.blendMode && n.blendMode !== "normal") L("Blend mode", n.blendMode, "Layer");
-  if (n.isMask) L("Mask", n.maskType === "luminance" ? "Luminance" : "Alpha", "Layer");
+  if (n.isMask)
+    L("Mask", n.maskType === "luminance" ? "Luminance" : n.maskType === "vector" ? "Vector" : "Alpha", "Layer");
   const fills = (n.fills ?? []).filter((f) => f.visible !== false);
   // Same reading order as the Design panel now uses: the paints stacked above
   // the base fill come first, so both sides count the stack from the canvas down.
@@ -5343,7 +5344,17 @@ function Design({
               hx={p.hx}
               hy={p.hy}
               blend={p.blend}
-              noImage
+              image={p.image}
+              imageFit={p.imageFit}
+              imageRot={p.imageRot}
+              imageExposure={p.imageExposure}
+              imageContrast={p.imageContrast}
+              imageSaturation={p.imageSaturation}
+              imageTemperature={p.imageTemperature}
+              imageTint={p.imageTint}
+              imageHighlights={p.imageHighlights}
+              imageShadows={p.imageShadows}
+              imageTile={p.imageTile}
               recents={collectColors(snap.pages[snap.page].root)}
               background={fillBackground(snap.pages[snap.page].root, n)}
               largeText={isLargeText(n)}
@@ -5377,6 +5388,17 @@ function Design({
                   gy: patch.fillGY,
                   hx: patch.fillHX,
                   hy: patch.fillHY,
+                  image: patch.imageSrc,
+                  imageFit: patch.imageFit,
+                  imageRot: patch.imageRot,
+                  imageTile: patch.imageTile,
+                  imageExposure: patch.imageExposure,
+                  imageContrast: patch.imageContrast,
+                  imageSaturation: patch.imageSaturation,
+                  imageTemperature: patch.imageTemperature,
+                  imageTint: patch.imageTint,
+                  imageHighlights: patch.imageHighlights,
+                  imageShadows: patch.imageShadows,
                 });
               }}
             />
@@ -5411,6 +5433,8 @@ function Design({
             imageTint={n.imageTint}
             imageHighlights={n.imageHighlights}
             imageShadows={n.imageShadows}
+            imageTile={n.imageTile}
+            onCrop={() => window.dispatchEvent(new CustomEvent("x-native-crop-image", { detail: { id: n.id } }))}
             gx={n.fillGX}
             gy={n.fillGY}
             hx={n.fillHX}
@@ -7867,6 +7891,7 @@ function fillValuePatch(v: FillValue): Partial<XNode> {
     imageTint: v.imageTint || 0,
     imageHighlights: v.imageHighlights || 0,
     imageShadows: v.imageShadows || 0,
+    imageTile: v.imageTile ?? 100,
     ...(v.gx != null
       ? { fillGX: v.gx, fillGY: v.gy, fillHX: v.hx, fillHY: v.hy }
       : handles
@@ -8030,6 +8055,7 @@ function ColorRow({
   imageTint = 0,
   imageHighlights = 0,
   imageShadows = 0,
+  imageTile = 100,
   gx,
   gy,
   hx,
@@ -8046,6 +8072,7 @@ function ColorRow({
   onRemove,
   onMeta,
   onValueChange,
+  onCrop,
 }: {
   title?: string;
   value: string;
@@ -8064,6 +8091,8 @@ function ColorRow({
   imageTint?: number;
   imageHighlights?: number;
   imageShadows?: number;
+  imageTile?: number;
+  onCrop?: () => void;
   gx?: number;
   gy?: number;
   hx?: number;
@@ -8180,6 +8209,7 @@ function ColorRow({
             imageTint,
             imageHighlights,
             imageShadows,
+            imageTile,
             gx,
             gy,
             hx,
@@ -8192,6 +8222,7 @@ function ColorRow({
           largeText={largeText}
           noImage={noImage}
           stroke={stroke}
+          onCrop={onCrop}
           onChange={(v) => {
             if (onValueChange) {
               onValueChange(v);
@@ -8421,6 +8452,10 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           <button role="menuitemcheckbox" aria-checked={!!snap.outlineMode} onClick={go(() => engine.dispatch({ type: "toggleOutlines" }))}>
             Layer outlines<span className="sc">⇧O</span>
             {snap.outlineMode && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={!!snap.showMaskOutlines} onClick={go(() => engine.dispatch({ type: "toggleMaskOutlines" }))}>
+            Mask outlines
+            {snap.showMaskOutlines && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.showFlows !== false} onClick={go(() => engine.dispatch({ type: "toggleFlows" }))}>
             Prototype flows<span className="sc">⇧F</span>

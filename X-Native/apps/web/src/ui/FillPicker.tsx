@@ -45,6 +45,7 @@ export interface FillValue {
   image?: string;
   imageFit?: ImageFit;
   imageRot?: number;
+  imageTile?: number;
   imageExposure?: number;
   imageContrast?: number;
   imageSaturation?: number;
@@ -78,6 +79,7 @@ export function FillPicker({
   largeText,
   noImage,
   stroke,
+  onCrop,
   onChange,
   onClose,
 }: {
@@ -85,9 +87,11 @@ export function FillPicker({
   value: FillValue;
   recents: string[];
   anchor: DOMRect;
-  /** Stacked fills cannot hold images yet (§13 owns that), so the type menu
-   *  offers no dead Image option for them. */
+  /** Strokes take no image fill, so the type menu offers no dead Image
+   *  option for them. */
   noImage?: boolean;
+  /** Enter the canvas crop tool (image fills only; base fill only). */
+  onCrop?: () => void;
   /** Stroke paint: gradient/image/blend strokes are unimplemented, so the
    *  picker offers Solid only and hides the dead blend menu. */
   stroke?: boolean;
@@ -655,6 +659,27 @@ export function FillPicker({
               </button>
             ))}
           </div>
+          {(value.imageFit || "fill") === "tile" && (
+            <label className="adj-row" title="Tile size as a percent of the image's original dimensions">
+              <span>Tile</span>
+              <input
+                type="number"
+                min={1}
+                max={400}
+                value={value.imageTile ?? 100}
+                onChange={(e) =>
+                  onChange({ ...value, imageTile: Math.max(1, Math.min(400, parseInt(e.target.value, 10) || 100)) } as FillValue)
+                }
+              />
+              <em>%</em>
+            </label>
+          )}
+          {(value.imageFit || "fill") === "crop" && value.image && onCrop && (
+            <button className="blend-row" onClick={onCrop}>
+              Crop image
+              <span>Edit ↓</span>
+            </button>
+          )}
           <button
             className="blend-row"
             title="Rotate fill 90°"

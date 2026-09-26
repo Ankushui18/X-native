@@ -39,8 +39,10 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintsAnyFill } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
+import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
+import { coverCrop, normalizeCropRect } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
 import { clampZoom, normalizeWheelDelta, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
@@ -157,7 +159,9 @@ type Drag =
         | "polyCount"
         | "radius"
         | "arc"
-        | "rotOrigin";
+        | "rotOrigin"
+        | "crop"
+        | "cropMove";
       /** Zoom-tool drag: the create block zooms to the rect instead of
        *  committing a node. */
       zoom?: boolean;
@@ -190,6 +194,13 @@ type Drag =
       origLocal?: { x: number; y: number };
       corner?: number;
       id?: string;
+      /** Crop drag: the handle being pulled, and the pointer's last local
+       *  point for the move (reposition) variant. */
+      cropHandle?: CropHandle;
+      cropLX?: number;
+      cropLY?: number;
+      /** Crop drag: the rect at drag start; every move recomputes from it. */
+      cropStart?: CropRect;
       duped?: boolean;
       /** Selection when a ⇧-marquee started: the band unions with this, so
        *  shrinking the band lets go of layers instead of accumulating them. */
@@ -270,6 +281,102 @@ export function Canvas({
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
   const imgs = useRef(new Map<string, HTMLImageElement>());
+  /** Resolve an image source to a loaded element, kicking off the load and
+   *  repainting on arrival when it is not there yet. */
+  /** Crop tool: the layer being cropped (its rect patches live, one undo
+   *  per gesture), plus the pre-tool rect for Esc and a dirty flag. */
+  const [cropId, setCropId] = useState<string | null>(null);
+  const cropOrig = useRef<CropRect | undefined>(undefined);
+  const cropDirty = useRef(false);
+  /** Place-image queue: sources picked from the file dialog, placed one per
+   *  click (a click on a shape fills it instead of adding a layer). */
+  const [placing, setPlacing] = useState<{ srcs: { src: string; name: string }[]; i: number } | null>(null);
+  const imgOf = (src: string) => {
+    let im = imgs.current.get(src);
+    if (!im && src) {
+      im = new Image();
+      im.src = src;
+      im.onload = () => engine.dispatch({ type: "select", ids: engine.snapshot().selection });
+      imgs.current.set(src, im);
+    }
+    return im && im.complete && im.naturalWidth ? im : undefined;
+  };
+  /** Enter the crop tool on an image layer: select it, switch its mode to
+   *  Crop, and remember the pre-tool rect for Esc. */
+  const enterCrop = (id: string) => {
+    const now = engine.snapshot();
+    const n = find(now.pages[now.page].root, id);
+    if (!n || (!n.imageSrc && n.fillType !== "image")) return;
+    if (n.fillType === "image" && !n.imageSrc) return;
+    cropOrig.current = n.imageCrop ? { ...n.imageCrop } : undefined;
+    cropDirty.current = false;
+    if (n.imageFit !== "crop") engine.dispatch({ type: "patch", id, patch: { imageFit: "crop" } });
+    engine.dispatch({ type: "select", ids: [id] });
+    if (n.imageSrc) imgOf(n.imageSrc);
+    setCropId(id);
+  };
+  /** Leave the crop tool, reverting to the pre-tool rect. */
+  const cancelCrop = () => {
+    if (cropDirty.current && cropId) {
+      engine.dispatch({ type: "patch", id: cropId, patch: { imageCrop: cropOrig.current } });
+    }
+    setCropId(null);
+  };
+  useEffect(() => {
+    const onCropEvent = (e: Event) => {
+      const id = (e as CustomEvent).detail?.id;
+      if (id) enterCrop(id);
+    };
+    const onPlaceEvent = () => {
+      // A cancelled image-tool click leaves a stale point behind; the menu
+      // path queues everything instead of landing the first on it.
+      pendingImage.current = null;
+      fileRef.current?.click();
+    };
+    window.addEventListener("x-native-crop-image", onCropEvent);
+    window.addEventListener("x-native-place-image", onPlaceEvent);
+    return () => {
+      window.removeEventListener("x-native-crop-image", onCropEvent);
+      window.removeEventListener("x-native-place-image", onPlaceEvent);
+    };
+  }, []);
+  /** Processed image dimensions for the crop tool (rotation-aware), or
+   *  null while the source is still loading. */
+  const cropImageDims = (cn: XNode) => {
+    const im = cn.imageSrc ? imgs.current.get(cn.imageSrc) : undefined;
+    if (!im || !im.complete || !im.naturalWidth) return null;
+    const rot = ((cn.imageRot % 360) + 360) % 360;
+    const swap = rot === 90 || rot === 270;
+    return { iw: swap ? im.naturalHeight : im.naturalWidth, ih: swap ? im.naturalWidth : im.naturalHeight };
+  };
+  // A selection that leaves the cropped layer applies the crop.
+  useEffect(() => {
+    if (cropId && !snap.selection.includes(cropId)) setCropId(null);
+  }, [snap.selection]);
+  // Enter applies, Escape reverts, while cropping or placing. Keystrokes
+  // aimed at a field belong to the field, not the tool.
+  useEffect(() => {
+    if (!cropId && !placing) return;
+    const key = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (cropId) cancelCrop();
+        if (placing) {
+          setPlacing(null);
+          engine.dispatch({ type: "setTool", tool: "select" });
+        }
+      } else if (e.key === "Enter" && cropId) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCropId(null);
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [cropId, placing]);
   // Layer-blur raster cache: a filtered node repaints identically every pan
   // frame while the blur dominates paint cost (profiled: 99.7% native in
   // d-pan), so each eligible leaf's filtered raster is kept offscreen and
@@ -1141,20 +1248,17 @@ export function Canvas({
           (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)));
       if (canShadow) paintDropShadowsMasked(ctx, fxNode, z, { trace: traceShape });
       if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
-        let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
-        if (n.imageSrc && !im) {
-          im = new Image();
-          im.src = n.imageSrc;
-          im.onload = () => engine.dispatch({ type: "select", ids: snap.selection });
-          imgs.current.set(n.imageSrc, im);
-        }
-        if (im?.complete && im.naturalWidth) {
+        // A hidden base image paints nothing, but the stack above it still
+        // does - each fill carries its own visibility.
+        const im = n.imageSrc && n.fillVisible !== false ? imgOf(n.imageSrc) : undefined;
+        if (im) {
           ctx.save();
           ctx.globalAlpha *= n.fillOpacity ?? 1;
           ctx.globalCompositeOperation = canvasBlend(n.fillBlend);
           paintImageFill(ctx, n, im, sx, sy, sw, sh);
           ctx.restore();
         }
+        paintStack(ctx, n, sx, sy, sw, sh, imgOf);
       } else if (
         n.fillVisible !== false &&
         n.fill &&
@@ -1165,7 +1269,7 @@ export function Canvas({
         ctx.save();
         ctx.globalAlpha *= n.fillOpacity ?? 1;
         ctx.globalCompositeOperation = canvasBlend(n.fillBlend);
-        paintFill(ctx, n, sx, sy, sw, sh);
+        paintFill(ctx, n, sx, sy, sw, sh, imgOf);
         ctx.restore();
       }
       if (n.kind === "vector" && n.vectorNetwork?.regions?.some((r) => r.fill)) {
@@ -1277,7 +1381,7 @@ export function Canvas({
             if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
               ctx.save();
               ctx.globalCompositeOperation = "source-over";
-              paintFill(ctx, n, sx, sy, sw, sh);
+              paintFill(ctx, n, sx, sy, sw, sh, imgOf);
               ctx.restore();
             }
           } else {
@@ -1507,45 +1611,145 @@ export function Canvas({
         }
         ctx.restore();
       }
-      let maskOn = 0;
-      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
-      for (const ch of renderChildren) {
-        if (ch.isMask && ch.visible) {
-          ctx.save();
-          const mx = snap.panX + (x + ch.x) * z;
-          const my = snap.panY + (y + ch.y) * z;
-          const mw = ch.w * z;
-          const mh = ch.h * z;
-          const mcx = mx + mw / 2;
-          const mcy = my + mh / 2;
-          ctx.save();
-          if (ch.rotation || ch.flipH || ch.flipV) {
-            ctx.translate(mcx, mcy);
-            if (ch.rotation) ctx.rotate((ch.rotation * Math.PI) / 180);
-            if (ch.flipH || ch.flipV) ctx.scale(ch.flipH ? -1 : 1, ch.flipV ? -1 : 1);
-            ctx.translate(-mcx, -mcy);
+      // Masked runs: a mask clips every sibling after it until the next mask.
+      // Each run composites offscreen - the mask is painted for real (fills,
+      // strokes, glyphs, blurs, image alpha all count), its tile is reduced
+      // per the mask type, and every masked sibling is painted into its own
+      // tile, punched by the mask, and blitted back under the live transform.
+      const paintMaskedRun = (mask: XNode, kids: XNode[]): boolean => {
+        if (!kids.length) return true;
+        // Screen-space union of the run, padded for spill (shadows, blurs)
+        // and rotation slack, mirroring the cull bounds above.
+        const spill = (c: XNode) => {
+          let pad = (c.strokeWidth ?? 0) + 2;
+          for (const st of c.strokes ?? []) if (st.visible) pad = Math.max(pad, st.width + 2);
+          for (const e of c.effects ?? []) {
+            if (!e.visible) continue;
+            pad = Math.max(
+              pad,
+              Math.abs(e.x ?? 0) + Math.abs(e.y ?? 0) + Math.abs(e.blur ?? 0) * 2 + Math.abs(e.spread ?? 0),
+            );
           }
-          ctx.beginPath();
-          if (ch.kind === "ellipse") {
-            ctx.ellipse(mcx, mcy, Math.abs(mw / 2), Math.abs(mh / 2), 0, 0, Math.PI * 2);
-          } else if (ch.path.length) {
-            tracePath(ctx, ch.path, mx, my, z, ch.closed);
-          } else if (typeof ctx.roundRect === "function") {
-            const rr = ch.cornerIndependent
-              ? [ch.cornerRadii[0] * z, ch.cornerRadii[1] * z, ch.cornerRadii[3] * z, ch.cornerRadii[2] * z]
-              : ch.cornerRadii[0] * z;
-            ctx.roundRect(mx, my, mw, mh, rr);
-          } else {
-            ctx.rect(mx, my, mw, mh);
-          }
-          ctx.restore();
-          ctx.clip();
-          maskOn += 1;
-          continue;
+          if (c.rotation) pad += Math.hypot(c.w, c.h) / 2 - Math.min(c.w, c.h) / 2;
+          return pad * z + 4;
+        };
+        let ox = Infinity;
+        let oy = Infinity;
+        let ex = -Infinity;
+        let ey = -Infinity;
+        for (const c of [mask, ...kids]) {
+          const q = spill(c);
+          const bx = snap.panX + (x + c.x) * z - q;
+          const by = snap.panY + (y + c.y) * z - q;
+          ox = Math.min(ox, bx);
+          oy = Math.min(oy, by);
+          ex = Math.max(ex, bx + c.w * z + q * 2);
+          ey = Math.max(ey, by + c.h * z + q * 2);
         }
-        paint(ch, x, y);
+        ox = Math.floor(ox);
+        oy = Math.floor(oy);
+        const ow = Math.ceil(ex - ox);
+        const oh = Math.ceil(ey - oy);
+        if (!(ow > 0 && oh > 0)) return true;
+        // Tile pixels per user unit, straight from the live transform (which
+        // carries the dpr scale and every ancestor rotation above this node).
+        const m = ctx.getTransform();
+        const sx = Math.hypot(m.a, m.b) || 1;
+        const sy = Math.hypot(m.c, m.d) || 1;
+        const tw = Math.max(1, Math.ceil(ow * sx));
+        const th = Math.max(1, Math.ceil(oh * sy));
+        if (tw > 8192 || th > 8192 || tw * th > 16777216) return false;
+        const tile = () => {
+          const c = document.createElement("canvas");
+          c.width = tw;
+          c.height = th;
+          const t = c.getContext("2d");
+          if (t) t.setTransform(m.a, m.b, m.c, m.d, m.e - (ox * m.a + oy * m.c), m.f - (ox * m.b + oy * m.d));
+          return t;
+        };
+        const prev = ctx;
+        const into = (t: CanvasRenderingContext2D | null, c: XNode) => {
+          if (!t) return false;
+          ctx = t;
+          try {
+            paint(c, x, y);
+          } finally {
+            ctx = prev;
+          }
+          return true;
+        };
+        // The mask paints with its opacity but never its blend mode: blending
+        // against a transparent tile is meaningless, and the mask's job is
+        // only to supply alpha (or luminance).
+        const mt = tile();
+        if (!into(mt, { ...mask, blendMode: "normal" })) return false;
+        const mc = mt!.canvas;
+        const type = mask.maskType || "alpha";
+        if (type !== "alpha") {
+          try {
+            const img = mt!.getImageData(0, 0, tw, th);
+            const d = img.data;
+            for (let i = 0; i < d.length; i += 4) {
+              d[i + 3] = reduceMaskAlpha(type, d[i], d[i + 1], d[i + 2], d[i + 3]);
+            }
+            mt!.putImageData(img, 0, 0);
+          } catch {
+            // Tainted tile (an external image without CORS): the unprocessed
+            // alpha stands in for the requested reduction.
+          }
+        }
+        for (const k of kids) {
+          const kt = tile();
+          if (!into(kt, k)) return false;
+          kt!.save();
+          kt!.globalCompositeOperation = "destination-in";
+          kt!.drawImage(mc, 0, 0);
+          kt!.restore();
+          ctx.drawImage(kt!.canvas, ox, oy, ow, oh);
+        }
+        return true;
+      };
+      const paintGeometricMask = (ch: XNode) => {
+        ctx.save();
+        const mx = snap.panX + (x + ch.x) * z;
+        const my = snap.panY + (y + ch.y) * z;
+        const mw = ch.w * z;
+        const mh = ch.h * z;
+        const mcx = mx + mw / 2;
+        const mcy = my + mh / 2;
+        ctx.save();
+        if (ch.rotation || ch.flipH || ch.flipV) {
+          ctx.translate(mcx, mcy);
+          if (ch.rotation) ctx.rotate((ch.rotation * Math.PI) / 180);
+          if (ch.flipH || ch.flipV) ctx.scale(ch.flipH ? -1 : 1, ch.flipV ? -1 : 1);
+          ctx.translate(-mcx, -mcy);
+        }
+        ctx.beginPath();
+        if (ch.kind === "ellipse") {
+          ctx.ellipse(mcx, mcy, Math.abs(mw / 2), Math.abs(mh / 2), 0, 0, Math.PI * 2);
+        } else if (ch.path.length) {
+          tracePath(ctx, ch.path, mx, my, z, ch.closed);
+        } else if (typeof ctx.roundRect === "function") {
+          const rr = ch.cornerIndependent
+            ? [ch.cornerRadii[0] * z, ch.cornerRadii[1] * z, ch.cornerRadii[3] * z, ch.cornerRadii[2] * z]
+            : ch.cornerRadii[0] * z;
+          ctx.roundRect(mx, my, mw, mh, rr);
+        } else {
+          ctx.rect(mx, my, mw, mh);
+        }
+        ctx.restore();
+        ctx.clip();
+      };
+      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
+      for (const run of partitionMaskRuns(renderChildren)) {
+        if (!run.mask) {
+          for (const k of run.kids) paint(k, x, y);
+        } else if (!paintMaskedRun(run.mask, run.kids)) {
+          paintGeometricMask(run.mask);
+          for (const k of run.kids) paint(k, x, y);
+          ctx.restore();
+        }
       }
-      while (maskOn--) ctx.restore();
       // Noise and texture sit on top of everything the layer paints -
       // strokes, glyphs and children included - in row order. The clip keeps
       // them inside the outline; open paths clip to the stroke's band instead
@@ -1572,6 +1776,16 @@ export function Canvas({
             paintTexture(ctx, sx, sy, sw, sh, e.blur || 16, e.spread || 4);
           }
         }
+        ctx.restore();
+      }
+      if (snap.showMaskOutlines && n.isMask && n.visible) {
+        ctx.save();
+        ctx.strokeStyle = "#00c853";
+        ctx.lineWidth = Math.max(1, z);
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        traceShape();
+        ctx.stroke();
         ctx.restore();
       }
       ctx.restore();
@@ -2947,7 +3161,90 @@ export function Canvas({
         }
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, panelHover, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos]);
+    // Crop tool overlay, painted last: the faded full image, the blue crop
+    // window (the layer box), and eight handles.
+    if (cropId && !snap.presentFrame) {
+      const wp = worldPos(root, cropId);
+      const cn = wp?.node;
+      const cim = cn?.imageSrc ? imgs.current.get(cn.imageSrc) : undefined;
+      if (wp && cn && cn.visible && cim?.complete && cim.naturalWidth) {
+        const bsx = snap.panX + wp.x * z;
+        const bsy = snap.panY + wp.y * z;
+        const bsw = cn.w * z;
+        const bsh = cn.h * z;
+        const crot = ((cn.imageRot % 360) + 360) % 360;
+        const cswap = crot === 90 || crot === 270;
+        const ciw = cswap ? cim.naturalHeight : cim.naturalWidth;
+        const cih = cswap ? cim.naturalWidth : cim.naturalHeight;
+        const crect = initialCropRect(cn.imageCrop, ciw, cih, cn.w, cn.h);
+        const full = cropFullExtent({ x: bsx, y: bsy, w: bsw, h: bsh }, crect);
+        const ccx = bsx + bsw / 2;
+        const ccy = bsy + bsh / 2;
+        ctx.save();
+        if (cn.rotation || cn.flipH || cn.flipV) {
+          ctx.translate(ccx, ccy);
+          if (cn.rotation) ctx.rotate((cn.rotation * Math.PI) / 180);
+          if (cn.flipH || cn.flipV) ctx.scale(cn.flipH ? -1 : 1, cn.flipV ? -1 : 1);
+          ctx.translate(-ccx, -ccy);
+        }
+        // Dimmed surround with the window cut out (a huge rect covers the
+        // viewport under any rotation), then the faded full image.
+        const dd = Math.hypot(w, h);
+        ctx.fillStyle = "rgba(13, 20, 38, 0.45)";
+        ctx.beginPath();
+        ctx.rect(ccx - dd, ccy - dd, dd * 2, dd * 2);
+        ctx.rect(bsx, bsy, bsw, bsh);
+        ctx.fill("evenodd");
+        ctx.save();
+        ctx.globalAlpha = 0.5;
+        if (crot) {
+          ctx.translate(full.x + full.w / 2, full.y + full.h / 2);
+          ctx.rotate((crot * Math.PI) / 180);
+          const dw = cswap ? full.h : full.w;
+          const dh = cswap ? full.w : full.h;
+          ctx.drawImage(cim, -dw / 2, -dh / 2, dw, dh);
+        } else {
+          ctx.drawImage(cim, full.x, full.y, full.w, full.h);
+        }
+        ctx.restore();
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(bsx, bsy, bsw, bsh);
+        for (const hh of cropHandleRects({ x: bsx, y: bsy, w: bsw, h: bsh }, 8)) {
+          ctx.fillStyle = "#0d99ff";
+          ctx.fillRect(hh.x, hh.y, 8, 8);
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(hh.x, hh.y, 8, 8);
+        }
+        ctx.restore();
+      }
+    }
+    // Place-image badge at the cursor: how many are left to place.
+    if (placing && cursorPos) {
+      const r = wrap.current?.getBoundingClientRect();
+      if (r) {
+        const left = placing.srcs.length - placing.i;
+        const label = left === 1 ? "Click to place · Esc to stop" : `${left} to place · click · Esc to stop`;
+        ctx.save();
+        ctx.font = "500 11px Inter, system-ui";
+        const tw = ctx.measureText(label).width + 16;
+        const bx = cursorPos.x - r.left + 14;
+        const by = cursorPos.y - r.top + 14;
+        ctx.fillStyle = "rgba(13, 20, 38, 0.92)";
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(bx, by, tw, 22, 5);
+          ctx.fill();
+        } else ctx.fillRect(bx, by, tw, 22);
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, bx + 8, by + 11);
+        ctx.restore();
+      }
+    }
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, panelHover, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -3248,6 +3545,44 @@ export function Canvas({
     }
     const wpt = toWorld(e.clientX, e.clientY);
     const root = snap.pages[snap.page].root;
+    if (placing && e.button === 0) {
+      placeQueued(wpt);
+      return;
+    }
+    if (cropId && snap.tool === "select" && e.button === 0) {
+      const wp = worldPos(root, cropId);
+      const cn = wp?.node;
+      const dims = cn && cn.visible ? cropImageDims(cn) : null;
+      if (wp && cn && cn.visible && (cn.imageCrop || dims)) {
+        const zc = snap.zoom;
+        const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, cn);
+        const hs = cropHandleRects({ x: wp.x, y: wp.y, w: cn.w, h: cn.h }, 10 / zc);
+        const hitH = hs.find(
+          (h) => local.x >= h.x && local.x <= h.x + 10 / zc && local.y >= h.y && local.y <= h.y + 10 / zc,
+        );
+        const start = cn.imageCrop
+          ? normalizeCropRect(cn.imageCrop)
+          : coverCrop(dims!.iw, dims!.ih, cn.w, cn.h);
+        if (hitH) {
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "crop", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+            id: cropId, cropHandle: hitH.handle, cropStart: start,
+          };
+          return;
+        }
+        if (local.x >= 0 && local.x <= cn.w && local.y >= 0 && local.y <= cn.h) {
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "cropMove", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+            id: cropId, cropLX: local.x, cropLY: local.y, cropStart: start,
+          };
+          return;
+        }
+      }
+      // Outside the crop window: apply and let the click through.
+      setCropId(null);
+    }
     if (snap.tool === "image") {
       pendingImage.current = { x: wpt.x, y: wpt.y };
       fileRef.current?.click();
@@ -3829,7 +4164,7 @@ export function Canvas({
    *  re-render the whole editor. */
   const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
-    if (eyedropArmed() || snap.tool === "eraser") {
+    if (eyedropArmed() || snap.tool === "eraser" || placing) {
       setCursorPos({ x: e.clientX, y: e.clientY });
     } else if (cursorPos) {
       setCursorPos(null);
@@ -4137,6 +4472,34 @@ export function Canvas({
           type: "patch",
           id: o.id,
           patch: { rotation: Math.round(((o.rotation || 0) + ang) * 10) / 10 },
+        });
+      }
+    } else if ((d.mode === "crop" || d.mode === "cropMove") && d.id && d.cropStart) {
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      const cn = wp?.node;
+      if (!wp || !cn) return;
+      const wpt = toWorld(e.clientX, e.clientY);
+      const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, cn);
+      const start = d.cropStart;
+      if (d.mode === "cropMove" && d.cropLX != null && d.cropLY != null) {
+        // Grab-style: the image follows the pointer, so the window moves
+        // against it.
+        const du = -(((local.x - d.cropLX) / cn.w) * start.w);
+        const dv = -(((local.y - d.cropLY) / cn.h) * start.h);
+        cropDirty.current = true;
+        engine.dispatch({ type: "patch", id: d.id, patch: { imageCrop: moveCrop(start, du, dv) } });
+      } else if (d.mode === "crop" && d.cropHandle) {
+        const { u, v } = layerToImage(start, local.x / cn.w, local.y / cn.h);
+        cropDirty.current = true;
+        engine.dispatch({
+          type: "patch",
+          id: d.id,
+          patch: {
+            imageCrop: dragCropHandle(start, d.cropHandle, u, v, {
+              lockAspect: !e.ctrlKey && !e.metaKey,
+              symmetric: e.altKey,
+            }),
+          },
         });
       }
     } else if (d.mode === "marquee" && d.id === "erase") {
@@ -4622,6 +4985,8 @@ export function Canvas({
       d.mode === "rotOrigin" ||
       d.mode === "autoPad" ||
       d.mode === "autoGap" ||
+      d.mode === "crop" ||
+      d.mode === "cropMove" ||
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
@@ -5045,6 +5410,9 @@ export function Canvas({
           engine.dispatch({ type: "patchPath", id: hit.id, path, closed: hit.closed });
         }
       }
+    } else if (snap.tool === "select" && hit && hit.fillType === "image") {
+      enterCrop(hit.id);
+      return;
     } else if (
       hit &&
       (hit.kind === "vector" ||
@@ -5196,7 +5564,7 @@ export function Canvas({
       });
   };
 
-  const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
+  const placeFiles = (files: FileList | File[], at?: { x: number; y: number }, grid?: boolean) => {
     const all = Array.from(files);
     for (const f of all) {
       if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) placeSvg(f, at);
@@ -5206,49 +5574,188 @@ export function Canvas({
     const list = all.filter(
       (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
     );
-    let ox = at?.x ?? 80;
-    let oy = at?.y ?? 80;
-    list.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const src = String(reader.result);
-        // Written to the asset store now, not at the next save: the document
-        // will only ever hold a reference to it.
-        rememberImage(src);
-        const im = new Image();
-        im.onload = () => {
-          const w = im.naturalWidth;
-          const h = im.naturalHeight;
-          const max = 480;
-          const s = Math.min(1, max / Math.max(w, h));
+    if (!list.length) return;
+    // Sizes first, then one layout pass under a single undo: a drop lands in
+    // aligned rows of ten, a paste cascades from its target.
+    const jobs = list.map(
+      (file) =>
+        new Promise<{ src: string; name: string; w: number; h: number }>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const src = String(reader.result);
+            const im = new Image();
+            im.onload = () => resolve({ src, name: file.name.replace(/\.[^.]+$/, ""), w: im.naturalWidth, h: im.naturalHeight });
+            im.onerror = reject;
+            im.src = src;
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        }),
+    );
+    Promise.allSettled(jobs).then((rs) => {
+      const items = rs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      if (!items.length) return;
+      // Written to the asset store now, not at the next save: the document
+      // will only ever hold a reference to it.
+      for (const it of items) rememberImage(it.src);
+      engine.dispatch({ type: "begin" });
+      try {
+        const origin = at ?? { x: 80, y: 80 };
+        let cx = origin.x;
+        let cy = origin.y;
+        let rowH = 0;
+        items.forEach((it, k) => {
+          const sc = Math.min(1, 480 / Math.max(it.w, it.h));
+          const pw = Math.max(8, it.w * sc);
+          const ph = Math.max(8, it.h * sc);
+          if (grid && k % 10 === 0 && k > 0) {
+            cx = origin.x;
+            cy += rowH + 24;
+            rowH = 0;
+          }
           const current = engine.snapshot();
           const root = current.pages[current.page].root;
-          const host = deepestFrame(root, ox, oy);
-          const local = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
+          const host = deepestFrame(root, cx, cy);
+          const local = host ? worldToLocal(root, host.id, cx, cy) : { x: cx, y: cy };
           engine.dispatch({
             type: "add",
             kind: "rect",
             x: local.x,
             y: local.y,
-            w: Math.max(8, w * s),
-            h: Math.max(8, h * s),
+            w: pw,
+            h: ph,
             parent: host?.id,
             extra: {
-              imageSrc: src,
+              imageSrc: it.src,
               fillType: "image",
               imageFit: "fill",
-              name: file.name.replace(/\.[^.]+$/, ""),
+              name: it.name,
               fill: "#00000000",
               fillVisible: true,
             },
           });
-          ox += 24;
-          oy += 24;
-        };
-        im.src = src;
-      };
-      reader.readAsDataURL(file);
+          if (grid) {
+            cx += pw + 24;
+            rowH = Math.max(rowH, ph);
+          } else {
+            cx += 24;
+            cy += 24;
+          }
+        });
+      } finally {
+        engine.dispatch({ type: "end" });
+      }
     });
+  };
+
+  /** One image at a point: a click on a shape fills the shape, anywhere else
+   *  adds a layer at (capped) natural size. */
+  const placeSingleImage = (img: { src: string; name: string }, wpt: { x: number; y: number }) => {
+    const current = engine.snapshot();
+    const root = current.pages[current.page].root;
+    const hit = hitTest(root, wpt.x, wpt.y, { deep: true });
+    if (hit && hit.kind !== "text" && hit.kind !== "line" && hit.kind !== "arrow" && !hit.locked) {
+      engine.dispatch({ type: "select", ids: [hit.id] });
+      engine.dispatch({
+        type: "patch",
+        id: hit.id,
+        patch: {
+          fillType: "image",
+          imageSrc: img.src,
+          imageFit: "fill",
+          imageTile: 100,
+          imageCrop: undefined,
+          fill: "#00000000",
+          fillVisible: true,
+          name: hit.nameLocked ? hit.name : img.name,
+        },
+      });
+      return;
+    }
+    const el = new Image();
+    el.onload = () => {
+      const w = el.naturalWidth;
+      const h = el.naturalHeight;
+      const sc = Math.min(1, 480 / Math.max(w, h));
+      const now = engine.snapshot();
+      const r2 = now.pages[now.page].root;
+      const host = deepestFrame(r2, wpt.x, wpt.y);
+      const local = host ? worldToLocal(r2, host.id, wpt.x, wpt.y) : wpt;
+      engine.dispatch({
+        type: "add",
+        kind: "rect",
+        x: local.x,
+        y: local.y,
+        w: Math.max(8, w * sc),
+        h: Math.max(8, h * sc),
+        parent: host?.id,
+        extra: {
+          imageSrc: img.src,
+          fillType: "image",
+          imageFit: "fill",
+          name: img.name,
+          fill: "#00000000",
+          fillVisible: true,
+        },
+      });
+    };
+    el.src = img.src;
+  };
+
+  /** Files from the picker become a placement queue: one click per image. */
+  const queueImages = (files: FileList | File[], at?: { x: number; y: number }) => {
+    const list = Array.from(files).filter(
+      (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
+    );
+    if (!list.length) return;
+    const jobs = list.map(
+      (file) =>
+        new Promise<{ src: string; name: string }>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({ src: String(reader.result), name: file.name.replace(/\.[^.]+$/, "") });
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        }),
+    );
+    Promise.allSettled(jobs).then((rs) => {
+      const srcs = rs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      if (!srcs.length) return;
+      for (const q of srcs) rememberImage(q.src);
+      // The image tool already took a click: the first lands there, the rest
+      // queue behind it.
+      if (at) {
+        placeSingleImage(srcs[0], at);
+        if (srcs.length === 1) {
+          engine.dispatch({ type: "setTool", tool: "select" });
+          return;
+        }
+        setPlacing({ srcs: srcs.slice(1), i: 0 });
+        toast(`Placing ${srcs.length - 1} more — click to place, Esc to stop`);
+      } else {
+        setPlacing({ srcs, i: 0 });
+        toast(
+          srcs.length === 1
+            ? "Click to place the image · Esc to stop"
+            : `Placing ${srcs.length} images — click to place, Esc to stop`,
+        );
+      }
+    });
+  };
+
+  const placeQueued = (wpt: { x: number; y: number }) => {
+    if (!placing) return;
+    const cur = placing.srcs[placing.i];
+    if (!cur) {
+      setPlacing(null);
+      return;
+    }
+    placeSingleImage(cur, wpt);
+    if (placing.i + 1 >= placing.srcs.length) {
+      setPlacing(null);
+      engine.dispatch({ type: "setTool", tool: "select" });
+    } else {
+      setPlacing({ srcs: placing.srcs, i: placing.i + 1 });
+    }
   };
 
   /* ------------------------------------------------------- system clipboard */
@@ -5495,7 +6002,7 @@ export function Canvas({
       onDrop={(e) => {
         e.preventDefault();
         const wpt = toWorld(e.clientX, e.clientY);
-        if (e.dataTransfer.files?.length) placeFiles(e.dataTransfer.files, wpt);
+        if (e.dataTransfer.files?.length) placeFiles(e.dataTransfer.files, wpt, true);
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -5654,9 +6161,17 @@ export function Canvas({
         ref={fileRef}
         type="file"
         accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,.sketch,.fig,image/*"
+        multiple
         hidden
         onChange={(e) => {
-          if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);
+          if (e.target.files) {
+            const at = pendingImage.current ?? undefined;
+            queueImages(e.target.files, at);
+            placeFiles(
+              Array.from(e.target.files).filter((f) => !f.type.startsWith("image/") || f.type === "image/svg+xml" || /\.svg$/i.test(f.name)),
+              at,
+            );
+          }
           pendingImage.current = null;
           e.target.value = "";
         }}

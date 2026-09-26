@@ -158,6 +158,7 @@ export function node(
     imageSrc: "",
     imageFit: "fill",
     imageRot: 0,
+    imageTile: 100,
     imageExposure: 0,
     imageContrast: 0,
     imageSaturation: 0,
@@ -729,6 +730,7 @@ interface Internal {
   showMinimap: boolean;
   showComments: boolean;
   outlineMode: boolean;
+  showMaskOutlines: boolean;
   pixelPreview: PixelPreview;
   viewLayoutGuides: boolean;
   propertyLabels: boolean;
@@ -939,6 +941,7 @@ export class MemoryEngine implements Engine {
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
       outlineMode: false,
+      showMaskOutlines: false,
       pixelPreview: "off",
       viewLayoutGuides: true,
       propertyLabels: false,
@@ -1221,6 +1224,7 @@ export class MemoryEngine implements Engine {
       "togglePropertyLabels",
       "toggleFlows",
       "toggleMinimap",
+      "toggleMaskOutlines",
       // Comments are annotations layered over the design, not part of it.
       // Keep them off the design undo stack entirely: ⌘Z after posting
       // a comment reverts your last *design* edit, it does not delete the note.
@@ -1416,6 +1420,7 @@ export class MemoryEngine implements Engine {
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
       outlineMode: this.state.outlineMode ?? false,
+      showMaskOutlines: this.state.showMaskOutlines ?? false,
       pixelPreview: this.state.pixelPreview,
       viewLayoutGuides: this.state.viewLayoutGuides,
       propertyLabels: this.state.propertyLabels,
@@ -1518,6 +1523,9 @@ export class MemoryEngine implements Engine {
         break;
       case "toggleOutlines":
         s.outlineMode = !s.outlineMode;
+        break;
+      case "toggleMaskOutlines":
+        s.showMaskOutlines = !s.showMaskOutlines;
         break;
       case "swapFillStroke": {
         for (const id of s.selection) {

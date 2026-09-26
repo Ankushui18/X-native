@@ -200,12 +200,29 @@ export function paintFill(
   sy: number,
   sw: number,
   sh: number,
+  /** Resolves an image source to a loaded element; without it (or while a
+   *  source is still loading) image paints are skipped, never broken. */
+  imgOf?: (src: string) => HTMLImageElement | undefined,
 ) {
-  paintOnePaint(ctx, n, sx, sy, sw, sh);
+  paintOnePaint(ctx, n, sx, sy, sw, sh, imgOf);
+  paintStack(ctx, n, sx, sy, sw, sh, imgOf);
+}
+
+/** The additional paints in `n.fills`, bottom-to-top, over the base fill. */
+export function paintStack(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  imgOf?: (src: string) => HTMLImageElement | undefined,
+) {
   for (const p of n.fills ?? []) {
     if (p.visible === false) continue;
     // Each extra fill is described by a Paint; project it onto the same
-    // node-shaped surface by borrowing the node's geometry fields.
+    // node-shaped surface by borrowing the node's geometry fields. Image
+    // settings come from the paint alone - the base fill's never leak in.
     const layer: XNode = {
       ...n,
       fill: p.color,
@@ -216,13 +233,25 @@ export function paintFill(
       fillGY: p.gy ?? n.fillGY,
       fillHX: p.hx ?? n.fillHX,
       fillHY: p.hy ?? n.fillHY,
+      imageSrc: p.image ?? "",
+      imageFit: p.imageFit ?? "fill",
+      imageRot: p.imageRot ?? 0,
+      imageTile: p.imageTile ?? 100,
+      imageExposure: p.imageExposure ?? 0,
+      imageContrast: p.imageContrast ?? 0,
+      imageSaturation: p.imageSaturation ?? 0,
+      imageTemperature: p.imageTemperature ?? 0,
+      imageTint: p.imageTint ?? 0,
+      imageHighlights: p.imageHighlights ?? 0,
+      imageShadows: p.imageShadows ?? 0,
+      imageCrop: undefined,
       fills: undefined,
     };
     ctx.save();
     const op = canvasBlend(p.blend);
     if (op !== "source-over") ctx.globalCompositeOperation = op;
     if (p.opacity != null && p.opacity < 1) ctx.globalAlpha *= p.opacity;
-    paintOnePaint(ctx, layer, sx, sy, sw, sh);
+    paintOnePaint(ctx, layer, sx, sy, sw, sh, imgOf);
     ctx.restore();
   }
 }
@@ -234,7 +263,13 @@ function paintOnePaint(
   sy: number,
   sw: number,
   sh: number,
+  imgOf?: (src: string) => HTMLImageElement | undefined,
 ) {
+  if (n.fillType === "image") {
+    const im = n.imageSrc ? imgOf?.(n.imageSrc) : undefined;
+    if (im) paintImageFill(ctx, n, im, sx, sy, sw, sh);
+    return;
+  }
   const a = n.fill;
   const stops = stopsOf(n);
   const gx = n.fillGX ?? 0.5;
@@ -453,18 +488,31 @@ export function paintImageFill(
   ctx.save();
   ctx.clip();
   if (fit === "tile") {
-    const z = sw / Math.max(1, n.w);
+    // Tile size is a percent of the image's original dimensions; the rect
+    // shrinks in step so the scaled pattern still covers exactly the box.
+    const t = Math.max(0.01, (n.imageTile ?? 100) / 100);
+    const z = (sw / Math.max(1, n.w)) * t;
     const pat = ctx.createPattern(src, "repeat");
     if (pat) {
       ctx.save();
       ctx.translate(sx, sy);
       ctx.scale(z, z);
       ctx.fillStyle = pat;
-      ctx.fillRect(0, 0, n.w, n.h);
+      ctx.fillRect(0, 0, n.w / t, n.h / t);
       ctx.restore();
     }
     ctx.restore();
     return;
+  }
+  if (fit === "crop") {
+    const crop = normalizeCropRect(n.imageCrop);
+    if (crop.x !== 0 || crop.y !== 0 || crop.w !== 1 || crop.h !== 1) {
+      ctx.drawImage(src, crop.x * iw, crop.y * ih, crop.w * iw, crop.h * ih, sx, sy, sw, sh);
+      ctx.restore();
+      return;
+    }
+    // No stored rect: the whole image as cover, so switching into Crop
+    // never distorts before the first drag materialises a rect.
   }
   const cover = fit === "fill" || fit === "crop" || !fit;
   const scale = cover ? Math.max(sw / iw, sh / ih) : Math.min(sw / iw, sh / ih);
@@ -474,6 +522,72 @@ export function paintImageFill(
   const dy = sy + (sh - dh) / 2;
   ctx.drawImage(src, dx, dy, dw, dh);
   ctx.restore();
+}
+
+/** Clamp a crop rect into normalised space: inside 0..1, at least 1% a side. */
+export function normalizeCropRect(rect?: { x: number; y: number; w: number; h: number }) {
+  if (!rect) return { x: 0, y: 0, w: 1, h: 1 };
+  const w = Math.max(0.01, Math.min(1, rect.w));
+  const h = Math.max(0.01, Math.min(1, rect.h));
+  return {
+    x: Math.max(0, Math.min(1 - w, rect.x)),
+    y: Math.max(0, Math.min(1 - h, rect.y)),
+    w,
+    h,
+  };
+}
+
+/**
+ * The normalised region of the image a cover ("Fill") shows for the given
+ * image and layer sizes. Materialises the crop rect on the first crop drag
+ * so entering Crop keeps the current look.
+ */
+export function coverCrop(iw: number, ih: number, w: number, h: number) {
+  if (!(iw > 0 && ih > 0 && w > 0 && h > 0)) return { x: 0, y: 0, w: 1, h: 1 };
+  const s = Math.max(w / iw, h / ih);
+  const vw = w / (iw * s);
+  const vh = h / (ih * s);
+  return { x: (1 - vw) / 2, y: (1 - vh) / 2, w: vw, h: vh };
+}
+
+/**
+ * Partition a child list into mask runs: plain children paint live, and a
+ * visible mask opens a run that clips every sibling after it until the next
+ * mask. A mask above content masks nothing (it opens an empty run), and a
+ * hidden mask is an ordinary child.
+ */
+export function partitionMaskRuns<T extends { isMask?: boolean; visible?: boolean }>(
+  children: readonly T[],
+): { mask: T | null; kids: T[] }[] {
+  const runs: { mask: T | null; kids: T[] }[] = [];
+  let cur: { mask: T | null; kids: T[] } = { mask: null, kids: [] };
+  for (const ch of children) {
+    if (ch.isMask && ch.visible) {
+      if (cur.mask || cur.kids.length) runs.push(cur);
+      cur = { mask: ch, kids: [] };
+    } else {
+      cur.kids.push(ch);
+    }
+  }
+  runs.push(cur);
+  return runs;
+}
+
+/**
+ * One pixel of mask reduction: alpha keeps the painted alpha, vector keeps
+ * any painted pixel fully opaque, luminance derives alpha from brightness.
+ * Pure so the compositor and the headless checks share it.
+ */
+export function reduceMaskAlpha(
+  type: "alpha" | "vector" | "luminance",
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): number {
+  if (type === "alpha") return a;
+  if (type === "vector") return a > 0 ? 255 : 0;
+  return Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
 }
 
 export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: number) {

@@ -802,7 +802,7 @@ const GROUPS: Group[] = [
       { id: "ellipse", label: "Ellipse", shortcut: "O" },
       { id: "poly", label: "Polygon", shortcut: "" },
       { id: "star", label: "Star", shortcut: "" },
-      { id: "image", label: "Place image/video…", shortcut: "⇧⌘K" },
+      { id: "image", label: "Place image…", shortcut: "⇧⌘K" },
     ],
   },
   {
@@ -1170,7 +1170,7 @@ export function Actions({
     { label: "Hide UI", sc: "⌘\\", run: onHide },
     { label: "Zen Mode (full canvas HUD)", sc: "Z", run: () => window.dispatchEvent(new CustomEvent("x-native-zen-mode")) },
     { label: "Marking / Radial menu", sc: "Q", run: () => window.dispatchEvent(new CustomEvent("x-native-radial-menu")) },
-    { label: "Clean up vector (sketch to Bézier)", sc: "⇧⌘K", run: () => engine.dispatch({ type: "vectorCleanup" }) },
+    { label: "Clean up vector (sketch to Bézier)", sc: "", run: () => engine.dispatch({ type: "vectorCleanup" }) },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
     { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
@@ -2103,7 +2103,9 @@ export function bindHotkeys(
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "k") {
       e.preventDefault();
-      engine.dispatch({ type: "setTool", tool: "image" });
+      // Picker-first: the chosen files queue up and each click places one.
+      // (The location-first image tool itself is still ⇧I.)
+      window.dispatchEvent(new CustomEvent("x-native-place-image"));
       return;
     }
     if (!meta && e.shiftKey) {
@@ -3121,7 +3123,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "line", name: "Line", keys: ["L"] },
       { id: "arrow", name: "Arrow", keys: ["⇧", "L"] },
       { id: "ellipse", name: "Ellipse", keys: ["O"] },
-      { id: "place-image", name: "Place image / video", keys: ["⇧", "⌘", "K"] },
+      { id: "place-image", name: "Place image", keys: ["⇧", "⌘", "K"] },
       { id: "pen", name: "Pen tool", keys: ["P"] },
       { id: "pencil", name: "Pencil tool", keys: ["⇧", "P"] },
       { id: "brush", name: "Brush tool", keys: ["B"] },

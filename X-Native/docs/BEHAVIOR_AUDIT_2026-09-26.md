@@ -467,3 +467,94 @@ text-shadow via the text path; plus-darker documented canvas fallback.
 - Text inner shadows render at box level, not glyph level.
 - Image-pixel transparency is not analysed for the drop mask (fillOpacity
   only); translucent glyphs deepen slightly per extra text-shadow pass.
+
+## §13 — Images / crop / place / masks
+
+Figma refs: "Crop an image" (entry points, 8 handles, slider, aspect
+picker, Resize-to-fit, Enter/click-outside applies, Option symmetric,
+aspect locked by default w/ Control unlock, ⌘+drag quick-crop,
+post-crop reposition/rotate/resize), "Adjust image properties" (Fill /
+Fit / Crop / Tile incl. %-of-original tile + fill-only Rotate-90, 7
+adjustments ± reversible), "Apply mask effects" (any layer incl. text /
+alpha-images / groups; mask-below-masked; siblings-above until next
+mask/object/parent/clip-frame; Alpha / Vector / Luminance; ⌃⌘M +
+Use-as-mask, default Alpha, hover-preview type switch; independent
+move/resize; remove re-reveals; View > Mask outlines), place-image
+best-practices (File > Place image, shape-tools menu, ⇧⌘K; multi-file
+picker, place one-by-one by click/drag; click shape/frame/text fills
+it; drag-drop batches in rows of ten; PNG/JPEG/GIF/TIFF/WEBP;
+browser copy-paste). After: full suite green
+(934 + 64 + 46 + 63 + 49 + 92 + 19 + 19 + 55 + 51 + 52 new image
+checks) + build clean.
+
+### Fixed (shipped in the §13 images commit on this branch)
+
+- M-001 — Masked siblings rendered with a geometric clip, so text,
+  alpha-image and blur/shadow-bearing masks could not work. Fix: an
+  offscreen compositor (`paintMaskedRun`) paints the mask for real,
+  reduces per type (`reduceMaskAlpha`), tiles each kid with
+  destination-in and blits under the live CTM; runs partitioned by
+  pure `partitionMaskRuns` (hidden masks paint plain).
+- M-002 — No View > Mask outlines. Fix: engine `showMaskOutlines` +
+  View-menu checkbox; canvas strokes visible masks green.
+- M-003 — No crop tool: `crop` fit cover-rendered with no rect to
+  edit. Fix: `imageCrop` model + `cropModel.ts` rect/handle math
+  (corners aspect-locked, Ctrl/⌘ frees, ⌥ symmetric, 1% min, grab-
+  style reposition, rotation-aware dims) + canvas crop mode (blue
+  window, dimmed surround, faded full image incl. rotated, Enter /
+  click-away applies, Esc restores the entry snapshot without
+  touching undo) entered via double-click, Crop image menu/button,
+  right-click; render falls back to cover until a rect exists.
+- M-004 — No place flow: the picker took one file and dropped it at
+  a capped size. Fix: picker-first queue (`queueImages`): ⇧⌘K, the
+  canvas menu and the assets panel open a multi-file picker, each
+  click places one (a click on a shape/frame fills it, clearing stale
+  crop/tile), Esc stops, a cursor badge counts down; the image tool
+  (⇧I) keeps location-first for its first file. ⇧⌘K was double-bound
+  to vector cleanup's display-only shortcut; the cleanup entry keeps
+  no chord and the key opens the picker.
+- M-005 — Multi-file drops cascaded diagonally. Fix: drops lay out
+  in aligned rows of ten from the drop point under one undo; pastes
+  keep the cascade.
+- M-006 — Image settings lived only on the base fill and tile was a
+  fixed scale. Fix: `imageTile` % model (FillPicker field, %-of-
+  original render), rotate-90 + 7 adjustments render on canvas via
+  the processed-image cache, `imageCrop` render branch.
+- M-007/M-008 — Adjustments + fill rotate: verified pre-existing and
+  correct (pixel-loop pipeline, 24-entry cache, `hasAdj` covers
+  `imageRot`); no fix needed.
+- M-009 — Stacked fills could not be images. Fix: `Paint` carries
+  the full image family, `paintOnePaint`/`paintStack` render them
+  through `imgOf` (skipped while loading, never broken), inspector
+  rows map every field, canvas preloads stack sources. Stack paints
+  never inherit the base crop (per-fill crop rects are out of model).
+- M-010 — Dev-mode readout labelled vector masks "Alpha". Fix: the
+  readout reports the actual mask type.
+- Export peek — SVG exported Fill as stretch, any stale `imageSrc`
+  as an image even under a solid fill, and shaped layers as
+  unclipped rects. Fix: fill/crop export as cover (`slice`), the
+  branch gates on `fillType === "image"`, shaped kinds clip the
+  bitmap to their outline. Crop-rect-exact, tile-pattern and
+  stacked-fill export need bitmap dims at export time: still out.
+- Labels — "Place image/video…" (toolbar, shortcut sheet) claimed
+  video support X has none of; now "Place image…".
+
+### Verified parity (traced, no fix needed)
+
+Cover/contain math; tile repeat; adjustments ± reversible; mask
+create via ⌘⌥M / Use-as-mask incl. 2+ selection grouping; mask
+default Alpha; sibling-independent move/resize; mask remove
+re-reveals; FillPicker preview/choose/replace + 4 modes; image tool
+natural size capped 480px; clipboard image/png ladder; inspector
+"Image" row labels + header kind label; assets panel listing.
+
+### Deferred / out of scope
+
+- GIF animation, TIFF decode, image strokes (K-007).
+- In-crop rotate / aspect picker / slider; drag-to-size place ghost;
+  per-fill crop rects for stacked images; mask-type hover preview
+  (native select kept); inspector image-dimensions section.
+- Place into text (glyph-clipped image fills need a text-image path).
+- Mask shortcut change (§26 owns shortcuts).
+- Export: crop-rect-exact, tile-pattern, stacked-fill, rotation and
+  adjustment baking (§24 owns import/export).
