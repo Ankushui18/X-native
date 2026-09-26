@@ -3735,6 +3735,136 @@ input:focus-visible,
 }
 .dock-done:hover { background: var(--accent-hover); }
 
+/* ── Presentation player ─────────────────────────────────────────────────────
+   Presenting is its own surface: a prototype is shown on a dark stage in both
+   app themes, so the dock defines the stage's palette here instead of borrowing
+   the app's tokens (which flip under the theme). Every control in the player
+   used to carry its own inline copy of these literals — eleven style objects
+   with `#fff`, `rgba(255,255,255,0.7)` and `#18181b` repeated — so the player
+   was the one surface no token reached (PT-U5). */
+.prototype-player-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  overflow: hidden;
+  z-index: 40;
+}
+.player-dock {
+  --stage-fg: #ffffff;
+  --stage-dim: rgba(255, 255, 255, 0.7);
+  --stage-faint: rgba(255, 255, 255, 0.3);
+  --stage-line: rgba(255, 255, 255, 0.14);
+  --stage-fill: rgba(24, 24, 27, 0.85);
+  --stage-well: rgba(255, 255, 255, 0.08);
+  --stage-hover: rgba(255, 255, 255, 0.1);
+  --stage-on-blue: #38bdf8;
+  --stage-on-blue-wash: rgba(13, 153, 255, 0.25);
+  --stage-on-green: #34d399;
+  --stage-on-green-wash: rgba(16, 185, 129, 0.25);
+  --stage-exit: #fca5a5;
+  --stage-exit-wash: rgba(239, 68, 68, 0.25);
+  --stage-exit-line: rgba(239, 68, 68, 0.4);
+
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: 24px;
+  background: var(--stage-fill);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  color: var(--stage-fg);
+  font-size: 12px;
+  font-family: Inter, system-ui;
+  user-select: none;
+  z-index: 50;
+  transform: translateX(-50%) translateY(0);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s;
+}
+/* Out of the way until the pointer moves; the stage keeps the pixels. */
+.player-dock.hidden {
+  transform: translateX(-50%) translateY(80px);
+  opacity: 0;
+  pointer-events: none;
+}
+/* The popup a native select opens is painted by the OS and ignores the dock's
+   own background, so the options are told what colour to use (once each). */
+.player-dock option {
+  background: #18181b;
+  color: var(--stage-fg);
+}
+.player-select {
+  max-width: 140px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--stage-line);
+  background: var(--stage-well);
+  color: var(--stage-fg);
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.player-select:focus-visible {
+  border-color: var(--accent);
+}
+.player-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--stage-fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.player-btn:hover:not(:disabled) {
+  background: var(--stage-hover);
+}
+.player-btn:disabled {
+  color: var(--stage-faint);
+  cursor: default;
+}
+/* A toggled control reads as on: tinted pill, its own hue. */
+.player-btn.on {
+  color: var(--stage-on-blue);
+  background: var(--stage-on-blue-wash);
+  border-radius: 12px;
+  padding: 4px 8px;
+}
+.player-btn.on.green {
+  color: var(--stage-on-green);
+  background: var(--stage-on-green-wash);
+}
+.player-btn.exit {
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--stage-exit-line);
+  background: var(--stage-exit-wash);
+  color: var(--stage-exit);
+}
+.player-page {
+  min-width: 40px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--stage-dim);
+  font-variant-numeric: tabular-nums;
+}
+.player-sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
 .right-head .grow { flex: 1; }
 
 /* ------------------------------------------------------------------ Dev Mode */

@@ -148,7 +148,7 @@ fullscreen/Exit — all functional.
 | PT-U2 | "Present Prototype" reuses `export-run` class | DRIFT (§29) | P2 |
 | PT-U3 | All proto selects/inputs raw + inline styles; icon-only btns native title= (orientation/plus/minus/condition) | DRIFT + tooltip split | P2 |
 | PT-U4 | FIXED: the selected-connection chip and the vector tool strip are the same `.canvas-dock` surface the canvas HUD and contextual toolbar use (`--dock`, `--line-2`, `--tool-fg`, elevation tokens). ~10 inline style objects per surface are gone, `#18181b`/`#fff` with them, and both follow the light/dark theme. Fixing it surfaced a second defect: **the chip could not be dismissed with Escape at all** — the canvas's own Escape branch is unreachable for real keypresses because the hotkey layer registers earlier and answers first (the reason `ui/penDraft.ts` exists), so the dismissal is now published (`ui/connSelection.ts`) and answered in the cascade. | FIXED (P2) | — |
-| PT-U5 | Player: 9 controls all inline-styled + native title= + hardcoded colors; zero x-ui/Tooltip | DRIFT | P2 |
+| PT-U5 | FIXED: the player is styled by `.player-dock` (it defines the presentation stage's own palette — a prototype is shown on a dark stage in both themes, so it deliberately does not use the app's `--dock`). 11 inline style objects and their `#18181b`/`#fff`/`rgba(255,255,255,…)` copies are gone, the three toggles carry `aria-pressed` instead of saying "on" through their own inline colour, and labels ride the shared tooltip bridge like every other control. Fixing it surfaced a second defect: **the pager listed frames the player can never present** (see §4o). | FIXED (P2) | — |
 | PT-U6 | "Prototype flows ⇧F" toggle lives in ZoomMenu (view menu inside inspector tab bar) — works, surprising home | IA note | P2 |
 | PT-U7 | Present button Tooltip shows "Esc to exit" but never the start chord ⌘⌥↩ (exists + in palette) | PARTIAL | P2 |
 
@@ -619,6 +619,29 @@ draft does (`ui/connSelection.ts`), and the Escape cascade answers it: real Esca
 keeps the layer selected, and leaves the interaction intact.
 
 Suite **242 pass / 0 fail** (10 new checks in §39), unit 1621, tsc and build clean.
+
+## §4o. The player is chrome — and its pager was lying (PT-U5)
+
+The presentation player was the one surface no token reached: eleven inline style objects carrying
+`#18181b`, `#fff` and `rgba(255,255,255,0.7)` per control, each toggle saying "I am on" only by its own
+inline colour, and the browser's own tooltip box instead of the shared pill. It is `.player-dock` now —
+the class owns the stage's palette (`--stage-fg/dim/faint/line/fill/well/hover/…`) with `.player-select`,
+`.player-btn` (+ `.on`, `.on.green`, `.exit`), `.player-page` and `.player-sep` — so the player is *one*
+place to change instead of eleven, the stage layer's geometry moved to CSS with it, and `.player-btn` got
+its first hover state. Toggles expose `aria-pressed`, and the two "on" hues (hotspots blue, live inputs
+green) survive as the modifier classes they were always meant to be.
+
+Verifying it turned up a second defect, in the pager. It listed **every frame in the document**, while
+`presentGo` lands on the outermost frame containing the destination (§23 PT-002) — so in the sample file
+"2. Card", a frame nested inside the phone frame, was a step that went nowhere: clicking Next grew the
+back stack and left the stage on screen 1, and the frame chooser offered the same dead entry. The step
+list is now the frames the player can actually reach (a nested frame is kept only while it *is* the
+frame being presented, so the pager still shows where the presentation is): 1/3 with all three steps
+landing, prev disabled at the start, next disabled at the end. The same list drives the chooser and the
+arrow keys, so all three agree.
+
+Suite **253 pass / 0 fail** (11 new checks in §40 — dock chrome, all 13 controls, `aria-pressed`, the
+three steps, idle slide-away, shared tooltip, Exit), unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

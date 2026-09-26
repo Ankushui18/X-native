@@ -94,16 +94,26 @@ export function PresentationPlayer({
   const soundActive = snap.prototypeSound ?? true;
   const scaleMode = snap.prototypeScale ?? "fit";
 
-  // All frames in document
+  // The frames the player can actually page through. `presentGo` lands on the
+  // outermost frame that contains the destination (§23 PT-002), so a frame
+  // nested inside another frame can never be the stage — listing it made the
+  // pager advertise a step that went nowhere and quietly grew the back history
+  // without moving (paging past the phone frame in the sample file landed on
+  // "2. Card" and stayed put). The frame being presented right now is kept in
+  // the list either way, so presenting a nested frame still shows where the
+  // presentation is.
   const allFrames = useMemo(() => {
     const list: XNode[] = [];
-    const walk = (n: XNode) => {
-      if (n !== root && n.kind === "frame") list.push(n);
-      for (const ch of n.children) walk(ch);
+    const walk = (n: XNode, underFrame: boolean) => {
+      for (const ch of n.children) {
+        const isFrame = ch.kind === "frame";
+        if (isFrame && (!underFrame || ch.id === snap.presentFrame)) list.push(ch);
+        walk(ch, underFrame || isFrame);
+      }
     };
-    walk(root);
+    walk(root, false);
     return list;
-  }, [root]);
+  }, [root, snap.presentFrame]);
 
   // Current frame index
   const curIndex = allFrames.findIndex((f) => f.id === snap.presentFrame);
@@ -365,18 +375,7 @@ export function PresentationPlayer({
   if (!presentNode) return null;
 
   return (
-    <div
-      className="prototype-player-layer"
-      onMouseMove={showDockTemporarily}
-      onClick={handleMissedClick}
-      style={{
-        position: "absolute",
-        inset: 0,
-        pointerEvents: "auto",
-        overflow: "hidden",
-        zIndex: 40,
-      }}
-    >
+    <div className="prototype-player-layer" onMouseMove={showDockTemporarily} onClick={handleMissedClick}>
       {/* Click ripple animations */}
       {ripples.map((r) => (
         <div
@@ -512,34 +511,14 @@ export function PresentationPlayer({
         );
       })}
 
-      {/* Floating Glass Presentation Control Dock */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute",
-          bottom: 24,
-          left: "50%",
-          transform: `translateX(-50%) translateY(${dockVisible ? "0px" : "80px"})`,
-          transition: "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s",
-          opacity: dockVisible ? 1 : 0,
-          background: "rgba(24, 24, 27, 0.85)",
-          backdropFilter: "blur(20px)",
-          border: "1px solid rgba(255, 255, 255, 0.12)",
-          borderRadius: 24,
-          boxShadow: "0 10px 30px rgba(0, 0, 0, 0.45)",
-          padding: "6px 14px",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          zIndex: 50,
-          color: "#fff",
-          fontSize: 12,
-          fontFamily: "Inter, system-ui",
-          userSelect: "none",
-        }}
-      >
+      {/* Presentation control dock. Every control used to be styled inline
+          with its own literal colours, so the player was the one surface in the
+          product that no token reached; `.player-dock` owns the stage's
+          palette and the classes below style each control (PT-U5). */}
+      <div className={`player-dock${dockVisible ? "" : " hidden"}`} onClick={(e) => e.stopPropagation()}>
         {/* Flow & Frame Selector */}
         <select
+          className="player-select"
           aria-label="Preview frame"
           value={snap.presentFrame}
           onChange={(e) => {
@@ -550,21 +529,9 @@ export function PresentationPlayer({
               engine.dispatch({ type: "presentGo", id: dest });
             }
           }}
-          style={{
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.14)",
-            borderRadius: 14,
-            color: "#fff",
-            padding: "4px 10px",
-            fontSize: 11,
-            outline: "none",
-            cursor: "pointer",
-            maxWidth: 140,
-            textOverflow: "ellipsis",
-          }}
         >
           {allFrames.map((f, i) => (
-            <option key={f.id} value={f.id} style={{ background: "#18181b", color: "#fff" }}>
+            <option key={f.id} value={f.id}>
               {i + 1}. {f.name}
             </option>
           ))}
@@ -572,91 +539,48 @@ export function PresentationPlayer({
 
         {/* Previous Frame */}
         <button
+          className="player-btn"
           onClick={() => {
             if (snap.presentStack.length > 1) engine.dispatch({ type: "presentBack" });
             else if (curIndex > 0) engine.dispatch({ type: "presentGo", id: allFrames[curIndex - 1].id });
           }}
           disabled={!canGoPrev}
           title="Previous frame (←)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: !canGoPrev ? "rgba(255,255,255,0.3)" : "#fff",
-            cursor: !canGoPrev ? "default" : "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name="arrow-left" size={14} />
         </button>
 
         {/* Frame Pager Index */}
-        <span style={{ fontSize: 11, color: "rgba(255, 255, 255, 0.7)", minWidth: 40, textAlign: "center" }}>
+        <span className="player-page">
           {curIndex >= 0 ? `${curIndex + 1} / ${allFrames.length}` : "—"}
         </span>
 
         {/* Next Frame */}
         <button
+          className="player-btn"
           onClick={() => {
             if (curIndex < allFrames.length - 1) engine.dispatch({ type: "presentGo", id: allFrames[curIndex + 1].id });
           }}
           disabled={curIndex >= allFrames.length - 1}
           title="Next frame (→ / Space)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: curIndex >= allFrames.length - 1 ? "rgba(255,255,255,0.3)" : "#fff",
-            cursor: curIndex >= allFrames.length - 1 ? "default" : "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name="arrow-right" size={14} />
         </button>
 
-        <div style={{ width: 1, height: 16, background: "rgba(255, 255, 255, 0.15)" }} />
+        <div className="player-sep" />
 
         {/* Restart Flow */}
-        <button
-          onClick={() => engine.dispatch({ type: "presentStart" })}
-          title="Restart flow (R)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: "#fff",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
-        >
+        <button className="player-btn" onClick={() => engine.dispatch({ type: "presentStart" })} title="Restart flow (R)">
           <Icon name="history" size={rowIconSize()} />
           <span>Restart</span>
         </button>
 
         {/* Hotspots Toggle */}
         <button
+          className={`player-btn${hotspotsActive ? " on" : ""}`}
+          aria-pressed={hotspotsActive}
           onClick={() => engine.dispatch({ type: "togglePrototypeHotspots" })}
           title="Toggle hotspot hints (H)"
-          style={{
-            background: hotspotsActive ? "rgba(13, 153, 255, 0.25)" : "transparent",
-            border: 0,
-            color: hotspotsActive ? "#38bdf8" : "rgba(255,255,255,0.7)",
-            cursor: "pointer",
-            padding: "4px 8px",
-            borderRadius: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
         >
           <Icon name="pointer" size={rowIconSize()} />
           <span>Hotspots</span>
@@ -664,25 +588,17 @@ export function PresentationPlayer({
 
         {/* Device Preset Switcher */}
         <select
+          className="player-select"
+          aria-label="Device mockup frame"
           value={device}
           onChange={(e) => engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })}
           title="Device Mockup Frame"
-          style={{
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.14)",
-            borderRadius: 14,
-            color: "#fff",
-            padding: "4px 8px",
-            fontSize: 11,
-            outline: "none",
-            cursor: "pointer",
-          }}
         >
-          <option value="none" style={{ background: "#18181b" }}>No device</option>
+          <option value="none">No device</option>
           {DEVICE_GROUPS.map((g) => (
             <optgroup key={g.group} label={g.group}>
               {g.items.map((d) => (
-                <option key={d.id} value={d.id} style={{ background: "#18181b" }}>
+                <option key={d.id} value={d.id}>
                   {d.label}
                 </option>
               ))}
@@ -692,6 +608,7 @@ export function PresentationPlayer({
 
         {/* Scale Switcher */}
         <button
+          className="player-btn"
           onClick={() => {
             const next = scaleMode === "fit" ? "100%" : "fit";
             engine.dispatch({ type: "setPrototypeScale", scale: next });
@@ -710,35 +627,16 @@ export function PresentationPlayer({
             }
           }}
           title={`Scale mode: ${scaleMode} (click to toggle)`}
-          style={{
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.14)",
-            borderRadius: 14,
-            color: "#fff",
-            padding: "4px 8px",
-            fontSize: 11,
-            cursor: "pointer",
-          }}
         >
           {scaleMode === "fit" ? "Fit" : "100%"}
         </button>
 
         {/* Live Form Inputs Toggle */}
         <button
+          className={`player-btn${liveInputsActive ? " on green" : ""}`}
+          aria-pressed={liveInputsActive}
           onClick={() => engine.dispatch({ type: "togglePrototypeLiveInputs" })}
           title="Toggle live editable inputs (I)"
-          style={{
-            background: liveInputsActive ? "rgba(16, 185, 129, 0.25)" : "transparent",
-            border: 0,
-            color: liveInputsActive ? "#34d399" : "rgba(255,255,255,0.7)",
-            cursor: "pointer",
-            padding: "4px 8px",
-            borderRadius: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
         >
           <Icon name="type" size={rowIconSize()} />
           <span>Live Inputs</span>
@@ -746,60 +644,28 @@ export function PresentationPlayer({
 
         {/* Sound Toggle */}
         <button
+          className={`player-btn${soundActive ? " on" : ""}`}
+          aria-pressed={soundActive}
           onClick={() => engine.dispatch({ type: "togglePrototypeSound" })}
           title="Toggle tactile sound feedback (M)"
-          style={{
-            background: soundActive ? "rgba(255, 255, 255, 0.1)" : "transparent",
-            border: 0,
-            color: soundActive ? "#fff" : "rgba(255,255,255,0.4)",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name={soundActive ? "volume" : "volume-x"} size={rowIconSize()} />
         </button>
 
         {/* Fullscreen Toggle */}
         <button
+          className="player-btn"
           onClick={() => {
             if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
             else document.exitFullscreen().catch(() => {});
           }}
           title="Fullscreen (F)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: "#fff",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name="fullscreen" size={rowIconSize()} />
         </button>
 
         {/* Exit Presentation */}
-        <button
-          onClick={onExit}
-          title="Exit presentation (Esc)"
-          style={{
-            background: "rgba(239, 68, 68, 0.25)",
-            border: "1px solid rgba(239, 68, 68, 0.4)",
-            color: "#fca5a5",
-            cursor: "pointer",
-            padding: "4px 10px",
-            borderRadius: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
-        >
+        <button className="player-btn exit" onClick={onExit} title="Exit presentation (Esc)">
           <Icon name="close" size={12} />
           <span>Exit</span>
         </button>

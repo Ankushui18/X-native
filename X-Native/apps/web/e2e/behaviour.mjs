@@ -2280,6 +2280,150 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 40. the presentation player is chrome, not inline paint (PT-U5) -----------
+{
+  const p = await page();
+  await rows(p);
+  const present = async () => {
+    await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]')?.click());
+    await sleep(600);
+    await p.evaluate(() => [...document.querySelectorAll(".inspector button")]
+      .find((b) => /Present Prototype/.test(b.textContent || ""))?.click());
+    await sleep(900);
+  };
+  await present();
+
+  const look = await p.evaluate(() => {
+    const dock = document.querySelector(".player-dock");
+    const cs = dock ? getComputedStyle(dock) : null;
+    return {
+      dock: !!dock,
+      bg: cs?.backgroundColor, radius: cs?.borderRadius, blur: cs?.backdropFilter,
+      // The Icon component keeps its own width/height/display; chrome may not
+      // lay itself out or colour itself inline.
+      inline: [...(dock?.querySelectorAll("[style]") ?? [])]
+        .map((e) => e.getAttribute("style"))
+        .filter((v) => !/^width: 1[0-9]px; height: 1[0-9]px; display: block;$/.test(v || "")),
+      layerInline: document.querySelector(".prototype-player-layer")?.getAttribute("style"),
+      children: [...(dock?.children ?? [])].map((c) => `${c.tagName.toLowerCase()}:${c.className}`),
+      selects: [...(dock?.querySelectorAll("select") ?? [])].map((s) => s.getAttribute("aria-label")),
+      buttons: [...(dock?.querySelectorAll("button") ?? [])].map((b) => (b.textContent || "").trim() || b.title),
+      pressed: [...(dock?.querySelectorAll("button[aria-pressed]") ?? [])].map((b) => `${b.title}=${b.getAttribute("aria-pressed")}`),
+      pager: dock?.querySelector(".player-page")?.textContent.trim(),
+    };
+  });
+  // Eleven inline style objects used to carry the whole player: `#18181b`,
+  // `#fff` and `rgba(255,255,255,0.7)` written out per control, unreachable by
+  // any token. The dock and its stage palette live in the stylesheet now.
+  t(`the player dock is stage chrome (${look.bg}, r${look.radius})`,
+    look.dock && look.bg === "rgba(24, 24, 27, 0.85)" && look.radius === "24px" &&
+    (look.blur || "").includes("20px") && look.inline.length === 0 && look.layerInline === null);
+  const WANT_BTNS = ["Previous frame (←)", "Next frame (→ / Space)", "Restart", "Hotspots", "Fit",
+                     "Live Inputs", "Toggle tactile sound feedback (M)", "Fullscreen (F)", "Exit"];
+  t(`every player control is still there (${look.buttons.length} buttons, ${look.selects.length} selects)`,
+    look.children.length === 13 && look.selects.join("|") === "Preview frame|Device mockup frame" &&
+    look.buttons.join("|") === WANT_BTNS.join("|"));
+  // A toggle used to say it was on only by its own inline colour; the state is
+  // in the DOM now, so assistive tech and tests can read it.
+  t(`toggles expose their state (${look.pressed.join(", ")})`,
+    look.pressed.join("|") === "Toggle hotspot hints (H)=false|Toggle live editable inputs (I)=true|Toggle tactile sound feedback (M)=true");
+
+  const step = () => p.evaluate(() => {
+    const sel = document.querySelector('.player-dock select[aria-label="Preview frame"]');
+    return {
+      pager: document.querySelector(".player-page").textContent.trim(),
+      frame: sel.selectedOptions[0]?.textContent.trim(),
+      options: [...sel.options].map((o) => o.textContent.trim()),
+      nextOff: document.querySelector('.player-dock button[title^="Next frame"]').disabled,
+      prevOff: document.querySelector('.player-dock button[title^="Previous frame"]').disabled,
+    };
+  });
+  const clickPlayer = (title) => p.evaluate((t) =>
+    document.querySelector(`.player-dock button[title^="${t}"]`).click(), title);
+
+  const first = await step();
+  // The pager used to list every frame in the document while presentGo lands on
+  // the outermost frame that contains the destination — so "2. Card" (a frame
+  // inside the phone frame) was a step that went nowhere and still grew the
+  // back history. Every step now lands somewhere.
+  t(`the pager lists only frames it can reach (${first.options.join(", ")})`,
+    first.options.join("|") === "1. iPhone 16 Pro|2. Success|3. Filter Sheet" &&
+    !first.options.some((o) => /Card/.test(o)));
+  t(`and starts on the first with prev disabled (${first.pager})`,
+    first.pager === "1 / 3" && first.prevOff === true && first.nextOff === false);
+
+  await clickPlayer("Next frame");
+  await sleep(500);
+  const second = await step();
+  t(`next actually moves the stage (${first.frame} → ${second.frame}, ${second.pager})`,
+    second.pager === "2 / 3" && second.frame === "2. Success" && second.prevOff === false);
+  await clickPlayer("Next frame");
+  await sleep(500);
+  const third = await step();
+  await clickPlayer("Previous frame");
+  await sleep(500);
+  const back = await step();
+  t(`the ends are honest (${third.pager} next-off ${third.nextOff}, back to ${back.pager})`,
+    third.pager === "3 / 3" && third.nextOff === true && back.pager === "2 / 3");
+
+  // Toggles: on is a pill in the control's own hue, off is plain text.
+  const hue = async (label) => p.evaluate((l) => {
+    const b = [...document.querySelectorAll(".player-dock button")].find((x) => (x.textContent || "").includes(l));
+    const cs = getComputedStyle(b);
+    return { pressed: b.getAttribute("aria-pressed"), color: cs.color, bg: cs.backgroundColor };
+  }, label);
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Hotspots/.test(b.textContent)).click());
+  await sleep(400);
+  const onBlue = await hue("Hotspots");
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Live Inputs/.test(b.textContent)).click());
+  await sleep(250);
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Live Inputs/.test(b.textContent)).click());
+  await sleep(400);
+  const onGreen = await hue("Live Inputs");
+  t(`a toggled control reads as on (hotspots ${onBlue.color}, inputs ${onGreen.color})`,
+    onBlue.pressed === "true" && onBlue.color === "rgb(56, 189, 248)" &&
+    onGreen.pressed === "true" && onGreen.color === "rgb(52, 211, 153)" &&
+    onBlue.color !== onGreen.color);
+
+  // It gets out of the way while the prototype is being looked at.
+  await sleep(4200);
+  const idle = await p.evaluate(() => {
+    const d = document.querySelector(".player-dock");
+    const cs = getComputedStyle(d);
+    return { hidden: d.classList.contains("hidden"), opacity: cs.opacity, pointer: cs.pointerEvents };
+  });
+  t(`the dock slides away when idle (opacity ${idle.opacity}, ${idle.pointer})`,
+    idle.hidden && idle.opacity === "0" && idle.pointer === "none");
+
+  // …and its labels are the shared pill, like every other control (the player
+  // used to be the one surface with the browser's own tooltip).
+  await p.mouse.move(800, 500);
+  await sleep(300);
+  const rb = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".player-dock button")].find((x) => /Restart/.test(x.textContent));
+    const r = b.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, hidden: document.querySelector(".player-dock").classList.contains("hidden") };
+  });
+  await p.mouse.move(rb.x, rb.y);
+  await sleep(750);
+  const tip = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    const b = [...document.querySelectorAll(".player-dock button")].find((x) => /Restart/.test(x.textContent));
+    return { pills: tips.length, text: tips.map((t) => t.textContent).join(" | "), chip: tips[0]?.querySelector(".tip-sc")?.textContent ?? null, title: b.getAttribute("title"), tip: b.dataset.tip };
+  });
+  t(`the dock wakes on a move and labels with the shared pill (${tip.text})`,
+    rb.hidden === false && tip.pills === 1 && tip.text === "Restart flowR" && tip.chip === "R" &&
+    tip.title === null && tip.tip === "Restart flow (R)");
+
+  // Exit still ends the presentation (and the stage goes with it).
+  await p.mouse.move(800, 400);
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Exit/.test(b.textContent)).click());
+  await sleep(700);
+  t("Exit leaves the player", await p.evaluate(() =>
+    !document.querySelector(".player-dock") && !document.querySelector(".prototype-player-layer")));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();
