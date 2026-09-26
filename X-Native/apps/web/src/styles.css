@@ -1398,6 +1398,14 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   font-weight: 500;
 }
 
+/* Palette scrim: click-anywhere-to-dismiss, and it swallows clicks so the
+   canvas underneath does not take them. */
+.actions-veil-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 16, 0.28);
+  z-index: 39;
+}
 .actions {
   position: absolute;
   left: 50%;

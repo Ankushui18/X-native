@@ -1687,7 +1687,18 @@ export function Actions({
     );
   };
   return (
-    <div className="actions" role="dialog" aria-label="Quick open">
+    <>
+      {/* Dismissible backdrop (PM-U2). The palette previously closed only on
+          Escape, run, or its own close button, so a click anywhere else left it
+          sitting over the canvas. It also stops clicks reaching the editor
+          underneath, which is what a sheet this large should do.
+          The wrapper is pointer-transparent so the scrim still spans the
+          viewport while the panel stays a viewport-centred 480px sheet rather
+          than the full width. */}
+      <div className="actions-veil" style={{ display: "contents" }} onMouseDown={() => onClose()}>
+        <div className="actions-veil-bg" aria-hidden />
+      </div>
+      <div className="actions" role="dialog" aria-label="Quick open" onMouseDown={(e) => e.stopPropagation()}>
       <input
         autoFocus
         placeholder="Type a command or search layers, pages, components…"
@@ -1743,7 +1754,8 @@ export function Actions({
           );
         })}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

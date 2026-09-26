@@ -2074,6 +2074,40 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 37. the palette dismisses like every other overlay (PM-U2) --------------
+{
+  const p = await page();
+  await rows(p);
+  const open = () => p.evaluate(() => !!document.querySelector(".actions"));
+  await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta");
+  await sleep(450);
+  t("the palette opens on ⌘/", await open());
+  t("with a backdrop over the app", await p.evaluate(() => !!document.querySelector(".actions-veil-bg")));
+  // Clicking away used to leave it sitting over the canvas: only Escape, running
+  // a row, or its own close button dismissed it.
+  await p.mouse.click(1300, 850);
+  await sleep(400);
+  t("clicking outside closes it", (await open()) === false);
+  t("and the editor did not take that click",
+    (await p.evaluate(() => document.querySelectorAll(".panel.left .row").length)) === 23);
+  // Inside the sheet, clicks must keep working (the palette is not dismiss-on-any-click).
+  await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta");
+  await sleep(400);
+  await p.keyboard.type("zoom");
+  await sleep(500);
+  const head = await p.evaluate(() => {
+    const r = document.querySelector(".actions").getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 30) };
+  });
+  await p.mouse.click(head.x, head.y);
+  await sleep(350);
+  t("clicking inside keeps it open", await open());
+  await p.keyboard.press("Escape");
+  await sleep(300);
+  t("and Escape still closes it", (await open()) === false);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

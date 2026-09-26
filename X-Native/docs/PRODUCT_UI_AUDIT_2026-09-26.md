@@ -255,7 +255,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | # | Finding | Status | Pri |
 |---|---|---|---|
 | PM-U1 (=FS-U2) | FIXED — same work: one XDialog-backed prompt/confirm/choice (no separate XConfirm component was needed; the bus is the wrapper). 32 headless checks on the bus (cancel values, queue order, double-settle, no-host fallback) + e2e §31 (no native dialog call recorded during rename, create, delete, style choice, dashboard project). PM-U6 (focus) covered for the new dialogs: primary action focused, prompt selects its value | FIXED (P1) | — |
-| PM-U2 | Actions palette has no outside-click close (no veil/backdrop; Esc/run/close only) | PARTIAL | P2 |
+| PM-U2 | FIXED: the palette now has a dismissible scrim — click anywhere outside closes it, clicks inside keep working (the sheet is not dismiss-on-any-click), and the scrim swallows clicks so the canvas underneath does not take them. Verified that a click meant for the backdrop did not also touch the document (layer rows unchanged). | FIXED (P2) | — |
 | PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
 | PM-U4 | NudgeDialog wears help-pop/help-card styles (a prefs dialog in help clothing) | DRIFT (§29) | P2 |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
@@ -578,6 +578,16 @@ styles that drifted from every other switch. Three strips now share one primitiv
 Suite **222 pass / 0 fail** (10 new checks in §36: roles and selection state on all three strips, roving
 focus, arrows switching the inspector tab and the pane — with the panel actually following — Home, no inline
 styles left on the pane switch). Unit 1621, tsc and build clean.
+
+## §4l. Palette dismissal (PM-U2)
+
+The quick-open sheet closed on Escape, on running a row, or on its own close button — a click anywhere else
+left it sitting over the canvas, and that click reached the editor underneath. It now has a scrim: clicking
+outside dismisses it, clicking inside does not (the sheet is large and full of controls, so
+dismiss-on-any-click would be hostile), and the backdrop swallows the press so the document is untouched —
+verified by clicking well clear of the sheet and finding the layer count unchanged.
+
+Suite **228 pass / 0 fail** (6 new checks in §37), unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
