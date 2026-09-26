@@ -133,6 +133,27 @@ fullscreen/Exit — all functional.
 | PT-U6 | "Prototype flows ⇧F" toggle lives in ZoomMenu (view menu inside inspector tab bar) — works, surprising home | IA note | P2 |
 | PT-U7 | Present button Tooltip shows "Esc to exit" but never the start chord ⌘⌥↩ (exists + in palette) | PARTIAL | P2 |
 
+## §7. Inspector architecture trace (prompts §§10–11, 20, 29) — Design:3061–6222 + Section:8455 + Field:7637
+
+ARCHITECTURE (good bones): shared `Section` (collapse + localStorage persist + `openSection` event bus
+so add-actions reveal their section) and shared `Field` (arithmetic commit, Mixed display, per-layer
+multi-values, word tokens, disabled-with-reason). Map: Typography (text-only, rendered FIRST) ·
+Position (X/Y/W/H/rotation/flip/constraints-picker/align/distribute/tidy; multi-aware w/ Mixed) ·
+Layout (add/suggest auto-layout) · Layout grid (frame-only) · Appearance (blend/opacity/radius) ·
+Fill · Stroke · Selection colors · Effects · Modifiers · Expressions · Export (default closed) ·
+kind-gated Boolean/Component-Instance/Poly-Star headers · vector card (Edit Path/Done/outline/
+simplify/offset) · PageDesign no-selection state. All traced controls dispatch to the engine.
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| IN-U1 | MULTI-SELECT: fill/stroke/appearance/effects show FIRST-layer values with NO Mixed (only corner radii has it); edits patch first layer only — exactly the §29 violation (controls masquerading as shared). Fix: Mixed display + apply-to-all via the numMany/onChangeMany pattern | PARTIAL | P1 |
+| IN-U2 | DUPLICATE "Outline stroke": seg button ~4300 (no id, no toast, no title) + vector-card button ~4525 (id + toast + ⇧⌘O) — both render on vectors with stroke, divergent behavior | DUPLICATE | P1 |
+| IN-U3 | Component/Instance, Boolean, Poly/Star headers use h-row, not Section (no collapse/persist, different chrome) | DRIFT (§29) | P2 |
+| IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
+| IN-U5 | "Edit vector" label dispatches `flatten` (misleading); seg buttons raw/unclassed | LABEL + DRIFT | P2 |
+| IN-U6 | Flip buttons + assorted icon-only buttons use native title= amid Tooltip siblings | PARTIAL (§2.3) | P2 |
+| IN-U7 | Design/Prototype/Inspect tabs are raw buttons, not XTabs; no arrow-key nav (§19 evidence) | DRIFT | P2 |
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
