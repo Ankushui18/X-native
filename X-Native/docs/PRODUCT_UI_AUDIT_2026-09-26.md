@@ -144,7 +144,7 @@ fullscreen/Exit — all functional.
 | # | Finding | Status | Pri |
 |---|---|---|---|
 | TB-U3 (upheld) | FIXED with TB-U3 above (distinct flow glyph, not the Present play triangle) | FIXED (P1) | — |
-| PT-U1 | No-op `onClick={() => {}}` on "Prototype settings" h-row (inspector ~779) | DEAD handler | P2 |
+| PT-U1 | FIXED with IN-U3: the header is a `Section`, so a click now folds the block instead of doing nothing | FIXED (P2) | — |
 | PT-U2 | "Present Prototype" reuses `export-run` class | DRIFT (§29) | P2 |
 | PT-U3 | All proto selects/inputs raw + inline styles; icon-only btns native title= (orientation/plus/minus/condition) | DRIFT + tooltip split | P2 |
 | PT-U4 | Selected-conn chip: hardcoded #18181b/#fff + inline styles + native title | DRIFT | P2 |
@@ -167,7 +167,7 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 |---|---|---|---|
 | IN-U1 | FIXED: shared patchMany/mixedProp/manyVals/patchNumMany helpers; Mixed display + apply-to-all for opacity/blend/corners(+toggles)/stroke weight/base fill+stroke rows (incl gradient/image/meta/remove/visibility) and Fill/Stroke/Effect Add; ColorRow gains a mixed swatch+hex. REMAINING (follow-up): fill/stroke/effect stack ROW edits, effect row ops, visibility-toggle display states (all: first-layer display kept, Export-precedent documented) | FIXED (P1) | — |
 | IN-U2 | FIXED: seg entry shows only when the vector card is absent (exactly one entry always); both use id+toast+⇧⌘O title; card refuses the stroke-less no-op with a teaching toast; labels unified | FIXED (P1) | — |
-| IN-U3 | Component/Instance, Boolean, Poly/Star headers use h-row, not Section (no collapse/persist, different chrome) | DRIFT (§29) | P2 |
+| IN-U3 | FIXED: every ad-hoc header is now a `Section` — Component/Instance (its action buttons moved into the section's action slot), Boolean, Star/Polygon, and on the page/prototype surfaces Frame Presets, Background, Local styles, Pixel grid, Flow starting point, Prototype settings, Interactions, Annotations. `h-row h3` and `.sec-toggle h2` were already the same 11px/500/muted style, so the chrome reads identically while every block gained fold + persistence + the scroll-to hook. Left bespoke on purpose: `Design health` (score + issues button) and the Dev Mode `Inspect` header (dot + view tabs) — both carry live, bespoke chrome a plain title would lose. Note: the audit's "10 sections" observation was itself approximate — the count varies by selection (screen 4 / layer 11 / text 12) and now includes these blocks. | FIXED (P2) | — |
 | IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
 | IN-U5 | "Edit vector" label dispatches `flatten` (misleading); seg buttons raw/unclassed | LABEL + DRIFT | P2 |
 | IN-U6 | Flip buttons + assorted icon-only buttons use native title= amid Tooltip siblings | PARTIAL (§2.3) | P2 |
@@ -492,6 +492,25 @@ read `title` *or* `data-tip` (5 sites, inline) so a resting pointer cannot hide 
 3. **IA / missing UI (PT-U6 view menu inside the inspector tab bar, LP-U3/LP-U4 first-run and empty
    states, FR-U3 rotate zone, RW-U1/RW-U2 unverified visual states)** — needs a design decision, not a
    sweep.
+
+## §4g. P2 round 2 — one inspector header chrome (IN-U3, PT-U1)
+
+Same story as §4f: the inspector already had the right primitive (`Section`) and used it for most of the
+panel, while eleven blocks — Component/Instance, Boolean, Star/Polygon, Frame Presets, Background, Local
+styles, Pixel grid, Flow starting point, Prototype settings, Interactions, Annotations — wore a bare
+`h-row` + `h3` instead. Two headers for the same rank of content is exactly the drift §29 warns about, and
+the bare ones silently lost three capabilities the `Section` has: folding, the folded preference surviving
+a reload, and the `x-native-open-section` scroll-to hook other features use.
+
+The styles were already identical (`h3` and `.sec-toggle h2` are both 11px/500/`var(--muted)`), so the
+migration is chrome-neutral: folded/unfolded verified per surface in the browser (screen 41→37→41 controls,
+text layer 95→45→95, Boolean 64→58→64 buttons, all restored), and the Component/Instance action row moved
+into the section's `actions` slot with its buttons intact. Two headers stay bespoke because they carry live
+chrome a plain title would drop: `Design health` (score + issues) and the Dev Mode `Inspect` header
+(status dot + view tabs).
+
+Suite **202 pass / 0 fail** (7 new checks in §33: the boolean block folds and restores, all three prototype
+blocks are sections, fold/reopen round-trips). Unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

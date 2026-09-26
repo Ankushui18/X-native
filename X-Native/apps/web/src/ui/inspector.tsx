@@ -656,9 +656,7 @@ function PageDesign({
       )}
       {tool === "frame" && (
         <>
-          <div className="h-row">
-            <h3>Frame Presets</h3>
-          </div>
+          <Section id="presets" title="Frame Presets">
           <div className="presets" style={{ maxHeight: 340, overflowY: "auto" }}>
             {PRESET_GROUPS.map((grp) => (
               <div key={grp.category} style={{ marginBottom: 6 }}>
@@ -695,12 +693,11 @@ function PageDesign({
               </div>
             ))}
           </div>
+          </Section>
           <div className="hr" />
         </>
       )}
-      <div className="h-row">
-        <h3>Background</h3>
-      </div>
+      <Section id="background" title="Background">
       <div className="insp-pad">
         <ColorRow
           value={root.fill}
@@ -714,10 +711,9 @@ function PageDesign({
           onVisible={(v) => engine.dispatch({ type: "patch", id: root.id, patch: { fillVisible: v } })}
         />
       </div>
+      </Section>
       <div className="hr" />
-      <div className="h-row">
-        <h3>Local styles</h3>
-      </div>
+      <Section id="local-styles" title="Local styles">
       <div className="insp-pad">
         {/* With nothing selected the file's local styles and variables live
             in the left panel's Variables tab; this row is the bridge there,
@@ -735,10 +731,9 @@ function PageDesign({
           Open variables &amp; styles
         </button>
       </div>
+      </Section>
       <div className="hr" />
-      <div className="h-row">
-        <h3>Pixel grid</h3>
-      </div>
+      <Section id="pixel-grid" title="Pixel grid">
       <div className="insp-pad">
         <ColorRow
           value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
@@ -752,6 +747,7 @@ function PageDesign({
           onVisible={(pixelGrid) => engine.dispatch({ type: "patchPage", patch: { pixelGrid } })}
         />
       </div>
+      </Section>
       <div className="hr" />
       <ExportBlock n={root} engine={engine} root={root} ids={[root.id]} page />
     </>
@@ -793,9 +789,7 @@ function Prototype({
   }
   return (
     <>
-      <div className="h-row">
-        <h3>Flow starting point</h3>
-      </div>
+      <Section id="proto-start" title="Flow starting point">
       <div className="proto-row">
         <span>Start</span>
         <select
@@ -811,10 +805,9 @@ function Prototype({
           ))}
         </select>
       </div>
+      </Section>
 
-      <div className="h-row" style={{ marginTop: 8 }} onClick={() => {}}>
-        <h3>Prototype settings</h3>
-      </div>
+      <Section id="proto-settings" title="Prototype settings">
       <div className="proto-row">
         <span>Device</span>
         <select
@@ -880,9 +873,9 @@ function Prototype({
         />
       </div>
       <p className="muted">Flow starts at {startName}. Esc steps back, then exits.</p>
+      </Section>
 
-      <div className="h-row" style={{ marginTop: 8 }}>
-        <h3>Interactions</h3>
+      <Section id="proto-interactions" title="Interactions" actions={
         <button
           className="plus"
           title="Add interaction"
@@ -903,7 +896,7 @@ function Prototype({
         >
           <Icon name="plus" size={14} />
         </button>
-      </div>
+      }>
       {!n && <p className="muted">Select a layer to add On click → Navigate.</p>}
       {n &&
         interactions.map((ix, i) => (
@@ -1351,6 +1344,7 @@ function Prototype({
             )}
           </div>
         ))}
+      </Section>
       <div className="insp-pad">
         <button className="export-run" onClick={() => onPresent?.()}>
           Present Prototype
@@ -2745,11 +2739,7 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
   return (
     <>
       <div className="hr" />
-      <div className="h-row">
-        <h3>Annotations</h3>
-        <span className="grow" />
-        <span className="sc">{list.length}</span>
-      </div>
+      <Section id="annotations" title="Annotations" actions={<span className="sc">{list.length}</span>}>
       <div className="insp-pad dev-annos">
         {list.map((a) => (
           <div className="dev-anno" key={a.id}>
@@ -2808,6 +2798,7 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
         </div>
         <p className="dev-note">Markers show on the canvas as green dots while Dev Mode is on.</p>
       </div>
+      </Section>
     </>
   );
 }
@@ -3988,9 +3979,7 @@ function Design({
 
       {multi && (
         <>
-          <div className="h-row">
-            <h3>Boolean</h3>
-          </div>
+          <Section id="boolean" title="Boolean">
           <div className="insp-pad">
             <div className="seg icons">
               {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
@@ -4058,6 +4047,7 @@ function Design({
               </div>
             )}
           </div>
+          </Section>
         </>
       )}
 
@@ -4848,9 +4838,11 @@ function Design({
         const propDefs = master?.properties ?? [];
         return (
           <>
-            <div className="h-row">
-              <h3>{n.isComponent ? "Component" : "Instance"}</h3>
-              <div style={{ display: "flex", gap: 4 }}>
+            <Section
+              id="component"
+              title={n.isComponent ? "Component" : "Instance"}
+              actions={
+                <div style={{ display: "flex", gap: 4 }}>
                 {n.componentId && (
                   <>
                     <button
@@ -4906,8 +4898,9 @@ function Design({
                     </button>
                   </>
                 )}
-              </div>
-            </div>
+                </div>
+              }
+            >
             <div className="insp-pad">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                 <span className="insp-label">Variant</span>
@@ -5099,6 +5092,7 @@ function Design({
               )}
               {master && <CodeMappingEditor engine={engine} master={master} />}
             </div>
+            </Section>
           </>
         );
       })()}
@@ -6456,9 +6450,7 @@ function Design({
       {(n.kind === "star" || n.kind === "poly") && (
         <>
           <div className="hr" />
-          <div className="h-row">
-            <h3>{n.kind === "star" ? "Star" : "Polygon"}</h3>
-          </div>
+          <Section id="polygon" title={n.kind === "star" ? "Star" : "Polygon"}>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <Field
               label="#"
@@ -6478,6 +6470,7 @@ function Design({
               onChange={(r) => patch({ cornerRadii: [Math.max(0, r), Math.max(0, r), Math.max(0, r), Math.max(0, r)] })}
             />
           </div>
+          </Section>
         </>
       )}
 

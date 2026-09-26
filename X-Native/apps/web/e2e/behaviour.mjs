@@ -1868,6 +1868,50 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 33. one header chrome: layer and prototype blocks fold like sections -------
+{
+  const p = await page();
+  await rows(p);
+  const secOpen = (p, title) => p.evaluate((t) =>
+    [...document.querySelectorAll(".inspector .sec-toggle")]
+      .find((b) => b.textContent.trim() === t)?.getAttribute("aria-expanded") ?? null, title);
+  const secTitles = () => p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .sec-toggle")].map((b) => b.textContent.trim()));
+  const buttons = () => p.evaluate(() => document.querySelector(".inspector").querySelectorAll("button").length);
+
+  // Two rects: the Boolean block used to be a static <h3> header with no fold.
+  await drawRect(p, 820, 640);
+  await drawRect(p, 1000, 640);
+  const drawn = (await p.evaluate(() => window.__xNativeDesignApi.call("findNodes", { kind: "rect", name: "Rectangle", limit: 50 }))).data.items.map((n) => n.id);
+  const pair = drawn.slice(-2);
+  for (const [k, id] of pair.entries()) await clickRowById(p, id, k > 0);
+  await sleep(450);
+  t("the boolean block is a section header now", (await secOpen(p, "Boolean")) === "true");
+  const withBoolean = await buttons();
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Boolean").click());
+  await sleep(250);
+  const foldedBoolean = await buttons();
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Boolean").click());
+  await sleep(250);
+  t(`folding the boolean block hides its controls (${withBoolean} -> ${foldedBoolean} -> ${await buttons()})`,
+    (await secOpen(p, "Boolean")) === "true" && foldedBoolean < withBoolean && (await buttons()) === withBoolean);
+
+  // Prototype tab: the three blocks were static headers too.
+  await p.keyboard.down("Shift"); await p.keyboard.press("e"); await p.keyboard.up("Shift");
+  await sleep(500);
+  const proto = await secTitles();
+  for (const want of ["Flow starting point", "Prototype settings", "Interactions"]) {
+    t(`the prototype ${want.toLowerCase()} block is a section`, proto.includes(want));
+  }
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Prototype settings").click());
+  await sleep(250);
+  t("folding prototype settings closes it", (await secOpen(p, "Prototype settings")) === "false");
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Prototype settings").click());
+  await sleep(250);
+  t("and reopening it brings the device rows back", (await secOpen(p, "Prototype settings")) === "true");
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();
