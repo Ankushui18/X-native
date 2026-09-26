@@ -350,6 +350,30 @@ rows it clicked were the sample document's own layers. Rows carry `data-row-id`;
 them by id and extends a selection with ⌘/Ctrl-toggle rather than a shift range (a range spans every row
 *between* two layers — the whole tree when one of them nested into a frame).
 
+## §4c. OPEN P1 — imported strokes with `inside` alignment paint nothing (2026-09-26)
+
+Repro (headless Chromium, software rasteriser): drop this SVG onto the demo file
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="160">
+  <rect x="30" y="30" width="160" height="100" fill="#dddddd" stroke="#ff0000" stroke-width="10"/>
+</svg>
+```
+at client (800,520) over the "iPhone 16 Pro" frame. The rect's fill paints; the stroke does not.
+
+**What is ruled in and out (measured, not guessed):**
+- The model is right: `strokePaint "#ff0000"`, `strokeWidth 10`, `strokeVisible true`, `strokeAlign "inside"`, and nothing else differs from a drawn rect's model (full-node diff run).
+- The app *does* stroke it: patching `CanvasRenderingContext2D.prototype.stroke` records `{ lineWidth: 14.75, strokeStyle: "#ff0000" }` (= 10 × zoom), so it is not a "the painter never ran" case.
+- Red pixels on the canvas: **0**. Not a repaint artefact — a nudge, an arrow-key nudge back, a zoom-menu interaction and a second import all leave 0.
+- Alignment is the switch: clicking the inspector's **center** button gives 180 red px, **outside** 553, back to **inside** 0. Each click also confirms `strokeAlign` in the model, so the pixels track the model.
+- It is not "inside alignment is broken": a rect drawn with the rect tool, given a stroke through the inspector at the same width 10 and left `inside`, renders 2868 red px — top-level *and* when drawn inside a frame.
+
+So the failing combination is specifically **a stroke that arrived through the SVG importer with inside alignment**. Root cause not established; the next step is to compare the importer's node against a drawn one for state the design API's `getNode(full)` does not serialise (the painter reads the live node, and the two models serialise identically). Two of the four stroke failures in the behaviour suite ("base stroke renders", "both strokes and the fill render together" — which drops the same SVG) are this bug; the style-list and .fig/`.sketch` failures are still unexplained and may or may not share it.
+
+## §4d. Suite-side corrections found while checking the remaining failures
+
+- "every inspector section is collapsible" asserts **8** sections; the panel now has **10** (Typography, Position, Layout, Appearance, Fill, Stroke, Effects, Modifiers, Expressions, Selection colors, Export — 11 on a text layer). Every one of them collapses and re-expands when clicked (verified in the browser). The number is stale, not the behaviour.
+- "three effects do not overflow the panel" asserts `scrollHeight <= clientHeight` for `.inspector`, which is `overflow: auto` by design (styles.css) — a scrolling panel is the intended shape, so the check asks for something the app deliberately does not do. The meaningful version of it is "the effect *rows* stay one line", which already passes.
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
