@@ -14,6 +14,21 @@ function viewport(): { w: number; h: number; x: number; y: number } {
   return { w: window.innerWidth - 520, h: window.innerHeight - 96, x: 240, y: 0 };
 }
 
+/** The world point under the middle of the visible canvas.
+ *
+ *  Anything placed on the user's behalf — a layer an agent created, a paste with
+ *  no better idea — has to land where they are looking. Before LP-U6 the agent
+ *  pane guessed document coordinates (a 390x844 frame at 120,80), so the layer
+ *  it "added" was routinely somewhere off-screen. Same local-canvas reasoning as
+ *  `zoomTo`: pan is relative to the canvas element, not the window. */
+export function viewportCentreWorld(snap: Snapshot): { x: number; y: number } {
+  const vp = viewport();
+  return {
+    x: (vp.w / 2 - snap.panX) / snap.zoom,
+    y: (vp.h / 2 - snap.panY) / snap.zoom,
+  };
+}
+
 /** Change the zoom while keeping the middle of the canvas still, which is what
  *  zoom-in/zoom-out shortcuts and percentage menu do. */
 export function zoomAboutCentre(engine: Engine, zoom: number) {

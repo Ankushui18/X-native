@@ -196,7 +196,7 @@ resting **field** uses (`C_FIELD`), while the state language says hover is
 `surface_hover` — as inputs already do. Either a row hover is its own wash step
 or the contract needs a second hover entry.
 
-## 12. Web chrome drift: 414 inline style objects, 131 literal colours (ratcheted, not gated by CI)
+## 12. Web chrome drift: 413 inline style objects, 131 literal colours (ratcheted, not gated by CI)
 
 `apps/web` is the product UI (`apps/web/README.md`), and its chrome grew the way
 immediate-mode chrome does not: every surface that needed a layout wrote one.
@@ -226,7 +226,7 @@ be committed apart). Reproduce the totals instead of trusting this file:
 cd apps/web && npx vite-node src/ui/__tests__/drift.test.mjs
 ```
 
-This ratchet and the 2,065 checks around it run in CI as the `web` job of
+This ratchet and the 2,100 checks around it run in CI as the `web` job of
 `.github/workflows/ci.yml` (`npm ci && npm test && npm run build`); before
 2026-09-26 nothing outside a Rust workspace was gated at all. That total is the
 sum of every `N passed` line the suites print, which is reproducible with
@@ -236,11 +236,13 @@ suites printing the `N passed, M failed` form. Two caveats stay
 open. `scripts/check.sh` — the script the repo calls the single definition of
 green — is still Rust-only, so a local `check.sh` run does not cover the product
 UI. And the **browser tier is not in CI**: `apps/web/e2e/behaviour.mjs` needs a
-Chromium and a running dev server, so its 295 checks (computed geometry, focus,
+Chromium and a running dev server, so its 313 checks (computed geometry, focus,
 hover, canvas pixels, keyboard chords) run only where someone provides both —
 including the eleven added by §43/§43b of `PRODUCT_UI_AUDIT_2026-09-26.md`,
 which retheme a canvas token under the running app and watch the chrome follow,
-and the sixteen from §44, which drive the empty states.
+the sixteen from §44, which drive the empty states, and the eighteen from
+§45, which read the Tools pane's disabled states and the agent's answers
+against the palette and the preset list.
 Everything a browser cannot reach is covered by the headless DOM tier instead
 (`apps/web/src/ui/__tests__/domEnv.mjs`, jsdom), which is why a UI finding is
 recorded as closed by *both* halves — and why the ledger names which tier closed

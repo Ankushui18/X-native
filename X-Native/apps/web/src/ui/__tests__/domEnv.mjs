@@ -286,6 +286,14 @@ export async function mountSurface(surface = "inspector", { layer = "vector", pr
         el.blur();
       });
     },
+    /** Press a key on an element the way a user does — the panes that act on
+     *  Enter (the agent's ask) have no button to click. */
+    async press(el, key) {
+      if (!el) throw new Error("press: no element");
+      await act(async () => {
+        el.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      });
+    },
     /** A dispatch the test drives itself, inside `act` so React can flush it. */
     async dispatch(cmd) {
       await act(async () => {

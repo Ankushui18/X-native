@@ -520,6 +520,13 @@ input, textarea { user-select: text; }
   white-space: nowrap;
   font-size: 12px;
 }
+/* The agent pane's transcript borrows the row recipe, but a reply is a sentence
+   rather than a layer name: it wraps instead of ellipsising, the row grows to
+   fit it, and the agent's own turns are muted so the two voices read apart
+   (LP-U6). */
+.agent-row { height: auto; min-height: 32px; align-items: flex-start; padding: 6px 8px; }
+.agent-row .name { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+.agent-row[data-who="agent"] .name { color: var(--muted); }
 /* The status dot in the layers list on an auto layout frame, which is
    also how the frames "Suggest auto layout" creates are spotted afterwards. */
 .row .al-dot {
@@ -831,6 +838,9 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   transition: all 0.15s ease;
 }
 .share { transition: box-shadow 160ms, filter 160ms; }
+/* `.share` pushes itself to the right edge of a head; a pane that has nothing
+   beside it wants the button on the left instead (was an inline marginLeft). */
+.share.left { margin-left: 0; }
 .share:hover {
   background: linear-gradient(135deg, var(--accent-hover), #087a54);
   box-shadow: 0 4px 12px rgba(14, 159, 110, 0.4);
@@ -1622,6 +1632,12 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
 }
 .presets button:hover { background: var(--hover); }
 .presets .sz { color: var(--muted); font-size: 11px; }
+/* The Tools pane is a list of commands, so it wears the same chord chip every
+   menu does (LP-U5) — each container declares its own, as .menu/.fly/.ctx do. */
+.presets .sc { margin-left: auto; color: var(--dim); font-size: 11px; }
+/* An action that cannot run says so instead of doing nothing when clicked. */
+.presets button:disabled { color: var(--dim); cursor: default; }
+.presets button:disabled:hover { background: transparent; }
 
 .color-row .minus { opacity: 0; }
 .color-row:hover .minus,

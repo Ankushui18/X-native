@@ -32,9 +32,9 @@ import { finishPenDraft } from "./penDraft";
 import { dismissSelectedConnection } from "./connSelection";
 import { THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
-import { align } from "./inspector";
+import { align, PRESET_GROUPS } from "./inspector";
 import { hugSize } from "./textLayout";
-import { stepZoom, zoomAboutCentre, zoomCenter, zoomTo, zoomToRect } from "./zoom";
+import { stepZoom, viewportCentreWorld, zoomAboutCentre, zoomCenter, zoomTo, zoomToRect } from "./zoom";
 import { roundToPixel } from "./round";
 
 import { clearDoc } from "../engine/persist";
@@ -955,7 +955,7 @@ function LeftPanelImpl({
       )}
       {nav === "assets" && <AssetsPane engine={engine} snap={snap} />}
       {nav === "variables" && <VarsPane engine={engine} snap={snap} />}
-      {nav === "tools" && <ToolsPane engine={engine} onActions={onActions} />}
+      {nav === "tools" && <ToolsPane engine={engine} snap={snap} onActions={onActions} />}
       {nav === "agent" && <AgentPane engine={engine} />}
       {pageMenuAt && (
         <ContextMenu
@@ -1041,6 +1041,10 @@ export const LeftPanel = memo(LeftPanelImpl, (a, b) =>
   a.snap.page === b.snap.page &&
   a.snap.selection === b.snap.selection &&
   a.snap.fileName === b.snap.fileName &&
+  // The Tools pane disables Undo/Redo from these, so a history-only change has to
+  // re-render the panel even when the document and the selection did not move.
+  a.snap.canUndo === b.snap.canUndo &&
+  a.snap.canRedo === b.snap.canRedo &&
   a.snap.treeRev === b.snap.treeRev,
 );
 
@@ -3802,74 +3806,157 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   );
 }
 
-function ToolsPane({ engine, onActions }: { engine: Engine; onActions?: () => void }) {
-  const tools = [
-    { label: "Place image", run: () => engine.dispatch({ type: "setTool", tool: "image" }) },
-    { label: "Duplicate", run: () => engine.dispatch({ type: "duplicate" }) },
-    { label: "Group", run: () => engine.dispatch({ type: "group" }) },
-    { label: "Undo", run: () => engine.dispatch({ type: "undo" }) },
-    { label: "Redo", run: () => engine.dispatch({ type: "redo" }) },
-    { label: "Zoom to 100%", run: () => zoomAboutCentre(engine, 1) },
-    { label: "All actions…", run: () => onActions?.() },
+function ToolsPane({
+  engine,
+  snap,
+  onActions,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onActions?: () => void;
+}) {
+  const selected = snap.selection.length > 0;
+  // LP-U5: this pane is a list of commands, so it now says which command each row
+  // is (the palette's own chord, in the chip every menu uses) and refuses the ones
+  // that cannot run instead of swallowing the click. `blocked` doubles as the
+  // disabled reason and as the line at the bottom that names what is missing, so
+  // the pane explains itself without a tooltip it cannot show on a dead control.
+  const actions: { label: string; sc: string; blocked?: string; run: () => void }[] = [
+    { label: "Place image", sc: "⇧I", run: () => engine.dispatch({ type: "setTool", tool: "image" }) },
+    {
+      label: "Duplicate",
+      sc: "⌘D",
+      blocked: selected ? undefined : "Duplicate needs a selection",
+      run: () => engine.dispatch({ type: "duplicate" }),
+    },
+    {
+      label: "Group",
+      sc: "⌘G",
+      blocked: selected ? undefined : "Group needs a selection",
+      run: () => engine.dispatch({ type: "group" }),
+    },
+    {
+      label: "Undo",
+      sc: "⌘Z",
+      blocked: snap.canUndo ? undefined : "Nothing to undo yet",
+      run: () => engine.dispatch({ type: "undo" }),
+    },
+    {
+      label: "Redo",
+      sc: "⇧⌘Z",
+      blocked: snap.canRedo ? undefined : "Nothing to redo",
+      run: () => engine.dispatch({ type: "redo" }),
+    },
+    { label: "Zoom to 100%", sc: "⇧0", run: () => zoomAboutCentre(engine, 1) },
+    { label: "All actions…", sc: "⌘K", run: () => onActions?.() },
   ];
+  const blocked = actions.map((a) => a.blocked).filter((b): b is string => !!b);
   return (
     <>
-      <p className="muted">Plugins and actions for this file.</p>
+      <p className="muted">Actions on this file — every row is a palette command, with its chord.</p>
       <div className="presets">
-        {tools.map((t) => (
-          <button key={t.label} onClick={t.run}>
-            {t.label}
+        {actions.map((a) => (
+          <button key={a.label} disabled={!!a.blocked} onClick={a.run}>
+            {a.label} <span className="sc">{a.sc}</span>
           </button>
         ))}
       </div>
+      {blocked.length > 0 && <p className="muted">{blocked.join(" · ")}</p>}
     </>
   );
 }
 
+/** One turn of the agent pane's transcript. */
+interface AgentTurn {
+  who: "you" | "agent";
+  text: string;
+}
+
+const AGENT_GREETING = "Ask me to add a frame, text, or a rectangle.";
+
 function AgentPane({ engine }: { engine: Engine }) {
-  const [chats, setChats] = useState<{ title: string; body: string }[]>([
-    { title: "New chat", body: "Ask the agent to add a frame, text, or color." },
-  ]);
+  const [chats, setChats] = useState<AgentTurn[]>([{ who: "agent", text: AGENT_GREETING }]);
   const [msg, setMsg] = useState("");
+  /** Successive asks cascade, so two frames are not stacked exactly on top of
+   *  each other at the same viewport centre. */
+  const placed = useRef(0);
   const send = () => {
     const t = msg.trim();
     if (!t) return;
-    setChats((c) => [...c, { title: t.slice(0, 28), body: t }]);
     setMsg("");
-    if (/frame/i.test(t)) {
-      engine.dispatch({ type: "add", kind: "frame", x: 120, y: 80, w: 390, h: 844, extra: { name: "Agent frame" } });
-    } else if (/text/i.test(t)) {
+    // LP-U6: placement is derived from where the user is looking, and the size
+    // comes from the app's own frame presets — the pane used to guess
+    // (120,80 / 390x844), so what it "added" was usually off-screen and matched
+    // no preset the inspector would recognise.
+    const snap = engine.snapshot();
+    const centre = viewportCentreWorld(snap);
+    const step = (placed.current % 5) * 24;
+    const cx = centre.x + step;
+    const cy = centre.y + step;
+    const put = (
+      kind: "frame" | "text" | "rect",
+      w: number,
+      h: number,
+      extra?: Record<string, unknown>,
+    ) => {
       engine.dispatch({
         type: "add",
-        kind: "text",
-        x: 140,
-        y: 120,
-        w: 240,
-        h: 32,
-        extra: { text: t, name: "Agent text" },
+        kind,
+        x: Math.round(cx - w / 2),
+        y: Math.round(cy - h / 2),
+        w,
+        h,
+        extra: extra as never,
       });
+      placed.current += 1;
+    };
+    // The reply is written from the same values that were dispatched, so it
+    // cannot promise something the pane did not do.
+    let said: string;
+    if (/frame/i.test(t)) {
+      const preset = PRESET_GROUPS.flatMap((g) => g.items)[0];
+      put("frame", preset.w, preset.h, { name: preset.name });
+      // "a"/"an" would depend on the preset's name, so the name goes in dashes.
+      said = `Added a frame — ${preset.name}, ${preset.w} × ${preset.h} — centred in your view and selected.`;
+    } else if (/text/i.test(t)) {
+      put("text", 240, 32, { text: t, name: "Agent text" });
+      said = "Added a text layer carrying your message, centred in your view and selected.";
     } else if (/rect|box/i.test(t)) {
-      engine.dispatch({ type: "add", kind: "rect", x: 160, y: 160, w: 160, h: 80 });
+      put("rect", 160, 80, { name: "Agent rectangle" });
+      said = "Added a 160 × 80 rectangle, centred in your view and selected.";
+    } else {
+      // LP-U6: an ask this pane cannot answer used to be appended to the
+      // transcript and dropped on the floor — the message sat there with nothing
+      // changed and nothing said. Now it answers, and says it changed nothing.
+      said = `Nothing in “${t}” matched what I can do. I can add a frame, text or a rectangle — and I changed nothing.`;
     }
+    setChats((c) => [...c, { who: "you", text: t }, { who: "agent", text: said }]);
   };
   return (
     <>
       <div className="file-head">
-        <button className="share" style={{ marginLeft: 0 }} onClick={() => setChats([{ title: "New chat", body: "" }])}>
+        <button
+          className="share left"
+          onClick={() => {
+            setChats([{ who: "agent", text: AGENT_GREETING }]);
+            placed.current = 0;
+          }}
+        >
           New chat
         </button>
       </div>
       <div className="tree">
         {chats.map((c, i) => (
-          <div key={i} className="row">
-            <Icon name="agent" size={14} />
-            <span className="name">{c.title}</span>
+          <div key={i} className="row agent-row" data-who={c.who}>
+            <Icon name={c.who === "agent" ? "agent" : "comment"} size={14} />
+            <span className="name">{c.text}</span>
           </div>
         ))}
       </div>
       <div className="search">
         <input
           placeholder="Ask to add a frame, text…"
+          aria-label="Ask the agent"
           value={msg}
           onChange={(e) => setMsg(e.target.value)}
           onKeyDown={(e) => {

@@ -286,8 +286,8 @@ palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts
 | LP-U2 | FIXED: `leftTab` deleted outright (type, snapshot field, command, engine state, undo list) and all 8 writers re-pointed at the App nav the panel actually reads. ⌥1..3 now switch panes, ⌘R opens the layers pane before dispatching rename, and the palette's variable row opens the Variables pane (it dispatched into dead state before, so the row did nothing). Inspector entry points without the callback toast where to look instead of dispatching into the void. ⚠️ Worth noting: this dual truth is exactly what produced the LP-U1 P1 bug, so removing it is the fix, not cleanup. | FIXED (P2) | — |
 | LP-U3 | FIXED: the layers tree now has the two sentences it was missing. An empty page renders the inspector's own `.empty-state` recipe inside `.tree` — icon, "No layers on this page", what a row will let you do (name, group, hide, lock, reorder) and the real chords (`F` frame · `R` rectangle · `T` text, `⌘K` for every command) — and a search with no hits renders `.empty` with the term quoted ("No layer matches “q”. Clear the search to see the whole page."), which is the palette's `.actions-empty` sentence in the panel that filters. The two are told apart by the panel asking `matchesLayer`, the same predicate each row uses to hide itself, so the tree and its rows cannot disagree. No new CSS recipe and no new control: 25 checks in `leftpanel.dom.test.mjs` (jsdom, mounted `LeftPanel` on an emptied document) plus §44 in the browser. §4s | FIXED (P2) | — |
 | LP-U4 | FIXED, at the scope the finding asked for ("minimal dismissible empty-canvas hints"): one card over an empty canvas — "Draw your first layer", the three chords as `<kbd>`, and what the Layers list will do with the result — that retires the moment the page holds a layer and is dismissed for good by its own `XButton` ("Don't show this again"), persisted by `ui/firstRun.ts` under `x-native-hint-empty-canvas`. The card takes `pointer-events: none` with only its button opted back in, so it cannot eat the drag it is describing (the `.cm-layer`/`.cm-pin` recipe); it is seeded from the persisted dismissal before first paint, so it never flashes for someone who has already closed it; and every localStorage access is guarded and injectable, because it throws in private mode and does not exist in node. No entrance animation — that is MOTION-U1's round, with eyes. 24 checks in `firstRun.test.mjs` (hostile stores, the key's namespace, the source contract) plus §44's draw-through-it, dismiss, reload, empty-again sequence. §4s | FIXED (P2) | — |
-| LP-U5 | ToolsPane: no disabled states/shortcuts; "Plugins" label with no plugins | PARTIAL | P2 |
-| LP-U6 | AgentPane: unmatched input silently ignored (chat appended, nothing happens); hardcoded geometry (390×844 frame at 120,80…). Fix: scope feedback | PARTIAL | P2 |
+| LP-U5 | FIXED: the pane stopped claiming plugins ("Actions on this file — every row is a palette command, with its chord") and became a command list: seven rows, each wearing the palette's own chord in the `.sc` chip every menu uses (`⇧I ⌘D ⌘G ⌘Z ⇧⌘Z ⇧0 ⌘K`), and each command that cannot run is `disabled` — Duplicate/Group without a selection, Undo/Redo without history — instead of swallowing the click. The reason is a line of text at the bottom of the pane naming what is missing, not a tooltip: a dead control cannot receive the pointer that would show one, and `title=` is at its ratchet ceiling in this file. `LeftPanel`'s memo comparator gained `canUndo`/`canRedo`, because a history-only change moves no document field it compared. §4t | FIXED (P2) | — |
+| LP-U6 | FIXED, at the scope the finding named ("scope feedback"): every ask now gets an answer. A matched one reports what it created from the same values it dispatched ("Added a frame — iPhone 16 Pro, 393 × 852 — centred in your view and selected."); an unmatched one says nothing matched, repeats the three things the pane can do, and states that it changed nothing. Placement is derived, not guessed: `viewportCentreWorld(snap)` in `ui/zoom.ts` puts the layer at the world point under the middle of the visible canvas (cascaded 24px per ask so two frames do not stack), and sizes come from the inspector's own `PRESET_GROUPS`, now exported and shared — the invented 390×844 matched no preset the inspector would recognise. The transcript keeps both voices (`data-who`), wraps instead of ellipsising, and the greeting no longer promises colour, which the pane cannot do. §4t | FIXED (P2) | — |
 
 ## §13. Import/export + responsive + icons/motion sweep (prompts §§12, 24, 31)
 
@@ -312,8 +312,8 @@ palette (max-width/max-height/scroll).
   the inspector tab bar (PT-U6), so canvas-display toggles are found by accident, not by structure.
 - VISUAL HIERARCHY: inspector `Section` vs ad-hoc `h-row` headers (IN-U3) give identical-rank content
   two different weights; the vector card's `<strong>` header is a third.
-- DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wastes its density on
-  7 shortcut-less buttons (LP-U5).
+- DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wasted its density on
+  7 shortcut-less buttons until §4t (LP-U5) — each row now carries its chord and its disabled state.
 - CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), two Esc owners (PM-U3),
   `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens — since §4r two
   *named roles* (`--accent` for controls, `--cv-sel` for selection ink on the canvas) rather than one
@@ -323,8 +323,8 @@ palette (max-width/max-height/scroll).
   and the empty layers tree taught nothing at all until §4s (LP-U3/LP-U4).
 - AFFORDANCE: locked selections show editable handles that refuse (FR-U1); "Edit vector" flattens
   (IN-U5); Resources opens the command palette (TB-U1); duplicate Outline-stroke buttons diverge (IN-U2).
-- FEEDBACK: bound-value edits vanish without notice (FS-U6); AgentPane swallows unmatched input (LP-U6);
-  multi-select shows first-layer values as shared (IN-U1/TY-U3).
+- FEEDBACK: bound-value edits vanish without notice (FS-U6); the AgentPane swallowed unmatched input
+  until §4t (LP-U6); multi-select shows first-layer values as shared (IN-U1/TY-U3).
 - ERROR PREVENTION: guard toasts on binding (good); destructive mode/collection delete now names what is lost
   and uses a red confirm instead of a native OK/Cancel (PM-U1 FIXED);
   corrupt→toast + fresh doc (honest, minimal).
@@ -884,7 +884,7 @@ clean and warning-free, the sheet at 96.88 kB (17.86 kB gzip) with the new token
 **Still open after this round:** FR-U2b (the dark column exists for every canvas role and retunes
 three of them — the rest is a design call that needs eyes), MOTION-U1, IN-U6/FS-U4, PM-U3, PM-U6,
 LP-U3–U6, RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows. (LP-U3 and
-LP-U4 closed in §4s; LP-U5/U6 remain.)
+LP-U4 closed in §4s; LP-U5/U6 in §4t.)
 
 ## §4s. P2 round 6 — the empty page says something (LP-U3, LP-U4)
 
@@ -962,9 +962,81 @@ number added no inline style, no colour literal, no `title=` and no raw `<button
 is `XButton`), which is the ratchet earning its keep: the new UI had to arrive through the primitives.
 
 **Still open after this round:** LP-U5 (ToolsPane: no disabled states or shortcuts, and a "Plugins"
-label with no plugins), LP-U6 (AgentPane silently ignores input it cannot match, and hardcodes a
-390×844 frame at 120,80), MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6, RW-U1, FR-U3/U4, and the
-`inspector.tsx` / `FigInspectorModal.tsx` drift rows.
+label with no plugins) and LP-U6 (AgentPane silently ignores input it cannot match, and hardcodes a
+390×844 frame at 120,80) — both closed in §4t — plus MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6,
+RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows.
+
+## §4t. P2 round 7 — the two panes that were placeholders (LP-U5, LP-U6)
+
+The last two rows of the LP family were the two panes nobody had finished. Both rendered, both were
+reachable from the rail, and both said something the product could not back up.
+
+**LP-U5: a command list has to say which command, and whether it can run.** The Tools pane called
+itself "Plugins and actions for this file" — there are no plugins, and the nav rail already calls it
+*Tools* — and then listed seven bare labels with no chords and no disabled states. Clicking
+**Duplicate** with nothing selected, or **Undo** with no history, dispatched a command the engine
+correctly ignored: the pane gave the click away and returned nothing. It is now what it looked like it
+was: seven rows in the `.presets` recipe the inspector's preset grid already uses, each wearing its
+chord in a `.sc` chip (the declaration every other menu container in the sheet makes for itself:
+`.menu .sc`, `.fly .sc`, `.ctx .sc`, now `.presets .sc`), and each command that cannot run is
+`disabled` — Duplicate and Group without a selection, Undo and Redo without history — with a `.muted`
+line at the bottom naming what is missing ("Duplicate needs a selection · Group needs a selection ·
+Nothing to undo yet · Nothing to redo"). The reasons are text rather than tooltips on purpose: a
+disabled control cannot receive the pointer that would show a tooltip, and `title=` in `chrome.tsx` is
+at its ratchet ceiling (40/40), so the honest option was also the only one the ratchet allowed. The
+chords are not typed twice — `toolsagent.dom.test.mjs` reads every `label: … sc: …` pair in
+`chrome.tsx` and fails if the pane and the palette disagree about one, and §45 opens the palette in a
+browser and compares them again. One plumbing fix came with it: `LeftPanel`'s memo comparator did not
+compare `canUndo`/`canRedo`, so a history-only change would have left the pane's Undo row stale.
+
+**LP-U6: an agent that cannot help has to say so.** The pane appended whatever you typed to a
+transcript and then, unless the text mentioned a frame, text or a box, dispatched nothing — the message
+sat there with no answer and no change, which reads as a broken product rather than a limited one. Its
+placements were also guessed document coordinates (a 390×844 frame at 120,80; text at 140,120), so what
+it "added" was routinely off-screen, and 390×844 matched no preset the inspector would recognise.
+Every ask now gets an answer, and the answer is written from the same values that were dispatched, so
+it cannot overclaim: *"Added a frame — iPhone 16 Pro, 393 × 852 — centred in your view and selected."*
+or *"Nothing in “…” matched what I can do. I can add a frame, text or a rectangle — and I changed
+nothing."* Placement is derived: `ui/zoom.ts` gained `viewportCentreWorld(snap)`, the world point under
+the middle of the visible canvas, using the same canvas-local pan reasoning as `zoomTo`, and successive
+asks cascade 24px so two frames do not stack exactly. Sizes come from the inspector's own preset list,
+now exported and shared (`PRESET_GROUPS`), which is why the reply can name a preset instead of a
+number nobody chose. The transcript keeps both voices (`data-who="you|agent"`, the agent's muted),
+wraps instead of ellipsising a sentence into a 32px layer-name row, and its greeting no longer promises
+colour — the pane has no colour branch, and a promise it cannot keep is the same defect as a control
+that does nothing.
+
+**Verification.** `toolsagent.dom.test.mjs` (35 checks) mounts both panes for real in jsdom and drives
+them: the row set and chords, the pane's copy, disabled/enabled transitions across a select → duplicate
+→ undo sequence, a live row's click actually dispatching (zoom becomes 1), no inline layout; then five
+agent asks — an unmatched one that must answer and change nothing, a frame whose name and size come
+from the preset list and which is selected as claimed, a second frame that must land exactly
+`200/zoom + 24` world pixels from the first after a `setPan` of 200 (the arithmetic that proves
+placement follows the view rather than a constant), a text ask carrying the message, and "box" reaching
+the rectangle branch. Two harness notes worth keeping: a **static** import of a `.tsx` surface at the
+top of a DOM test loads react-dom before jsdom is installed, after which every input event throws
+`activeElement.detachEvent is not a function` and React's updates land a render late — so the preset
+list is imported dynamically, after the first mount; and `domEnv` learned `press(el, key)`, because a
+surface that acts on Enter has no button to click.
+
+**Browser suite §45 — written, NOT RUN here** (18 checks, 313 total): the chords compared against the
+palette opened with ⌘K rather than against a number in the test; disabled rows computed against `--dim`
+and live rows against `--text`; no row explaining itself with a native `title`; clicking a dimmed row
+leaving the layer count alone; a selection re-enabling Duplicate and Group; the agent's frame painted
+*on screen* after a hand-tool pan far from the document origin (measured as selection chrome near
+`--cv-sel`, the §43 technique — a fixed document coordinate would not survive that pan); the inspector
+agreeing the layer is the 393×852 preset; the reply wrapping and wearing `--muted` against the
+visitor's own voice; and an unmatched ask answering while the layer count stays put.
+
+**Numbers.** Unit suite **2100 checks, 0 failed** (2065 → 2100: +35). `tsc -b` clean; `vite build`
+clean and warning-free, the sheet at 97.83 kB (18.01 kB gzip). Drift moved **down**: `chrome.tsx`
+inline 51 → 50 (the agent pane's `style={{ marginLeft: 0 }}` became `.share.left`), workspace inline
+414 → 413, with no new raw `<button>`, no new `title=` and no new colour literal across two rebuilt
+panes — the rows stayed the recipe they were already in.
+
+**Still open after this round:** MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6, RW-U1, FR-U3/U4, and the
+`inspector.tsx` / `FigInspectorModal.tsx` drift rows. The LP family (LP-U1 … LP-U6) is now closed end to
+end.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

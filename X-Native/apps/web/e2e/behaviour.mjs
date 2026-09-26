@@ -2951,6 +2951,225 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 45. LP-U5 + LP-U6: the Tools pane tells the truth, the agent answers --------
+{
+  const p = await page();
+  await rows(p);
+  const navTo = async (label) => {
+    await p.evaluate((l) => {
+      const b = [...document.querySelectorAll(".rail .nav")].find((x) => x.textContent.trim() === l);
+      b?.click();
+    }, label);
+    await sleep(400);
+  };
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+  const cssColor = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      return c.fillStyle;
+    }, name);
+  const countNear = (rgb, tol) =>
+    p.evaluate((r, g, b, t2) => {
+      const c = document.querySelector("canvas");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol);
+
+  /* ── the Tools pane ── */
+  await navTo("Tools");
+  const pane = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".panel.left .presets button")];
+    return {
+      rows: rows.map((b) => {
+        const sc = b.querySelector(".sc");
+        const cs = getComputedStyle(b);
+        return {
+          label: (b.textContent || "").replace(sc?.textContent || "", "").trim(),
+          sc: sc?.textContent.trim() ?? null,
+          disabled: b.disabled,
+          color: cs.color,
+          cursor: cs.cursor,
+          hoverBg: cs.backgroundColor,
+          title: b.getAttribute("title"),
+        };
+      }),
+      muted: [...document.querySelectorAll(".panel.left .muted")].map((e) => e.textContent.trim()),
+      strays: [...document.querySelectorAll(".panel.left .presets [style]")].map((e) => e.getAttribute("style")),
+    };
+  });
+  t(`the Tools pane lists its commands with a chord each (${pane.rows.length} rows)`,
+    pane.rows.length === 7 && pane.rows.every((r) => !!r.sc && !!r.label));
+  t(`it does not advertise plugins (${pane.muted[0]})`,
+    !/plugin/i.test(pane.muted.join(" ")) && /palette|chord/i.test(pane.muted[0]));
+  t(`and no row carries an inline style (${pane.strays.length} stray)`, pane.strays.length === 0);
+
+  // The chords are the palette's own: open it and compare, rather than trusting
+  // either surface to keep a number straight.
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(500);
+  const palette = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".actions button, .palette button, [role=\"dialog\"] button")];
+    return rows
+      .map((b) => {
+        const sc = b.querySelector(".sc");
+        return { label: (b.textContent || "").replace(sc?.textContent || "", "").trim(), sc: sc?.textContent.trim() ?? "" };
+      })
+      .filter((r) => r.label);
+  });
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const mismatched = pane.rows
+    .map((r) => {
+      const said = palette.find((x) => x.label === r.label);
+      return said && said.sc !== r.sc ? `${r.label}: pane ${r.sc} vs palette ${said.sc}` : null;
+    })
+    .filter(Boolean);
+  t(`every chord matches the palette's (${mismatched.join("; ") || `${pane.rows.length} agree`})`,
+    mismatched.length === 0 && palette.length > 20);
+
+  // Disabled means dimmed, cursor-less and explained - and the explanation is
+  // text on the page, not a tooltip on a control that cannot receive the pointer.
+  const dim = await cssColor("--dim");
+  const ink = await cssColor("--text");
+  const disabled = pane.rows.filter((r) => r.disabled);
+  const enabled = pane.rows.filter((r) => !r.disabled);
+  t(`disabled rows are dimmed (${disabled.length} disabled, ${dim})`,
+    disabled.length > 0 && disabled.every((r) => r.color === dim && r.cursor === "default"));
+  t(`live rows are not (${enabled.length} enabled)`,
+    enabled.length > 0 && enabled.every((r) => r.color === ink));
+  t("none of them explains itself with a native title", pane.rows.every((r) => r.title === null));
+  const why = pane.muted.at(-1) || "";
+  t(`and the pane says why, in words (${why})`,
+    disabled.every((r) => why.includes(r.label)) && enabled.every((r) => !why.includes(r.label)));
+
+  // A dead row stays dead: clicking it changes nothing.
+  const rowsBefore = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  await navTo("File");
+  const dupBtn = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Duplicate"));
+    return b ? { disabled: b.disabled } : null;
+  });
+  await p.evaluate(() => {
+    [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Duplicate"))?.click();
+  });
+  await sleep(400);
+  const rowsAfter = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  t(`clicking a dimmed row does nothing (${rowsBefore} → ${rowsAfter} layers, disabled=${dupBtn?.disabled})`,
+    dupBtn?.disabled === true && rowsAfter === rowsBefore);
+
+  // Pick a layer and the selection-bound rows come back to life.
+  await p.evaluate(() => document.querySelector(".panel.left .tree [data-row-id]")?.dispatchEvent(
+    new MouseEvent("click", { bubbles: true })));
+  await sleep(400);
+  await navTo("Tools");
+  const after = await p.evaluate(() => ({
+    dup: [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Duplicate"))?.disabled ?? null,
+    grp: [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Group"))?.disabled ?? null,
+    why: [...document.querySelectorAll(".panel.left .muted")].map((e) => e.textContent.trim()).at(-1) || "",
+  }));
+  t(`a selection re-enables them (Duplicate ${after.dup}, Group ${after.grp})`,
+    after.dup === false && after.grp === false && !/needs a selection/.test(after.why));
+
+  /* ── the agent pane ── */
+  await navTo("Agent");
+  const greet = await p.evaluate(() => ({
+    turns: [...document.querySelectorAll(".agent-row")].map((r) => ({
+      who: r.getAttribute("data-who"),
+      text: (r.querySelector(".name")?.textContent || "").trim(),
+    })),
+  }));
+  t(`the agent opens by naming what it can do (${greet.turns[0]?.text})`,
+    greet.turns.length === 1 && greet.turns[0].who === "agent" &&
+    /frame/.test(greet.turns[0].text) && /rectangle/.test(greet.turns[0].text) &&
+    !/colo(?:u)?r/i.test(greet.turns[0].text));
+
+  const ask = async (text) => {
+    await p.evaluate((v) => {
+      const el = [...document.querySelectorAll(".panel.left .search input")]
+        .find((i) => i.getAttribute("aria-label") === "Ask the agent");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      el.focus();
+      set.call(el, v);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, text);
+    await sleep(200);
+    await p.keyboard.press("Enter");
+    await sleep(500);
+  };
+
+  // Pan somewhere else first: the old pane placed layers at a fixed document
+  // coordinate, so "added" routinely meant "added off-screen".
+  const selRgb = await tokenRgb("--cv-sel");
+  const idle = await countNear(selRgb, 24);
+  await p.keyboard.press("h");
+  await p.mouse.move(900, 500); await p.mouse.down();
+  await p.mouse.move(1250, 720, { steps: 8 }); await p.mouse.up();
+  await p.keyboard.press("v");
+  await sleep(400);
+  await ask("please add a frame");
+  const reply = await p.evaluate(() => {
+    const turns = [...document.querySelectorAll(".agent-row")].map((r) => ({
+      who: r.getAttribute("data-who"),
+      text: (r.querySelector(".name")?.textContent || "").trim(),
+      h: r.getBoundingClientRect().height,
+      nameColor: getComputedStyle(r.querySelector(".name")).color,
+      whiteSpace: getComputedStyle(r.querySelector(".name")).whiteSpace,
+    }));
+    return { turns, rows: document.querySelectorAll(".panel.left .tree").length };
+  });
+  const said = reply.turns.at(-1);
+  t(`a matched ask is answered with what happened (${said?.text})`,
+    said?.who === "agent" && /393 × 852/.test(said.text) && /centred/.test(said.text));
+  const chromePx = (await countNear(selRgb, 24)) - idle;
+  t(`and the frame it added is on screen where the user is looking (+${chromePx}px of selection chrome)`,
+    chromePx > 500);
+  const size = { w: await field(p, "W"), h: await field(p, "H") };
+  t(`the inspector agrees it is the preset (${size.w} × ${size.h})`, size.w === "393" && size.h === "852");
+
+  // A reply is a sentence, not a layer name: it wraps, and the two voices differ.
+  const mutedInk = await cssColor("--muted");
+  t(`the reply wraps instead of ellipsising (${Math.round(said?.h ?? 0)}px tall, ${said?.whiteSpace})`,
+    (said?.h ?? 0) > 30 && said?.whiteSpace === "normal");
+  t(`and the agent's voice is muted against the visitor's (${said?.nameColor} vs ${mutedInk})`,
+    said?.nameColor === mutedInk &&
+    reply.turns.filter((x) => x.who === "you").every((x) => x.nameColor !== mutedInk));
+
+  // An ask it cannot answer still gets an answer, and changes nothing.
+  const layersBefore = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  await navTo("File");
+  await navTo("Agent");
+  await ask("make me a sandwich");
+  const void_ = await p.evaluate(() => {
+    const turns = [...document.querySelectorAll(".agent-row")].map((r) => (r.querySelector(".name")?.textContent || "").trim());
+    return { last: turns.at(-1), count: turns.length };
+  });
+  await navTo("File");
+  const layersAfter = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  t(`an ask it cannot answer says so (${void_.last?.slice(0, 40)}…)`,
+    /nothing/i.test(void_.last || "") && /changed nothing/i.test(void_.last || ""));
+  t(`and changes nothing (${layersBefore} → ${layersAfter} layers)`, layersAfter === layersBefore);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

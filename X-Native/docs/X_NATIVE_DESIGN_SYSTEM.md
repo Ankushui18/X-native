@@ -38,7 +38,7 @@ already theme-split as literals); the rest match light because changing them is 
 has made with eyes on the canvas yet — **FR-U2b**, one sheet edit per role.
 
 Debt, measured and ratcheted (2026-09-26, colours re-measured after §4r): `src/ui/*.tsx` still
-carries **414 inline `style={{` objects, 131 quoted hex literals, 340 native `title=`, 363 raw
+carries **413 inline `style={{` objects, 131 quoted hex literals, 340 native `title=`, 363 raw
 `<button` and 49 raw `<select`** — `inspector.tsx` alone is 179/44/221/192/41. The colour row fell from
 195 when the three 2D surfaces were tokenised: `Canvas.tsx` 68 → 13 (all thirteen triaged as document
 ink), `Minimap.tsx` 4 → 0, `Rulers.tsx` 5 → 0. `src/ui/__tests__/drift.test.mjs` pins those per file and

@@ -441,7 +441,10 @@ interface PresetCategory {
   items: { name: string; w: number; h: number }[];
 }
 
-const PRESET_GROUPS: PresetCategory[] = [
+/** Frame presets, shared: the inspector's preset grid and the agent pane's
+ *  "add a frame" both place one of these, so the sizes and names stay in one
+ *  place (LP-U6 — the agent used to invent a 390x844 that matched nothing). */
+export const PRESET_GROUPS: PresetCategory[] = [
   {
     category: "Phone",
     icon: "phone",
