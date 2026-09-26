@@ -19,7 +19,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 9 | Grid / guides / rulers | ✅ done | G-000–G-007 (19 tests) |
 | 10 | Fill / color / gradient | ✅ done | P-001–P-010 (19 tests) |
 | 11 | Strokes (+ variable) | ✅ done | K-001–K-009 (55 tests) |
-| 12 | Effects / shadows / blur | … | |
+| 12 | Effects / shadows / blur | ✅ done | L-001–L-010 (51 tests) |
 | 13 | Images (place/crop/mask/export) | … | |
 | 14 | Typography (+ phantom controls) | … | |
 | 15 | Vector / pen (object vs edit mode) | … | |
@@ -390,3 +390,80 @@ and recolor paths untouched; selection outline excludes stroke weight.
 - Remove-stroke `/` and remove-fill `⌥/`: §26 (keyboard) to adjudicate.
 - Outlined dashes: engine outlines the path; whether Figma dices dashes into
   shapes on outline is unverified — left as is.
+
+## §12 — Effects / shadows / blur
+
+Figma refs: "Apply effects to layers" (all 3 chunks: 7 kinds, caps,
+per-kind settings, show-behind + its 4 conditions, spread kind-gate,
+hover previews, copy/paste/duplicate, reorder, layer + group render
+order, bg-blur fill rule + nested ignore, effect styles), "Apply blend
+modes" (chunk 0: blend targets incl. effects, pass-through vs normal,
+per-mode math). After: full suite green
+(934 + 64 + 46 + 63 + 49 + 92 + 19 + 19 + 55 + 51 new effect checks).
+
+### Fixed (shipped in the §12 effects commit on this branch)
+
+- L-001 — Noise and texture painted below inner shadows and strokes;
+  Figma stacks them on top (over strokes, glyphs and children). Fix: both
+  paint after children at the end of the layer, in row order, clipped to
+  the outline (stroke band for open paths).
+- L-002 — Only the first noise rendered, and paint ignored its colour;
+  the popover labelled density "Blur". Fix: every visible noise renders in
+  order with its own blend; colour row + Density/Size fields added (spread
+  = grain size); noise default colour is white, preserving prior output.
+- L-003 — Text and booleans rendered only the first drop shadow. Fix: one
+  native-shadow pass per visible drop; strokes stay shadowless (as text
+  already was). Text drops still composite Normal and ignore spread and
+  blend - the former matches Figma's kind gate, the latter two are native-
+  shadow platform limits.
+- L-004 — "Show behind transparent areas: off" only affected stroke-only
+  layers; a translucent fill let its own shadow show through. Fix: drops
+  on translucent fills paint through an even-odd inverse clip of the
+  footprint (`dropMaskNeeds` + `fillCompositeAlpha`), rotation-safe.
+- L-005 — Spread rendered on every kind; Figma only applies it on
+  rectangles, ellipses, frames and components (frames/components also need
+  clip + a visible fill; instances included as master renders). Fix:
+  `spreadApplies` gates both painters, and the Spread field hints where it
+  will not render. The value is kept, only the render ignored.
+- L-006 — Hovering an effect kind gave no canvas preview. Fix: engine
+  `previewEffect` (render-only, cleared on select/add/menu-leave) merged
+  into the paint list via `withPreviewEffect`, cap-aware; blur cache
+  bypassed for the previewed layer.
+- L-007 — ⌘D with an effect open duplicated the whole layer. Fix: capture-
+  phase ⌘D in the popover duplicates the effect next to the original
+  (cap-checked with toast).
+- L-008 — Background blur / glass with an opaque or missing fill silently
+  did nothing. Fix: row tooltip when the composite fill alpha is outside
+  0.10%-99.99% (`bgBlurSeesThrough`).
+- L-009 — A layer whose only fill was an additional paint cast no shadow
+  (`canShadow` read the scalar base only). Fix: shared `paintsAnyFill`
+  covers base, image and additional fills in the gate and ring choice.
+- L-010 — Noise/texture on lines and arrows clipped to the zero-area trace
+  and vanished. Fix: open paths clip to the stroke band.
+
+### Verified parity (traced, no fix needed)
+
+Effect caps 8/8/1/1/2/1/1 with counts + toasts; drag reorder (drop/inner
+render in row order); eye toggles; remove closes the popover; `+` opens the
+type menu; X/Y/fill+opacity/blur/spread settings; per-shadow blend;
+show-behind checkbox gated on the 4 documented conditions; shadow offsets
+rotation-invariant; ring shadows for stroke-only layers; spread-then-blur
+order; layer blur over the subtree (+raster cache); bg blur reads beneath
+before own paint, first only; inner below strokes, drops below fills;
+text-shadow via the text path; plus-darker documented canvas fallback.
+
+### Deferred / out of scope
+
+- Progressive blur, noise duo/multi palettes, texture radius + unclipped
+  mode, glass light/refraction/depth/dispersion/frost/splay (X glass is a
+  documented tint+blur simplification): model + render absent.
+- Copy/paste effect settings (⌘C/⌘V target ambiguity with layer paste).
+- Effect styles: §19 (with stroke color styles).
+- Group silhouette shadows (X paints the bounds rect for groups).
+- Normal-parent blend isolation (X composites inline; pass-through ==
+  normal) and blur-vs-noise row order (filter always wraps the composite).
+- Non-cacheable layer blur is per-op, not composite (groups, rotated,
+  blended, text); nested background blurs multiply instead of ignoring.
+- Text inner shadows render at box level, not glyph level.
+- Image-pixel transparency is not analysed for the drop mask (fillOpacity
+  only); translucent glyphs deepen slightly per extra text-shadow pass.

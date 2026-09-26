@@ -477,10 +477,93 @@ export function paintImageFill(
 }
 
 export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: number) {
+  paintDropShadowsMasked(ctx, n, z);
+}
+
+/**
+ * Whether the layer paints any fill at all: the scalar base fill, an image
+ * fill, or one of the additional paints in the stack. The drop-shadow gate
+ * and the ring-vs-silhouette choice both key off this, so a layer whose only
+ * fill is an additional paint still casts a shadow.
+ */
+export function paintsAnyFill(n: XNode): boolean {
+  if ((n.fills ?? []).some((p) => p.visible !== false)) return true;
+  if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) return true;
+  return n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow";
+}
+
+/**
+ * Figma only applies shadow spread on rectangles, ellipses, frames and
+ * components; instances render through their master so they keep it too.
+ * Frames and components additionally need clipped content and a visible
+ * fill, otherwise the value is kept but ignored on canvas.
+ */
+export function spreadApplies(n: XNode): boolean {
+  if (n.kind === "rect" || n.kind === "ellipse" || n.kind === "instance") return true;
+  if (n.kind !== "frame" && n.kind !== "component") return false;
+  if (n.overflow === "visible") return false;
+  return paintsAnyFill(n);
+}
+
+/**
+ * The alpha the layer's fills composite to, 0..1: additional paints stack
+ * over the scalar base, and a gradient's most transparent stop caps its
+ * layer. Used to decide whether a drop shadow needs masking (a translucent
+ * fill lets the shadow show through unless it is erased behind the layer)
+ * and whether a background blur has anything to show through.
+ */
+export function fillCompositeAlpha(n: XNode): number {
+  const stopMin = (stops?: GradientStop[]) => {
+    if (!stops?.length) return 1;
+    let m = 1;
+    for (const s of stops) m = Math.min(m, parseHex(s.color).a);
+    return m;
+  };
+  let t = 1;
+  const paints = (n.fills ?? []).filter((p) => p.visible !== false);
+  for (const p of paints) {
+    t *= 1 - Math.min(p.opacity ?? 1, parseHex(p.color).a, stopMin(p.stops));
+  }
+  if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
+    t *= 1 - (n.fillOpacity ?? 1);
+  } else if (n.fillVisible !== false && !!n.fill && !isNone(n.fill)) {
+    t *= 1 - Math.min(n.fillOpacity ?? 1, parseHex(n.fill).a, stopMin(n.gradientStops));
+  }
+  return 1 - t;
+}
+
+/**
+ * True when a drop shadow with "show behind transparent areas" off must be
+ * erased behind the layer: the layer paints a fill, but translucently, so
+ * the shadow would otherwise show through its own layer. Opaque layers and
+ * stroke-only layers (which already cast a ring) need no mask.
+ */
+export function dropMaskNeeds(n: XNode): boolean {
+  if (n.kind === "line" || n.kind === "arrow") return false;
+  if (!paintsAnyFill(n)) return false;
+  return fillCompositeAlpha(n) < 1;
+}
+
+/**
+ * Drop shadows with optional masking. `mask` carries what the masked path
+ * needs that the fast path does not: a re-trace of the outline (the caller
+ * owns the current path). Without `mask` every drop takes the fast path.
+ */
+export function paintDropShadowsMasked(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  z: number,
+  mask?: { trace: () => void },
+) {
   const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
+  const spreadOn = spreadApplies(n);
   for (const drop of drops) {
     const { r, g, b, a } = parseHex(drop.color);
     if (a <= 0) continue;
+    if (drop.showBehind !== true && dropMaskNeeds(n) && mask) {
+      paintMaskedDrop(ctx, n, z, drop, mask);
+      continue;
+    }
     ctx.save();
     // A shadow can carry its own blend mode; source-over (Normal) is the
     // default and needs no operation change.
@@ -500,36 +583,81 @@ export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: num
     // shadow is masked by what the layer paints. A layer with a fill paints
     // its whole outline, so it casts the same shadow either way - but a
     // stroke-only layer paints a ring, and that is the shadow it casts.
-    const paintsFill =
-      n.fillVisible !== false &&
-      !!n.fill &&
-      !isNone(n.fill) &&
-      n.kind !== "line" &&
-      n.kind !== "arrow";
+    // (A translucent fill is masked by inverse clip instead; see paintMaskedDrop.)
+    const paintsFill = paintsAnyFill(n);
     const ring =
       drop.showBehind !== true &&
       !paintsFill &&
       n.strokeVisible !== false &&
       n.strokeWidth > 0 &&
       !isNone(n.strokePaint);
+    const spread = spreadOn ? Math.max(0, drop.spread) : 0;
     if (ring) {
       ctx.lineJoin = "miter";
       ctx.lineCap = "butt";
-      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z) + Math.max(0, drop.spread) * 2 * z;
+      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z) + spread * 2 * z;
       ctx.strokeStyle = ctx.fillStyle;
       ctx.stroke();
     } else {
       ctx.fill();
-      if (drop.spread) {
+      if (spread) {
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
-        ctx.lineWidth = Math.max(0, drop.spread * 2) * z;
+        ctx.lineWidth = spread * 2 * z;
         ctx.strokeStyle = ctx.fillStyle;
         ctx.stroke();
       }
     }
     ctx.restore();
   }
+}
+
+/**
+ * One drop shadow masked by its own layer. The shape plus a huge rect clip
+ * even-odd to "everywhere except the layer's footprint", and the shadow
+ * paints into that region exactly like the fast path (same offset, blur,
+ * spread, blend). The cut runs along the outline the layer's own
+ * translucent fill re-covers afterwards, so no seam shows. Like the inner
+ * shadow's ring, this is pure live-canvas work - no offscreen tile, which is
+ * also why it stays correct under rotation.
+ */
+function paintMaskedDrop(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  z: number,
+  drop: { color: string; x: number; y: number; blur: number; spread: number; blend?: string },
+  mask: { trace: () => void },
+) {
+  const { r, g, b, a } = parseHex(drop.color);
+  ctx.save();
+  mask.trace();
+  ctx.rect(-1e6, -1e6, 2e6, 2e6);
+  ctx.clip("evenodd");
+  const op = canvasBlend(drop.blend);
+  if (op !== "source-over") ctx.globalCompositeOperation = op;
+  const blur = Math.max(0, drop.blur) * z;
+  if (blur) ctx.filter = `blur(${blur}px)`;
+  // Same counter-rotation as the fast path: Figma never rotates an effect
+  // with its layer.
+  const th = ((n.rotation || 0) * Math.PI) / 180;
+  const c = Math.cos(th);
+  const s = Math.sin(th);
+  ctx.translate((drop.x * c + drop.y * s) * z, (-drop.x * s + drop.y * c) * z);
+  ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+  // Re-trace the silhouette alone: the current path still holds the clip's
+  // rect, which must not paint.
+  ctx.beginPath();
+  mask.trace();
+  ctx.fill();
+  const spread = spreadApplies(n) ? Math.max(0, drop.spread) : 0;
+  if (spread) {
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.lineWidth = spread * 2 * z;
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 export function paintInnerShadows(
@@ -560,7 +688,9 @@ export function paintInnerShadows(
     // the shape with the shadow colour and then punched the shape back out,
     // which erased the layer's fill and whatever sat underneath it.
     ctx.beginPath();
-    const spread = Math.max(0, inner.spread) * z;
+    // Spread is kept on the effect but ignored on canvas for anything but
+    // rectangles, ellipses, frames and components.
+    const spread = (spreadApplies(n) ? Math.max(0, inner.spread) : 0) * z;
     if (box && spread > 0 && box.w > 0 && box.h > 0) {
       const cx = box.x + box.w / 2;
       const cy = box.y + box.h / 2;

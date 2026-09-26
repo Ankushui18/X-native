@@ -28,6 +28,31 @@ export function canAddEffect(effects: readonly Effect[], kind: EffectKind): bool
 }
 
 /**
+ * The effect list the canvas paints: the stored stack plus the type-menu
+ * hover preview, when one targets this layer and there is room for it.
+ * Render-only - the preview never enters history or the document.
+ */
+export function withPreviewEffect(
+  effects: readonly Effect[],
+  preview: { id: string; kind: EffectKind; effect: Effect } | null | undefined,
+  id: string,
+): readonly Effect[] {
+  if (!preview || preview.id !== id) return effects;
+  if (preview.effect.kind !== preview.kind) return effects;
+  if (!canAddEffect(effects, preview.kind)) return effects;
+  return [...effects, preview.effect];
+}
+
+/**
+ * A background blur (or glass, which reads the same beneath) only shows
+ * through a fill between 0.10% and 99.99% opacity: fully transparent shows
+ * nothing to blur through, fully opaque covers it.
+ */
+export function bgBlurSeesThrough(fillAlpha: number): boolean {
+  return fillAlpha >= 0.001 && fillAlpha <= 0.9999;
+}
+
+/**
  * Move an effect to another slot, when its row is dragged. The
  * row lands where it was dropped rather than swapping, matching the fill stack.
  */

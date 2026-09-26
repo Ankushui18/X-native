@@ -59,6 +59,7 @@ import {
   usesVariableWidth,
 } from "../engine/strokeModel";
 import {
+  bgBlurSeesThrough,
   canAddEffect,
   canShowBehindTransparent,
   countKind,
@@ -68,6 +69,7 @@ import {
   moveEffect,
   EFFECT_LIMITS,
 } from "./effectModel";
+import { fillCompositeAlpha, spreadApplies } from "../engine/paint";
 import {
   rotateAboutOrigin,
   SCALE_ANCHORS,
@@ -6008,6 +6010,7 @@ function EffectPopover({
   anchor,
   layer,
   onChange,
+  onDuplicate,
   onClose,
 }: {
   fx: Effect;
@@ -6016,6 +6019,7 @@ function EffectPopover({
    *  depends on the layer's own fills and strokes. */
   layer: XNode;
   onChange: (p: Partial<Effect>) => void;
+  onDuplicate: () => void;
   onClose: () => void;
 }) {
   const [blendOpen, setBlendOpen] = useState(false);
@@ -6028,14 +6032,22 @@ function EffectPopover({
     };
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      // ⌘D with an effect open duplicates the effect, not the layer.
+      // Capture phase: the app's own ⌘D (duplicate layer) would otherwise
+      // see the key first and clone the whole layer underneath.
+      if ((e.metaKey || e.ctrlKey) && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        e.stopPropagation();
+        onDuplicate();
+      }
     };
     window.addEventListener("mousedown", click);
-    window.addEventListener("keydown", key);
+    window.addEventListener("keydown", key, true);
     return () => {
       window.removeEventListener("mousedown", click);
-      window.removeEventListener("keydown", key);
+      window.removeEventListener("keydown", key, true);
     };
-  }, [onClose]);
+  }, [onClose, onDuplicate]);
 
   const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
   const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";
@@ -6058,12 +6070,35 @@ function EffectPopover({
           <Field label="Y" aria="Shadow Y" value={fx.y} onChange={(y) => onChange({ y })} />
         </div>
       )}
+      {fx.kind === "noise" && (
+        <ColorRow
+          title="Noise"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#ffffff", "#000000", "#00000040"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
       <div className="grid2">
-        {(shadow || blur || fx.kind === "noise") && (
+        {(shadow || blur) && (
           <Field label="Blur" aria="Blur" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
         )}
         {shadow && (
-          <Field label="Spread" aria="Spread" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+          <Field
+            label="Spread"
+            aria="Spread"
+            value={fx.spread}
+            onChange={(v) => onChange({ spread: v })}
+            hint={spreadApplies(layer) ? undefined : "Renders on rectangles, ellipses, frames and components"}
+          />
+        )}
+        {fx.kind === "noise" && (
+          <>
+            <Field label="Density" aria="Noise density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+            <Field label="Size" aria="Noise size" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+          </>
         )}
       </div>
       {fx.kind === "glass" && (
@@ -6160,8 +6195,15 @@ function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boo
   // kind, two noise rows and a single glass or texture, and
   // the menu says so instead of silently piling on more.
   const room = (kind: EffectKind) => canAddEffect(effects, kind);
+  // Hovering a kind previews it on the canvas; anything without room, or the
+  // pointer leaving the menu, clears the preview again.
+  const preview = (kind: EffectKind | null) => {
+    if (kind && room(kind)) engine.dispatch({ type: "previewEffect", id: n.id, kind });
+    else engine.dispatch({ type: "previewEffect", id: null });
+  };
   const addKind = (kind: EffectKind) => {
     openSection("effects");
+    engine.dispatch({ type: "previewEffect", id: null });
     if (!room(kind)) {
       toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
       setOpen(false);
@@ -6186,6 +6228,20 @@ function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boo
     setEditing(null);
     engine.dispatch({ type: "patch", id: n.id, patch: { effects: effects.filter((_, j) => j !== i) } });
   };
+  // ⌘D from the popover: the copy lands next to the original.
+  const duplicate = (i: number) => {
+    const fx = effects[i];
+    if (!fx) return;
+    if (!room(fx.kind)) {
+      toast(limitMessage(fx.kind, EFFECT_LIMITS[fx.kind] ?? 1));
+      return;
+    }
+    engine.dispatch({
+      type: "patch",
+      id: n.id,
+      patch: { effects: [...effects.slice(0, i + 1), { ...fx }, ...effects.slice(i + 1)] },
+    });
+  };
   return (
     <>
       <Section
@@ -6202,19 +6258,27 @@ function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boo
               disabled={locked}
               onClick={() => {
                 if (!effects.length) openSection("effects");
+                if (open) preview(null);
                 setOpen((v) => !v);
               }}
             >
               <Icon name="plus" size={14} />
             </button>
             {open && (
-              <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
+              <div
+                className="type-menu"
+                style={{ right: 8, top: 28, left: "auto", width: 180 }}
+                onMouseLeave={() => preview(null)}
+              >
                 {kinds.map((k) => (
                   <button
                     key={k.id}
                     disabled={!room(k.id)}
                     title={room(k.id) ? undefined : limitMessage(k.id, EFFECT_LIMITS[k.id] ?? 1)}
                     onClick={() => addKind(k.id)}
+                    onMouseEnter={() => preview(k.id)}
+                    onFocus={() => preview(k.id)}
+                    onBlur={() => preview(null)}
                   >
                     {k.label}
                     <span className="fx-count">
@@ -6231,9 +6295,15 @@ function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boo
           <div className="insp-pad">
             <div className="empty-add">
               <span className="muted">No effects</span>
-              <div className="empty-add-menu">
+              <div className="empty-add-menu" onMouseLeave={() => preview(null)}>
                 {kinds.map((k) => (
-                  <button key={k.id} onClick={() => addKind(k.id)}>
+                  <button
+                    key={k.id}
+                    onClick={() => addKind(k.id)}
+                    onMouseEnter={() => preview(k.id)}
+                    onFocus={() => preview(k.id)}
+                    onBlur={() => preview(null)}
+                  >
                     {k.label}
                   </button>
                 ))}
@@ -6286,7 +6356,12 @@ function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boo
                   cursor: "pointer",
                   color: "inherit",
                 }}
-                title={`${EFFECT_LABEL[fx.kind]} settings`}
+                title={
+                  (fx.kind === "background-blur" || fx.kind === "glass") &&
+                  !bgBlurSeesThrough(fillCompositeAlpha(n))
+                    ? "Needs a fill between 0.1% and 99.99% opacity to show through"
+                    : `${EFFECT_LABEL[fx.kind]} settings`
+                }
                 aria-label={`Edit ${EFFECT_LABEL[fx.kind]}`}
                 aria-expanded={editing?.i === i}
                 onClick={(e) => {
@@ -6325,6 +6400,7 @@ function Effects({ n, engine, locked }: { n: XNode; engine: Engine; locked?: boo
           anchor={editing.rect}
           layer={n}
           onChange={(p) => set(editing.i, p)}
+          onDuplicate={() => duplicate(editing.i)}
           onClose={() => setEditing(null)}
         />
       )}

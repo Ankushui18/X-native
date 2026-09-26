@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
+import type { Effect, Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveVariable } from "../engine/variables";
 import { prefersReducedMotion } from "./a11y";
-import { deepestFrame, find, findParent, hitTest, insideInstance, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
+import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
@@ -39,7 +39,8 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintsAnyFill } from "../engine/paint";
+import { withPreviewEffect } from "./effectModel";
 import { registerPenFinisher } from "./penDraft";
 import { clampZoom, normalizeWheelDelta, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
@@ -900,7 +901,16 @@ export function Canvas({
       const parentAlpha = ctx.globalAlpha;
       ctx.globalAlpha *= n.opacity;
       ctx.globalCompositeOperation = canvasBlend(n.blendMode);
-      const layerBlur = (n.effects ?? []).find((e) => e.kind === "layer-blur" && e.visible);
+      // The effect list this paint reads: the stored stack plus the type-menu
+      // hover preview when it targets this layer. Render-only - painters that
+      // take the node get a wrapper, so the document is never touched.
+      const previewFx = snap.previewEffect;
+      const fxList =
+        previewFx && previewFx.id === n.id
+          ? withPreviewEffect(n.effects ?? [], { ...previewFx, effect: defaultEffect(previewFx.kind) }, n.id)
+          : (n.effects ?? []);
+      const fxNode = { ...n, effects: [...fxList] };
+      const layerBlur = fxList.find((e) => e.kind === "layer-blur" && e.visible);
       if (layerBlur) ctx.filter = `blur(${Math.max(0, layerBlur.blur) * z}px)`;
       const sx = snap.panX + x * z;
       const sy = snap.panY + y * z;
@@ -923,7 +933,8 @@ export function Canvas({
         !n.flipV &&
         n.kind !== "text" &&
         ctx.globalCompositeOperation === "source-over" &&
-        !(n.effects ?? []).some((e) => e.visible && (e.kind === "background-blur" || e.kind === "glass")) &&
+        !fxList.some((e) => e.visible && (e.kind === "background-blur" || e.kind === "glass")) &&
+        !(previewFx && previewFx.id === n.id) &&
         !(n.fillType === "image" || (n.imageSrc && isNone(n.fill)));
       if (cacheable && layerBlur) {
         const pad = Math.ceil(Math.max(0, layerBlur.blur) * z * 3) + 2;
@@ -984,14 +995,27 @@ export function Canvas({
         else ctx.rect(sx, sy, sw, sh);
       };
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
-        const dropB = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
-        if (dropB) {
-          ctx.shadowColor = cssRgba(dropB.color);
-          ctx.shadowBlur = Math.max(0, dropB.blur) * z;
-          ctx.shadowOffsetX = dropB.x * z;
-          ctx.shadowOffsetY = dropB.y * z;
+        // Every visible drop gets its own pass over the union; the stroke
+        // paints shadowless afterwards, like a text stroke.
+        const dropBs = fxList.filter((e) => e.kind === "drop-shadow" && e.visible);
+        for (const dropB of dropBs.length ? dropBs : [undefined]) {
+          if (dropB) {
+            ctx.shadowColor = cssRgba(dropB.color);
+            ctx.shadowBlur = Math.max(0, dropB.blur) * z;
+            ctx.shadowOffsetX = dropB.x * z;
+            ctx.shadowOffsetY = dropB.y * z;
+          } else {
+            ctx.shadowColor = "transparent";
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+          }
+          paintBoolean(ctx, fxNode, x, y, snap);
         }
-        paintBoolean(ctx, n, x, y, snap);
+        ctx.shadowColor = "transparent";
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
         if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
           ctx.save();
           ctx.strokeStyle = cssRgba(n.strokePaint);
@@ -1088,7 +1112,7 @@ export function Canvas({
         ctx.stroke();
         ctx.restore();
         if (n.kind === "text" && edit?.id !== n.id) {
-          paintText(ctx, n, sx, sy, sw, sh, z);
+          paintText(ctx, fxNode, sx, sy, sw, sh, z);
         }
         if (n.kind === "frame" && n.overflow !== "visible") {
           round();
@@ -1098,9 +1122,7 @@ export function Canvas({
         ctx.restore();
         return;
       }
-      const bgBlur = (n.effects ?? []).find(
-        (e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible,
-      );
+      const bgBlur = fxList.find((e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible);
       if (bgBlur && sw > 1 && sh > 1) {
         try {
           ctx.save();
@@ -1115,9 +1137,9 @@ export function Canvas({
       const canShadow =
         n.kind !== "text" &&
         (!!n.imageSrc ||
-          (n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") ||
+          paintsAnyFill(n) ||
           (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)));
-      if (canShadow) paintDropShadows(ctx, n, z);
+      if (canShadow) paintDropShadowsMasked(ctx, fxNode, z, { trace: traceShape });
       if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
         let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
         if (n.imageSrc && !im) {
@@ -1188,15 +1210,8 @@ export function Canvas({
           ctx.restore();
         }
       }
-      const noise = (n.effects ?? []).find((e) => e.kind === "noise" && e.visible);
-      if (noise) {
-        ctx.save();
-        const op = canvasBlend(noise.blend);
-        if (op !== "source-over") ctx.globalCompositeOperation = op;
-        paintNoise(ctx, sx, sy, sw, sh, noise.blur);
-        ctx.restore();
-      }
-      const glass = (n.effects ?? []).find((e) => e.kind === "glass" && e.visible);
+      // Noise and texture paint last (after children), over everything else.
+      const glass = fxList.find((e) => e.kind === "glass" && e.visible);
       if (glass) {
         ctx.save();
         ctx.clip();
@@ -1205,13 +1220,11 @@ export function Canvas({
         ctx.fill();
         ctx.restore();
       }
-      const texture = (n.effects ?? []).find((e) => e.kind === "texture" && e.visible);
-      if (texture) paintTexture(ctx, sx, sy, sw, sh, texture.blur || 16, texture.spread || 4);
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
-      paintInnerShadows(ctx, n, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
+      paintInnerShadows(ctx, fxNode, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
       if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
@@ -1414,7 +1427,7 @@ export function Canvas({
       }
       paintExtraStrokes(ctx, n, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
       if (n.kind === "text" && edit?.id !== n.id) {
-        paintText(ctx, n, sx, sy, sw, sh, z);
+        paintText(ctx, fxNode, sx, sy, sw, sh, z);
       }
       if (n.kind === "frame" && n.overflow !== "visible") {
         round();
@@ -1533,6 +1546,34 @@ export function Canvas({
         paint(ch, x, y);
       }
       while (maskOn--) ctx.restore();
+      // Noise and texture sit on top of everything the layer paints -
+      // strokes, glyphs and children included - in row order. The clip keeps
+      // them inside the outline; open paths clip to the stroke's band instead
+      // of their zero-area trace.
+      const topFx = fxList.filter((e) => (e.kind === "noise" || e.kind === "texture") && e.visible);
+      if (topFx.length) {
+        ctx.save();
+        ctx.beginPath();
+        if (n.kind === "line" || n.kind === "arrow") {
+          const pad = Math.max(1, ((n.strokeWidth || 1) * z) / 2);
+          ctx.rect(sx - pad, sy - pad, sw + pad * 2, sh + pad * 2);
+        } else {
+          traceShape();
+        }
+        ctx.clip();
+        for (const e of topFx) {
+          if (e.kind === "noise") {
+            ctx.save();
+            const op = canvasBlend(e.blend);
+            if (op !== "source-over") ctx.globalCompositeOperation = op;
+            paintNoise(ctx, sx, sy, sw, sh, e.blur, e.spread, e.color);
+            ctx.restore();
+          } else {
+            paintTexture(ctx, sx, sy, sw, sh, e.blur || 16, e.spread || 4);
+          }
+        }
+        ctx.restore();
+      }
       ctx.restore();
     };
     const present = snap.presentFrame ? find(root, snap.presentFrame) : null;
@@ -6029,13 +6070,18 @@ function paintNoise(
   sw: number,
   sh: number,
   density: number,
+  size = 1,
+  color = "#ffffff",
 ) {
   const d = Math.max(0, Math.min(1, density / 100));
   if (d <= 0 || sw < 1 || sh < 1) return;
+  const { r: cr, g: cg, b: cb, a: ca } = parseHex(color);
+  if (ca <= 0) return;
+  const s = Math.max(1, Math.round(size) || 1);
   ctx.save();
   ctx.clip();
-  ctx.fillStyle = "#ffffff";
-  ctx.globalAlpha = 0.35 * d;
+  ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+  ctx.globalAlpha = 0.35 * d * ca;
   const count = Math.min(4000, Math.floor((sw * sh * d) / 18));
   const seed = Math.floor(sx * 13 + sy * 17);
   for (let i = 0; i < count; i++) {
@@ -6043,7 +6089,7 @@ function paintNoise(
     const r = h - Math.floor(h);
     const h2 = Math.sin(seed * 4.1414 + i * 19.19) * 23421.631;
     const r2 = h2 - Math.floor(h2);
-    ctx.fillRect(sx + r * sw, sy + r2 * sh, 1, 1);
+    ctx.fillRect(sx + r * sw, sy + r2 * sh, s, s);
   }
   ctx.restore();
 }
@@ -6525,39 +6571,48 @@ function paintText(
   let y0 = sy;
   if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
   if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
-  const drop = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
-  if (drop) {
+  const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
+  const setDrop = (drop?: Effect) => {
+    if (!drop) {
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      return;
+    }
     const { r, g, b, a } = parseHex(drop.color);
     ctx.shadowColor = `rgba(${r},${g},${b},${a})`;
     ctx.shadowBlur = Math.max(0, drop.blur) * z;
     ctx.shadowOffsetX = drop.x * z;
     ctx.shadowOffsetY = drop.y * z;
-  }
-  let ty = y0;
+  };
   const fillOn = n.fillVisible !== false && !isNone(n.fill);
   const strokeOn = n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint);
-  const paintLine = (str: string, x: number, y: number, maxW?: number) => {
-    if (fillOn) {
-      ctx.save();
-      ctx.fillStyle = textFill;
-      ctx.globalAlpha *= n.fillOpacity ?? 1;
-      ctx.fillText(str, x, y, maxW);
-      ctx.restore();
-    }
-    if (strokeOn) {
-      ctx.save();
-      ctx.shadowColor = "transparent";
-      ctx.strokeStyle = cssRgba(n.strokePaint);
-      ctx.globalAlpha *= n.strokeOpacity ?? 1;
-      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
-      ctx.strokeText(str, x, y, maxW);
-      ctx.restore();
-    }
+  const paintFillLine = (str: string, x: number, y: number, maxW?: number) => {
+    if (!fillOn) return;
+    ctx.save();
+    ctx.fillStyle = textFill;
+    ctx.globalAlpha *= n.fillOpacity ?? 1;
+    ctx.fillText(str, x, y, maxW);
+    ctx.restore();
   };
+  const paintStrokeLine = (str: string, x: number, y: number, maxW?: number) => {
+    if (!strokeOn) return;
+    ctx.save();
+    ctx.shadowColor = "transparent";
+    ctx.strokeStyle = cssRgba(n.strokePaint);
+    ctx.globalAlpha *= n.strokeOpacity ?? 1;
+    ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+    ctx.strokeText(str, x, y, maxW);
+    ctx.restore();
+  };
+  const paintRows = (mode: "fill" | "stroke", decorate: boolean) => {
+  let ty = y0;
   lines.forEach((row) => {
     const line = row.line;
     const left = sx + row.lead;
     const innerW = Math.max(0, sw - row.lead);
+    const paintLine = mode === "fill" ? paintFillLine : paintStrokeLine;
     if (row.marker) paintLine(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
     const tx =
       n.textAlign === "center"
@@ -6590,7 +6645,7 @@ function paintText(
     } else {
       paintLine(line, tx, ty, wrap ? innerW : undefined);
     }
-    if (fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
+    if (decorate && fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
       const textWidth = measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
       const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
       const x0 = n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
@@ -6607,10 +6662,18 @@ function paintText(
     }
     ty += lh + (row.lastInPara ? paraGap : 0);
   });
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
+  };
+  // Every visible drop gets its own pass: the glyphs repaint identically, so
+  // N shadows accumulate behind one set of glyphs. Native shadows cannot
+  // blend independently, so text shadows always composite Normal; spread
+  // stays ignored on text, matching Figma's kind gate.
+  const passes = drops.length ? drops : [undefined];
+  for (const d of passes) {
+    setDrop(d);
+    paintRows("fill", false);
+  }
+  setDrop(undefined);
+  paintRows("stroke", true);
 }
 
 function walkInteractions(

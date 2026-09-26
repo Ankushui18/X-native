@@ -4,6 +4,7 @@ import type {
   Command,
   ComponentMaster,
   Effect,
+  EffectKind,
   Engine,
   NodeKind,
   Page,
@@ -744,6 +745,7 @@ interface Internal {
   selectedGuide: string | null;
   /** Hover preview of a stroke position (inspector → canvas). */
   previewStroke: { id: string; align: StrokeAlign } | null;
+  previewEffect: { id: string; kind: EffectKind } | null;
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -952,6 +954,7 @@ export class MemoryEngine implements Engine {
       booleanPreview: null,
       selectedGuide: null,
       previewStroke: null,
+      previewEffect: null,
     };
     this.relayout();
     this.snapCache = this.build();
@@ -1255,6 +1258,8 @@ export class MemoryEngine implements Engine {
       "selectGuide",
       // Stroke-position hover preview; render-only by design.
       "previewStroke",
+      // Effect-kind hover preview; render-only by design.
+      "previewEffect",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
@@ -1394,6 +1399,7 @@ export class MemoryEngine implements Engine {
       selection: this.state.selection,
       selectedGuide: this.state.selectedGuide,
       previewStroke: this.state.previewStroke,
+      previewEffect: this.state.previewEffect,
       treeRev: this.state.treeRev,
       tool: this.state.tool,
       zoom: this.state.zoom,
@@ -1446,6 +1452,7 @@ export class MemoryEngine implements Engine {
         s.booleanPreview = null;
         s.selectedGuide = null;
         s.previewStroke = null;
+        s.previewEffect = null;
         this.justDuplicated = false;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
@@ -1458,6 +1465,9 @@ export class MemoryEngine implements Engine {
         break;
       case "previewStroke":
         s.previewStroke = cmd.id && cmd.align ? { id: cmd.id, align: cmd.align } : null;
+        break;
+      case "previewEffect":
+        s.previewEffect = cmd.id && cmd.kind ? { id: cmd.id, kind: cmd.kind } : null;
         break;
       case "setTool":
         s.tool = cmd.tool;
@@ -4062,7 +4072,9 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
         ? "#ffffff80"
         : kind === "texture"
           ? "#00000020"
-          : "#000000",
+          : kind === "noise"
+            ? "#ffffff"
+            : "#000000",
     x: 0,
     y: shadow ? 4 : 0,
     blur:
