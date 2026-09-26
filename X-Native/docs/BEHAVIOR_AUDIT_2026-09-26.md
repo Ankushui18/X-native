@@ -27,7 +27,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 17 | Components | ✅ done | C-001–C-013 (55 tests) |
 | 18 | Variables / tokens / styles | ✅ done | VR-001–VR-014 (32 tests) |
 | 19 | Auto Layout UX | ✅ done | AL-001–AL-014 (42 tests) |
-| 20 | Contextual inspector | … | |
+| 20 | Contextual inspector | ✅ done | IN-001–IN-009 (40 tests) |
 | 21 | Context toolbar | … | |
 | 22 | Popups / popovers / menus | … | |
 | 23 | Prototyping | … | |
@@ -1036,3 +1036,96 @@ per-frame, reorder/delete-in-instance rules, duplicate placement).
 - Per-frame stroke include/exclude toggle (X implements the
   Figma default — included — with no toggle surfaced).
 - `suggestLayout` stroke-awareness (suggestion heuristic only).
+
+## §20 — Contextual inspector
+
+Evidence: Figma “Design, prototype, and explore layer properties”
+(360039832014, chunks 0–1: nothing-selected = local styles/
+variables + canvas background + export page; layer-selected
+controls; view-only tabs out of scope) and “Adjust alignment,
+rotation, position, and dimensions” (360039956914, chunks 0–2:
+single→parent / multi→each-other / ⇧-align group-to-parent with
+cross-frame per-frame groups; ⌥WASD/VH table; distribute multi
+retains outermost; tidy 1D most-common spacing / 2D top-left
+grid; mode gap display; X/Y = bounds top-left; nudge 1/10 + ⇧;
+aspect-lock canvas modifiers + proportional min/max; rotation
+±180 with ⇧-15 snap; flip ⇧H/V + right-click menu; order
+⌘]/[ + ⌘⌥]/[; equations incl `Mixed+100` apply to all selected
+layers; scrub label + ⌥-on-input with 2x/1x/1/2/1/4 vertical
+speeds).
+
+### Fixed (shipped in the §20 inspector commit on this branch)
+
+- IN-001 ⇧-align moves the selection as one rigid group
+  (was per-layer to each own parent): members sharing a frame
+  take the union box's delta, cross-frame members group per
+  frame against each own parent; locked layers and instance
+  members sit out before the union is measured. ⌥⇧+WASD is the
+  keyboard twin of ⇧-click (was unbound; ⌥⇧H/V previously
+  fell through to flip on Windows/Linux only).
+- IN-002 `distribute` and `tidyUp` measure in world coordinates
+  (were local, so cross-frame members shared no span), refuse
+  deep-locked layers and instance members like `move` (were
+  direct-locked-only), and round only with the pixel grid on
+  (tidy-up rounded unconditionally, distribute never did).
+- IN-003 Tidy-up repeats the most common gap (was forced even,
+  clamped at 0): a strict mode steps the row from its anchored
+  first layer, ties fall back to the even split; a grid
+  (overlap on both axes) bands rows by Y overlap and steps
+  columns from the selection's top-left, which never moves,
+  keeping within-row stagger; single rows/columns pick their
+  axis by overlap, scatter by major span.
+- IN-004 Position X/Y, W/H and rotation edit a multi-selection
+  together (were first-layer-only): the fields show Mixed while
+  the layers disagree, a plain number lands on every mover,
+  equations evaluate once per layer (`evalFieldMany`,
+  all-or-nothing), scrubbing shifts every mover by the same
+  delta, and each layer keeps its own aspect lock, ratio,
+  rotation origin and text hug refit. Opacity and the type
+  metrics stay first-layer.
+- IN-005 Rotation wraps to ±180 on every write: new central
+  `wrapRotationDeg`, applied inside `rotateAboutOrigin` (panel
+  single + multi) and in the ungroup inherit (was `% 360`,
+  spilling into [0, 360)); the canvas single-drag wrap is now
+  idempotent through the same helper.
+- IN-006 Front/back accept ⌥ as well as ⇧ (the shortcut sheet
+  advertises ⌘⌥]/[ while only ⌘⇧]/[ was bound; the Arrange
+  menu shows ⇧ — both chords now reach the command).
+- IN-007 Nothing-selected exposes local styles: a “Local styles”
+  row under Background bridges to the left panel's Variables
+  tab (was background + pixel grid + export only).
+- IN-008 Scrub speed follows pointer height: ×2 above the start
+  row, ×1/2 then ×1/4 below, with a toast naming the speed on
+  change (was uniform 1 unit/px, ⇧×10 kept orthogonal).
+- IN-009 The panel's Scale-all skips deep-locked layers (was
+  direct `locked` only, against its own comment).
+
+### Verified parity (traced, no fix needed)
+
+- Single→parent align incl. grid-cell and stack-axis retargets;
+  multi-align to selection bounds; ⌥WASD/HV; ⌃⌥H/V distribute;
+  ⌃⌥⇧T tidy; distribute keeps outermost, needs three.
+- Nudge 1/10 + ⇧; aspect-lock ⇧-force / ⌃-release canvas
+  modifiers; proportional min/max under lock; ⌥R origin target;
+  single-rotate ±180 wrap + ⇧-15 snap; flip ⇧H/V + context menu
+  with locked/member guards; SelectionColors multi-paint story.
+- Field arithmetic incl. `Mixed`/`x` substitution, live absolute
+  typing, commit-on-blur/Enter, ⌥-drag scrub from the input.
+- PageDesign background + pixel grid + page export; Design/
+  Prototype tab gates; boolean-member section locks.
+
+### Deferred / out of scope
+
+- Engine `patch` still applies to locked layers (move/resize/
+  reorder guard; the panel neither disables nor refuses) —
+  needs a locked-key whitelist (unlock/visibility/rename stay
+  legal) plus per-section UI disabling; new §20 code paths
+  exclude locked layers themselves so the hole does not widen.
+- X/Y show the origin on rotated layers (Figma shows the
+  bounds top-left); opacity + type metrics stay first-layer on
+  multi-select; sizing label-click cycles the first layer only.
+- Rotation sign convention vs Figma's “+=counter-clockwise”
+  unverified headless; flow-child distribute/tidy (layout snaps
+  raw moves back, same as multi-align); multi paint-stack
+  editing beyond SelectionColors; tidy gap readout (“8 · 24”)
+  has no X surface.

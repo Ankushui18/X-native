@@ -43,11 +43,11 @@ import type {
   ComponentMaster,
 } from "../engine/types";
 import type { Modifier } from "../engine/modifierStack";
-import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
+import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, isEffectivelyLocked, isInstanceMember, worldPos } from "../engine/memory";
 import { isAlias, resolveVariable } from "../engine/variables";
 import { lintDocument, type LintFix, type LintIssue } from "../engine/lint";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
-import { evalField, hasExpression } from "./fieldExpr";
+import { evalField, evalFieldMany, hasExpression } from "./fieldExpr";
 import {
   SIDES,
   isBranchingNetwork,
@@ -71,6 +71,7 @@ import {
 } from "./effectModel";
 import { fillCompositeAlpha, spreadApplies } from "../engine/paint";
 import {
+  parentAlignDelta,
   rotateAboutOrigin,
   SCALE_ANCHORS,
   SCALE_FACTORS,
@@ -670,6 +671,17 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           }
           onVisible={(v) => engine.dispatch({ type: "patch", id: root.id, patch: { fillVisible: v } })}
         />
+      </div>
+      <div className="hr" />
+      <div className="h-row">
+        <h3>Local styles</h3>
+      </div>
+      <div className="insp-pad">
+        {/* With nothing selected the file's local styles and variables live
+            in the left panel's Variables tab; this row is the bridge there. */}
+        <button className="link" onClick={() => engine.dispatch({ type: "setLeftTab", tab: "tokens" })}>
+          Open variables &amp; styles
+        </button>
       </div>
       <div className="hr" />
       <div className="h-row">
@@ -3114,7 +3126,7 @@ function Design({
     const root = snap.pages[snap.page].root;
     const picked = snap.selection
       .map((id) => find(root, id))
-      .filter((m): m is XNode => !!m && !m.locked);
+      .filter((m): m is XNode => !!m && !isEffectivelyLocked(root, m.id));
     if (!picked.length) {
       toast("Nothing to scale · the selection is empty or locked");
       return;
@@ -3203,6 +3215,76 @@ function Design({
     if (key === "fontSize" || key === "letterSpacing" || key === "lineHeight" || key === "paragraphSpacing")
       refitHug({ [key]: next });
   };
+  // A multi-selection edits position, size and rotation together: the fields
+  // show Mixed while the layers disagree, and a commit applies to every layer
+  // that may move — locked layers and instance members sit out, the same pair
+  // the engine's `move` refuses. Each layer keeps its own aspect lock, ratio,
+  // rotation origin and hug refit; opacity and the type metrics stay first-layer.
+  const dRoot = snap.pages[snap.page].root;
+  const selNodes = snap.selection
+    .map((id) => find(dRoot, id))
+    .filter((m): m is XNode => !!m);
+  const movers =
+    selNodes.length > 1
+      ? selNodes.filter((m) => !isEffectivelyLocked(dRoot, m.id) && !isInstanceMember(dRoot, m.id))
+      : [];
+  const multiKey = (key: "x" | "y" | "w" | "h" | "rotation"): number[] =>
+    movers.map((m) => (key === "rotation" ? (m.rotation ?? 0) : m[key]));
+  const multiMixed = (key: "x" | "y" | "w" | "h" | "rotation"): string | undefined => {
+    if (!multi) return undefined;
+    const all = selNodes.map((m) => (key === "rotation" ? (m.rotation ?? 0) : m[key]));
+    return new Set(all).size > 1 ? "Mixed" : undefined;
+  };
+  const numMany = (key: "x" | "y" | "w" | "h" | "rotation", vals: number[]) => {
+    if (!movers.length) return;
+    engine.dispatch({ type: "begin" });
+    movers.forEach((m, i) => {
+      const v = vals[i];
+      if (v == null || !Number.isFinite(v)) return;
+      if (key === "x" || key === "y") {
+        engine.dispatch({
+          type: "move",
+          ids: [m.id],
+          dx: key === "x" ? v - m.x : 0,
+          dy: key === "y" ? v - m.y : 0,
+        });
+        return;
+      }
+      if (key === "w" || key === "h") {
+        let w = key === "w" ? v : m.w;
+        let h = key === "h" ? v : m.h;
+        if (snap.tool === "scale" && m.w > 0 && m.h > 0) {
+          const box = sizeKeepingRatio(
+            { x: m.x, y: m.y, w: m.w, h: m.h },
+            key === "w" ? { w: v } : { h: v },
+          );
+          w = box.w;
+          h = box.h;
+        } else if (m.aspectLocked) {
+          const ratio =
+            m.aspectRatio && m.aspectRatio > 0 ? m.aspectRatio : m.w > 0 && m.h > 0 ? m.h / m.w : 1;
+          if (key === "w") h = Math.max(1, v * ratio);
+          else w = Math.max(1, v / ratio);
+        }
+        engine.dispatch({ type: "resize", id: m.id, x: m.x, y: m.y, w, h });
+        if (key === "w") refitHugFor(m, { w, sizingW: "fixed" }, { h: m.sizingH === "hug" });
+        else refitHugFor(m, { h, sizingH: "fixed" }, { w: m.sizingW === "hug" });
+        return;
+      }
+      // rotateAboutOrigin wraps to ±180, so a typed 190 lands on -170.
+      const turned = rotateAboutOrigin(
+        { x: m.x, y: m.y, w: m.w, h: m.h, rotation: m.rotation ?? 0 },
+        m.rotOrigin ?? [0.5, 0.5],
+        v,
+      );
+      engine.dispatch({
+        type: "patch",
+        id: m.id,
+        patch: { x: turned.x, y: turned.y, rotation: turned.rotation },
+      });
+    });
+    engine.dispatch({ type: "end" });
+  };
   const kindLabel = n.imageSrc
     ? "Image"
     : n.isComponent
@@ -3236,12 +3318,14 @@ function Design({
   /* A min or max is a limit the hugging axes have to be measured against: each
    * keystroke clamps the box, and without a re-fit a limit typed as "200" would
    * leave the width at the "2" the first keystroke clamped it to. */
-  const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
-    if (n.kind !== "text") return;
-    const fit = hugSize({ ...n, ...over } as XNode, n.text, axes);
+  const refitHugFor = (m: XNode, over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
+    if (m.kind !== "text") return;
+    const fit = hugSize({ ...m, ...over } as XNode, m.text, axes);
     if (fit.w === undefined && fit.h === undefined) return;
-    patch(fit);
+    engine.dispatch({ type: "patch", id: m.id, patch: fit });
   };
+  const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) =>
+    refitHugFor(n, over, axes);
   // An aspect lock links the min/max limits too: typing one sets the
   // proportional opposite alongside it, as Figma does. Clearing a limit only
   // clears the one typed.
@@ -3773,8 +3857,22 @@ function Design({
           </div>
         </div>
         <div className="grid3">
-          <Field label="X" value={x} onChange={(v) => num("x", v)} />
-          <Field label="Y" value={y} onChange={(v) => num("y", v)} />
+          <Field
+            label="X"
+            value={x}
+            onChange={(v) => num("x", v)}
+            mixed={multiMixed("x")}
+            values={multi ? multiKey("x") : undefined}
+            onChangeMany={multi ? (vs) => numMany("x", vs) : undefined}
+          />
+          <Field
+            label="Y"
+            value={y}
+            onChange={(v) => num("y", v)}
+            mixed={multiMixed("y")}
+            values={multi ? multiKey("y") : undefined}
+            onChangeMany={multi ? (vs) => numMany("y", vs) : undefined}
+          />
           <button
             className={`icon-btn${conOpen ? " on" : ""}`}
             title="Constraints"
@@ -3782,7 +3880,15 @@ function Design({
           >
             <Icon name="constraints" size={14} />
           </button>
-          <Field icon="rotate" aria="Rotation" value={n.rotation} onChange={(v) => num("rotation", v)} />
+          <Field
+            icon="rotate"
+            aria="Rotation"
+            value={n.rotation}
+            onChange={(v) => num("rotation", v)}
+            mixed={multiMixed("rotation")}
+            values={multi ? multiKey("rotation") : undefined}
+            onChangeMany={multi ? (vs) => numMany("rotation", vs) : undefined}
+          />
           <div className="seg icons">
             <button
               title="Flip horizontal"
@@ -3916,6 +4022,9 @@ function Design({
             hintNote={hugNote("width")}
             value={n.w}
             onChange={(v) => num("w", v)}
+            mixed={multiMixed("w")}
+            values={multi ? multiKey("w") : undefined}
+            onChangeMany={multi ? (vs) => numMany("w", vs) : undefined}
             onLabelClick={() => {
               const sizingW = cycleSizing(n.sizingW);
               if (n.kind === "text") setSizing(sizingW, n.sizingH);
@@ -3929,6 +4038,9 @@ function Design({
             hintNote={hugNote("height")}
             value={n.h}
             onChange={(v) => num("h", v)}
+            mixed={multiMixed("h")}
+            values={multi ? multiKey("h") : undefined}
+            onChangeMany={multi ? (vs) => numMany("h", vs) : undefined}
             onLabelClick={() => {
               const sizingH = cycleSizing(n.sizingH);
               if (n.kind === "text") setSizing(n.sizingW, sizingH);
@@ -7453,11 +7565,19 @@ function Field({
   token,
   disabled,
   disabledTitle,
+  values,
+  onChangeMany,
 }: {
   label?: string;
   icon?: IconName;
   value: number;
   onChange: (v: number) => void;
+  /** Per-layer currents for a multi-selection. With `onChangeMany` the draft
+   *  evaluates once per layer — a plain number lands on every layer, `+10`
+   *  adds 10 to each — and scrubbing shifts every layer by the same delta. */
+  values?: number[];
+  /** Applies one committed number per entry of `values`, in order. */
+  onChangeMany?: (vals: number[]) => void;
   hint?: string;
   /** Why the hint is what it is, e.g. a hug that a filling child turned into a
    *  Fixed frame. Shown on the label, next to the value. */
@@ -7486,7 +7606,29 @@ function Field({
   // Reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
   // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
   // commit evaluates, so typing `12/` mid-expression does not move the layer.
+  // Over a multi-selection the same draft evaluates once per layer, each
+  // against its own current value, so `Mixed+100` adds 100 to every layer.
   const commit = () => {
+    if (onChangeMany && values) {
+      const word = token?.[draft.trim().toLowerCase()];
+      if (word != null) {
+        onChangeMany(values.map(() => word));
+        setDraft(fmt(word));
+        return;
+      }
+      const parsed = evalFieldMany(draft, values);
+      if (parsed) {
+        onChangeMany(parsed);
+        setDraft(
+          parsed.length > 0 && parsed.every((p) => p === parsed[0])
+            ? fmt(parsed[0])
+            : (mixed ?? fmt(value)),
+        );
+      } else {
+        setDraft(mixed ?? fmt(value));
+      }
+      return;
+    }
     const word = token?.[draft.trim().toLowerCase()];
     const parsed =
       word != null
@@ -7504,20 +7646,36 @@ function Field({
     }
   };
   // Dragging a field's label or icon scrubs its value, 1 unit per pixel and
-  // 10 with ⇧ held. A press that never moves stays a click, so labels that
-  // cycle a mode on click keep working. The burst coalescer in the engine
-  // folds the drag's patches into one undo step.
+  // 10 with ⇧ held. Sliding the pointer above the start row runs at ×2 for
+  // long hauls, below it at ×1/2 then ×1/4 for fine work; a toast names the
+  // speed on every change. A press that never moves stays a click, so labels
+  // that cycle a mode on click keep working. The burst coalescer in the
+  // engine folds the drag's patches into one undo step.
   const startScrub = (e: React.MouseEvent) => {
     if (disabled || e.button !== 0) return;
     e.preventDefault();
     const startX = e.clientX;
+    const startY = e.clientY;
     const startV = value;
+    const startVs = values;
     let dragging = false;
+    let speed = 1;
     const onMove = (ev: MouseEvent) => {
       const dx = ev.clientX - startX;
       if (!dragging && Math.abs(dx) < 3) return;
       dragging = true;
-      onChange(Math.round((startV + dx * (ev.shiftKey ? 10 : 1)) * 100) / 100);
+      const dy = ev.clientY - startY;
+      const nextSpeed = dy < -48 ? 2 : dy < 40 ? 1 : dy < 120 ? 0.5 : 0.25;
+      if (nextSpeed !== speed) {
+        speed = nextSpeed;
+        toast(`Scrub speed ×${speed}`);
+      }
+      const rate = (ev.shiftKey ? 10 : 1) * speed;
+      if (onChangeMany && startVs) {
+        onChangeMany(startVs.map((sv) => Math.round((sv + dx * rate) * 100) / 100));
+      } else {
+        onChange(Math.round((startV + dx * rate) * 100) / 100);
+      }
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
@@ -7538,7 +7696,7 @@ function Field({
     >
       {icon ? (
         <span
-          title={disabled && disabledTitle ? disabledTitle : `${aria ?? label ?? icon} · drag to scrub (⇧ = ×10)`}
+          title={disabled && disabledTitle ? disabledTitle : `${aria ?? label ?? icon} · drag to scrub (⇧ = ×10, ↑↓ = speed)`}
           onMouseDown={startScrub}
           style={disabled ? undefined : { cursor: "ew-resize", display: "inline-flex" }}
         >
@@ -7549,7 +7707,7 @@ function Field({
           title={
             disabled && disabledTitle
               ? disabledTitle
-              : `${hint ? `${label} · ${hintNote ?? hint}` : (label ?? "")}${disabled ? "" : " · drag to scrub (⇧ = ×10)"}`
+              : `${hint ? `${label} · ${hintNote ?? hint}` : (label ?? "")}${disabled ? "" : " · drag to scrub (⇧ = ×10, ↑↓ = speed)"}`
           }
           onMouseDown={startScrub}
           style={disabled ? undefined : { cursor: "ew-resize" }}
@@ -7579,7 +7737,13 @@ function Field({
           setDraft(next);
           if (hasExpression(next)) return;
           const parsed = parseFloat(next);
-          if (!Number.isNaN(parsed)) onChange(parsed);
+          // Live typing is always an absolute number, so over a
+          // multi-selection it lands on every layer at once; equations wait
+          // for the commit, which evaluates them once per layer.
+          if (!Number.isNaN(parsed)) {
+            if (onChangeMany && values) onChangeMany(values.map(() => parsed));
+            else onChange(parsed);
+          }
         }}
         onBlur={() => {
           focused.current = false;
@@ -8676,20 +8840,34 @@ export function align(
 ) {
   const root = snap.pages[snap.page].root;
   if (toParent && snap.selection.length) {
-    engine.dispatch({ type: "begin" });
+    // ⇧-align plants the selection on its parent's edge as one rigid group:
+    // members that share a frame move by the same delta, so their offsets
+    // survive, and members of different frames form one group per frame, each
+    // against its own parent. Locked layers and instance members sit out
+    // before the union is measured, so they neither move nor anchor the rest.
+    const groups = new Map<string, { parent: XNode; members: XNode[] }>();
     for (const id of snap.selection) {
       const n = find(root, id);
       const p = n ? findParent(root, n.id) : null;
       if (!n || !p || p === root) continue;
-      let dx = 0;
-      let dy = 0;
-      if (mode === "align-left") dx = -n.x;
-      if (mode === "align-right") dx = p.w - n.w - n.x;
-      if (mode === "align-hcenter") dx = (p.w - n.w) / 2 - n.x;
-      if (mode === "align-top") dy = -n.y;
-      if (mode === "align-bottom") dy = p.h - n.h - n.y;
-      if (mode === "align-vcenter") dy = (p.h - n.h) / 2 - n.y;
-      if (dx || dy) engine.dispatch({ type: "move", ids: [n.id], dx, dy });
+      if (isEffectivelyLocked(root, n.id) || isInstanceMember(root, n.id)) continue;
+      const g = groups.get(p.id);
+      if (g) g.members.push(n);
+      else groups.set(p.id, { parent: p, members: [n] });
+    }
+    engine.dispatch({ type: "begin" });
+    for (const { parent, members } of groups.values()) {
+      const union = {
+        x: Math.min(...members.map((m) => m.x)),
+        y: Math.min(...members.map((m) => m.y)),
+        w: 0,
+        h: 0,
+      };
+      union.w = Math.max(...members.map((m) => m.x + m.w)) - union.x;
+      union.h = Math.max(...members.map((m) => m.y + m.h)) - union.y;
+      const { dx, dy } = parentAlignDelta(mode, union, parent.w, parent.h);
+      if (dx || dy)
+        engine.dispatch({ type: "move", ids: members.map((m) => m.id), dx, dy });
     }
     engine.dispatch({ type: "end" });
     return;

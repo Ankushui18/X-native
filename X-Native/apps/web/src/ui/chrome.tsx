@@ -1712,8 +1712,9 @@ export function bindHotkeys(
     }
     // ⌥W/A/S/D/H/V align. e.code, not e.key: with ⌥ held macOS types dead-key
     // characters (å, ∑) instead of letters, which left these chords working on
-    // Windows/Linux but dead on Mac.
-    if (e.altKey && !meta && !e.shiftKey) {
+    // Windows/Linux but dead on Mac. With ⇧ added the selection aligns to its
+    // parent instead — the keyboard twin of ⇧-clicking an align button.
+    if (e.altKey && !meta) {
       const am: Record<
         string,
         "align-left" | "align-right" | "align-top" | "align-bottom" | "align-hcenter" | "align-vcenter"
@@ -1728,7 +1729,7 @@ export function bindHotkeys(
       const mode = am[e.code];
       if (mode) {
         e.preventDefault();
-        align(engine, engine.snapshot(), mode);
+        align(engine, engine.snapshot(), mode, e.shiftKey);
         return;
       }
     }
@@ -1888,14 +1889,16 @@ export function bindHotkeys(
       else engine.dispatch({ type: e.shiftKey ? "ungroup" : "group" });
       return;
     }
+    // Front/back take ⌥ (what the shortcut sheet advertises) or ⇧ (what the
+    // Arrange menu shows) — both chords reach the same command.
     if (meta && e.key === "]") {
       e.preventDefault();
-      engine.dispatch({ type: "arrange", dir: e.shiftKey ? "front" : "forward" });
+      engine.dispatch({ type: "arrange", dir: e.shiftKey || e.altKey ? "front" : "forward" });
       return;
     }
     if (meta && e.key === "[") {
       e.preventDefault();
-      engine.dispatch({ type: "arrange", dir: e.shiftKey ? "back" : "backward" });
+      engine.dispatch({ type: "arrange", dir: e.shiftKey || e.altKey ? "back" : "backward" });
       return;
     }
     // ⌘L adds stack layout, ⌥⌘L removes stack layout

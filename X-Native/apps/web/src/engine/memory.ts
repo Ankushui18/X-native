@@ -237,7 +237,9 @@ function findParent(root: XNode, id: string): XNode | null {
 /**
  * Figma lock inheritance: locking a frame/group locks its whole subtree, and
  * a child cannot be unlocked while an ancestor stays locked. All canvas
- * interaction and structural ops go through this instead of `n.locked`.
+ * interaction and structural ops go through this instead of `n.locked`. Exported
+ * for the inspector, which needs the same guard when it resolves a
+ * multi-selection down to the layers a panel edit may actually touch.
  */
 function isEffectivelyLocked(root: XNode, id: string): boolean {
   let cur: XNode | null = find(root, id);
@@ -321,10 +323,55 @@ function findMasterRoot(root: XNode, id: string): XNode | null {
 }
 
 /** True when the layer sits strictly inside an instance (the instance root
- *  itself is editable — it is the members whose geometry belongs to the master). */
+ *  itself is editable — it is the members whose geometry belongs to the master).
+ *  Exported for the inspector's multi-selection resolver, same as the lock guard. */
 function isInstanceMember(root: XNode, id: string): boolean {
   const r = findInstanceRoot(root, id);
   return !!r && r.id !== id;
+}
+
+/** The gap Figma's tidy-up repeats: the strictly most common spacing between
+ *  consecutive layers, compared at 1/100px so float dust does not split the
+ *  vote. Null when no gap repeats — the caller then falls back to an even
+ *  split, which is what distribute would have done with the same span. */
+function modeStep(gaps: number[]): number | null {
+  const counts = new Map<number, number>();
+  for (const g of gaps) {
+    const k = Math.round(g * 100) / 100;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  let bestCount = 1;
+  let tied = false;
+  for (const [k, c] of counts) {
+    if (c > bestCount) {
+      best = k;
+      bestCount = c;
+      tied = false;
+    } else if (best !== null && c === bestCount) {
+      tied = true;
+    }
+  }
+  return tied ? null : best;
+}
+
+/** Move a world-measured layer to a world point: the node keeps its offset
+ *  from its own parent by taking a delta, and rounding follows the pixel
+ *  grid exactly as under `move`. Shared by distribute and tidy-up. */
+function shiftWorld(
+  w: { x: number; y: number; node: XNode },
+  nx: number,
+  ny: number,
+  snap: boolean,
+) {
+  w.node.x += nx - w.x;
+  w.node.y += ny - w.y;
+  if (snap) {
+    w.node.x = Math.round(w.node.x);
+    w.node.y = Math.round(w.node.y);
+  }
+  w.x = nx;
+  w.y = ny;
 }
 
 /**
@@ -1773,38 +1820,126 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "tidyUp": {
+        const rt = this.root();
+        // Same footing as distribute: world coordinates, locked layers and
+        // instance members sit out, rounding follows the pixel grid.
         const items = s.selection
-          .map((id) => find(this.root(), id))
-          .filter((n): n is XNode => !!n && !n.locked);
+          .map((id) => worldPos(rt, id))
+          .filter(
+            (w): w is { x: number; y: number; node: XNode } =>
+              !!w && !isEffectivelyLocked(rt, w.node.id) && !isInstanceMember(rt, w.node.id),
+          );
         if (items.length < 2) break;
-        const xs = items.map((i) => i.x);
-        const ys = items.map((i) => i.y);
-        const spanX = Math.max(...xs) - Math.min(...xs);
-        const spanY = Math.max(...ys) - Math.min(...ys);
-        const isHoriz = cmd.axis === "h" || (cmd.axis !== "v" && spanX >= spanY);
-        if (isHoriz) {
-          items.sort((a, b) => a.x - b.x);
-          const minX = items[0].x;
-          const maxX = items[items.length - 1].x + items[items.length - 1].w;
-          const totalW = items.reduce((sum, n) => sum + n.w, 0);
-          const gap = Math.max(0, (maxX - minX - totalW) / (items.length - 1));
-          let cur = minX;
-          for (const item of items) {
-            item.x = Math.round(cur);
-            cur += item.w + gap;
-          }
-        } else {
-          items.sort((a, b) => a.y - b.y);
-          const minY = items[0].y;
-          const maxY = items[items.length - 1].y + items[items.length - 1].h;
-          const totalH = items.reduce((sum, n) => sum + n.h, 0);
-          const gap = Math.max(0, (maxY - minY - totalH) / (items.length - 1));
-          let cur = minY;
-          for (const item of items) {
-            item.y = Math.round(cur);
-            cur += item.h + gap;
+        const snap = snapOn(this.state, s.page);
+        // Which arrangement this is: a single row's members overlap in Y but
+        // not in X, a single column's the reverse, and a grid overlaps both.
+        const span = (w: { x: number; y: number; node: XNode }, horiz: boolean): [number, number] =>
+          horiz ? [w.x, w.x + w.node.w] : [w.y, w.y + w.node.h];
+        let overlapsX = false;
+        let overlapsY = false;
+        for (let i = 0; i < items.length && !(overlapsX && overlapsY); i++) {
+          for (let j = i + 1; j < items.length && !(overlapsX && overlapsY); j++) {
+            const [ax0, ax1] = span(items[i], true);
+            const [bx0, bx1] = span(items[j], true);
+            const [ay0, ay1] = span(items[i], false);
+            const [by0, by1] = span(items[j], false);
+            if (!overlapsX && ax0 < bx1 && bx0 < ax1) overlapsX = true;
+            if (!overlapsY && ay0 < by1 && by0 < ay1) overlapsY = true;
           }
         }
+        // A one-dimensional pass along an axis: every layer steps forward
+        // from the first by the most common gap, so the row keeps the spacing
+        // it already had instead of being stretched even. With no repeated
+        // gap the even split keeps both ends where distribute would put them.
+        const pass1D = (horiz: boolean) => {
+          const at = (w: { x: number; y: number; node: XNode }) => (horiz ? w.x : w.y);
+          const len = (w: { node: XNode }) => (horiz ? w.node.w : w.node.h);
+          const sorted = [...items].sort((a, b) => at(a) - at(b));
+          const gaps: number[] = [];
+          for (let i = 1; i < sorted.length; i++)
+            gaps.push(at(sorted[i]) - (at(sorted[i - 1]) + len(sorted[i - 1])));
+          const first = at(sorted[0]);
+          const last = at(sorted[sorted.length - 1]) + len(sorted[sorted.length - 1]);
+          const total = sorted.reduce((sum, w) => sum + len(w), 0);
+          const step = modeStep(gaps) ?? (last - first - total) / (sorted.length - 1);
+          let cursor = first;
+          for (const w of sorted) {
+            if (horiz) shiftWorld(w, cursor, w.y, snap);
+            else shiftWorld(w, w.x, cursor, snap);
+            cursor += len(w) + step;
+          }
+        };
+        // An explicit axis forces a one-dimensional pass; otherwise a grid
+        // (overlap on both axes) tidies into rows and columns from the
+        // selection's top-left, which never moves.
+        if (cmd.axis !== "h" && cmd.axis !== "v" && overlapsX && overlapsY) {
+          const byY = [...items].sort((a, b) => a.y - b.y);
+          const rows: Array<typeof items> = [];
+          for (const w of byY) {
+            const row = rows[rows.length - 1];
+            const bottom = row ? Math.max(...row.map((m) => m.y + m.node.h)) : -Infinity;
+            if (row && w.y < bottom) row.push(w);
+            else rows.push([w]);
+          }
+          // Banding can still collapse to one row (or one column of
+          // singleton rows): those are one-dimensional after all.
+          if (rows.length < 2) {
+            pass1D(true);
+            break;
+          }
+          if (rows.every((r) => r.length < 2)) {
+            pass1D(false);
+            break;
+          }
+          const left = Math.min(...items.map((w) => w.x));
+          const top = Math.min(...items.map((w) => w.y));
+          rows.sort(
+            (a, b) => Math.min(...a.map((m) => m.y)) - Math.min(...b.map((m) => m.y)),
+          );
+          const rowTops = rows.map((r) => Math.min(...r.map((m) => m.y)));
+          const rowBottoms = rows.map((r) => Math.max(...r.map((m) => m.y + m.node.h)));
+          const rowGaps: number[] = [];
+          for (let i = 1; i < rows.length; i++) rowGaps.push(rowTops[i] - rowBottoms[i - 1]);
+          const rowsTotal = rowBottoms.reduce((sum, b, i) => sum + (b - rowTops[i]), 0);
+          const rowStep =
+            modeStep(rowGaps) ??
+            (rowBottoms[rowBottoms.length - 1] - top - rowsTotal) / (rows.length - 1);
+          let cursorY = top;
+          for (let i = 0; i < rows.length; i++) {
+            const row = [...rows[i]].sort((a, b) => a.x - b.x);
+            const gaps: number[] = [];
+            for (let k = 1; k < row.length; k++)
+              gaps.push(row[k].x - (row[k - 1].x + row[k - 1].node.w));
+            const rowRight = Math.max(...row.map((m) => m.x + m.node.w));
+            const rowTotal = row.reduce((sum, m) => sum + m.node.w, 0);
+            const colStep =
+              row.length > 1
+                ? (modeStep(gaps) ?? (rowRight - row[0].x - rowTotal) / (row.length - 1))
+                : 0;
+            let cursorX = left;
+            const rowH = rowBottoms[i] - rowTops[i];
+            for (const w of row) {
+              // Within-row stagger survives: only the row's top edge is grid-aligned.
+              shiftWorld(w, cursorX, cursorY + (w.y - rowTops[i]), snap);
+              cursorX += w.node.w + colStep;
+            }
+            cursorY += rowH + rowStep;
+          }
+          break;
+        }
+        let horiz: boolean;
+        if (cmd.axis === "h") horiz = true;
+        else if (cmd.axis === "v") horiz = false;
+        else if (overlapsX && !overlapsY) horiz = false;
+        else if (overlapsY && !overlapsX) horiz = true;
+        else {
+          const minX = Math.min(...items.map((w) => w.x));
+          const maxX = Math.max(...items.map((w) => w.x + w.node.w));
+          const minY = Math.min(...items.map((w) => w.y));
+          const maxY = Math.max(...items.map((w) => w.y + w.node.h));
+          horiz = maxX - minX >= maxY - minY;
+        }
+        pass1D(horiz);
         break;
       }
       case "openComment":
@@ -2695,7 +2830,13 @@ export class MemoryEngine implements Engine {
             const ncy = loy + (cx - lox) * sin + (cy - loy) * cos;
             k.x = n.x + ncx - k.w / 2;
             k.y = n.y + ncy - k.h / 2;
-            k.rotation = ((k.rotation ?? 0) + (n.rotation ?? 0)) % 360;
+            // Rotation lives in ±180 everywhere (the panel, the canvas drag,
+            // and the Figma ±180 convention), so the inherited turn wraps the
+            // same way instead of spilling past 180 into [0, 360).
+            let combined = (k.rotation ?? 0) + (n.rotation ?? 0);
+            while (combined > 180) combined -= 360;
+            while (combined <= -180) combined += 360;
+            k.rotation = combined;
             return k;
           });
           const i = parent.children.findIndex((c) => c.id === id);
@@ -4047,31 +4188,41 @@ export class MemoryEngine implements Engine {
         s.activeOverlay = null;
         break;
       case "distribute": {
+        const rt = this.root();
+        // World coordinates, like multi-align: members of different frames
+        // share one span, and each layer keeps its offset from its own parent
+        // by taking a delta rather than an absolute. Locked layers and
+        // instance members sit out, exactly as under `move`. The outermost
+        // layers stay where they are; the middle is split evenly.
         const items = s.selection
-          .map((id) => find(this.root(), id))
-          .filter((n): n is XNode => !!n && !n.locked);
+          .map((id) => worldPos(rt, id))
+          .filter(
+            (w): w is { x: number; y: number; node: XNode } =>
+              !!w && !isEffectivelyLocked(rt, w.node.id) && !isInstanceMember(rt, w.node.id),
+          );
         if (items.length < 3) break;
+        const snap = snapOn(this.state, s.page);
         if (cmd.axis === "h") {
           items.sort((a, b) => a.x - b.x);
           const min = items[0].x;
-          const max = items[items.length - 1].x + items[items.length - 1].w;
-          const total = items.reduce((sum, n) => sum + n.w, 0);
+          const max = items[items.length - 1].x + items[items.length - 1].node.w;
+          const total = items.reduce((sum, w) => sum + w.node.w, 0);
           const gap = (max - min - total) / (items.length - 1);
           let cursor = min;
-          for (const n of items) {
-            n.x = cursor;
-            cursor += n.w + gap;
+          for (const w of items) {
+            shiftWorld(w, cursor, w.y, snap);
+            cursor += w.node.w + gap;
           }
         } else {
           items.sort((a, b) => a.y - b.y);
           const min = items[0].y;
-          const max = items[items.length - 1].y + items[items.length - 1].h;
-          const total = items.reduce((sum, n) => sum + n.h, 0);
+          const max = items[items.length - 1].y + items[items.length - 1].node.h;
+          const total = items.reduce((sum, w) => sum + w.node.h, 0);
           const gap = (max - min - total) / (items.length - 1);
           let cursor = min;
-          for (const n of items) {
-            n.y = cursor;
-            cursor += n.h + gap;
+          for (const w of items) {
+            shiftWorld(w, w.x, cursor, snap);
+            cursor += w.node.h + gap;
           }
         }
         break;
