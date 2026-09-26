@@ -23,6 +23,50 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const b = await puppeteer.launch(LAUNCH);
 const allErrors = [];
 
+/** Inspector field values addressed by aria-label, never by position: the panel
+ *  gains and reorders fields as it grows, so index reads rot without anyone
+ *  noticing (rotation used to be index 2, corner radius 6, stroke weight 7). */
+const field = (p, label) => p.evaluate((l) => {
+  const input = [...document.querySelectorAll(".inspector .field input")]
+    .find((i) => i.getAttribute("aria-label") === l);
+  return input ? input.value : null;
+}, label);
+const focusField = (p, label) => p.evaluate((l) => {
+  const el = [...document.querySelectorAll(".inspector .field input")]
+    .find((i) => i.getAttribute("aria-label") === l);
+  if (el) { el.focus(); el.select(); }
+  return !!el;
+}, label);
+
+/** The app's in-app dialog (DialogHost). Native prompt/confirm are gone, so a
+ *  flow that used to be answered by page.on("dialog") is answered here. */
+const dlg = (p) => p.evaluate(() => {
+  const el = document.querySelector(".x-dialog");
+  if (!el) return null;
+  return {
+    title: el.querySelector(".x-dialog-title")?.textContent ?? "",
+    body: el.querySelector(".dlg-body")?.textContent ?? "",
+    value: el.querySelector(".dlg-input")?.value ?? null,
+    error: el.querySelector(".dlg-error")?.textContent ?? null,
+    buttons: [...el.querySelectorAll(".x-dialog-foot button")].map((b) => b.textContent.trim()),
+  };
+});
+const clickDlg = async (p, label) => {
+  const hit = await p.evaluate((l) => {
+    const b = [...document.querySelectorAll(".x-dialog-foot button")].find((x) => x.textContent.trim() === l);
+    if (!b) return false;
+    b.click();
+    return true;
+  }, label);
+  await sleep(350);
+  return hit;
+};
+const typeDlg = async (p, text) => {
+  await p.evaluate(() => { const el = document.querySelector(".dlg-input"); el.focus(); el.select(); });
+  await p.keyboard.type(text);
+  await sleep(120);
+};
+
 async function page(fresh = true) {
   const p = await b.newPage();
   await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
@@ -261,8 +305,8 @@ for (const [label, payload] of [
 {
   const p = await page();
   await drawRect(p);
-  const rotVal = () => p.evaluate(() => document.querySelectorAll(".inspector .field input")[2]?.value);
-  await p.evaluate(() => { const el = document.querySelectorAll(".inspector .field input")[2]; el.focus(); el.select(); });
+  const rotVal = () => field(p, "Rotation");
+  await focusField(p, "Rotation");
   await p.keyboard.type("45"); await p.keyboard.press("Enter"); await sleep(500);
   t(`typed rotation applies (${await rotVal()})`, String(await rotVal()).startsWith("45"));
   await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta"); await sleep(600);
@@ -574,10 +618,10 @@ for (const [label, payload] of [
   const rs = await p.$$(".panel.left .row");
   await rs[names.indexOf("Card")].click();
   await sleep(650);
-  const f = await p.evaluate(() =>
-    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
-  t(`Card keeps its 120x60 size (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
-  t(`Card keeps corner radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+  const w = await field(p, "W"), h = await field(p, "H");
+  const r = await field(p, "Corner radius"), sw = await field(p, "Stroke weight");
+  t(`Card keeps its 120x60 size (${w}x${h})`, w === "120" && h === "60");
+  t(`Card keeps corner radius 8 and stroke 2 (r${r} s${sw})`, r === "8" && sw === "2");
 
   // and it has to actually render
   const px = await p.evaluate(() => {
@@ -625,8 +669,10 @@ for (const [label, payload] of [
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     const dt = new DataTransfer();
     dt.items.add(new File([u8], "design.fig", { type: "" }));
+    // Empty canvas, like the .sketch check above: dropping on top of the demo's
+    // frames measures their clipping, not whether .fig fills survive import.
     document.querySelector(".canvas-wrap").dispatchEvent(
-      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 420, clientY: 250 }));
   }, b64);
   await sleep(2200);
   const after = await rows(p);
@@ -637,10 +683,10 @@ for (const [label, payload] of [
   const rs = await p.$$(".panel.left .row");
   await rs[after.indexOf("FigCard")].click();
   await sleep(650);
-  const f = await p.evaluate(() =>
-    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
-  t(`.fig keeps exact geometry (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
-  t(`.fig keeps radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+  const fw = await field(p, "W"), fh = await field(p, "H");
+  const fr = await field(p, "Corner radius"), fsw = await field(p, "Stroke weight");
+  t(`.fig keeps exact geometry (${fw}x${fh})`, fw === "120" && fh === "60");
+  t(`.fig keeps radius 8 and stroke 2 (r${fr} s${fsw})`, fr === "8" && fsw === "2");
 
   const px = await p.evaluate(() => {
     const c = document.querySelector("canvas");
@@ -753,9 +799,6 @@ for (const [label, payload] of [
 // 17. shared styles: one edit repaints every bound layer -------------------
 {
   const p = await page();
-  let reply = "Brand";
-  const onDialog = async (d) => { await d.accept(reply); };
-  p.on("dialog", onDialog);
   await p.evaluate(() => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="140">
       <rect x="10" y="20" width="110" height="90" fill="#ff0000"/>
@@ -783,6 +826,14 @@ for (const [label, payload] of [
       b.click();
     });
     await sleep(500);
+    // Styles is a sub-tab of the Vars pane; its "+" does not exist until it is
+    // the open one, so opening Vars alone left this block clicking nothing.
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll(".panel.left button")]
+        .find(x => x.textContent.trim() === "Styles");
+      if (b && b.className !== "on") b.click();
+    });
+    await sleep(400);
   };
   const openFile = async () => {
     await p.evaluate(() => {
@@ -803,7 +854,15 @@ for (const [label, payload] of [
       .find(b => b.getAttribute("title") === "Create style from selection");
     el && el.click();
   });
-  await sleep(900);
+  await sleep(700);
+  // These rectangles carry only a fill, so there is no fill-or-stroke choice to
+  // make: the in-app prompt for a name comes straight up, prefilled from the
+  // layer. (A layer with both fills the choice dialog first — see §22.)
+  const nameDlg = await dlg(p);
+  t(`creating a style asks for its name in-app (${nameDlg?.title})`, nameDlg?.title === "Style name (fill)");
+  await typeDlg(p, "Brand");
+  await p.keyboard.press("Enter");
+  await sleep(700);
   t("creating a style lists it", (await p.evaluate(() =>
     document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
 
@@ -817,11 +876,15 @@ for (const [label, payload] of [
   });
   await sleep(800);
 
-  reply = "#0000ff";
   await p.evaluate(() => {
     const el = document.querySelector('.panel.left button[aria-label^="Edit style"]');
     el && el.click();
   });
+  await sleep(700);
+  const colourDlg = await dlg(p);
+  t(`editing a style asks for its colour in-app (${colourDlg?.title})`, colourDlg?.title === "Colour for Brand");
+  await typeDlg(p, "#0000ff");
+  await p.keyboard.press("Enter");
   await sleep(1000);
   const after = await px();
   t(`one style edit repaints every bound layer (red ${after.red}, blue ${after.blue})`,
@@ -836,7 +899,6 @@ for (const [label, payload] of [
   await openVars();
   t("the style list survives a reload", (await p.evaluate(() =>
     document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
-  p.off("dialog", onDialog);
   await p.close();
 }
 
@@ -1030,12 +1092,6 @@ for (const [label, payload] of [
 // 21. remaining gaps: stroke styles and draggable comment pins -------------
 {
   const p = await page();
-  let reply = "Brand";
-  const onDialog = async (d) => {
-    if (d.type() === "confirm") await d.accept();   // create from the stroke
-    else await d.accept(reply);
-  };
-  p.on("dialog", onDialog);
   await p.evaluate(() => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140">
       <rect x="20" y="20" width="150" height="90" fill="#dddddd" stroke="#ff0000" stroke-width="8"/></svg>`;
@@ -1052,10 +1108,24 @@ for (const [label, payload] of [
   });
   await sleep(500);
   await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".panel.left button")]
+      .find((x) => x.textContent.trim() === "Styles");
+    if (b && b.className !== "on") b.click();
+  });
+  await sleep(400);
+  await p.evaluate(() => {
     const el = [...document.querySelectorAll(".panel.left button.plus")]
       .find((x) => x.getAttribute("title") === "Create style from selection");
     el && el.click();
   });
+  await sleep(700);
+  // This layer has a fill *and* a stroke, so the app asks which one to save
+  // instead of the old confirm() where OK secretly meant stroke.
+  const choose = await dlg(p);
+  t(`both fill and stroke offer a real choice (${choose?.title})`, choose?.title === "Create style from");
+  await clickDlg(p, "Stroke");
+  await typeDlg(p, "Brand");
+  await p.keyboard.press("Enter");
   await sleep(900);
   // The engine has always supported stroke styles; only the UI was missing.
   const swatch = await p.evaluate(() => {
@@ -1124,7 +1194,6 @@ for (const [label, payload] of [
   await p.reload({ waitUntil: "networkidle0" });
   await sleep(1200);
   t(`the moved pin persists (${await pinLeft()})`, Math.abs((await pinLeft()) - after) < 4);
-  p.off("dialog", onDialog);
   await p.close();
 }
 
@@ -1521,32 +1590,6 @@ for (const [label, payload] of [
     window.alert = (msg) => { window.__nativeCalls.push(`alert: ${msg}`); };
   });
   const nativeCalls = () => p.evaluate(() => window.__nativeCalls || []);
-  const dlg = () => p.evaluate(() => {
-    const el = document.querySelector(".x-dialog");
-    if (!el) return null;
-    return {
-      title: el.querySelector(".x-dialog-title")?.textContent ?? "",
-      body: el.querySelector(".dlg-body")?.textContent ?? "",
-      value: el.querySelector(".dlg-input")?.value ?? null,
-      error: el.querySelector(".dlg-error")?.textContent ?? null,
-      buttons: [...el.querySelectorAll(".x-dialog-foot button")].map((b) => b.textContent.trim()),
-    };
-  });
-  const clickDlg = async (label) => {
-    const hit = await p.evaluate((l) => {
-      const b = [...document.querySelectorAll(".x-dialog-foot button")].find((x) => x.textContent.trim() === l);
-      if (!b) return false;
-      b.click();
-      return true;
-    }, label);
-    await sleep(350);
-    return hit;
-  };
-  const typeInto = async (text) => {
-    await p.evaluate(() => { const el = document.querySelector(".dlg-input"); el.focus(); el.select(); });
-    await p.keyboard.type(text);
-    await sleep(120);
-  };
   const tab = async (re) => {
     await p.evaluate((rx) => [...document.querySelectorAll(".panel.left .nav, .rail .nav")]
       .find(el => new RegExp(rx, "i").test(el.textContent || ""))?.click(), re);
@@ -1583,12 +1626,12 @@ for (const [label, payload] of [
   const keptId = (await api("getSelection", {})).data.ids[0];
   await tab("vars");
   await openRename("dlg-token");
-  const rename = await dlg();
+  const rename = await dlg(p);
   t(`rename opens an in-app prompt (${rename?.title})`, rename?.title === "Rename variable");
   t(`the prompt starts from the current name (${rename?.value})`, rename?.value === "dlg-token");
   t("the prompt offers Rename and Cancel",
     rename?.buttons.join("|") === "Cancel|Rename", rename?.buttons);
-  await typeInto("dlg-renamed");
+  await typeDlg(p, "dlg-renamed");
   await p.keyboard.press("Enter");
   await sleep(400);
   t("Enter commits the rename", (await varNames()).includes("dlg-renamed"));
@@ -1598,31 +1641,31 @@ for (const [label, payload] of [
   await openRename("dlg-token");
   await p.keyboard.press("Escape");
   await sleep(350);
-  t("Escape closes the prompt", (await dlg()) === null);
+  t("Escape closes the prompt", (await dlg(p)) === null);
   t("Escape left the canvas selection alone",
     (await api("getSelection", {})).data.ids[0] === keptId);
   t("Escape keeps the old name", (await varNames()).includes("dlg-renamed"));
   await openRename("dlg-token");
   await p.evaluate(() => document.querySelector(".x-dialog-backdrop").click());
   await sleep(350);
-  t("clicking the backdrop dismisses the prompt", (await dlg()) === null);
+  t("clicking the backdrop dismisses the prompt", (await dlg(p)) === null);
   t("dismissing keeps the old name", (await varNames()).includes("dlg-renamed"));
   t("still no native dialogs", (await nativeCalls()).length === 0);
 
   // ── confirm: deleting a collection is explicit and named ──────────────────
   await p.evaluate(() => document.querySelector('.panel.left button[title="Add collection"]').click());
   await sleep(350);
-  const newCol = await dlg();
+  const newCol = await dlg(p);
   t(`creating a collection asks in-app (${newCol?.title})`, newCol?.title === "New collection");
   t("the collection name is prefilled", !!newCol?.value);
-  await typeInto("QA");
-  await clickDlg("Create");
+  await typeDlg(p, "QA");
+  await clickDlg(p, "Create");
   const chips = () => p.evaluate(() => [...document.querySelectorAll(".panel.left button")].map((b) => b.textContent.trim()));
   t("the collection is created", (await chips()).includes("QA"));
 
   await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"]').click());
   await sleep(350);
-  const del = await dlg();
+  const del = await dlg(p);
   t(`deleting a collection confirms in-app (${del?.title})`, del?.title === 'Delete collection "QA"');
   t("the confirm names what is lost", /variables/i.test(del?.body ?? ""));
   t("the confirm says Delete collection, not OK",
@@ -1632,7 +1675,7 @@ for (const [label, payload] of [
   t("cancelling the confirm keeps the collection", (await chips()).includes("QA"));
   await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"]').click());
   await sleep(350);
-  await clickDlg("Delete collection");
+  await clickDlg(p, "Delete collection");
   t("confirming deletes the collection", !(await chips()).includes("QA"));
   t("destructive flows used no native confirm", (await nativeCalls()).length === 0);
 
@@ -1650,17 +1693,17 @@ for (const [label, payload] of [
   await sleep(300);
   await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Create style from selection"]').click());
   await sleep(350);
-  const choose = await dlg();
+  const choose = await dlg(p);
   t(`a two-way style choice is a real choice (${choose?.title})`, choose?.title === "Create style from");
   t("both outcomes are named buttons, and Cancel exists",
     choose?.buttons.join("|") === "Cancel|Stroke|Fill", choose?.buttons);
-  await clickDlg("Stroke");
-  const nameDlg = await dlg();
+  await clickDlg(p, "Stroke");
+  const nameDlg = await dlg(p);
   t(`picking Stroke leads to the name (${nameDlg?.title})`, nameDlg?.title === "Style name (stroke)");
   const layerName = (await full(id)).name;
   t(`the style name starts from the layer name (${nameDlg?.value} vs ${layerName})`,
     nameDlg?.value === layerName);
-  await typeInto("stroke-qa");
+  await typeDlg(p, "stroke-qa");
   await p.keyboard.press("Enter");
   await sleep(400);
   const styleRow = await p.evaluate(() => {
@@ -1685,16 +1728,16 @@ for (const [label, payload] of [
   await spy();
   await p.evaluate(() => document.querySelector('button[title="New project"]').click());
   await sleep(350);
-  const project = await dlg();
+  const project = await dlg(p);
   t(`new project asks in-app (${project?.title})`, project?.title === "New project");
-  await clickDlg("Create");
-  const blocked = await dlg();
+  await clickDlg(p, "Create");
+  const blocked = await dlg(p);
   t("an empty name is refused, not silently dropped", !!blocked?.error, blocked?.error);
   t("the dialog stays open on a refused answer", !!blocked);
-  await typeInto("E2E project");
+  await typeDlg(p, "E2E project");
   await p.keyboard.press("Enter");
   await sleep(400);
-  t("a valid name closes the dialog", (await dlg()) === null);
+  t("a valid name closes the dialog", (await dlg(p)) === null);
   t("the dashboard reported the new project",
     await p.evaluate(() => (document.querySelector(".toast")?.textContent ?? "").includes("E2E project")));
   t("the dashboard used no native prompt", (await nativeCalls()).length === 0);
