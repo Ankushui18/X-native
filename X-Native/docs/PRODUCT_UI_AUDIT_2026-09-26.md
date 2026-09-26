@@ -218,6 +218,24 @@ on-canvas gradient handles, star/poly param handles, frame-tool + badges, smart 
 | FR-U3 | Rotate affordance invisible (zone-only = Figma parity, but zero first-time discoverability) — roadmap: subtle corner affordance on hover | ROADMAP | P2 |
 | FR-U4 | Size/angle badge has no viewport clamp (by = sy+sh+8 can run off-screen at viewport bottom) | PARTIAL (§18 class) | P2 |
 
+## §11. Popovers/Modals/Tabs trace (prompts §§17–19, 21–22)
+
+CORRECTION to §2.1: XPopover IS adopted (EffectPopover renders inside it). Still unused: XDialog,
+XTabs, XButton, XInput, XSelect, XSegmentedControl, PropertyField (except the hidden hack), ContextToolbar.
+CONNECTED: FillPicker (anchor+flip+clamp, Esc, outside-click, role=dialog), EffectPopover (via XPopover,
+nested-picker-aware outside-click), ContextMenu (clamped, Esc, outside, arrow nav incl. submenus),
+Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, empty state), NudgeDialog
+(Esc capture + veil + close btn), ExportAssetsDialog (veil + global Esc), FigInspectorModal (Esc + veil).
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| PM-U1 (=FS-U2) | ≥10 native window.prompt/confirm sites and NO X-Native confirm/prompt modal (XDialog unused, no wrapper). Fix: XConfirm/XPrompt on XDialog + migrate all sites | MISSING UI | P1 |
+| PM-U2 | Actions palette has no outside-click close (no veil/backdrop; Esc/run/close only) | PARTIAL | P2 |
+| PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
+| PM-U4 | NudgeDialog wears help-pop/help-card styles (a prefs dialog in help clothing) | DRIFT (§29) | P2 |
+| PM-U5 | FOUR tab/seg systems: left NavRail, inspector raw tabs (IN-U7), vars/styles bespoke seg w/ inline styles, qo-filters — XTabs unused. Fix: one tab/seg primitive; migrate inspector + vars/styles | DRIFT (§29) | P2 |
+| PM-U6 | ExportAssetsDialog has no initial focus (no autoFocus) — keyboard users start from top | PARTIAL | P2 |
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
