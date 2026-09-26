@@ -8,6 +8,7 @@ import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectS
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 import { armPopover } from "./popoverGuard";
+import { askPrompt } from "./dialog";
 
 export type MenuItem =
   | { kind: "action"; id: string; label: string; shortcut?: string; icon?: IconName; enabled?: boolean }
@@ -403,7 +404,7 @@ export function pageMenu(canDelete: boolean): MenuItem[] {
   ];
 }
 
-export function runMenu(
+export async function runMenu(
   engine: Engine,
   id: string,
   extra?: { x?: number; y?: number; onRename?: () => void },
@@ -583,13 +584,21 @@ export function runMenu(
       engine.dispatch({ type: "outlineStroke" });
       break;
     case "offsetPath": {
-      const distStr = window.prompt("Offset vector path distance (+ to expand, - to contract):", "8");
-      if (distStr !== null) {
-        const d = parseFloat(distStr);
-        if (!isNaN(d) && d !== 0) {
-          engine.dispatch({ type: "offsetPath", distance: d });
-          toast(`Offset vector path ${d > 0 ? "+" : ""}${d}px`);
-        }
+      // The distance is checked in the dialog: the old prompt accepted "abc",
+      // closed, and then did nothing at all without saying why.
+      const text = await askPrompt({
+        title: "Offset path",
+        label: "Distance in pixels",
+        hint: "Positive expands the path, negative contracts it",
+        value: "8",
+        confirmLabel: "Offset",
+        validate: (v) => (Number.isFinite(parseFloat(v)) && parseFloat(v) !== 0 ? null : "Enter a non-zero number"),
+      });
+      if (text === null) break;
+      const d = parseFloat(text);
+      if (Number.isFinite(d) && d !== 0) {
+        engine.dispatch({ type: "offsetPath", distance: d });
+        toast(`Offset vector path ${d > 0 ? "+" : ""}${d}px`);
       }
       break;
     }

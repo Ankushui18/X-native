@@ -102,6 +102,7 @@ import { hugSize } from "./textLayout";
 import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
+import { askChoice, askPrompt } from "./dialog";
 import { buildPdf } from "../engine/pdf";
 import { contentBox, exportClipSvg, exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
@@ -5036,17 +5037,45 @@ function Design({
                   </button>
                   <button
                     style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
-                    onClick={() => {
-                      const propType = prompt("Property type: boolean, text, or instance-swap?", "boolean")?.toLowerCase();
+                    onClick={async () => {
+                      // A picker for the type: the old prompt asked the user to
+                      // spell "instance-swap" correctly or the click did nothing.
+                      const picked = await askChoice({
+                        title: "Property type",
+                        body: `New property on "${n.name}"`,
+                        options: [
+                          { label: "Boolean", value: "boolean", primary: true },
+                          { label: "Text", value: "text" },
+                          { label: "Instance swap", value: "instance-swap" },
+                        ],
+                      });
+                      const propType = picked?.toLowerCase();
                       if (propType === "boolean" || propType === "text" || propType === "instance-swap") {
-                        const propName = prompt(`Enter ${propType} property name (e.g. Show icon, Title):`);
+                        const propName = await askPrompt({
+                          title: "Property name",
+                          label: `${propType} property name`,
+                          placeholder: propType === "boolean" ? "Show icon" : propType === "text" ? "Title" : "Icon slot",
+                          confirmLabel: "Add property",
+                          validate: (v) => (v.trim() ? null : "Enter a property name"),
+                        });
                         if (propName) {
                           const targetLayer =
-                            prompt(
-                              propType === "instance-swap"
-                                ? "Nested instance name to swap (required):"
-                                : "Child layer name to bind to (optional):",
-                            ) || undefined;
+                            (await askPrompt({
+                              title: propType === "instance-swap" ? "Nested instance" : "Target layer",
+                              label:
+                                propType === "instance-swap"
+                                  ? "Nested instance name to swap"
+                                  : "Child layer name to bind to",
+                              hint:
+                                propType === "instance-swap"
+                                  ? "Required — the instance this property swaps"
+                                  : "Optional — leave empty to bind to nothing yet",
+                              confirmLabel: "Add property",
+                              validate:
+                                propType === "instance-swap"
+                                  ? (v) => (v.trim() ? null : "An instance swap needs a target instance")
+                                  : undefined,
+                            })) || undefined;
                           engine.dispatch({
                             type: "addComponentProperty",
                             componentId: master.id,
@@ -6665,30 +6694,23 @@ function EffectPopover({
 }) {
   const [blendOpen, setBlendOpen] = useState(false);
   useEffect(() => {
-    const click = (e: MouseEvent) => {
-      const t = e.target as HTMLElement;
-      // The colour picker portals outside this popover, so a click inside it
-      // must not count as "outside" and close the editor underneath.
-      if (!t.closest(".fx-pop") && !t.closest(".fx-row") && !t.closest(".fill-pop")) onClose();
-    };
+    // Dismissal (outside click, Escape) belongs to XPopover, which knows its own
+    // element. This used to run its own guard against a `.fx-pop` class that the
+    // shared popover replaced, so the guard matched nothing and every click
+    // *inside* the popover closed it — the shadow fields could be opened, but
+    // not used. What is left here is the one binding XPopover must not own:
+    // ⌘D with an effect open duplicates the effect, not the layer (capture
+    // phase, or the app's own ⌘D clones the layer underneath).
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-      // ⌘D with an effect open duplicates the effect, not the layer.
-      // Capture phase: the app's own ⌘D (duplicate layer) would otherwise
-      // see the key first and clone the whole layer underneath.
       if ((e.metaKey || e.ctrlKey) && (e.key === "d" || e.key === "D")) {
         e.preventDefault();
         e.stopPropagation();
         onDuplicate();
       }
     };
-    window.addEventListener("mousedown", click);
     window.addEventListener("keydown", key, true);
-    return () => {
-      window.removeEventListener("mousedown", click);
-      window.removeEventListener("keydown", key, true);
-    };
-  }, [onClose, onDuplicate]);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [onDuplicate]);
 
   const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
   const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";

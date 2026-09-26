@@ -201,10 +201,11 @@ for (const [label, payload] of [
   await drawRect(p); await sleep(1200);
   const edited = (await rows(p)).length;
   t("drawing adds a layer", edited === base + 1);
-  let accepting = false;
-  p.on("dialog", async d => { accepting ? await d.accept() : await d.dismiss(); });
+  // The confirmation is an in-app dialog, so the check drives its buttons —
+  // and a native one still appearing would be a missed call site.
+  const natives = [];
+  p.on("dialog", async d => { natives.push(d.message()); await d.dismiss(); });
   const run = async (accept) => {
-    accepting = accept;
     await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta"); await sleep(450);
     await p.keyboard.type("New file"); await sleep(450);
     await p.evaluate(() => {
@@ -212,12 +213,24 @@ for (const [label, payload] of [
         .find(r => r.textContent.trim().startsWith("New file"));
       el && el.click();
     });
-    await sleep(accept ? 2500 : 900);
+    await sleep(600);
+    const asked = await p.evaluate(() => document.querySelector(".x-dialog-title")?.textContent || "");
+    // Accepting reloads the page out from under this evaluate, so it is allowed
+    // to fail with a destroyed context.
+    await p.evaluate((ok) => {
+      const label = ok ? "Delete and start new" : "Cancel";
+      [...document.querySelectorAll(".x-dialog-foot button")]
+        .find(b => b.textContent.trim() === label)?.click();
+    }, accept).catch(() => {});
+    await sleep(accept ? 2500 : 700);
     // Cancelling leaves the palette open; close it so the next run starts clean.
     if (!accept) { await p.keyboard.press("Escape"); await sleep(400); }
+    return asked;
   };
-  await run(false);
+  const cancelTitle = await run(false);
+  t(`New file confirms in an in-app dialog (${cancelTitle})`, cancelTitle === "New file");
   t("cancelling New file keeps the document", (await rows(p)).length === edited);
+  t("cancelling left no native dialog behind", natives.length === 0);
   await run(true);
   const after = (await rows(p)).length;
   const cleared = await p.evaluate(() => !localStorage.getItem("x-native-document"));
@@ -309,6 +322,11 @@ for (const [label, payload] of [
       b.click();
     });
     await sleep(550);
+    // "Copy selected layer's colour" sits in the Styles subtab of this pane,
+    // next to the other colour primitives — not in the Variables list.
+    await p.evaluate(() => [...document.querySelectorAll(".panel.left button")]
+      .find(b => b.textContent.trim() === "Styles")?.click());
+    await sleep(400);
   };
   await openVars();
   await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
@@ -815,18 +833,32 @@ for (const [label, payload] of [
     el && el.click();
   });
   await sleep(600);
-  t("the row opens an effect popover", await p.evaluate(() => !!document.querySelector(".fx-pop")));
-  const f = await p.$$(".fx-pop .field input");
+  // The effect controls moved into the shared XPopover, so the class is the
+  // shared one and the fields are named rather than positional — a new control
+  // must not silently renumber this check.
+  t("the row opens an effect popover", await p.evaluate(() => !!document.querySelector(".x-popover")));
+  const f = await p.$$(".x-popover .field input");
   t(`the popover carries the shadow controls (${f.length})`, f.length === 4);
-  await f[1].click();
-  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
-  await p.keyboard.type("18"); await p.keyboard.press("Enter");
-  await sleep(600);
-  const vals = await p.evaluate(() => [...document.querySelectorAll(".fx-pop .field input")].map(i => i.value));
-  t(`editing in the popover reaches the model (Y=${vals[1]})`, vals[1] === "18");
-  await p.keyboard.press("Escape");
-  await sleep(400);
-  t("Escape closes the popover", !(await p.evaluate(() => !!document.querySelector(".fx-pop"))));
+  const y = await p.$('.x-popover input[aria-label="Shadow Y"]');
+  t("the popover names the shadow offset", !!y);
+  if (y) {
+    await y.click();
+    await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+    await p.keyboard.type("18"); await p.keyboard.press("Enter");
+    await sleep(600);
+    // Assert the model, not a DOM index: which control sits at [1] is not the
+    // question this check is asking.
+    const sel = (await p.evaluate(() => window.__xNativeDesignApi.call("getSelection", {}))).data.ids[0];
+    const y2 = (await p.evaluate((id) => window.__xNativeDesignApi.call("getNode", { id, full: true }), sel))
+      .data.full.effects?.[0]?.y;
+    t(`editing in the popover reaches the model (Y=${y2})`, y2 === 18);
+    t("the popover stays open while editing", await p.evaluate(() => !!document.querySelector(".x-popover")));
+    await p.keyboard.press("Escape");
+    await sleep(400);
+    t("Escape closes the popover", !(await p.evaluate(() => !!document.querySelector(".x-popover"))));
+  } else {
+    t("editing in the popover reaches the model (skipped: no named field)", false);
+  }
   await p.close();
 }
 
@@ -1260,8 +1292,12 @@ for (const [label, payload] of [
     await p.keyboard.type(v);
     await sleep(400);
   };
+  // Layer rows only: the Pages list sits above the tree in the same panel and
+  // its rows share the .row class, so index 0 would be a page — clicking one
+  // switches page, and shift-clicking one clears the selection instead of
+  // extending it. Layer rows carry an inline indent; page rows do not.
   const clickRow = async (k, shift = false) => {
-    const rs = await p.$$(".panel.left .row");
+    const rs = await p.$$('.panel.left .row[style*="padding-left"]');
     if (shift) await p.keyboard.down("Shift");
     await rs[k].click();
     if (shift) await p.keyboard.up("Shift");
@@ -1298,39 +1334,60 @@ for (const [label, payload] of [
   const p = await page();
   await rows(p);
   const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  // Layer rows only: the Pages list sits above the tree in the same panel and
+  // its rows share the .row class, so index 0 would be a page — clicking one
+  // switches page, and shift-clicking one clears the selection instead of
+  // extending it. Layer rows carry an inline indent; page rows do not.
   const clickRow = async (k, shift = false) => {
-    const rs = await p.$$(".panel.left .row");
+    const rs = await p.$$('.panel.left .row[style*="padding-left"]');
     if (shift) await p.keyboard.down("Shift");
     await rs[k].click();
     if (shift) await p.keyboard.up("Shift");
     await sleep(350);
   };
+  // Returns false when the field is missing so a bad setup fails as a check
+  // instead of crashing the rest of the suite.
   const setSize = async (v) => {
+    const present = await p.evaluate(() => !!document.querySelector('.inspector input[aria-label="S"]'));
+    if (!present) return false;
     await p.evaluate(() => { const el = document.querySelector('.inspector input[aria-label="S"]'); el.focus(); el.select(); });
     await p.keyboard.type(String(v));
     await p.keyboard.press("Enter");
     await sleep(400);
+    return true;
   };
+  const layerCount = () => p.evaluate(() => document.querySelectorAll('.panel.left .row[style*="padding-left"]').length);
+  // T on the text just created edits that layer rather than making another, so
+  // each creation starts from an empty selection. The two boxes are also far
+  // apart: a drag that lands inside the previous box edits its text instead of
+  // creating a second layer.
   const dragText = async (x, y) => {
+    await p.keyboard.press("v");
+    await p.mouse.click(300, 200);
+    await sleep(200);
+    const before = await layerCount();
     await p.keyboard.press("t");
     await p.mouse.move(x, y); await p.mouse.down();
     await p.mouse.move(x + 120, y + 30, { steps: 6 }); await p.mouse.up();
     await sleep(400);
     await p.keyboard.press("Escape");
     await sleep(300);
+    return (await layerCount()) === before + 1;
   };
-  await dragText(820, 640);
-  await dragText(820, 720);
+  // Both boxes go to canvas the sample document leaves empty: a drag inside a
+  // frame nests the new text layer, and then the tree order below is not the
+  // creation order.
+  t("the text tool makes one layer per drag", (await dragText(820, 640)) && (await dragText(1020, 640)));
   await clickRow(1);
-  await setSize("20");
+  t("a text layer is selected", await setSize("20"));
   await clickRow(0);
-  await setSize("32");
+  t("the second text layer is selected", await setSize("32"));
   await clickRow(1);
   await clickRow(0, true);
   const ids = (await api("getSelection", {})).data.ids;
   t("two text layers selected", ids.length === 2);
   t("size reads Mixed",
-    await p.evaluate(() => document.querySelector('.inspector input[aria-label="S"]').value) === "Mixed");
+    await p.evaluate(() => document.querySelector('.inspector input[aria-label="S"]')?.value) === "Mixed");
   await setSize("24");
   const sizes = [];
   for (const id of (await api("getSelection", {})).data.ids)
@@ -1370,8 +1427,12 @@ for (const [label, payload] of [
     }
     return false;
   };
+  // Layer rows only: the Pages list sits above the tree in the same panel and
+  // its rows share the .row class, so index 0 would be a page — clicking one
+  // switches page, and shift-clicking one clears the selection instead of
+  // extending it. Layer rows carry an inline indent; page rows do not.
   const clickRow = async (k, shift = false) => {
-    const rs = await p.$$(".panel.left .row");
+    const rs = await p.$$('.panel.left .row[style*="padding-left"]');
     if (shift) await p.keyboard.down("Shift");
     await rs[k].click();
     if (shift) await p.keyboard.up("Shift");
@@ -1419,6 +1480,204 @@ for (const [label, payload] of [
   await sleep(400);
   const cleared = [(await full(ids[0])).variableBindings?.opacity, (await full(ids[1])).variableBindings?.opacity];
   t("one unbind clears every layer", cleared.every(v => v === undefined));
+  await p.close();
+}
+
+// 31. dialogs: native prompt/confirm are gone (PM-U1) -----------------------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  const full = async (id) => (await api("getNode", { id, full: true })).data.full;
+
+  // A native prompt/confirm blocks the page and is invisible to the DOM, so
+  // "we stopped using them" is only checkable by counting the calls. Anything
+  // recorded here is a site that was missed.
+  const spy = () => p.evaluate(() => {
+    window.__nativeCalls = [];
+    window.prompt = (msg) => { window.__nativeCalls.push(`prompt: ${msg}`); return null; };
+    window.confirm = (msg) => { window.__nativeCalls.push(`confirm: ${msg}`); return false; };
+    window.alert = (msg) => { window.__nativeCalls.push(`alert: ${msg}`); };
+  });
+  const nativeCalls = () => p.evaluate(() => window.__nativeCalls || []);
+  const dlg = () => p.evaluate(() => {
+    const el = document.querySelector(".x-dialog");
+    if (!el) return null;
+    return {
+      title: el.querySelector(".x-dialog-title")?.textContent ?? "",
+      body: el.querySelector(".dlg-body")?.textContent ?? "",
+      value: el.querySelector(".dlg-input")?.value ?? null,
+      error: el.querySelector(".dlg-error")?.textContent ?? null,
+      buttons: [...el.querySelectorAll(".x-dialog-foot button")].map((b) => b.textContent.trim()),
+    };
+  });
+  const clickDlg = async (label) => {
+    const hit = await p.evaluate((l) => {
+      const b = [...document.querySelectorAll(".x-dialog-foot button")].find((x) => x.textContent.trim() === l);
+      if (!b) return false;
+      b.click();
+      return true;
+    }, label);
+    await sleep(350);
+    return hit;
+  };
+  const typeInto = async (text) => {
+    await p.evaluate(() => { const el = document.querySelector(".dlg-input"); el.focus(); el.select(); });
+    await p.keyboard.type(text);
+    await sleep(120);
+  };
+  const tab = async (re) => {
+    await p.evaluate((rx) => [...document.querySelectorAll(".panel.left .nav, .rail .nav")]
+      .find(el => new RegExp(rx, "i").test(el.textContent || ""))?.click(), re);
+    await sleep(400);
+  };
+  const varNames = () => p.evaluate(() =>
+    [...document.querySelectorAll(".panel.left span[title='Double-click to rename']")].map((s) => s.textContent));
+  // By name: the sample document already ships variables (spacing-sm, radius-md
+  // …), so "the first row" would rename one of those instead.
+  const openRename = async (name) => {
+    await p.evaluate((n) => {
+      const spans = [...document.querySelectorAll(".panel.left span[title='Double-click to rename']")];
+      (spans.find((x) => x.textContent.trim() === n) ?? spans[0])
+        ?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    }, name);
+    await sleep(350);
+  };
+
+  await tab("vars");
+  // one variable to rename
+  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"]').click());
+  await sleep(300);
+  await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Variable name"]'); el.focus(); el.select(); });
+  await p.keyboard.type("dlg-token");
+  await p.evaluate(() => [...document.querySelectorAll(".panel.left button")].find(b => b.textContent === "Save")?.click());
+  await sleep(400);
+  await spy();
+
+  // ── prompt: rename a variable ─────────────────────────────────────────────
+  // A real selection first, so "the dialog swallowed Escape" is checkable: with
+  // nothing selected the old assertion could pass for the wrong reason.
+  await tab("file");
+  await drawRect(p);
+  const keptId = (await api("getSelection", {})).data.ids[0];
+  await tab("vars");
+  await openRename("dlg-token");
+  const rename = await dlg();
+  t(`rename opens an in-app prompt (${rename?.title})`, rename?.title === "Rename variable");
+  t(`the prompt starts from the current name (${rename?.value})`, rename?.value === "dlg-token");
+  t("the prompt offers Rename and Cancel",
+    rename?.buttons.join("|") === "Cancel|Rename", rename?.buttons);
+  await typeInto("dlg-renamed");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  t("Enter commits the rename", (await varNames()).includes("dlg-renamed"));
+  t("no native prompt was used", (await nativeCalls()).length === 0);
+
+  // ── Escape and backdrop are cancels, not answers ──────────────────────────
+  await openRename("dlg-token");
+  await p.keyboard.press("Escape");
+  await sleep(350);
+  t("Escape closes the prompt", (await dlg()) === null);
+  t("Escape left the canvas selection alone",
+    (await api("getSelection", {})).data.ids[0] === keptId);
+  t("Escape keeps the old name", (await varNames()).includes("dlg-renamed"));
+  await openRename("dlg-token");
+  await p.evaluate(() => document.querySelector(".x-dialog-backdrop").click());
+  await sleep(350);
+  t("clicking the backdrop dismisses the prompt", (await dlg()) === null);
+  t("dismissing keeps the old name", (await varNames()).includes("dlg-renamed"));
+  t("still no native dialogs", (await nativeCalls()).length === 0);
+
+  // ── confirm: deleting a collection is explicit and named ──────────────────
+  await p.evaluate(() => document.querySelector('.panel.left button[title="Add collection"]').click());
+  await sleep(350);
+  const newCol = await dlg();
+  t(`creating a collection asks in-app (${newCol?.title})`, newCol?.title === "New collection");
+  t("the collection name is prefilled", !!newCol?.value);
+  await typeInto("QA");
+  await clickDlg("Create");
+  const chips = () => p.evaluate(() => [...document.querySelectorAll(".panel.left button")].map((b) => b.textContent.trim()));
+  t("the collection is created", (await chips()).includes("QA"));
+
+  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"]').click());
+  await sleep(350);
+  const del = await dlg();
+  t(`deleting a collection confirms in-app (${del?.title})`, del?.title === 'Delete collection "QA"');
+  t("the confirm names what is lost", /variables/i.test(del?.body ?? ""));
+  t("the confirm says Delete collection, not OK",
+    del?.buttons.join("|") === "Cancel|Delete collection", del?.buttons);
+  await p.keyboard.press("Escape");
+  await sleep(350);
+  t("cancelling the confirm keeps the collection", (await chips()).includes("QA"));
+  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"]').click());
+  await sleep(350);
+  await clickDlg("Delete collection");
+  t("confirming deletes the collection", !(await chips()).includes("QA"));
+  t("destructive flows used no native confirm", (await nativeCalls()).length === 0);
+
+  // ── choice: a style is created from the stroke or the fill, both as buttons
+  await tab("file");
+  await drawRect(p);
+  const id = (await api("getSelection", {})).data.ids[0];
+  await p.evaluate(() => [...document.querySelectorAll(".inspector button.plus")]
+    .find((b) => b.getAttribute("title") === "Add stroke")?.click());
+  await sleep(400);
+  const strokePaint = (await full(id)).strokePaint;
+  await tab("vars");
+  await p.evaluate(() => [...document.querySelectorAll(".panel.left button")]
+    .find((b) => b.textContent.trim() === "Styles")?.click());
+  await sleep(300);
+  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Create style from selection"]').click());
+  await sleep(350);
+  const choose = await dlg();
+  t(`a two-way style choice is a real choice (${choose?.title})`, choose?.title === "Create style from");
+  t("both outcomes are named buttons, and Cancel exists",
+    choose?.buttons.join("|") === "Cancel|Stroke|Fill", choose?.buttons);
+  await clickDlg("Stroke");
+  const nameDlg = await dlg();
+  t(`picking Stroke leads to the name (${nameDlg?.title})`, nameDlg?.title === "Style name (stroke)");
+  const layerName = (await full(id)).name;
+  t(`the style name starts from the layer name (${nameDlg?.value} vs ${layerName})`,
+    nameDlg?.value === layerName);
+  await typeInto("stroke-qa");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  const styleRow = await p.evaluate(() => {
+    const row = [...document.querySelectorAll(".panel.left .color-row")]
+      .find((r) => r.textContent.includes("stroke-qa"));
+    if (!row) return null;
+    return { name: row.textContent.trim(), swatch: getComputedStyle(row.querySelector(".swatch")).backgroundColor };
+  });
+  t("the stroke style lands in the styles list", !!styleRow);
+  const hexToRgb = (hex) => {
+    const h = (hex || "").replace("#", "");
+    const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6), 16);
+    return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+  };
+  t(`it holds the stroke colour, not the fill (${styleRow?.swatch} vs ${strokePaint})`,
+    !!styleRow && styleRow.swatch === hexToRgb(strokePaint));
+  t("the choice flow used no native confirm", (await nativeCalls()).length === 0);
+
+  // ── validation: a rejected answer keeps the dialog open and says why ──────
+  await p.goto(`${URL}/#/`, { waitUntil: "networkidle0" });
+  await sleep(500);
+  await spy();
+  await p.evaluate(() => document.querySelector('button[title="New project"]').click());
+  await sleep(350);
+  const project = await dlg();
+  t(`new project asks in-app (${project?.title})`, project?.title === "New project");
+  await clickDlg("Create");
+  const blocked = await dlg();
+  t("an empty name is refused, not silently dropped", !!blocked?.error, blocked?.error);
+  t("the dialog stays open on a refused answer", !!blocked);
+  await typeInto("E2E project");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  t("a valid name closes the dialog", (await dlg()) === null);
+  t("the dashboard reported the new project",
+    await p.evaluate(() => (document.querySelector(".toast")?.textContent ?? "").includes("E2E project")));
+  t("the dashboard used no native prompt", (await nativeCalls()).length === 0);
+
   await p.close();
 }
 

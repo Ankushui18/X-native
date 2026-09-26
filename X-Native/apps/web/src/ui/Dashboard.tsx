@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ICON_LG, Icon, caretSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { THEME_OPTIONS, useTheme } from "./theme";
-import { toast } from "./toast";
+import { subscribeToast, toast } from "./toast";
+import { askPrompt } from "./dialog";
 import {
   createFile,
   deleteFile,
@@ -296,6 +297,24 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
     return () => window.removeEventListener("mousedown", off);
   }, [menu]);
 
+  // Every action on this screen reports through the toast bus ("File deleted",
+  // "Moved to Drafts", an import that failed), but nothing here was rendering
+  // one: the messages went nowhere and the dashboard looked like it had
+  // silently ignored the click. The editor has always drawn its own.
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    let timer = 0;
+    const off = subscribeToast((msg) => {
+      setNote(msg);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setNote(""), 1800);
+    });
+    return () => {
+      off();
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   const title = view === "recents" ? "Recently viewed" : view === "trash" ? "Trash" : "All files";
 
   return (
@@ -451,8 +470,15 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
                 className="mini"
                 title="New project"
                 aria-label="New project"
-                onClick={() => {
-                  const name = window.prompt("Project name");
+                onClick={async () => {
+                  const name = await askPrompt({
+                    title: "New project",
+                    label: "Project name",
+                    placeholder: "Marketing site",
+                    hint: "Move files into it from their ⋯ menu",
+                    confirmLabel: "Create",
+                    validate: (v) => (v.trim() ? null : "Enter a project name"),
+                  });
                   if (name?.trim()) toast(`Project "${name.trim()}" — move files into it from their ⋯ menu`);
                 }}
               >
@@ -772,6 +798,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
         </div>
       )}
+      {note && <div className="toast">{note}</div>}
     </div>
   );
 }

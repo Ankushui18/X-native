@@ -18,7 +18,7 @@
  *   T_BODY    — descriptions, empty states
  *   T_SECTION — inspector section headers
  */
-import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ReactNode, forwardRef, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
 import { armPopover } from "./popoverGuard";
@@ -58,20 +58,25 @@ export interface XButtonProps {
   style?: React.CSSProperties;
 }
 
-export function XButton({
-  variant = "secondary",
-  size = "md",
-  icon,
-  iconSize,
-  disabled = false,
-  active = false,
-  title,
-  ariaLabel,
-  onClick,
-  children,
-  className = "",
-  style,
-}: XButtonProps) {
+// forwardRef: a modal needs to put focus on its primary action when it opens,
+// and that is the one thing a button cannot do for itself from the outside.
+export const XButton = forwardRef<HTMLButtonElement, XButtonProps>(function XButton(
+  {
+    variant = "secondary",
+    size = "md",
+    icon,
+    iconSize,
+    disabled = false,
+    active = false,
+    title,
+    ariaLabel,
+    onClick,
+    children,
+    className = "",
+    style,
+  }: XButtonProps,
+  ref,
+) {
   const isIconOnly = variant === "icon" || (!children && !!icon);
   const sizeClass = `x-btn-${size}`;
   const variantClass = isIconOnly ? "x-btn-ghost x-btn-icon" : `x-btn-${variant}`;
@@ -80,6 +85,7 @@ export function XButton({
 
   return (
     <button
+      ref={ref}
       className={`x-btn ${variantClass} ${sizeClass}${activeClass} ${className}`}
       disabled={disabled}
       title={title}
@@ -91,7 +97,7 @@ export function XButton({
       {children}
     </button>
   );
-}
+});
 
 // ── Input ───────────────────────────────────────────────────────────────────
 export interface XInputProps {
@@ -529,7 +535,7 @@ export function XDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="x-dialog" style={{ width }} role="dialog" aria-label={title}>
+      <div className="x-dialog" style={{ width }} role="dialog" aria-modal="true" aria-label={title}>
         <div className="x-dialog-head">
           <span className="x-dialog-title">{title}</span>
           <button className="icon-btn" aria-label="Close" onClick={onClose}>

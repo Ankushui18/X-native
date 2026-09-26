@@ -15,6 +15,7 @@ import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout
 import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { plural, toast } from "./toast";
+import { askChoice, askConfirm, askPrompt } from "./dialog";
 import { rankSearch, loadRecents, saveRecent } from "./search";
 import type { RecentEntry, SearchEntry, SearchKind } from "./search";
 import { useRestoreFocus } from "./a11y";
@@ -1444,8 +1445,14 @@ export function Actions({
       // to a blank file. Destructive and unrecoverable, hence the confirm.
       label: "New file…",
       sc: "",
-      run: () => {
-        if (!window.confirm("Discard the current document and start a new file?")) return;
+      run: async () => {
+        const ok = await askConfirm({
+          title: "New file",
+          body: "The file stored in this browser is deleted and a blank one opens. This cannot be undone.",
+          confirmLabel: "Delete and start new",
+          danger: true,
+        });
+        if (!ok) return;
         clearDoc();
         window.location.reload();
       },
@@ -2972,12 +2979,15 @@ function VarRow({
     }
   };
 
-  const editValue = () => {
+  const editValue = async () => {
     const current = isAlias(slot) ? `@${targetName}` : String(slot);
-    const next = window.prompt(
-      `Edit value for ${v.name}${isDefaultSlot ? "" : ` (${modeName})`} — @name makes it an alias`,
-      current,
-    );
+    const next = await askPrompt({
+      title: `Value for ${v.name}`,
+      label: isDefaultSlot ? "Value" : `Value in ${modeName}`,
+      hint: "@name makes it an alias of another variable",
+      value: current,
+      confirmLabel: "Set value",
+    });
     if (next === null) return;
     if (next.startsWith("@")) {
       const target = vars.find((x) => x.name === next.slice(1) && x.type === v.type);
@@ -3102,8 +3112,13 @@ function VarRow({
           whiteSpace: "nowrap",
         }}
         title="Double-click to rename"
-        onDoubleClick={() => {
-          const name = window.prompt("Rename variable", v.name);
+        onDoubleClick={async () => {
+          const name = await askPrompt({
+            title: "Rename variable",
+            label: "Name",
+            value: v.name,
+            confirmLabel: "Rename",
+          });
           if (!name?.trim() || name.trim() === v.name) return;
           engine.dispatch({ type: "patchVariable", id: v.id, patch: { name: name.trim() } });
         }}
@@ -3242,11 +3257,17 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                   }}
                   title={c === "All" ? "Show every collection" : "Filter to this collection — double-click to rename"}
                   onClick={() => setCol(c)}
-                  onDoubleClick={() => {
+                  onDoubleClick={async () => {
                     if (c === "All") return;
                     const id = varCollections.find((x) => x.name === c)?.id;
                     if (!id) return;
-                    const name = window.prompt("Rename collection", c);
+                    const name = await askPrompt({
+                      title: "Rename collection",
+                      label: "Name",
+                      value: c,
+                      confirmLabel: "Rename",
+                      validate: (val) => (val.trim() ? null : "Enter a collection name"),
+                    });
                     if (!name?.trim()) return;
                     engine.dispatch({ type: "renameCollection", id, name: name.trim() });
                     setCol(name.trim());
@@ -3267,8 +3288,14 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                   flexShrink: 0,
                 }}
                 title="Add collection"
-                onClick={() => {
-                  const name = window.prompt("Collection name", `Collection ${varCollections.length + 1}`);
+                onClick={async () => {
+                  const name = await askPrompt({
+                    title: "New collection",
+                    label: "Collection name",
+                    value: `Collection ${varCollections.length + 1}`,
+                    confirmLabel: "Create",
+                    validate: (val) => (val.trim() ? null : "Enter a collection name"),
+                  });
                   if (!name?.trim()) return;
                   engine.dispatch({ type: "addCollection", name: name.trim() });
                   setCol(name.trim());
@@ -3311,8 +3338,14 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                     onClick={() =>
                       engine.dispatch({ type: "setActiveMode", collectionId: activeCol.id, modeId: m.id })
                     }
-                    onDoubleClick={() => {
-                      const name = window.prompt("Rename mode", m.name);
+                    onDoubleClick={async () => {
+                      const name = await askPrompt({
+                        title: "Rename mode",
+                        label: "Name",
+                        value: m.name,
+                        confirmLabel: "Rename",
+                        validate: (val) => (val.trim() ? null : "Enter a mode name"),
+                      });
                       if (!name?.trim()) return;
                       engine.dispatch({
                         type: "renameMode",
@@ -3337,8 +3370,14 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                     flexShrink: 0,
                   }}
                   title="Add mode"
-                  onClick={() => {
-                    const name = window.prompt("Mode name", `Mode ${activeCol.modes.length + 1}`);
+                  onClick={async () => {
+                    const name = await askPrompt({
+                      title: "New mode",
+                      label: "Mode name",
+                      value: `Mode ${activeCol.modes.length + 1}`,
+                      confirmLabel: "Create",
+                      validate: (val) => (val.trim() ? null : "Enter a mode name"),
+                    });
                     if (!name?.trim()) return;
                     engine.dispatch({ type: "addMode", collectionId: activeCol.id, name: name.trim() });
                   }}
@@ -3350,10 +3389,16 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                 <button
                   className="icon-btn"
                   title="Delete the active mode and its overrides"
-                  onClick={() => {
+                  onClick={async () => {
                     const m = activeCol.modes.find((x) => x.id === activeModeId);
                     if (!m) return;
-                    if (!window.confirm(`Delete mode "${m.name}" and its overrides?`)) return;
+                    const ok = await askConfirm({
+                      title: `Delete mode "${m.name}"`,
+                      body: "Values set in this mode are removed with it. The default mode keeps its values.",
+                      confirmLabel: "Delete mode",
+                      danger: true,
+                    });
+                    if (!ok) return;
                     engine.dispatch({ type: "deleteMode", collectionId: activeCol.id, modeId: m.id });
                   }}
                 >
@@ -3363,8 +3408,14 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               <button
                 className="icon-btn"
                 title={`Delete collection "${activeCol.name}" and its variables`}
-                onClick={() => {
-                  if (!window.confirm(`Delete collection "${activeCol.name}" and its variables?`)) return;
+                onClick={async () => {
+                  const ok = await askConfirm({
+                    title: `Delete collection "${activeCol.name}"`,
+                    body: "Every variable in it is deleted, and layers bound to those variables keep their current appearance.",
+                    confirmLabel: "Delete collection",
+                    danger: true,
+                  });
+                  if (!ok) return;
                   engine.dispatch({ type: "deleteCollection", id: activeCol.id });
                   setCol("All");
                 }}
@@ -3512,17 +3563,33 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             <button
               className="plus"
               title="Create style from selection"
-              onClick={() => {
+              onClick={async () => {
                 if (!selNode) {
                   toast("Select a layer to create a style from its fill or stroke");
                   return;
                 }
                 const hasStroke = selNode.strokeWidth > 0 && !isNone(selNode.strokePaint);
-                const kind: "fill" | "stroke" =
-                  hasStroke && window.confirm("Create from the stroke?\n\nOK = stroke, Cancel = fill")
-                    ? "stroke"
-                    : "fill";
-                const name = window.prompt(`Style name (${kind})`, selNode.name || "Style");
+                // Was `confirm`: OK meant stroke and Cancel meant fill, so the
+                // dialog had no way to say "neither" — and pressing Cancel
+                // created a style anyway. Both outcomes are buttons now.
+                const kind =
+                  (hasStroke
+                    ? await askChoice({
+                        title: "Create style from",
+                        body: `"${selNode.name}" has both a fill and a stroke.`,
+                        options: [
+                          { label: "Stroke", value: "stroke" },
+                          { label: "Fill", value: "fill", primary: true },
+                        ],
+                      })
+                    : "fill") as "fill" | "stroke" | null;
+                if (kind === null) return;
+                const name = await askPrompt({
+                  title: `Style name (${kind})`,
+                  label: "Name",
+                  value: selNode.name || "Style",
+                  confirmLabel: "Create style",
+                });
                 if (name === null) return;
                 engine.dispatch({ type: "createStyle", kind, name });
               }}
@@ -3563,8 +3630,13 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                     className="hex"
                     style={{ flex: 1 }}
                     title="Double-click to rename"
-                    onDoubleClick={() => {
-                      const name = window.prompt("Rename style", st.name);
+                    onDoubleClick={async () => {
+                      const name = await askPrompt({
+                        title: "Rename style",
+                        label: "Name",
+                        value: st.name,
+                        confirmLabel: "Rename",
+                      });
                       if (!name?.trim() || name.trim() === st.name) return;
                       engine.dispatch({ type: "editStyle", id: st.id, name: name.trim() });
                     }}
@@ -3589,8 +3661,15 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                     className="mini"
                     title={`Edit ${st.name}`}
                     aria-label={`Edit style ${st.name}`}
-                    onClick={() => {
-                      const next = window.prompt(`Colour for ${st.name}`, st.color);
+                    onClick={async () => {
+                      const next = await askPrompt({
+                        title: `Colour for ${st.name}`,
+                        label: "Hex colour",
+                        value: st.color,
+                        hint: "The leading # is optional",
+                        confirmLabel: "Set colour",
+                        validate: (v) => (v.trim() ? null : "Enter a colour, e.g. #10b981"),
+                      });
                       if (!next) return;
                       const hex = next.trim().startsWith("#") ? next.trim() : `#${next.trim()}`;
                       engine.dispatch({ type: "editStyle", id: st.id, color: hex });

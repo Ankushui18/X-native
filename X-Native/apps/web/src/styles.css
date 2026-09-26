@@ -4259,6 +4259,11 @@ html[data-theme="dark"] .x-btn-danger {
   color: #f87171;
   border-color: rgba(220, 38, 38, 0.4);
 }
+/* A destructive button must not wear the accent ring: the focus token (--blue)
+   holds the accent green, which reads as "safe" around a red action. */
+.x-btn-danger:focus-visible {
+  outline-color: var(--red);
+}
 
 .x-btn:disabled {
   opacity: 0.4;
@@ -4648,3 +4653,55 @@ html[data-theme="dark"] .x-btn-danger {
   cursor: pointer;
 }
 .bind-unbind:hover { background: var(--hover); color: var(--text); }
+
+/* ── Modal dialogs (PM-U1) ───────────────────────────────────────────────────
+   Prompt / confirm / choice bodies for the shared DialogHost. Everything
+   structural is the existing XDialog / XButton pair; only the field and its
+   feedback are local to this flow. */
+.dlg-body {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+/* Buttons are the shared XButton primitive (x-btn-*), so the dialog footer
+   matches every other surface; only the field and its feedback are local. */
+.dlg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dlg-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dim);
+}
+.dlg-input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.dlg-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14);
+}
+.dlg-input.bad {
+  border-color: var(--red);
+}
+.dlg-hint,
+.dlg-error {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.dlg-hint {
+  color: var(--dim);
+}
+.dlg-error {
+  color: var(--red);
+}

@@ -172,7 +172,7 @@ styles (memory ~2482, Figma-correct). Engine has ONLY fill+stroke style slots.
 | FS-U6 | RETRACTED as filed: `patch` DOES generically detach (memory:2489–2499 — my earlier grep was head-truncated). Fill/stroke/type/radii/text edits correctly unbind. The chip text is TRUE. Remnants below (verified by full read + handler-by-handler check) | RETRACTED | — |
 | FS-U6′ | REAL remnant, FIXED: `hideSel` toggled `visible` without detaching a `visible` binding (the only bindable prop outside patch/resize/autoLayout, all verified covered) → toggle silently reverted on next relayout. Fix: detach visible + ownBindings.visible in hideSel (mirrors precedents). Tests: +4 in variables.test.mjs (100/0) | FIXED | P2 |
 | FS-U5 | FIXED: BindingChip replaced by the pill state of the same BindControl — every bound row shows its variable name (+ re-pick/unbind), multi divergent shows a lit Mixed ghost, structurally unbindable rows show a disabled ghost with the reason. visible/text have no inspector row (unchanged). Known tradeoff: 4 independent-corner fields each show the one cornerRadii pill | FIXED (P1) | — |
-| FS-U2 | Native window.prompt/confirm in ≥10 UI sites (variable/collection/mode rename+create, mode+style delete/create, new-file confirm, offset distance, project name) — blocking browser dialogs instead of X-Native modals (§17) | DRIFT | P1 |
+| FS-U2 | FIXED: 0 native prompt/confirm left in src (18 call sites). New `ui/dialog.ts` (promise bus: askConfirm/askPrompt/askChoice, queued so nested questions stay ordered, resolve is idempotent) + `ui/DialogHost` on the shared XDialog (Escape/backdrop = cancel, capture-phase Escape so the editor's global Escape does not also fire, primary action focused, prompt auto-selects its current value, Enter submits, inline validation refuses with a reason instead of silently doing nothing). Host mounted once in main.tsx over both routes. The style fill/stroke `confirm` (Cancel used to mean "fill") is a real 3-way choice. XButton gained forwardRef for dialog focus; XDialog gained aria-modal. NOTE: dashboard had 10 toast() call sites and rendered none — added, or a dialog's success message landed nowhere. e2e §31 | FIXED (P1) | — |
 | FS-U3 | Text/effect styles don't exist in engine (only fill+stroke slots) — OUT OF SCOPE per §3/§35, not missing UI | OOS | — |
 | FS-U4 | Plus/eye/minus/export buttons use native title= throughout ColorRow/fill/stroke/effects | PARTIAL (§2.3) | P2 |
 
@@ -221,8 +221,13 @@ on-canvas gradient handles, star/poly param handles, frame-tool + badges, smart 
 
 ## §11. Popovers/Modals/Tabs trace (prompts §§17–19, 21–22)
 
-CORRECTION to §2.1: XPopover IS adopted (EffectPopover renders inside it). Still unused: XDialog,
-XTabs, XButton, XInput, XSelect, XSegmentedControl, PropertyField (except the hidden hack), ContextToolbar.
+CORRECTION to §2.1: XPopover IS adopted (EffectPopover renders inside it) — and the migration left a
+stale guard behind: EffectPopover kept its own outside-click handler matching `.fx-pop`, the class the
+shared popover replaced, so the guard matched nothing and **every click inside the shadow popover closed
+it** (fields could be opened, not used; Enter/Tab-committed edits from a focused-by-script field worked,
+which is why no unit test caught it). FIXED: dismissal is XPopover's alone; only the ⌘D echo remains here.
+Still unused: XDialog (now used by DialogHost — see PM-U1), XTabs, XSelect, XSegmentedControl,
+PropertyField (except the hidden hack), ContextToolbar. XButton gained forwardRef for the dialogs.
 CONNECTED: FillPicker (anchor+flip+clamp, Esc, outside-click, role=dialog), EffectPopover (via XPopover,
 nested-picker-aware outside-click), ContextMenu (clamped, Esc, outside, arrow nav incl. submenus),
 Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, empty state), NudgeDialog
@@ -230,7 +235,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| PM-U1 (=FS-U2) | ≥10 native window.prompt/confirm sites and NO X-Native confirm/prompt modal (XDialog unused, no wrapper). Fix: XConfirm/XPrompt on XDialog + migrate all sites | MISSING UI | P1 |
+| PM-U1 (=FS-U2) | FIXED — same work: one XDialog-backed prompt/confirm/choice (no separate XConfirm component was needed; the bus is the wrapper). 32 headless checks on the bus (cancel values, queue order, double-settle, no-host fallback) + e2e §31 (no native dialog call recorded during rename, create, delete, style choice, dashboard project). PM-U6 (focus) covered for the new dialogs: primary action focused, prompt selects its value | FIXED (P1) | — |
 | PM-U2 | Actions palette has no outside-click close (no veil/backdrop; Esc/run/close only) | PARTIAL | P2 |
 | PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
 | PM-U4 | NudgeDialog wears help-pop/help-card styles (a prefs dialog in help clothing) | DRIFT (§29) | P2 |
@@ -289,7 +294,8 @@ palette (max-width/max-height/scroll).
   (IN-U5); Resources opens the command palette (TB-U1); duplicate Outline-stroke buttons diverge (IN-U2).
 - FEEDBACK: bound-value edits vanish without notice (FS-U6); AgentPane swallows unmatched input (LP-U6);
   multi-select shows first-layer values as shared (IN-U1/TY-U3).
-- ERROR PREVENTION: guard toasts on binding (good); native confirm() for destructive mode delete (PM-U1);
+- ERROR PREVENTION: guard toasts on binding (good); destructive mode/collection delete now names what is lost
+  and uses a red confirm instead of a native OK/Cancel (PM-U1 FIXED);
   corrupt→toast + fresh doc (honest, minimal).
 - ACCESSIBILITY: align/valign/decoration buttons have no accessible name at all (TY-U2); tooltips are
   pointer-only (TY-U6); tool flyouts/menu-less popovers lack keyboard paths (TB-U2); dialogs lack initial
@@ -300,12 +306,41 @@ palette (max-width/max-height/scroll).
   badged); inspector has the best primitives (Section/Field) with the worst multi-select honesty;
   toolbar has a duplicate + mouse-only flyouts; popovers are individually good but unshared; modals are
   bespoke + native-dialog-backed.
+- TOKEN NAMING: `--blue` holds the accent green (#0e9f6e / #10b981) in both themes — so the global focus
+  ring is green everywhere, and a destructive confirm needed an explicit `outline-color` override to stop
+  reading as the safe action. Renaming the token is a wide, risky sweep; recorded, not done.
 - TYPOGRAPHY/ICONOGRAPHY/SPACING/COLOR: type scale + icon scale disciplined (12/14/16); spacing and
   radius have NO token scales (ad-hoc gaps/radii everywhere); color tokens complete incl. dark theme +
   green/red/amber, but canvas + chips bypass them with hardcoded values.
 - MOTION/PERFORMANCE PERCEPTION: motion restrained and non-blocking (pass); memo'd panel/tree + hover
   guards show perf intent; full-snapshot subscriptions remain the structural risk (§33 — not measured
   here for lack of a browser).
+
+## §4b. Behaviour suite status (PM-U1 pass, 2026-09-26)
+
+The suite is runnable in this sandbox again: `npm i -D @sparticuz/chromium`, brotli-extract `al2023.tar.br`
+and launch with `CHROMIUM_PATH=/tmp/chromium CHROMIUM_LIBS=/tmp/al2023x/lib npm run test:e2e`.
+155 pass / 24 fail, no crash. **Attribution measured, not assumed**: the identical suite was run against
+`0a910ce` on a second port — 30 failures there, 24 now: the 6 fixed are the 5 dialog checks and the
+effect-popover check that could not run before (its guard bug is above). Nothing in the list is
+caused by the dialog migration or the FS-U1 inspector work.
+
+Was previously unreachable: the suite died at §10 on a stale selector (the colour-copy "+" moved into the
+Vars pane's Styles subtab), so §§11–30 had **never executed in this environment**. Fixed, plus three more
+blockers: §18's effect popover selectors (`.fx-pop` → the shared `.x-popover`, fields addressed by name),
+every `clickRow` helper (`.panel.left .row` now starts with the Pages list, so index 0 was a *page* —
+clicking it switched page and shift-clicking it cleared the selection), and §TY-U3's text setup
+(crash-proof + a deselect first, since T on a selected text layer edits it).
+
+Open, pre-existing (each verified failing at baseline, all outside PM-U1/FS-U1):
+pixel/canvas assertions (stamped/unstamped fills and strokes read 0px under the software rasteriser:
+§"Card keeps radius 8 and stroke 2", sketch/.fig fills, stroke stack, style repaint + reload), "every
+inspector section is collapsible", "creating a style lists it", "three effects do not overflow the panel"
+(1164 > 912 — the popover refactor's own budget), the boolean-menu marquee, "locked selection drops the
+accent", the corrupt-save toast, and the TY-U3 text-size section — that one is a **product finding**:
+dragging with the text tool creates the layer at a position unrelated to the drag (three runs: (497,968),
+(-43,800), (228,800) for drags at (820,640)/(1020,640)), and inside the sample document's frame, so the
+new rows are nested and the section cannot address them.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
