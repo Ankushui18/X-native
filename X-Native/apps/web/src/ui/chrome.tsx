@@ -1006,10 +1006,15 @@ export function Toolbar({
   engine,
   snap,
   onActions,
+  onNav,
 }: {
   engine: Engine;
   snap: Snapshot;
   onActions: () => void;
+  /** App-owned nav switch. When present the Resources key opens the Assets
+   *  pane (its label's promise); without it the key falls back to the
+   *  palette, which is also reachable from the dedicated Actions key. */
+  onNav?: (n: NavId) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const [boolOpen, setBoolOpen] = useState(false);
@@ -1202,8 +1207,12 @@ export function Toolbar({
       <div className="div" />
       <div className="toolset right">
       <div className="tool">
-        <Tooltip label="Resources" shortcut="⌘/">
-          <button className="hit" aria-label="Resources" onClick={onActions}>
+        <Tooltip label="Assets" shortcut="⌥2">
+          <button
+            className="hit"
+            aria-label="Assets"
+            onClick={() => (onNav ? onNav("assets") : onActions())}
+          >
             <Icon name="resources" size={16} />
           </button>
         </Tooltip>

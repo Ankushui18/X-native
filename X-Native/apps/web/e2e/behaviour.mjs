@@ -1049,6 +1049,37 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 22. cross-panel navigation: the toolbar key and the inspector bridge -----
+{
+  const p = await page();
+  await rows(p);
+  // TB-U1: the toolbar's resources key opens the Assets pane, not the palette
+  // (the dedicated Actions key keeps the ⌘/ palette).
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Assets"]').click());
+  await sleep(400);
+  t("toolbar Assets opens the Assets pane",
+    await p.evaluate(() => [...document.querySelectorAll(".panel.left .section-label")]
+      .some(el => /Local components/.test(el.textContent || ""))));
+  t("toolbar Assets does not open the actions palette",
+    await p.evaluate(() => !document.querySelector(".actions")));
+  // LP-U1: with nothing selected the inspector's bridge row opens Variables.
+  await p.evaluate(() => [...document.querySelectorAll(".panel.left .nav, .rail .nav")]
+    .find(el => /file/i.test(el.textContent || ""))?.click());
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const bridge = await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".inspector button.link")]
+      .find(x => /Open variables/.test(x.textContent || ""));
+    if (el) el.click();
+    return !!el;
+  });
+  t("inspector shows the variables bridge with nothing selected", bridge);
+  await sleep(400);
+  t("bridge opens the Variables pane",
+    await p.evaluate(() => /Variables/.test(document.querySelector(".panel.left")?.textContent || "")));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

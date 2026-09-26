@@ -607,7 +607,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
           />
         ) : (
           <>
-            <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} />
+            <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} onNav={setNav} />
             <HelpBtn />
           </>
         )}
@@ -641,6 +641,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onShare={share}
         exportOpen={exportOpen}
         onCloseExport={() => setExportOpen(false)}
+        onOpenVariables={() => setNav("variables")}
       />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
       {toast && <div className="toast">{toast}</div>}

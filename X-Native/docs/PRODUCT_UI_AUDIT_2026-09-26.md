@@ -97,7 +97,7 @@ token EXISTS (alias of --line) — divider renders; cleared.
 | Multi-select: make/boolean/flatten | dispatch makeComponent/boolean/flatten | CONNECTED | — |
 | Dev Mode toggle | `setRightTab` inspect/design + aria-pressed | CONNECTED | — |
 | VecEdit Done | `setVecEdit` null | CONNECTED (+P2: native title=) | P2 |
-| TB-U1 Resources + Actions | BOTH call onActions; BOTH claim ⌘/; adjacent | DUPLICATE + misleading label | P1 |
+| TB-U1 Resources + Actions | FIXED: Resources key retargeted to Assets pane via onNav (label "Assets", ⌥2); Actions key keeps the ⌘/ palette | FIXED (P1) | — |
 | TB-U2 tool flyouts | no arrows/Esc/focus mgmt; global Esc skips toolbar `open` | PARTIAL (mouse-only menu) | P1 |
 | TB-U3 Prototype entry | rightTab via ⇧E/palette only; no toolbar button; palette shows no sc | MISSING UI (undiscoverable) | P1 |
 | TB-U4 caret + Done tooltips | native `title=` inside a Tooltip-using component | PARTIAL (§2.3) | P2 |
@@ -248,7 +248,7 @@ palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| LP-U1 | "Open variables & styles" (no-selection inspector) dispatches setLeftTab(tokens) — but NOTHING reads leftTab; the panel runs on local nav state → button does nothing visible. Fix: plumb onNav to RightPanel (App owns setNav) or unify panel on leftTab | DEAD UI | P1 |
+| LP-U1 | FIXED: RightPanel/PageDesign take onOpenVariables from App (setNav("variables")); legacy setLeftTab kept as fallback only | FIXED (P1) | — |
 | LP-U2 | leftTab is write-only engine state (⌥1..3 writes it alongside the working onNav; zero readers) — remove or unify (same fix) | DEAD STATE | P2 |
 | LP-U3 | Empty page = blank tree, no teaching empty state (assets HAS one; layers doesn't) | MISSING UI | P2 |
 | LP-U4 | Zero first-run onboarding anywhere (no welcome/empty-canvas guidance) — §25 steps 1–3 fail cold. Fix: minimal dismissible empty-canvas hints | MISSING UI | P2 |

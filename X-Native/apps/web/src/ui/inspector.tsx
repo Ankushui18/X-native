@@ -157,6 +157,7 @@ export function RightPanel({
   onShare,
   exportOpen,
   onCloseExport,
+  onOpenVariables,
 }: {
   engine: Engine;
   snap: Snapshot;
@@ -165,6 +166,10 @@ export function RightPanel({
   /** ⇧⌘E's bulk sheet. App owns the flag so Escape can be handled centrally. */
   exportOpen?: boolean;
   onCloseExport?: () => void;
+  /** App-owned nav switch to the Variables pane. Without it the "Open
+   *  variables & styles" row falls back to the legacy setLeftTab dispatch,
+   *  which no panel reads. */
+  onOpenVariables?: () => void;
 }) {
   const tabs: { id: RightTab; label: string }[] = [
     { id: "design", label: "Design" },
@@ -238,7 +243,7 @@ export function RightPanel({
         {inspect && <Inspect n={n} engine={engine} snap={snap} />}
         {snap.rightTab === "design" && !inspect && !n && (
           <>
-            <PageDesign engine={engine} tool={snap.tool} />
+            <PageDesign engine={engine} tool={snap.tool} onOpenVariables={onOpenVariables} />
             <DesignHealth engine={engine} snap={snap} />
           </>
         )}
@@ -607,7 +612,15 @@ function DesignHealth({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   );
 }
 
-function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
+function PageDesign({
+  engine,
+  tool,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  tool: string;
+  onOpenVariables?: () => void;
+}) {
   const snap = engine.snapshot();
   const root = snap.pages[snap.page].root;
   return (
@@ -695,8 +708,18 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
       </div>
       <div className="insp-pad">
         {/* With nothing selected the file's local styles and variables live
-            in the left panel's Variables tab; this row is the bridge there. */}
-        <button className="link" onClick={() => engine.dispatch({ type: "setLeftTab", tab: "tokens" })}>
+            in the left panel's Variables tab; this row is the bridge there,
+            through the App-owned nav the panel actually reads. */}
+        <button
+          className="link"
+          onClick={() => {
+            if (onOpenVariables) {
+              onOpenVariables();
+              return;
+            }
+            engine.dispatch({ type: "setLeftTab", tab: "tokens" });
+          }}
+        >
           Open variables &amp; styles
         </button>
       </div>
