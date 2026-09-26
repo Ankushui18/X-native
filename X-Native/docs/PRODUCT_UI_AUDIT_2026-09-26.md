@@ -200,6 +200,24 @@ viewport clamp, role=tooltip; empty shortcut renders nothing).
 | TY-U5 | Hidden x-ui "wiring" div (`display:none` PropertyField to force bundling) — dead UI + bundling hack; one of only 3 x-ui usages | DEAD UI | P2 |
 | TY-U6 | Tooltip is pointer-only (no focus trigger) — keyboard users never see tooltips (§32) | PARTIAL | P2 |
 
+## §10. Frame/Selection canvas trace (prompts §§6, 8, 27–28) — Canvas render ~2085–2960
+
+CONNECTED & TYPE-AWARE: purple ring for component/instance, accent otherwise; frames 7px squares,
+shapes 6px squares, vectors/star/poly diamonds; text-hug side-only handles; line end-only handles;
+rotation/flip-aware chrome transform; hover ring + panel-hover highlight; multi = thin member outlines
++ combined box (ring + 8 handles + size badge, hit-tested first). Labels: top-level frames/sections/
+groups only (nested skipped), constant 11px, accent when active, off-screen culling, hidden while
+presenting; double-click label → inline rename (Enter commits, Esc cancels, empty→"Frame"). Rotate:
+zone-based 6–22px (parity-verified) + live angle readout while rotating, size badge otherwise. Extras:
+on-canvas gradient handles, star/poly param handles, frame-tool + badges, smart guides + gap badges.
+
+| # | Finding | Status | Pri |
+|---|---|---|---|
+| FR-U1 | LOCKED selection shows fully editable chrome (ring + handles + badge): `select` accepts any ids and the render loop has no locked branch — but the engine refuses locked drags → dead handles. Fix: locked chrome (grey/dashed ring, suppressed handles or lock badge) | BROKEN (chrome lies) | P1 |
+| FR-U2 | Chrome colors hardcoded in Canvas consts (#10b981 accent ≠ --accent #0e9f6e token; #a855f7, #fff, #ff3b6b) — bypass theme, can't adapt to dark mode; two different "accent" greens | DRIFT (§6) | P2 |
+| FR-U3 | Rotate affordance invisible (zone-only = Figma parity, but zero first-time discoverability) — roadmap: subtle corner affordance on hover | ROADMAP | P2 |
+| FR-U4 | Size/angle badge has no viewport clamp (by = sy+sh+8 can run off-screen at viewport bottom) | PARTIAL (§18 class) | P2 |
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
