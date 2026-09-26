@@ -169,7 +169,8 @@ styles (memory ~2482, Figma-correct). Engine has ONLY fill+stroke style slots.
 | # | Finding | Status | Pri |
 |---|---|---|---|
 | FS-U1 | NO property-first variable binding: ColorRow/type/layout rows have zero bind affordance; binding requires leaving the inspector for the left Variables tab (variable-first only). §13 expects variable in the picker flow | MISSING UI | P1 |
-| FS-U6 | Bound fill/stroke edits are SILENTLY OVERWRITTEN: BindingChip promises "editing the value directly unbinds it", but `patch` (memory:2432) never clears variableBindings.fill/strokePaint — next evaluation re-applies the binding and the edit vanishes. Engine already does "explicit edit wins" for w/h (resize), layout keys, AND styles — fill/stroke bindings were missed | BROKEN (state lie + lost edit) | P1 |
+| FS-U6 | RETRACTED as filed: `patch` DOES generically detach (memory:2489–2499 — my earlier grep was head-truncated). Fill/stroke/type/radii/text edits correctly unbind. The chip text is TRUE. Remnants below (verified by full read + handler-by-handler check) | RETRACTED | — |
+| FS-U6′ | REAL remnant, FIXED: `hideSel` toggled `visible` without detaching a `visible` binding (the only bindable prop outside patch/resize/autoLayout, all verified covered) → toggle silently reverted on next relayout. Fix: detach visible + ownBindings.visible in hideSel (mirrors precedents). Tests: +4 in variables.test.mjs (100/0) | FIXED | P2 |
 | FS-U5 | BindingChip renders ONLY for fill + strokePaint: all other bindable props (opacity? fontSize? layoutGap? w/h?) show no indicator when bound, so FS-U6-class surprises are invisible there too | PARTIAL | P1 |
 | FS-U2 | Native window.prompt/confirm in ≥10 UI sites (variable/collection/mode rename+create, mode+style delete/create, new-file confirm, offset distance, project name) — blocking browser dialogs instead of X-Native modals (§17) | DRIFT | P1 |
 | FS-U3 | Text/effect styles don't exist in engine (only fill+stroke slots) — OUT OF SCOPE per §3/§35, not missing UI | OOS | — |
@@ -195,7 +196,7 @@ viewport clamp, role=tooltip; empty shortcut renders nothing).
 | TY-U1 | ITALIC has zero inspector UI: ⌘I chord + `italic` model exist (KB-002) but "italic" appears nowhere in inspector.tsx — keyboard-only, undiscoverable. Fix: toggle in type row/popover | MISSING UI | P1 |
 | TY-U2 | Align (4) + valign (3) + underline + strike buttons carry NO tooltip/aria/label of any kind — icon-only, undiscoverable, screen-reader invisible; the resize-mode seg directly above HAS Tooltips | MISSING LABELS | P1 |
 | TY-U3 | Multi-select type metrics (size/leading/tracking/¶ + family/weight selects) show FIRST-layer values, no Mixed — IN-U1 sibling (§29) | PARTIAL | P1 |
-| FS-U6 scope+ | patchType→patch, so bound type/layout props share the silent-overwrite bug (fix in `patch` covers all) | (fold into FS-U6) | P1 |
+| FS-U6 scope+ | RETRACTED with FS-U6: patchType→patch detaches correctly (verified) | — | — |
 | TY-U4 | Round-to-pixels button has BOTH Tooltip wrapper AND native title= → double tooltip | DRIFT | P2 |
 | TY-U5 | Hidden x-ui "wiring" div (`display:none` PropertyField to force bundling) — dead UI + bundling hack; one of only 3 x-ui usages | DEAD UI | P2 |
 | TY-U6 | Tooltip is pointer-only (no focus trigger) — keyboard users never see tooltips (§32) | PARTIAL | P2 |

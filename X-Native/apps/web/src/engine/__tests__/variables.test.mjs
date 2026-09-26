@@ -451,5 +451,20 @@ console.log("§18 pin hygiene:");
   t("reset clears pins", !byId(e, inst2).children[0].variableBindings?.fill);
 }
 
+// FS-U6': hideSel detaches a `visible` binding (explicit edit wins).
+{
+  const e = new MemoryEngine(false);
+  e.dispatch({ type: "addVariable", variable: { id: "v-vis", name: "vis", type: "boolean", value: true, collection: "Flags" } });
+  e.dispatch({ type: "add", kind: "rect", x: 10, y: 10, w: 100, h: 60 });
+  const id = snapOf(e).selection[0];
+  e.dispatch({ type: "bindVariable", id, prop: "visible", variableId: "v-vis" });
+  t("visible binding lands", byId(e, id).variableBindings?.visible === "v-vis");
+  e.dispatch({ type: "hideSel" });
+  t("hideSel toggles a bound layer", byId(e, id).visible === false);
+  t("hideSel detaches the visible binding", byId(e, id).variableBindings?.visible === undefined);
+  e.dispatch({ type: "select", ids: [id] });
+  t("toggle survives the next relayout", byId(e, id).visible === false);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

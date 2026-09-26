@@ -2726,6 +2726,18 @@ export class MemoryEngine implements Engine {
           const n = find(this.root(), id);
           if (n) {
             n.visible = !n.visible;
+            // FS-U6': an explicit visibility toggle wins over a `visible`
+            // binding (same detach rule as patch/resize/autoLayout) —
+            // otherwise the next relayout re-applies the binding and the
+            // toggle silently reverts.
+            if (n.variableBindings?.visible) {
+              delete n.variableBindings.visible;
+              if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+            }
+            if (n.ownBindings?.visible) {
+              delete n.ownBindings.visible;
+              if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+            }
             this.publishIfMasterEdit(id);
           }
         }
