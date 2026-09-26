@@ -11,6 +11,7 @@
  * lives here is the arithmetic of "which point stays put".
  */
 
+
 export interface Box {
   x: number;
   y: number;
@@ -64,6 +65,7 @@ export function unionBox(boxes: Box[]): Box {
  * and 0.5/0.5 its centre). A factor below 1 shrinks toward the anchor, which is
  * the one thing the anchor box changes: everything else is the same map.
  */
+
 export function scaleBoxAround(box: Box, f: number, ax: number, ay: number): Box {
   const px = box.x + box.w * ax;
   const py = box.y + box.h * ay;
@@ -86,6 +88,7 @@ export function sizeKeepingRatio(box: Box, next: { w?: number; h?: number }): Bo
  * them apart: keeps the relative positions and the gaps, so the whole
  * group maps as one.
  */
+
 export function scaleMembers(box: Box, members: Box[], f: number, anchor: ScaleAnchor): Box[] {
   const { ax, ay } = anchorOf(anchor);
   const px = box.x + box.w * ax;
@@ -117,16 +120,69 @@ export function factorBetween(from: number, to: number): number {
  * returns the same numbers the old code wrote for every layer that never
  * touched the target.
  */
+
+/** The six alignment modes the Position section offers. */
+export type AlignMode =
+  | "align-left"
+  | "align-hcenter"
+  | "align-right"
+  | "align-top"
+  | "align-vcenter"
+  | "align-bottom";
+
+/**
+ * The delta that plants a group's union box on its parent's edge. Aligning a
+ * multi-selection to its parent moves the whole group rigidly — every member
+ * takes this same delta — and members of different frames form one group per
+ * frame, each against its own parent. The union box and the parent size are
+ * both in the parent's local coordinates.
+ */
+
+export function parentAlignDelta(
+  mode: AlignMode,
+  union: Box,
+  parentW: number,
+  parentH: number,
+): { dx: number; dy: number } {
+  switch (mode) {
+    case "align-left":
+      return { dx: -union.x, dy: 0 };
+    case "align-right":
+      return { dx: parentW - union.w - union.x, dy: 0 };
+    case "align-hcenter":
+      return { dx: (parentW - union.w) / 2 - union.x, dy: 0 };
+    case "align-top":
+      return { dx: 0, dy: -union.y };
+    case "align-bottom":
+      return { dx: 0, dy: parentH - union.h - union.y };
+    case "align-vcenter":
+      return { dx: 0, dy: (parentH - union.h) / 2 - union.y };
+  }
+}
+
+/** Fold any angle into (-180, 180]: 190 becomes -170, -190 becomes 170. Every
+ *  rotation write — the panel field, the canvas drag, the ungroup inherit —
+ *  passes through this, so stored rotation always matches the ±180 range the
+ *  Figma rotation control shows. */
+export function wrapRotationDeg(deg: number): number {
+  let r = deg;
+  while (r > 180) r -= 360;
+  while (r <= -180) r += 360;
+  // A -0 turns the field's "-0°" into "0°".
+  return r === 0 ? 0 : r;
+}
+
 export function rotateAboutOrigin(
   box: Box & { rotation: number },
   origin: readonly [number, number],
   deg: number,
 ): { x: number; y: number; rotation: number } {
+  const target = wrapRotationDeg(deg);
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
   const px = box.x + origin[0] * box.w;
   const py = box.y + origin[1] * box.h;
-  const d = ((deg - box.rotation) * Math.PI) / 180;
+  const d = ((target - wrapRotationDeg(box.rotation)) * Math.PI) / 180;
   const cos = Math.cos(d);
   const sin = Math.sin(d);
   const dx = px - cx;
@@ -134,5 +190,5 @@ export function rotateAboutOrigin(
   // Where the pivot ends up once the box has turned about its centre.
   const sx = cx + dx * cos - dy * sin;
   const sy = cy + dx * sin + dy * cos;
-  return { x: box.x + (px - sx), y: box.y + (py - sy), rotation: deg };
+  return { x: box.x + (px - sx), y: box.y + (py - sy), rotation: target };
 }

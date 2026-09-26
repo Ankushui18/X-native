@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { GradientStop } from "../engine/types";
 import { Icon, caretSize } from "./icons";
+import { useRestoreFocus } from "./a11y";
 import {
   armEyedrop,
   BLENDS,
@@ -32,6 +33,7 @@ import {
   type ImageFit,
 } from "./color";
 import { rememberImage } from "../engine/assets";
+import { mixHex } from "../engine/paint";
 import { armPopover } from "./popoverGuard";
 
 export interface FillValue {
@@ -43,6 +45,7 @@ export interface FillValue {
   image?: string;
   imageFit?: ImageFit;
   imageRot?: number;
+  imageTile?: number;
   imageExposure?: number;
   imageContrast?: number;
   imageSaturation?: number;
@@ -74,6 +77,9 @@ export function FillPicker({
   anchor,
   background,
   largeText,
+  noImage,
+  stroke,
+  onCrop,
   onChange,
   onClose,
 }: {
@@ -81,6 +87,14 @@ export function FillPicker({
   value: FillValue;
   recents: string[];
   anchor: DOMRect;
+  /** Strokes take no image fill, so the type menu offers no dead Image
+   *  option for them. */
+  noImage?: boolean;
+  /** Enter the canvas crop tool (image fills only; base fill only). */
+  onCrop?: () => void;
+  /** Stroke paint: gradient/image/blend strokes are unimplemented, so the
+   *  picker offers Solid only and hides the dead blend menu. */
+  stroke?: boolean;
   /** What the colour is painted over, resolved from the layer's own ancestry so
    *  the check means something on the canvas rather than only against white. */
   background?: string;
@@ -89,6 +103,7 @@ export function FillPicker({
   onChange: (v: FillValue) => void;
   onClose: () => void;
 }) {
+  useRestoreFocus();
   const { r, g, b } = parseHex(value.color);
   const init = rgbToHsv(r, g, b);
   const [hsv, setHsv] = useState(init);
@@ -135,6 +150,28 @@ export function FillPicker({
         e.preventDefault();
         armEyedrop((c) => applyRgb(...hexToRgb(c)));
       }
+      // Delete (or Backspace) drops the selected gradient stop, like Figma —
+      // but never while typing in a field, and never below two stops.
+      if ((e.key === "Delete" || e.key === "Backspace") && !typing) {
+        const isGrad =
+          value.type === "linear" ||
+          value.type === "radial" ||
+          value.type === "angular" ||
+          value.type === "diamond";
+        const ramp = rampOf(value);
+        if (isGrad && ramp.length > 2) {
+          e.preventDefault();
+          const i = Math.min(stopIdx, ramp.length - 1);
+          const next = ramp.filter((_, k) => k !== i);
+          onChange({
+            ...value,
+            stops: next,
+            color: next[0].color,
+            second: next[next.length - 1].color,
+          });
+          setStopIdx(Math.max(0, i - 1));
+        }
+      }
     };
     window.addEventListener("mousedown", on);
     window.addEventListener("keydown", key);
@@ -145,7 +182,7 @@ export function FillPicker({
       window.removeEventListener("keydown", key);
       disarm();
     };
-  }, [onClose, value]);
+  }, [onClose, value, stopIdx]);
 
   const applyRgb = (rr: number, gg: number, bb: number, next?: Partial<FillValue>) => {
     const color = toHex(rr, gg, bb);
@@ -401,7 +438,7 @@ export function FillPicker({
         </button>
         {typeOpen && (
           <div className="type-menu">
-            {FILL_TYPES.map((t) => (
+            {FILL_TYPES.filter((t) => (stroke ? t.id === "solid" : !noImage || t.id !== "image")).map((t) => (
               <button
                 key={t.id}
                 className={value.type === t.id ? "on" : ""}
@@ -535,7 +572,7 @@ export function FillPicker({
                     title="Back to the background this layer actually sits on"
                     onClick={() => setBgOverride(null)}
                   >
-                    <Icon name="reset" size={11} />
+                    <Icon name="reset" size={12} />
                   </button>
                 )}
                 <select
@@ -553,11 +590,11 @@ export function FillPicker({
               <div className="a11y-result">
                 <strong>{ratio.toFixed(2)}:1</strong>
                 <span className={`a11y-badge${passAA ? " ok" : " bad"}`} title={`AA · ${targetAA}:1`}>
-                  AA <Icon name={passAA ? "check" : "x-mark"} size={11} />
+                  AA <Icon name={passAA ? "check" : "x-mark"} size={12} />
                 </span>
                 {hasAAA && (
                   <span className={`a11y-badge${passAAA ? " ok" : " bad"}`} title={`AAA · ${targetAAA}:1`}>
-                    AAA <Icon name={passAAA ? "check" : "x-mark"} size={11} />
+                    AAA <Icon name={passAAA ? "check" : "x-mark"} size={12} />
                   </span>
                 )}
                 {!passAA && (
@@ -622,6 +659,27 @@ export function FillPicker({
               </button>
             ))}
           </div>
+          {(value.imageFit || "fill") === "tile" && (
+            <label className="adj-row" title="Tile size as a percent of the image's original dimensions">
+              <span>Tile</span>
+              <input
+                type="number"
+                min={1}
+                max={400}
+                value={value.imageTile ?? 100}
+                onChange={(e) =>
+                  onChange({ ...value, imageTile: Math.max(1, Math.min(400, parseInt(e.target.value, 10) || 100)) } as FillValue)
+                }
+              />
+              <em>%</em>
+            </label>
+          )}
+          {(value.imageFit || "fill") === "crop" && value.image && onCrop && (
+            <button className="blend-row" onClick={onCrop}>
+              Crop image
+              <span>Edit ↓</span>
+            </button>
+          )}
           <button
             className="blend-row"
             title="Rotate fill 90°"
@@ -677,6 +735,8 @@ export function FillPicker({
         </div>
       )}
 
+      {!stroke && (
+      <>
       <button className="blend-row" onClick={() => setBlendOpen((v) => !v)}>
         Apply blend mode
         <span>
@@ -700,6 +760,8 @@ export function FillPicker({
             </button>
           ))}
         </div>
+      )}
+      </>
       )}
     </div>,
     document.body,
@@ -757,9 +819,11 @@ function GradientStops({
     const move = (ev: PointerEvent) => {
       const r = el.getBoundingClientRect();
       const t = Math.max(0, Math.min(1, (ev.clientX - r.left) / Math.max(1, r.width)));
-      const next = stops.map((s) => (s === id ? { ...s, position: t } : s));
-      const sorted = commit(next);
-      onSelect(sorted.findIndex((s) => s.color === id.color && s.position === t));
+      // Track the dragged stop by identity: matching on colour breaks when
+      // two stops share one (a fade holds the same colour twice).
+      const moved = { ...id, position: t };
+      const sorted = commit(stops.map((s) => (s === id ? moved : s)));
+      onSelect(sorted.indexOf(moved));
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -776,14 +840,20 @@ function GradientStops({
         ref={bar}
         style={{ background: css }}
         onPointerDown={(e) => {
-          // Clicking the bar inserts a stop sampled from the ramp at that point.
+          // Clicking the bar inserts a stop in the ramp's colour at that
+          // point — interpolated with the same OKLab mix the renderer uses,
+          // so the ramp looks identical after the insert.
           const r = e.currentTarget.getBoundingClientRect();
           const t = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
           let after = stops.findIndex((s) => s.position > t);
           if (after < 0) after = stops.length;
-          const before = Math.max(0, after - 1);
-          const sorted = commit([...stops, { color: stops[before].color, position: t }]);
-          onSelect(sorted.findIndex((s) => s.position === t));
+          const lo = stops[Math.max(0, after - 1)];
+          const hi = stops[Math.min(after, stops.length - 1)];
+          const span = hi.position - lo.position;
+          const color = mixHex(lo.color, hi.color, span > 0 ? (t - lo.position) / span : 0);
+          const fresh = { color, position: t };
+          const sorted = commit([...stops, fresh]);
+          onSelect(sorted.indexOf(fresh));
         }}
       >
         {stops.map((s, i) => (

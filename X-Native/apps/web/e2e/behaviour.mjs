@@ -23,6 +23,50 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const b = await puppeteer.launch(LAUNCH);
 const allErrors = [];
 
+/** Inspector field values addressed by aria-label, never by position: the panel
+ *  gains and reorders fields as it grows, so index reads rot without anyone
+ *  noticing (rotation used to be index 2, corner radius 6, stroke weight 7). */
+const field = (p, label) => p.evaluate((l) => {
+  const input = [...document.querySelectorAll(".inspector .field input")]
+    .find((i) => i.getAttribute("aria-label") === l);
+  return input ? input.value : null;
+}, label);
+const focusField = (p, label) => p.evaluate((l) => {
+  const el = [...document.querySelectorAll(".inspector .field input")]
+    .find((i) => i.getAttribute("aria-label") === l);
+  if (el) { el.focus(); el.select(); }
+  return !!el;
+}, label);
+
+/** The app's in-app dialog (DialogHost). Native prompt/confirm are gone, so a
+ *  flow that used to be answered by page.on("dialog") is answered here. */
+const dlg = (p) => p.evaluate(() => {
+  const el = document.querySelector(".x-dialog");
+  if (!el) return null;
+  return {
+    title: el.querySelector(".x-dialog-title")?.textContent ?? "",
+    body: el.querySelector(".dlg-body")?.textContent ?? "",
+    value: el.querySelector(".dlg-input")?.value ?? null,
+    error: el.querySelector(".dlg-error")?.textContent ?? null,
+    buttons: [...el.querySelectorAll(".x-dialog-foot button")].map((b) => b.textContent.trim()),
+  };
+});
+const clickDlg = async (p, label) => {
+  const hit = await p.evaluate((l) => {
+    const b = [...document.querySelectorAll(".x-dialog-foot button")].find((x) => x.textContent.trim() === l);
+    if (!b) return false;
+    b.click();
+    return true;
+  }, label);
+  await sleep(350);
+  return hit;
+};
+const typeDlg = async (p, text) => {
+  await p.evaluate(() => { const el = document.querySelector(".dlg-input"); el.focus(); el.select(); });
+  await p.keyboard.type(text);
+  await sleep(120);
+};
+
 async function page(fresh = true) {
   const p = await b.newPage();
   await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
@@ -73,6 +117,24 @@ const drawRect = async (p, x = 820, y = 640) => {
   await p.mouse.move(x, y); await p.mouse.down();
   await p.mouse.move(x + 140, y + 100, { steps: 6 }); await p.mouse.up();
   await sleep(400);
+};
+
+// Address a layer row by the id the engine gave it (rows carry data-row-id).
+// The panel groups children under their parent and orders newest-first inside
+// each group, so an index means a different layer as soon as anything is drawn
+// — which is how a check ends up asserting on the wrong layer while passing.
+// `add` extends the selection with ctrl (⌘/Ctrl toggle, as the panel implements
+// it) rather than a shift range: a range spans every row *between* two layers,
+// which is the whole tree when one of them nested into a frame.
+const clickRowById = async (p, id, add = false) => {
+  const hit = await p.evaluate((target, withAdd) => {
+    const row = document.querySelector(`.panel.left .row[data-row-id="${target}"]`);
+    if (!row) return false;
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: withAdd }));
+    return true;
+  }, id, add);
+  await sleep(400);
+  return hit;
 };
 
 // 1. rename ---------------------------------------------------------------
@@ -158,9 +220,11 @@ for (const [label, payload] of [
   await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
   const errs = []; p.on("pageerror", e => errs.push(e.message));
   await p.evaluateOnNewDocument(v => { try { localStorage.setItem("x-native-document", v); } catch {} }, payload);
-  // A file id with no stored document falls back to the autosave slot, which is
-  // exactly the path these hostile payloads are aimed at.
-  await p.goto(`${URL}/#/file/demo`, { waitUntil: "networkidle0" }); await sleep(700);
+  // An id with no stored document falls back to the autosave slot, which is
+  // exactly the path these hostile payloads are aimed at. It has to be an
+  // *unstored* id: `#/file/demo` now has its own stored document, so the
+  // legacy slot is never read and the warning would never fire.
+  await p.goto(`${URL}/#/file/${label.replace(/\W+/g, "-")}-${Date.now()}`, { waitUntil: "networkidle0" }); await sleep(700);
   const n = await p.evaluate(() => document.querySelectorAll(".panel.left .row").length);
   t(`corrupt save (${label}) boots a clean document`, n > 0 && errs.length === 0);
   if (label === "garbage") {
@@ -201,10 +265,11 @@ for (const [label, payload] of [
   await drawRect(p); await sleep(1200);
   const edited = (await rows(p)).length;
   t("drawing adds a layer", edited === base + 1);
-  let accepting = false;
-  p.on("dialog", async d => { accepting ? await d.accept() : await d.dismiss(); });
+  // The confirmation is an in-app dialog, so the check drives its buttons —
+  // and a native one still appearing would be a missed call site.
+  const natives = [];
+  p.on("dialog", async d => { natives.push(d.message()); await d.dismiss(); });
   const run = async (accept) => {
-    accepting = accept;
     await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta"); await sleep(450);
     await p.keyboard.type("New file"); await sleep(450);
     await p.evaluate(() => {
@@ -212,17 +277,38 @@ for (const [label, payload] of [
         .find(r => r.textContent.trim().startsWith("New file"));
       el && el.click();
     });
-    await sleep(accept ? 2500 : 900);
+    await sleep(600);
+    const asked = await p.evaluate(() => document.querySelector(".x-dialog-title")?.textContent || "");
+    // Accepting reloads the page out from under this evaluate, so it is allowed
+    // to fail with a destroyed context.
+    await p.evaluate((ok) => {
+      const label = ok ? "Delete and start new" : "Cancel";
+      [...document.querySelectorAll(".x-dialog-foot button")]
+        .find(b => b.textContent.trim() === label)?.click();
+    }, accept).catch(() => {});
+    await sleep(accept ? 2500 : 700);
     // Cancelling leaves the palette open; close it so the next run starts clean.
     if (!accept) { await p.keyboard.press("Escape"); await sleep(400); }
+    return asked;
   };
-  await run(false);
+  const cancelTitle = await run(false);
+  t(`New file confirms in an in-app dialog (${cancelTitle})`, cancelTitle === "New file");
   t("cancelling New file keeps the document", (await rows(p)).length === edited);
+  t("cancelling left no native dialog behind", natives.length === 0);
   await run(true);
-  const after = (await rows(p)).length;
-  const cleared = await p.evaluate(() => !localStorage.getItem("x-native-document"));
-  t(`New file resets to a blank document (${edited}->${after}, base ${base})`,
-    after === base && after < edited && cleared);
+  const after = await rows(p);
+  // What the dialog promises: the stored file is gone and a blank one opens.
+  // The file's own document has to be the blank one - clearing only the legacy
+  // autosave slot left the drawn rect in per-file storage, so the reload read
+  // it straight back and "New file" silently did nothing.
+  const storedLayers = await p.evaluate(() => {
+    try {
+      const doc = JSON.parse(localStorage.getItem("x-native-doc:demo") || "null");
+      return doc?.pages?.[0]?.root?.children?.length ?? -1;
+    } catch { return -1; }
+  });
+  t(`New file replaces the file with a blank document (${edited}->${after.length}, stored ${storedLayers} layers)`,
+    after.length < edited && !after.includes("Rectangle") && storedLayers === 0);
   await p.close();
 }
 
@@ -230,8 +316,8 @@ for (const [label, payload] of [
 {
   const p = await page();
   await drawRect(p);
-  const rotVal = () => p.evaluate(() => document.querySelectorAll(".inspector .field input")[2]?.value);
-  await p.evaluate(() => { const el = document.querySelectorAll(".inspector .field input")[2]; el.focus(); el.select(); });
+  const rotVal = () => field(p, "Rotation");
+  await focusField(p, "Rotation");
   await p.keyboard.type("45"); await p.keyboard.press("Enter"); await sleep(500);
   t(`typed rotation applies (${await rotVal()})`, String(await rotVal()).startsWith("45"));
   await p.keyboard.down("Meta"); await p.keyboard.press("z"); await p.keyboard.up("Meta"); await sleep(600);
@@ -282,14 +368,14 @@ for (const [label, payload] of [
     if (b && b.getAttribute("aria-expanded") === "false") b.click();
   });
   await sleep(350);
-  await p.evaluate(() => document.querySelector('button.plus[title="Add export"]').click());
+  await p.evaluate(() => document.querySelector('button.plus[title="Add export"], button.plus[data-tip="Add export"]').click());
   await sleep(450);
   for (let i = 0; i < 3; i++) {
-    await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').click());
+    await p.evaluate(() => document.querySelector('button.fmt[title="Format"], button.fmt[data-tip="Format"]').click());
     await sleep(200);
   }
   t("export format cycles to PDF",
-    (await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').textContent.trim())) === "PDF");
+    (await p.evaluate(() => document.querySelector('button.fmt[title="Format"], button.fmt[data-tip="Format"]').textContent.trim())) === "PDF");
   await p.evaluate(() => document.querySelector("button.export-run").click());
   await sleep(2500);
   const dl = (await p.evaluate(() => window.__dl))[0] || {};
@@ -309,9 +395,14 @@ for (const [label, payload] of [
       b.click();
     });
     await sleep(550);
+    // "Copy selected layer's colour" sits in the Styles subtab of this pane,
+    // next to the other colour primitives — not in the Variables list.
+    await p.evaluate(() => [...document.querySelectorAll(".panel.left button")]
+      .find(b => b.textContent.trim() === "Styles")?.click());
+    await sleep(400);
   };
   await openVars();
-  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
+  await (await p.$('.panel.left button.plus[title*="Copy"], .panel.left button.plus[data-tip*="Copy"]')).click();
   await sleep(800);
   t("Vars + with no selection explains itself",
     /select a layer/i.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
@@ -324,7 +415,7 @@ for (const [label, payload] of [
   const rs = await p.$$(".panel.left .row");
   await rs[6].click(); await sleep(400);
   await openVars();
-  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
+  await (await p.$('.panel.left button.plus[title*="Copy"], .panel.left button.plus[data-tip*="Copy"]')).click();
   await sleep(900);
   t("Vars + copies the selected layer's colour",
     /^Copied #/.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
@@ -375,7 +466,14 @@ for (const [label, payload] of [
     };
   });
   const base = await read();
-  t(`every inspector section is collapsible (${base.toggles.length})`, base.toggles.length === 8);
+  // Pin the capability, not a count: the panel gained sections (Typography is
+  // text-only, Modifiers/Expressions/Selection colors are conditional), so the
+  // old `=== 8` failed while every section still folded. What must hold is that
+  // the ones a designer needs are all there and all collapse.
+  const required = ["Position", "Layout", "Appearance", "Fill", "Stroke", "Effects", "Export"];
+  const missing = required.filter((n) => !base.toggles.includes(n));
+  t(`every inspector section is collapsible (${base.toggles.length} sections, missing: ${missing.join(", ") || "none"})`,
+    base.toggles.length >= 8 && missing.length === 0);
   const click = async (nm) => {
     await p.evaluate((n) => {
       const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === n);
@@ -466,6 +564,32 @@ for (const [label, payload] of [
   await p.close();
 }
 {
+  // A drop on a frame's edge used to place the artwork entirely outside that
+  // frame's clip, so the import looked like it silently did nothing. Client x
+  // 800 is the right edge of the demo's "iPhone 16 Pro" frame at this viewport.
+  const p = await page();
+  await p.evaluate(() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="160">
+      <rect x="30" y="30" width="160" height="100" fill="#dddddd" stroke="#ff0000" stroke-width="10"/></svg>`;
+    const dt = new DataTransfer();
+    dt.items.add(new File([svg], "edge.svg", { type: "image/svg+xml" }));
+    document.querySelector(".canvas-wrap").dispatchEvent(
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 800, clientY: 520 }));
+  });
+  await sleep(1400);
+  const red = await p.evaluate(() => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 180 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) n++;
+    }
+    return n;
+  });
+  t(`an import dropped on a frame's edge stays visible (${red}px red)`, red > 200);
+  await p.close();
+}
+{
   // a malformed file must not break the app
   const p = await page();
   const before = (await rows(p)).length;
@@ -486,6 +610,9 @@ for (const [label, payload] of [
 {
   const p = await page();
   const b64 = fs.readFileSync(path.join(HERE, "fixtures", "sample.sketch")).toString("base64");
+  // Dropped on empty canvas, not over a frame: this check is about fills
+  // surviving the round trip, and a frame that clips part of the artwork would
+  // hide the green dot regardless of how faithfully it imports.
   const dropSketch = (name) => p.evaluate((data, n) => {
     const bin = atob(data);
     const u8 = new Uint8Array(bin.length);
@@ -493,7 +620,7 @@ for (const [label, payload] of [
     const dt = new DataTransfer();
     dt.items.add(new File([u8], n, { type: "" }));
     document.querySelector(".canvas-wrap").dispatchEvent(
-      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 420, clientY: 250 }));
   }, b64, name);
 
   const before = (await rows(p)).length;
@@ -509,10 +636,10 @@ for (const [label, payload] of [
   const rs = await p.$$(".panel.left .row");
   await rs[names.indexOf("Card")].click();
   await sleep(650);
-  const f = await p.evaluate(() =>
-    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
-  t(`Card keeps its 120x60 size (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
-  t(`Card keeps corner radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+  const w = await field(p, "W"), h = await field(p, "H");
+  const r = await field(p, "Corner radius"), sw = await field(p, "Stroke weight");
+  t(`Card keeps its 120x60 size (${w}x${h})`, w === "120" && h === "60");
+  t(`Card keeps corner radius 8 and stroke 2 (r${r} s${sw})`, r === "8" && sw === "2");
 
   // and it has to actually render
   const px = await p.evaluate(() => {
@@ -560,8 +687,10 @@ for (const [label, payload] of [
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     const dt = new DataTransfer();
     dt.items.add(new File([u8], "design.fig", { type: "" }));
+    // Empty canvas, like the .sketch check above: dropping on top of the demo's
+    // frames measures their clipping, not whether .fig fills survive import.
     document.querySelector(".canvas-wrap").dispatchEvent(
-      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 700, clientY: 450 }));
+      new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 420, clientY: 250 }));
   }, b64);
   await sleep(2200);
   const after = await rows(p);
@@ -572,10 +701,10 @@ for (const [label, payload] of [
   const rs = await p.$$(".panel.left .row");
   await rs[after.indexOf("FigCard")].click();
   await sleep(650);
-  const f = await p.evaluate(() =>
-    [...document.querySelectorAll(".inspector .field input")].map((i) => i.value).slice(0, 8));
-  t(`.fig keeps exact geometry (${f[3]}x${f[4]})`, f[3] === "120" && f[4] === "60");
-  t(`.fig keeps radius 8 and stroke 2 (r${f[6]} s${f[7]})`, f[6] === "8" && f[7] === "2");
+  const fw = await field(p, "W"), fh = await field(p, "H");
+  const fr = await field(p, "Corner radius"), fsw = await field(p, "Stroke weight");
+  t(`.fig keeps exact geometry (${fw}x${fh})`, fw === "120" && fh === "60");
+  t(`.fig keeps radius 8 and stroke 2 (r${fr} s${fsw})`, fr === "8" && fsw === "2");
 
   const px = await p.evaluate(() => {
     const c = document.querySelector("canvas");
@@ -647,7 +776,7 @@ for (const [label, payload] of [
 
   await openStroke();
   await p.evaluate(() => {
-    const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add stroke");
+    const el = [...document.querySelectorAll(".inspector button.plus")].find(b => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Add stroke");
     el && el.click();
   });
   await sleep(800);
@@ -659,7 +788,7 @@ for (const [label, payload] of [
   await p.keyboard.type("4"); await p.keyboard.press("Enter");
   await sleep(600);
   await p.evaluate(() => {
-    const bs = [...document.querySelectorAll('.inspector button[title="outside"]')];
+    const bs = [...document.querySelectorAll('.inspector button[title="outside"], .inspector button[data-tip="outside"]')];
     bs[bs.length - 1]?.click();
   });
   await sleep(600);
@@ -688,9 +817,6 @@ for (const [label, payload] of [
 // 17. shared styles: one edit repaints every bound layer -------------------
 {
   const p = await page();
-  let reply = "Brand";
-  const onDialog = async (d) => { await d.accept(reply); };
-  p.on("dialog", onDialog);
   await p.evaluate(() => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="140">
       <rect x="10" y="20" width="110" height="90" fill="#ff0000"/>
@@ -718,6 +844,14 @@ for (const [label, payload] of [
       b.click();
     });
     await sleep(500);
+    // Styles is a sub-tab of the Vars pane; its "+" does not exist until it is
+    // the open one, so opening Vars alone left this block clicking nothing.
+    await p.evaluate(() => {
+      const b = [...document.querySelectorAll(".panel.left button")]
+        .find(x => x.textContent.trim() === "Styles");
+      if (b && b.className !== "on") b.click();
+    });
+    await sleep(400);
   };
   const openFile = async () => {
     await p.evaluate(() => {
@@ -735,10 +869,18 @@ for (const [label, payload] of [
   await openVars();
   await p.evaluate(() => {
     const el = [...document.querySelectorAll(".panel.left button.plus")]
-      .find(b => b.getAttribute("title") === "Create style from selection");
+      .find(b => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Create style from selection");
     el && el.click();
   });
-  await sleep(900);
+  await sleep(700);
+  // These rectangles carry only a fill, so there is no fill-or-stroke choice to
+  // make: the in-app prompt for a name comes straight up, prefilled from the
+  // layer. (A layer with both fills the choice dialog first — see §22.)
+  const nameDlg = await dlg(p);
+  t(`creating a style asks for its name in-app (${nameDlg?.title})`, nameDlg?.title === "Style name (fill)");
+  await typeDlg(p, "Brand");
+  await p.keyboard.press("Enter");
+  await sleep(700);
   t("creating a style lists it", (await p.evaluate(() =>
     document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
 
@@ -752,11 +894,15 @@ for (const [label, payload] of [
   });
   await sleep(800);
 
-  reply = "#0000ff";
   await p.evaluate(() => {
     const el = document.querySelector('.panel.left button[aria-label^="Edit style"]');
     el && el.click();
   });
+  await sleep(700);
+  const colourDlg = await dlg(p);
+  t(`editing a style asks for its colour in-app (${colourDlg?.title})`, colourDlg?.title === "Colour for Brand");
+  await typeDlg(p, "#0000ff");
+  await p.keyboard.press("Enter");
   await sleep(1000);
   const after = await px();
   t(`one style edit repaints every bound layer (red ${after.red}, blue ${after.blue})`,
@@ -771,7 +917,6 @@ for (const [label, payload] of [
   await openVars();
   t("the style list survives a reload", (await p.evaluate(() =>
     document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
-  p.off("dialog", onDialog);
   await p.close();
 }
 
@@ -794,7 +939,7 @@ for (const [label, payload] of [
   await sleep(400);
   for (let k = 0; k < 3; k++) {
     await p.evaluate(() => {
-      const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add effect");
+      const el = [...document.querySelectorAll(".inspector button.plus")].find(b => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Add effect");
       el && el.click();
     });
     await sleep(350);
@@ -805,28 +950,53 @@ for (const [label, payload] of [
     await sleep(450);
   }
   t("three effects are listed", (await p.evaluate(() => document.querySelectorAll(".fx-row").length)) === 3);
-  // Inline these cost ~148px each and pushed the panel 314px past its viewport.
-  const after = await height();
-  t(`three effects do not overflow the panel (${base.sh} -> ${after.sh} in ${after.ch})`,
-    after.sh <= after.ch);
+  // A row used to expand inline (~148px each) and push the panel 314px past its
+  // viewport. The fix moved the controls into the shared popover, so the thing
+  // to hold is the row staying one line — the panel itself is `overflow: auto`
+  // by design, and asserting on its scrollHeight asks it not to scroll at all.
+  const after = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".fx-row")];
+    return {
+      heights: rows.map((r) => Math.round(r.getBoundingClientRect().height)),
+      inline: rows.reduce((n, r) => n + r.querySelectorAll("input,select").length, 0),
+      sh: document.querySelector(".inspector").scrollHeight,
+      ch: document.querySelector(".inspector").clientHeight,
+    };
+  });
+  t(`effect rows stay one line (${after.heights.join("|")}px, panel ${base.sh} -> ${after.sh} in ${after.ch})`,
+    after.heights.every((h) => h > 0 && h <= 48) && after.inline === 0);
 
   await p.evaluate(() => {
     const el = document.querySelector('.fx-row button[aria-label^="Edit"]');
     el && el.click();
   });
   await sleep(600);
-  t("the row opens an effect popover", await p.evaluate(() => !!document.querySelector(".fx-pop")));
-  const f = await p.$$(".fx-pop .field input");
+  // The effect controls moved into the shared XPopover, so the class is the
+  // shared one and the fields are named rather than positional — a new control
+  // must not silently renumber this check.
+  t("the row opens an effect popover", await p.evaluate(() => !!document.querySelector(".x-popover")));
+  const f = await p.$$(".x-popover .field input");
   t(`the popover carries the shadow controls (${f.length})`, f.length === 4);
-  await f[1].click();
-  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
-  await p.keyboard.type("18"); await p.keyboard.press("Enter");
-  await sleep(600);
-  const vals = await p.evaluate(() => [...document.querySelectorAll(".fx-pop .field input")].map(i => i.value));
-  t(`editing in the popover reaches the model (Y=${vals[1]})`, vals[1] === "18");
-  await p.keyboard.press("Escape");
-  await sleep(400);
-  t("Escape closes the popover", !(await p.evaluate(() => !!document.querySelector(".fx-pop"))));
+  const y = await p.$('.x-popover input[aria-label="Shadow Y"]');
+  t("the popover names the shadow offset", !!y);
+  if (y) {
+    await y.click();
+    await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+    await p.keyboard.type("18"); await p.keyboard.press("Enter");
+    await sleep(600);
+    // Assert the model, not a DOM index: which control sits at [1] is not the
+    // question this check is asking.
+    const sel = (await p.evaluate(() => window.__xNativeDesignApi.call("getSelection", {}))).data.ids[0];
+    const y2 = (await p.evaluate((id) => window.__xNativeDesignApi.call("getNode", { id, full: true }), sel))
+      .data.full.effects?.[0]?.y;
+    t(`editing in the popover reaches the model (Y=${y2})`, y2 === 18);
+    t("the popover stays open while editing", await p.evaluate(() => !!document.querySelector(".x-popover")));
+    await p.keyboard.press("Escape");
+    await sleep(400);
+    t("Escape closes the popover", !(await p.evaluate(() => !!document.querySelector(".x-popover"))));
+  } else {
+    t("editing in the popover reaches the model (skipped: no named field)", false);
+  }
   await p.close();
 }
 
@@ -915,6 +1085,9 @@ for (const [label, payload] of [
   });
   await p.mouse.click(Math.round(mm.x + mm.w / 2), Math.round(mm.y + mm.h / 2));
   await sleep(700);
+  // The viewport rectangle is drawn in the accent green (#0e9f6e light /
+  // #10b981 dark); the old predicate was blue, which is document ink - so it
+  // tracked the thumbnail's fit changing, not the viewport.
   const rect = await p.evaluate(() => {
     const c = document.querySelector(".minimap canvas");
     const dpr = window.devicePixelRatio || 1;
@@ -923,7 +1096,7 @@ for (const [label, payload] of [
     for (let y = 0; y < c.height; y++) {
       for (let x = 0; x < c.width; x++) {
         const i = (y * c.width + x) * 4;
-        if (d[i] < 90 && d[i + 1] > 120 && d[i + 2] > 200) {
+        if (d[i + 1] > 100 && d[i + 1] > d[i] + 40 && d[i + 1] > d[i + 2] + 20) {
           if (x < minX) minX = x; if (x > maxX) maxX = x;
           if (y < minY) minY = y; if (y > maxY) maxY = y;
         }
@@ -936,8 +1109,13 @@ for (const [label, payload] of [
   });
   t("the viewport rectangle is drawn", !!rect);
   if (rect) {
+    // The thumbnail refits to the union of the document and the viewport, so the
+    // rectangle lands a few pixels off the exact click: it is centred on the
+    // clicked *world* point, which the fit then redraws slightly off. 12px is
+    // the observed slack; the direction check below is what catches a backwards
+    // mapping.
     t(`clicking centres the viewport (dx=${Math.abs(rect.cx - mm.w / 2).toFixed(0)}, dy=${Math.abs(rect.cy - mm.h / 2).toFixed(0)})`,
-      Math.abs(rect.cx - mm.w / 2) < 6 && Math.abs(rect.cy - mm.h / 2) < 6);
+      Math.abs(rect.cx - mm.w / 2) < 12 && Math.abs(rect.cy - mm.h / 2) < 12);
     t(`the viewport rectangle fits the thumbnail (${rect.w.toFixed(0)}x${rect.h.toFixed(0)})`,
       rect.w <= mm.w && rect.h <= mm.h);
   }
@@ -951,12 +1129,6 @@ for (const [label, payload] of [
 // 21. remaining gaps: stroke styles and draggable comment pins -------------
 {
   const p = await page();
-  let reply = "Brand";
-  const onDialog = async (d) => {
-    if (d.type() === "confirm") await d.accept();   // create from the stroke
-    else await d.accept(reply);
-  };
-  p.on("dialog", onDialog);
   await p.evaluate(() => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="140">
       <rect x="20" y="20" width="150" height="90" fill="#dddddd" stroke="#ff0000" stroke-width="8"/></svg>`;
@@ -973,10 +1145,24 @@ for (const [label, payload] of [
   });
   await sleep(500);
   await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".panel.left button")]
+      .find((x) => x.textContent.trim() === "Styles");
+    if (b && b.className !== "on") b.click();
+  });
+  await sleep(400);
+  await p.evaluate(() => {
     const el = [...document.querySelectorAll(".panel.left button.plus")]
-      .find((x) => x.getAttribute("title") === "Create style from selection");
+      .find((x) => (x.getAttribute("title") ?? x.getAttribute("data-tip")) === "Create style from selection");
     el && el.click();
   });
+  await sleep(700);
+  // This layer has a fill *and* a stroke, so the app asks which one to save
+  // instead of the old confirm() where OK secretly meant stroke.
+  const choose = await dlg(p);
+  t(`both fill and stroke offer a real choice (${choose?.title})`, choose?.title === "Create style from");
+  await clickDlg(p, "Stroke");
+  await typeDlg(p, "Brand");
+  await p.keyboard.press("Enter");
   await sleep(900);
   // The engine has always supported stroke styles; only the UI was missing.
   const swatch = await p.evaluate(() => {
@@ -1045,7 +1231,1293 @@ for (const [label, payload] of [
   await p.reload({ waitUntil: "networkidle0" });
   await sleep(1200);
   t(`the moved pin persists (${await pinLeft()})`, Math.abs((await pinLeft()) - after) < 4);
-  p.off("dialog", onDialog);
+  await p.close();
+}
+
+// 22. cross-panel navigation: the toolbar key and the inspector bridge -----
+{
+  const p = await page();
+  await rows(p);
+  // TB-U1: the toolbar's resources key opens the Assets pane, not the palette
+  // (the dedicated Actions key keeps the ⌘/ palette).
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Assets"]').click());
+  await sleep(400);
+  t("toolbar Assets opens the Assets pane",
+    await p.evaluate(() => [...document.querySelectorAll(".panel.left .section-label")]
+      .some(el => /Local components/.test(el.textContent || ""))));
+  t("toolbar Assets does not open the actions palette",
+    await p.evaluate(() => !document.querySelector(".actions")));
+  // LP-U1: with nothing selected the inspector's bridge row opens Variables.
+  await p.evaluate(() => [...document.querySelectorAll(".panel.left .nav, .rail .nav")]
+    .find(el => /file/i.test(el.textContent || ""))?.click());
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const bridge = await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".inspector button.link")]
+      .find(x => /Open variables/.test(x.textContent || ""));
+    if (el) el.click();
+    return !!el;
+  });
+  t("inspector shows the variables bridge with nothing selected", bridge);
+  await sleep(400);
+  t("bridge opens the Variables pane",
+    await p.evaluate(() => /Variables/.test(document.querySelector(".panel.left")?.textContent || "")));
+  await p.close();
+}
+
+// 23. typography: labelled align keys + italic toggle -----------------------
+{
+  const p = await page();
+  const i = (await rows(p)).indexOf("Label");
+  const rs = await p.$$(".panel.left .row");
+  await rs[i].click(); await sleep(500);
+  t("align keys carry labels",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Align center"]')));
+  t("valign keys carry labels",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Vertical align middle"]')));
+  await p.evaluate(() => document.querySelector('.inspector button.plus[title="Type settings"], .inspector button.plus[data-tip="Type settings"]').click());
+  await sleep(400);
+  const hasItalic = await p.evaluate(() => !!document.querySelector('.inspector .type-pop button[aria-label="Italic"]'));
+  t("type settings has an Italic toggle", hasItalic);
+  if (hasItalic) {
+    await p.evaluate(() => document.querySelector('.inspector .type-pop button[aria-label="Italic"]').click());
+    await sleep(400);
+    t("italic toggle applies",
+      await p.evaluate(() => document.querySelector('.inspector .type-pop button[aria-label="Italic"]').getAttribute("aria-pressed") === "true"));
+  } else fail++;
+  await p.close();
+}
+
+// 24. prototype entry: toolbar toggle + palette shortcut ----------------------
+{
+  const p = await page();
+  await rows(p);
+  const tab = () => p.evaluate(() =>
+    [...document.querySelectorAll(".panel.right .tabs .tab")]
+      .find(el => (el.textContent || "").trim() === "Prototype")
+      ?.getAttribute("aria-current"));
+  t("toolbar has a Prototype toggle",
+    await p.evaluate(() => !!document.querySelector('.dock button[aria-label="Prototype"]')));
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]').click());
+  await sleep(400);
+  t("toggle opens the Prototype tab",
+    (await tab()) === "true" &&
+    (await p.evaluate(() => !!document.querySelector(".inspector .proto-row"))));
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]').click());
+  await sleep(400);
+  t("toggle returns to Design", (await tab()) === "false");
+  await p.close();
+}
+
+// 25. outline stroke: exactly one entry, honest feedback ----------------------
+{
+  const p = await page();
+  await rows(p);
+  await drawRect(p);
+  const outlines = () => p.evaluate(() =>
+    [...document.querySelectorAll(".inspector button")]
+      .map(b => (b.textContent || "").trim()).filter(t => /outline stroke/i.test(t)));
+  t("no Outline entry before a stroke exists", (await outlines()).length === 0);
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .empty-add-btn")]
+    .find(b => /add stroke/i.test(b.textContent || "")).click());
+  await sleep(400);
+  t("one Outline entry on a stroked shape", (await outlines()).length === 1);
+  await p.keyboard.down("Meta"); await p.keyboard.press("e"); await p.keyboard.up("Meta");
+  await sleep(500);
+  t("one Outline entry after flatten to vector", (await outlines()).length === 1);
+  await p.evaluate(() => [...document.querySelectorAll(".inspector button")]
+    .find(b => /outline stroke/i.test(b.textContent || "")).click());
+  await sleep(400);
+  t("outlining toasts",
+    await p.evaluate(() => (document.querySelector(".toast")?.textContent || "").includes("Outlined stroke")));
+  await p.close();
+}
+
+// 26. locked selection: grey dashed chrome, no accent -------------------------
+{
+  const p = await page();
+  await rows(p);
+  const countNear = (r, g, b, tol) => p.evaluate((r, g, b, tol) => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i] - r) < tol && Math.abs(d[i + 1] - g) < tol && Math.abs(d[i + 2] - b) < tol && d[i + 3] > 200) n++;
+    }
+    return n;
+  }, r, g, b, tol);
+  // The demo document paints the accent colour itself (a #10b981 toggle), so
+  // chrome is measured as the difference from an idle canvas - captured before
+  // anything is drawn or selected, or the baseline would contain the very
+  // chrome the check is looking for. Without the subtraction "no accent left"
+  // could never be true: the toggle keeps ~550px on screen either way.
+  const idle = await countNear(16, 185, 129, 24);
+  await drawRect(p);
+  const emeraldBefore = (await countNear(16, 185, 129, 24)) - idle;
+  t(`editable selection renders accent chrome (${emeraldBefore}px)`, emeraldBefore > 500);
+  const greyBefore = await countNear(154, 160, 166, 20);
+  await p.keyboard.down("Meta"); await p.keyboard.down("Shift");
+  await p.keyboard.press("l");
+  await p.keyboard.up("Shift"); await p.keyboard.up("Meta");
+  await sleep(500);
+  const emeraldAfter = (await countNear(16, 185, 129, 24)) - idle;
+  const greyAfter = await countNear(154, 160, 166, 20);
+  t(`locked selection drops the accent (${emeraldAfter}px)`, emeraldAfter < 60);
+  t(`locked selection renders grey chrome (+${greyAfter - greyBefore}px)`, greyAfter - greyBefore > 100);
+  await p.close();
+}
+
+// 27. toolbar flyouts: full keyboard menu -----------------------------------
+{
+  const p = await page();
+  await rows(p);
+  const flyOpen = (g) => p.evaluate((g) =>
+    !!document.querySelector(`.dock .tool[data-group="${g}"].open`), g);
+  const focused = () => p.evaluate(() => ({
+    role: document.activeElement?.getAttribute("role"),
+    label: (document.activeElement?.getAttribute("aria-label") || document.activeElement?.textContent || "").trim(),
+  }));
+  // arrows open the move-group flyout and land on the current tool
+  await p.evaluate(() => document.querySelector('.dock .tool[data-group="move"] .hit').focus());
+  await p.keyboard.press("ArrowDown");
+  await sleep(300);
+  t("arrow opens the tool flyout", await flyOpen("move"));
+  t("focus lands on the current tool", (await focused()).role === "menuitemradio");
+  // arrows move, esc closes and returns focus without touching the selection
+  const first = (await focused()).label;
+  await p.keyboard.press("ArrowDown");
+  await sleep(200);
+  t("arrow moves between tools", (await focused()).label !== first);
+  const selBefore = await rows(p);
+  await p.keyboard.press("Escape");
+  await sleep(300);
+  t("esc closes the flyout", !(await flyOpen("move")));
+  t("esc returns focus to the trigger",
+    await p.evaluate(() => document.activeElement?.classList?.contains("hit")));
+  t("esc keeps the selection", JSON.stringify(await rows(p)) === JSON.stringify(selBefore));
+  // enter on a menu item switches tools
+  await p.keyboard.press("ArrowDown");
+  await sleep(300);
+  await p.keyboard.press("ArrowDown");
+  await sleep(200);
+  await p.keyboard.press("Enter");
+  await sleep(300);
+  t("enter switches to the chosen tool",
+    await p.evaluate(() => document.querySelector('.dock .tool[data-group="move"] .hit').getAttribute("aria-label")) === "Hand");
+  // the boolean menu takes the same path once two layers are selected
+  await p.keyboard.press("r");
+  await p.mouse.move(820, 620); await p.mouse.down();
+  await p.mouse.move(960, 720, { steps: 6 }); await p.mouse.up();
+  await sleep(300);
+  await p.keyboard.press("r");
+  await p.mouse.move(1000, 620); await p.mouse.down();
+  await p.mouse.move(1140, 720, { steps: 6 }); await p.mouse.up();
+  await sleep(300);
+  // Selecting the two rects from the layer tree: a marquee has to start on
+  // empty canvas, and this corner of the demo document is covered by frames, so
+  // the drag grabbed whichever frame sat under it instead of marqueeing.
+  const rectIds = (await p.evaluate(() => window.__xNativeDesignApi.call("findNodes", { kind: "rect", name: "Rectangle", limit: 50 }))).data.items
+    .map((n) => n.id);
+  for (const [k, id] of rectIds.entries()) await clickRowById(p, id, k > 0);
+  await sleep(400);
+  const hasBool = await p.evaluate(() => !!document.querySelector('.dock .tool[data-group="bool"] .hit'));
+  t("two selected layers show the boolean menu", hasBool);
+  if (hasBool) {
+    await p.evaluate(() => document.querySelector('.dock .tool[data-group="bool"] .hit').focus());
+    await p.keyboard.press("ArrowDown");
+    await sleep(300);
+    t("arrow opens the boolean menu",
+      (await flyOpen("bool")) && (await focused()).role === "menuitem");
+    await p.keyboard.press("Escape");
+    await sleep(300);
+    t("esc closes the boolean menu", !(await flyOpen("bool")));
+  }
+  await p.close();
+}
+
+// 28. multi-select scalars: Mixed display + apply to all ----------------------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  const setField = async (sel, v) => {
+    await p.evaluate((s) => {
+      const el = document.querySelector(s);
+      el.focus(); el.select();
+    }, sel);
+    await p.keyboard.type(String(v));
+    await p.keyboard.press("Enter");
+    await sleep(400);
+  };
+  const setHex = async (v) => {
+    await p.evaluate(() => { const el = document.querySelectorAll(".inspector .color-row .hex")[0]; el.focus(); el.select(); });
+    await p.keyboard.type(v);
+    await sleep(400);
+  };
+  const full = async (id) => (await api("getNode", { id, full: true })).data.full;
+  // two rects, divergent opacity + fill
+  await drawRect(p);
+  const firstId = (await api("getSelection", {})).data.ids[0];
+  await setField('.inspector input[aria-label="%"]', "30");
+  await setHex("ff0000");
+  await drawRect(p, 1000, 640);
+  const secondId = (await api("getSelection", {})).data.ids[0];
+  await setField('.inspector input[aria-label="%"]', "60");
+  await setHex("0000ff");
+  await clickRowById(p, firstId);
+  await clickRowById(p, secondId, true);
+  const ids = (await api("getSelection", {})).data.ids;
+  t(`both rects selected (${ids.length})`,
+    ids.length === 2 && ids.includes(firstId) && ids.includes(secondId));
+  t("opacity reads Mixed",
+    await p.evaluate(() => document.querySelector('.inspector input[aria-label="%"]').value) === "Mixed");
+  t("fill reads Mixed",
+    await p.evaluate(() => document.querySelectorAll(".inspector .color-row .hex")[0].value) === "Mixed");
+  await setField('.inspector input[aria-label="%"]', "80");
+  const ops = [(await full(ids[0])).opacity, (await full(ids[1])).opacity];
+  t(`opacity commits to every layer (${ops.join(",")})`, ops.every(v => v === 0.8));
+  await setHex("00ff00");
+  const fills = [(await full(ids[0])).fill, (await full(ids[1])).fill];
+  t(`fill commits to every layer (${fills.join(",")})`,
+    fills.every(f => f.toLowerCase().startsWith("#00ff00")));
+  await p.close();
+}
+
+// 29. multi-select type metrics: Mixed size + apply to all -------------------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  // Returns false when the field is missing so a bad setup fails as a check
+  // instead of crashing the rest of the suite.
+  const setSize = async (v) => {
+    const present = await p.evaluate(() => !!document.querySelector('.inspector input[aria-label="S"]'));
+    if (!present) return false;
+    await p.evaluate(() => { const el = document.querySelector('.inspector input[aria-label="S"]'); el.focus(); el.select(); });
+    await p.keyboard.type(String(v));
+    await p.keyboard.press("Enter");
+    await sleep(400);
+    return true;
+  };
+  const layerCount = () => p.evaluate(() => document.querySelectorAll('.panel.left .row[style*="padding-left"]').length);
+  // T on the text just created edits that layer rather than making another, so
+  // each creation starts from an empty selection. The two boxes are also far
+  // apart: a drag that lands inside the previous box edits its text instead of
+  // creating a second layer.
+  // Returns the new layer's id, so the checks below can address it directly
+  // instead of guessing where it landed in the tree.
+  const dragText = async (x, y) => {
+    await p.keyboard.press("v");
+    await p.mouse.click(300, 200);
+    await sleep(200);
+    const before = await layerCount();
+    await p.keyboard.press("t");
+    await p.mouse.move(x, y); await p.mouse.down();
+    await p.mouse.move(x + 120, y + 30, { steps: 6 }); await p.mouse.up();
+    await sleep(400);
+    await p.keyboard.press("Escape");
+    await sleep(300);
+    const id = (await api("getSelection", {})).data.ids[0];
+    return (await layerCount()) === before + 1 ? id : null;
+  };
+  const textA = await dragText(820, 640);
+  const textB = await dragText(1020, 640);
+  t("the text tool makes one layer per drag", !!textA && !!textB && textA !== textB);
+  t("the first text layer can be selected from the tree", await clickRowById(p, textA));
+  t("its size field is editable", await setSize("20"));
+  t("the second text layer can be selected from the tree", await clickRowById(p, textB));
+  t("its size field is editable", await setSize("32"));
+  await clickRowById(p, textA);
+  await clickRowById(p, textB, true); // ctrl-toggle: exactly these two
+  const ids = (await api("getSelection", {})).data.ids;
+  t(`two text layers selected (${ids.length})`, ids.length === 2);
+  t("size reads Mixed",
+    await p.evaluate(() => document.querySelector('.inspector input[aria-label="S"]')?.value) === "Mixed");
+  await setSize("24");
+  const sizes = [];
+  for (const id of (await api("getSelection", {})).data.ids)
+    sizes.push((await api("getNode", { id, full: true })).data.full.fontSize);
+  t(`size commits to every text layer (${sizes.join(",")})`, sizes.every(v => v === 24));
+  await p.close();
+}
+
+// 30. property-first binding: bind from the row, pill, mixed multi ---------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  const full = async (id) => (await api("getNode", { id, full: true })).data.full;
+  const tab = async (re) => {
+    await p.evaluate((rx) => [...document.querySelectorAll(".panel.left .nav, .rail .nav")]
+      .find(el => new RegExp(rx, "i").test(el.textContent || ""))?.click(), re);
+    await sleep(400);
+  };
+  const addVar = async (name, type, value) => {
+    await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"], .panel.left button.plus[data-tip="Add Variable"]').click());
+    await sleep(300);
+    await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Variable name"]'); el.focus(); el.select(); });
+    await p.keyboard.type(name);
+    await p.select('.panel.left select[aria-label="Variable type"]', type);
+    await sleep(200);
+    await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Value"]'); el.focus(); el.select(); });
+    await p.keyboard.type(value);
+    await p.evaluate(() => [...document.querySelectorAll(".panel.left button")].find(b => b.textContent === "Save")?.click());
+    await sleep(400);
+  };
+  const pickVar = async (name) => {
+    const rows = await p.$$(".x-popover .bind-row");
+    for (const r of rows) {
+      const text = await p.evaluate(el => el.textContent, r);
+      if (text.includes(name)) { await r.click(); await sleep(400); return true; }
+    }
+    return false;
+  };
+  await tab("vars");
+  await addVar("e2e-red", "color", "#ff0000");
+  await addVar("e2e-size", "number", "24");
+  await tab("file");
+  await drawRect(p);
+  const id1 = (await api("getSelection", {})).data.ids[0];
+  t("rect selected", !!id1);
+  // fill: ghost button -> picker -> pill
+  t("fill row carries a bind ghost",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Bind fill to a variable"]')));
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Bind fill to a variable"]').click());
+  await sleep(400);
+  t("picker lists the colour variable", await pickVar("e2e-red"));
+  t("pill names the bound variable",
+    await p.evaluate(() => document.querySelector(".inspector .bind-pill-name")?.textContent) === "e2e-red");
+  t("fill binding lands on the layer", !!(await full(id1)).variableBindings?.fill);
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Remove fill binding"]').click());
+  await sleep(400);
+  t("unbind detaches the fill binding", (await full(id1)).variableBindings?.fill === undefined);
+  // opacity: picker filters by type; multi shows mixed then binds all
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Bind opacity to a variable"]').click());
+  await sleep(400);
+  const names = await p.evaluate(() => [...document.querySelectorAll(".x-popover .bind-row")].map(el => el.textContent));
+  t(`opacity picker lists numbers not colours (${names.join("|")})`,
+    names.some(x => x.includes("e2e-size")) && !names.some(x => x.includes("e2e-red")));
+  t("number bind lands", await pickVar("e2e-size"));
+  await drawRect(p, 1000, 640);
+  const id2 = (await api("getSelection", {})).data.ids[0];
+  await clickRowById(p, id1);
+  await clickRowById(p, id2, true); // ctrl-toggle: exactly these two
+  const ids = (await api("getSelection", {})).data.ids;
+  t(`both rects selected (${ids.sort().join(",")})`,
+    ids.length === 2 && ids.includes(id1) && ids.includes(id2));
+  t("half-bound multi shows a mixed bind indicator",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label^="Mixed bindings"]')));
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label^="Mixed bindings"]').click());
+  await sleep(400);
+  t("mixed bind resolves through the picker", await pickVar("e2e-size"));
+  const bound = [(await full(ids[0])).variableBindings?.opacity, (await full(ids[1])).variableBindings?.opacity];
+  t(`one pick binds every layer (${bound.join(",")})`, bound.every(Boolean) && bound[0] === bound[1]);
+  await p.evaluate(() => document.querySelector('.inspector button[aria-label="Remove opacity binding"]').click());
+  await sleep(400);
+  const cleared = [(await full(ids[0])).variableBindings?.opacity, (await full(ids[1])).variableBindings?.opacity];
+  t("one unbind clears every layer", cleared.every(v => v === undefined));
+  await p.close();
+}
+
+// 31. dialogs: native prompt/confirm are gone (PM-U1) -----------------------
+{
+  const p = await page();
+  await rows(p);
+  const api = (method, params) => p.evaluate((m, x) => window.__xNativeDesignApi.call(m, x), method, params);
+  const full = async (id) => (await api("getNode", { id, full: true })).data.full;
+
+  // A native prompt/confirm blocks the page and is invisible to the DOM, so
+  // "we stopped using them" is only checkable by counting the calls. Anything
+  // recorded here is a site that was missed.
+  const spy = () => p.evaluate(() => {
+    window.__nativeCalls = [];
+    window.prompt = (msg) => { window.__nativeCalls.push(`prompt: ${msg}`); return null; };
+    window.confirm = (msg) => { window.__nativeCalls.push(`confirm: ${msg}`); return false; };
+    window.alert = (msg) => { window.__nativeCalls.push(`alert: ${msg}`); };
+  });
+  const nativeCalls = () => p.evaluate(() => window.__nativeCalls || []);
+  const tab = async (re) => {
+    await p.evaluate((rx) => [...document.querySelectorAll(".panel.left .nav, .rail .nav")]
+      .find(el => new RegExp(rx, "i").test(el.textContent || ""))?.click(), re);
+    await sleep(400);
+  };
+  const varNames = () => p.evaluate(() =>
+    [...document.querySelectorAll(".panel.left span[title='Double-click to rename'], .panel.left span[data-tip='Double-click to rename']")].map((s) => s.textContent));
+  // By name: the sample document already ships variables (spacing-sm, radius-md
+  // …), so "the first row" would rename one of those instead.
+  const openRename = async (name) => {
+    await p.evaluate((n) => {
+      const spans = [...document.querySelectorAll(".panel.left span[title='Double-click to rename'], .panel.left span[data-tip='Double-click to rename']")];
+      (spans.find((x) => x.textContent.trim() === n) ?? spans[0])
+        ?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    }, name);
+    await sleep(350);
+  };
+
+  await tab("vars");
+  // one variable to rename
+  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"], .panel.left button.plus[data-tip="Add Variable"]').click());
+  await sleep(300);
+  await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Variable name"]'); el.focus(); el.select(); });
+  await p.keyboard.type("dlg-token");
+  await p.evaluate(() => [...document.querySelectorAll(".panel.left button")].find(b => b.textContent === "Save")?.click());
+  await sleep(400);
+  await spy();
+
+  // ── prompt: rename a variable ─────────────────────────────────────────────
+  // A real selection first, so "the dialog swallowed Escape" is checkable: with
+  // nothing selected the old assertion could pass for the wrong reason.
+  await tab("file");
+  await drawRect(p);
+  const keptId = (await api("getSelection", {})).data.ids[0];
+  await tab("vars");
+  await openRename("dlg-token");
+  const rename = await dlg(p);
+  t(`rename opens an in-app prompt (${rename?.title})`, rename?.title === "Rename variable");
+  t(`the prompt starts from the current name (${rename?.value})`, rename?.value === "dlg-token");
+  t("the prompt offers Rename and Cancel",
+    rename?.buttons.join("|") === "Cancel|Rename", rename?.buttons);
+  await typeDlg(p, "dlg-renamed");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  t("Enter commits the rename", (await varNames()).includes("dlg-renamed"));
+  t("no native prompt was used", (await nativeCalls()).length === 0);
+
+  // ── Escape and backdrop are cancels, not answers ──────────────────────────
+  await openRename("dlg-token");
+  await p.keyboard.press("Escape");
+  await sleep(350);
+  t("Escape closes the prompt", (await dlg(p)) === null);
+  t("Escape left the canvas selection alone",
+    (await api("getSelection", {})).data.ids[0] === keptId);
+  t("Escape keeps the old name", (await varNames()).includes("dlg-renamed"));
+  await openRename("dlg-token");
+  await p.evaluate(() => document.querySelector(".x-dialog-backdrop").click());
+  await sleep(350);
+  t("clicking the backdrop dismisses the prompt", (await dlg(p)) === null);
+  t("dismissing keeps the old name", (await varNames()).includes("dlg-renamed"));
+  t("still no native dialogs", (await nativeCalls()).length === 0);
+
+  // ── confirm: deleting a collection is explicit and named ──────────────────
+  await p.evaluate(() => document.querySelector('.panel.left button[title="Add collection"], .panel.left button[data-tip="Add collection"]').click());
+  await sleep(350);
+  const newCol = await dlg(p);
+  t(`creating a collection asks in-app (${newCol?.title})`, newCol?.title === "New collection");
+  t("the collection name is prefilled", !!newCol?.value);
+  await typeDlg(p, "QA");
+  await clickDlg(p, "Create");
+  const chips = () => p.evaluate(() => [...document.querySelectorAll(".panel.left button")].map((b) => b.textContent.trim()));
+  t("the collection is created", (await chips()).includes("QA"));
+
+  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"], .panel.left button[data-tip^="Delete collection"]').click());
+  await sleep(350);
+  const del = await dlg(p);
+  t(`deleting a collection confirms in-app (${del?.title})`, del?.title === 'Delete collection "QA"');
+  t("the confirm names what is lost", /variables/i.test(del?.body ?? ""));
+  t("the confirm says Delete collection, not OK",
+    del?.buttons.join("|") === "Cancel|Delete collection", del?.buttons);
+  await p.keyboard.press("Escape");
+  await sleep(350);
+  t("cancelling the confirm keeps the collection", (await chips()).includes("QA"));
+  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"], .panel.left button[data-tip^="Delete collection"]').click());
+  await sleep(350);
+  await clickDlg(p, "Delete collection");
+  t("confirming deletes the collection", !(await chips()).includes("QA"));
+  t("destructive flows used no native confirm", (await nativeCalls()).length === 0);
+
+  // ── choice: a style is created from the stroke or the fill, both as buttons
+  await tab("file");
+  await drawRect(p);
+  const id = (await api("getSelection", {})).data.ids[0];
+  await p.evaluate(() => [...document.querySelectorAll(".inspector button.plus")]
+    .find((b) => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Add stroke")?.click());
+  await sleep(400);
+  const strokePaint = (await full(id)).strokePaint;
+  await tab("vars");
+  await p.evaluate(() => [...document.querySelectorAll(".panel.left button")]
+    .find((b) => b.textContent.trim() === "Styles")?.click());
+  await sleep(300);
+  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Create style from selection"], .panel.left button.plus[data-tip="Create style from selection"]').click());
+  await sleep(350);
+  const choose = await dlg(p);
+  t(`a two-way style choice is a real choice (${choose?.title})`, choose?.title === "Create style from");
+  t("both outcomes are named buttons, and Cancel exists",
+    choose?.buttons.join("|") === "Cancel|Stroke|Fill", choose?.buttons);
+  await clickDlg(p, "Stroke");
+  const nameDlg = await dlg(p);
+  t(`picking Stroke leads to the name (${nameDlg?.title})`, nameDlg?.title === "Style name (stroke)");
+  const layerName = (await full(id)).name;
+  t(`the style name starts from the layer name (${nameDlg?.value} vs ${layerName})`,
+    nameDlg?.value === layerName);
+  await typeDlg(p, "stroke-qa");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  const styleRow = await p.evaluate(() => {
+    const row = [...document.querySelectorAll(".panel.left .color-row")]
+      .find((r) => r.textContent.includes("stroke-qa"));
+    if (!row) return null;
+    return { name: row.textContent.trim(), swatch: getComputedStyle(row.querySelector(".swatch")).backgroundColor };
+  });
+  t("the stroke style lands in the styles list", !!styleRow);
+  const hexToRgb = (hex) => {
+    const h = (hex || "").replace("#", "");
+    const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h.slice(0, 6), 16);
+    return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+  };
+  t(`it holds the stroke colour, not the fill (${styleRow?.swatch} vs ${strokePaint})`,
+    !!styleRow && styleRow.swatch === hexToRgb(strokePaint));
+  t("the choice flow used no native confirm", (await nativeCalls()).length === 0);
+
+  // ── validation: a rejected answer keeps the dialog open and says why ──────
+  await p.goto(`${URL}/#/`, { waitUntil: "networkidle0" });
+  await sleep(500);
+  await spy();
+  // by accessible name: this button is Tooltip-wrapped, so it carries no native
+  // title for the bridge to adopt (and must not, or it would be labelled twice)
+  await p.evaluate(() => document.querySelector('button[aria-label="New project"]').click());
+  await sleep(350);
+  const project = await dlg(p);
+  t(`new project asks in-app (${project?.title})`, project?.title === "New project");
+  await clickDlg(p, "Create");
+  const blocked = await dlg(p);
+  t("an empty name is refused, not silently dropped", !!blocked?.error, blocked?.error);
+  t("the dialog stays open on a refused answer", !!blocked);
+  await typeDlg(p, "E2E project");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  t("a valid name closes the dialog", (await dlg(p)) === null);
+  t("the dashboard reported the new project",
+    await p.evaluate(() => (document.querySelector(".toast")?.textContent ?? "").includes("E2E project")));
+  t("the dashboard used no native prompt", (await nativeCalls()).length === 0);
+
+  await p.close();
+}
+
+// 32. one tooltip system: native titles adopt the shared pill ----------------
+{
+  const p = await page();
+  await rows(p);
+  // Controls that only have the native attribute are named before anyone
+  // interacts with them, so assistive tech and tests can find them.
+  const named = await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button.mini[title^="Lock layer"]');
+    if (!el) return null;
+    el.dataset.probeTip = "1";
+    return { title: el.getAttribute("title"), name: el.getAttribute("aria-label") };
+  });
+  t(`a title-only control is named up front (${named?.name})`, named?.name === "Lock layer");
+
+  const visibleTips = () => p.evaluate(() =>
+    [...document.querySelectorAll(".tip")].filter((el) => getComputedStyle(el).display !== "none").length);
+
+  // Hover: the browser's own box is taken out of the way and the shared pill
+  // renders instead, with the shortcut split into its own chip.
+  const box = await p.evaluate(() => {
+    const el = document.querySelector('[data-probe-tip="1"]');
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top };
+  });
+  await p.mouse.move(box.x, box.y);
+  await sleep(650);
+  const hovered = await p.evaluate(() => {
+    const el = document.querySelector('[data-probe-tip="1"]');
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return {
+      pills: tips.length,
+      text: tips.map((t) => t.textContent).join(" | "),
+      title: el.getAttribute("title"),
+      dataTip: el.dataset.tip,
+      chip: tips[0]?.querySelector(".tip-sc")?.textContent ?? null,
+      above: tips[0] ? Math.round(tips[0].getBoundingClientRect().bottom) <= Math.round(el.getBoundingClientRect().top) : null,
+    };
+  });
+  t(`hover shows the shared pill (${hovered.text})`, hovered.pills === 1 && hovered.text.startsWith("Lock layer"));
+  t(`the shortcut is its own chip (${hovered.chip})`, hovered.chip === "⇧⌘L");
+  t("the native attribute is out of the way while the pill shows",
+    hovered.title === null && hovered.dataTip === "Lock layer (⇧⌘L)");
+  t("the pill sits above its control, not over it", hovered.above === true);
+
+  // Leaving puts the attribute back: the bridge is presentation, not the owner.
+  await p.mouse.move(box.x + 300, box.y + 260);
+  await sleep(400);
+  const left = await p.evaluate(() => {
+    const el = document.querySelector('[data-probe-tip="1"]');
+    return { title: el.getAttribute("title"), dataTip: el.dataset.tip ?? null };
+  });
+  t(`the attribute returns on leave (${left.title})`,
+    left.title === "Lock layer (⇧⌘L)" && left.dataTip === null && (await visibleTips()) === 0);
+
+  // Keyboard: the same label, for both kinds of control. A tool flyout button
+  // is wrapped in the shared component; the lock button only has the attribute.
+  await p.mouse.move(box.x + 300, box.y + 260);
+  await p.keyboard.press("Tab");
+  await p.evaluate(() => document.querySelector('.dock .tool[data-group="move"] .hit').focus());
+  await sleep(500);
+  const kbComponent = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return { pills: tips.length, text: tips.map((t) => t.textContent).join(" | ") };
+  });
+  t(`keyboard focus shows a wrapped control's label (${kbComponent.text})`,
+    kbComponent.pills === 1 && kbComponent.text.includes("Move"));
+  await p.evaluate(() => document.querySelector('[data-probe-tip="1"]').focus());
+  await sleep(500);
+  const kbAttr = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return { pills: tips.length, text: tips.map((t) => t.textContent).join(" | ") };
+  });
+  t(`keyboard focus shows a title-only control's label (${kbAttr.text})`,
+    kbAttr.pills === 1 && kbAttr.text.startsWith("Lock layer"));
+
+  // A control inside a Tooltip wrapper must not ALSO carry a native title: both
+  // systems would answer, and the user sees two boxes (TY-U4).
+  await p.mouse.move(30, 980);
+  await p.keyboard.press("Escape");
+  await sleep(250);
+  const doubly = await p.evaluate(() =>
+    [...document.querySelectorAll(".tip-host [title], .tip-host[title]")]
+      .map((el) => el.getAttribute("title") || ""));
+  t(`no control is labelled twice (${doubly.length ? doubly.join(", ") : "none"})`, doubly.length === 0);
+  await p.close();
+}
+
+// 33. one header chrome: layer and prototype blocks fold like sections -------
+{
+  const p = await page();
+  await rows(p);
+  const secOpen = (p, title) => p.evaluate((t) =>
+    [...document.querySelectorAll(".inspector .sec-toggle")]
+      .find((b) => b.textContent.trim() === t)?.getAttribute("aria-expanded") ?? null, title);
+  const secTitles = () => p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .sec-toggle")].map((b) => b.textContent.trim()));
+  const buttons = () => p.evaluate(() => document.querySelector(".inspector").querySelectorAll("button").length);
+
+  // Two rects: the Boolean block used to be a static <h3> header with no fold.
+  await drawRect(p, 820, 640);
+  await drawRect(p, 1000, 640);
+  const drawn = (await p.evaluate(() => window.__xNativeDesignApi.call("findNodes", { kind: "rect", name: "Rectangle", limit: 50 }))).data.items.map((n) => n.id);
+  const pair = drawn.slice(-2);
+  for (const [k, id] of pair.entries()) await clickRowById(p, id, k > 0);
+  await sleep(450);
+  t("the boolean block is a section header now", (await secOpen(p, "Boolean")) === "true");
+  const withBoolean = await buttons();
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Boolean").click());
+  await sleep(250);
+  const foldedBoolean = await buttons();
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Boolean").click());
+  await sleep(250);
+  t(`folding the boolean block hides its controls (${withBoolean} -> ${foldedBoolean} -> ${await buttons()})`,
+    (await secOpen(p, "Boolean")) === "true" && foldedBoolean < withBoolean && (await buttons()) === withBoolean);
+
+  // Prototype tab: the three blocks were static headers too.
+  await p.keyboard.down("Shift"); await p.keyboard.press("e"); await p.keyboard.up("Shift");
+  await sleep(500);
+  const proto = await secTitles();
+  for (const want of ["Flow starting point", "Prototype settings", "Interactions"]) {
+    t(`the prototype ${want.toLowerCase()} block is a section`, proto.includes(want));
+  }
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Prototype settings").click());
+  await sleep(250);
+  t("folding prototype settings closes it", (await secOpen(p, "Prototype settings")) === "false");
+  await p.evaluate(() => [...document.querySelectorAll(".sec-toggle")].find((b) => b.textContent.trim() === "Prototype settings").click());
+  await sleep(250);
+  t("and reopening it brings the device rows back", (await secOpen(p, "Prototype settings")) === "true");
+  await p.close();
+}
+
+// 34. one nav truth: every entry point switches the visible pane ------------
+{
+  const p = await page();
+  await rows(p);
+  const pane = () => p.evaluate(() => document.querySelector(".nav.on")?.textContent?.trim() ?? null);
+  // The engine's leftTab was write-only: the palette's variable row and the
+  // ⌥1..3 chords "worked" (they dispatched) but no panel read the value, so
+  // nothing moved. They now go through the App-owned nav the panel reads.
+  await p.keyboard.down("Alt"); await p.keyboard.press("3"); await p.keyboard.up("Alt");
+  await sleep(400);
+  const vars = await pane();
+  t(`⌥3 opens the Variables pane (${vars})`, vars === "Vars");
+  await p.keyboard.down("Alt"); await p.keyboard.press("1"); await p.keyboard.up("Alt");
+  await sleep(350);
+  t(`⌥1 returns to the layers pane (${await pane()})`, (await pane()) === "File");
+
+  // a variable result in the palette must land on the pane that lists it
+  const name = (await p.evaluate(() => window.__xNativeDesignApi.call("getVariables", { limit: 1 }))).data.items[0].name;
+  await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta");
+  await sleep(400);
+  await p.keyboard.type(name);
+  await sleep(600);
+  const opened = await p.evaluate(() => {
+    const rows2 = [...document.querySelectorAll("[role=option], .act-row")];
+    const hit = rows2[rows2.length - 1];
+    hit?.click();
+    return hit?.textContent?.trim().slice(0, 30) ?? null;
+  });
+  await sleep(500);
+  t(`a palette variable opens the Variables pane (${opened} → ${await pane()})`, opened !== null && (await pane()) === "Vars");
+  t("and the toast points at the pane it opened",
+    await p.evaluate(() => /Variables tab/.test(document.querySelector(".toast")?.textContent ?? "")));
+  await p.close();
+}
+
+// 35. "Edit points" edits; "Flatten" bakes (IN-U5) ----------------------------
+{
+  const p = await page();
+  await rows(p);
+  await drawRect(p);
+  const seg = () => p.evaluate(() =>
+    [...document.querySelectorAll(".inspector .seg button")].map((b) => b.textContent.trim()).filter(Boolean));
+  const names = await seg();
+  // Both buttons used to dispatch `flatten`, so "Edit vector" promised editing
+  // and delivered a bake - the same action twice under two labels.
+  t(`the vector row offers distinct actions (${names.join(" / ")})`,
+    names.includes("Edit points") && names.includes("Flatten"));
+  const doneVisible = () => p.evaluate(() => !!document.querySelector('.dock [title^="Done editing path"]'));
+  t("vector edit mode is off to begin with", (await doneVisible()) === false);
+
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")].find((b) => b.textContent.trim() === "Edit points").click());
+  await sleep(500);
+  const editing = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".inspector .seg button")].find((x) => /point/i.test(x.textContent));
+    return { label: b?.textContent.trim(), done: !!document.querySelector('.dock [title^="Done editing path"]') };
+  });
+  t(`Edit points enters vector edit (${editing.label}, done button ${editing.done})`,
+    editing.done === true && editing.label === "Editing points");
+
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const left = await p.evaluate(() => {
+    const s = window.__xNativeDesignApi.call("getSelection", {}).data;
+    return {
+      done: !!document.querySelector('.dock [title^="Done editing path"]'),
+      sel: s.ids.length,
+      seg: [...document.querySelectorAll(".inspector .seg button")].map((b) => b.textContent.trim()).filter(Boolean),
+    };
+  });
+  // Leaving the point editor must not also drop the layer: the inspector used
+  // to jump back to the page panel and the shape being edited was lost, because
+  // the App's Escape cascade deselects without knowing edit mode exists.
+  t(`Esc leaves vector edit and keeps the layer selected (${left.sel} selected, ${left.seg.join("/")})`,
+    left.done === false && left.sel === 1 && left.seg.includes("Edit points"));
+
+  // Flatten is still its own action: it converts the shape, not the mode.
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")].find((b) => b.textContent.trim() === "Flatten")?.click());
+  await sleep(500);
+  const after = await p.evaluate(() => {
+    const s = window.__xNativeDesignApi.call("getSelection", {}).data;
+    return { kind: s.nodes?.[0]?.kind ?? null, done: !!document.querySelector('.dock [title^="Done editing path"]') };
+  });
+  t(`Flatten converts the shape without entering edit mode (kind ${after.kind})`,
+    after.kind === "vector" && after.done === false);
+  await p.close();
+}
+
+// 36. one tab primitive: three strips, one behaviour (PM-U5, IN-U7) ---------
+{
+  const p = await page();
+  await rows(p);
+  const strip = (sel) => p.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return null;
+    return {
+      role: el.getAttribute("role"),
+      label: el.getAttribute("aria-label"),
+      buttons: [...el.querySelectorAll("button")].map((b) => ({
+        text: b.textContent.trim(),
+        selected: b.getAttribute("aria-selected"),
+        roving: b.getAttribute("tabindex"),
+      })),
+    };
+  }, sel);
+
+  // The inspector head strip: role/aria-selected/roving focus, and the
+  // underline look it always had (driven by aria-current).
+  const head = await strip(".panel.right .tabs-row .tabs");
+  t(`the inspector tabs are a real tab list (${head?.buttons.map((b) => b.text).join("/")})`,
+    head?.role === "tablist" && head.buttons.length === 2 && head.buttons.every((b) => b.selected !== null));
+  t("only the active tab is tabbable",
+    head.buttons.filter((b) => b.roving === "0").length === 1 && head.buttons.filter((b) => b.roving === "-1").length === 1);
+  t("the zoom menu still shares the row",
+    await p.evaluate(() => !!document.querySelector(".panel.right .tabs-row .zoom, .panel.right .tabs-row .tabs ~ .zoom")));
+
+  await p.evaluate(() => document.querySelector('.panel.right .tabs-row .tabs button[aria-selected="true"]')?.focus());
+  await p.keyboard.press("ArrowRight");
+  await sleep(350);
+  const moved = await strip(".panel.right .tabs-row .tabs");
+  t(`arrows switch the inspector tab (${moved.buttons.find((b) => b.selected === "true")?.text})`,
+    moved.buttons.find((b) => b.selected === "true")?.text === "Prototype" &&
+    (await p.evaluate(() => document.activeElement?.textContent?.trim())) === "Prototype");
+  t("and the prototype panel followed", await p.evaluate(() => !!document.querySelector(".inspector .proto-row")));
+  await p.keyboard.press("Home");
+  await sleep(300);
+  const home = await strip(".panel.right .tabs-row .tabs");
+  t(`Home returns to the first tab (${home.buttons.find((b) => b.selected === "true")?.text})`,
+    home.buttons.find((b) => b.selected === "true")?.text === "Design");
+
+  // The Variables/Styles switch was four inline-styled buttons with no keyboard
+  // path; it is now the shared segmented control.
+  await p.keyboard.down("Alt"); await p.keyboard.press("3"); await p.keyboard.up("Alt");
+  await sleep(500);
+  const pane = await strip(".panel.left .seg.pane");
+  t(`the variables pane switch is a tab list (${pane?.buttons.map((b) => b.text).join("/")})`,
+    pane?.role === "tablist" && pane.buttons.length === 2);
+  t("its active pane is selected, not just coloured",
+    pane.buttons.find((b) => b.text === "Variables")?.selected === "true");
+  t("and it carries no styling of its own",
+    await p.evaluate(() => ![...document.querySelectorAll(".panel.left .seg.pane button")].some((b) => b.getAttribute("style"))));
+  await p.evaluate(() => document.querySelector(".panel.left .seg.pane button")?.focus());
+  await p.keyboard.press("ArrowRight");
+  await sleep(450);
+  const after = await strip(".panel.left .seg.pane");
+  t(`arrows switch to the styles pane (${after.buttons.find((b) => b.selected === "true")?.text})`,
+    after.buttons.find((b) => b.selected === "true")?.text === "Styles" &&
+    (await p.evaluate(() => !!document.querySelector(".panel.left .color-row"))));
+  await p.close();
+}
+
+// 37. the palette dismisses like every other overlay (PM-U2) --------------
+{
+  const p = await page();
+  await rows(p);
+  const open = () => p.evaluate(() => !!document.querySelector(".actions"));
+  await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta");
+  await sleep(450);
+  t("the palette opens on ⌘/", await open());
+  t("with a backdrop over the app", await p.evaluate(() => !!document.querySelector(".actions-veil-bg")));
+  // Clicking away used to leave it sitting over the canvas: only Escape, running
+  // a row, or its own close button dismissed it.
+  await p.mouse.click(1300, 850);
+  await sleep(400);
+  t("clicking outside closes it", (await open()) === false);
+  t("and the editor did not take that click",
+    (await p.evaluate(() => document.querySelectorAll(".panel.left .row").length)) === 23);
+  // Inside the sheet, clicks must keep working (the palette is not dismiss-on-any-click).
+  await p.keyboard.down("Meta"); await p.keyboard.press("k"); await p.keyboard.up("Meta");
+  await sleep(400);
+  await p.keyboard.type("zoom");
+  await sleep(500);
+  const head = await p.evaluate(() => {
+    const r = document.querySelector(".actions").getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + 30) };
+  });
+  await p.mouse.click(head.x, head.y);
+  await sleep(350);
+  t("clicking inside keeps it open", await open());
+  await p.keyboard.press("Escape");
+  await sleep(300);
+  t("and Escape still closes it", (await open()) === false);
+  await p.close();
+}
+
+// 38. the nudge form is a dialog, not a help sheet (PM-U4) ------------------
+{
+  const p = await page();
+  await rows(p);
+  await p.evaluate(() => window.dispatchEvent(new CustomEvent("x-native-nudge-dialog")));
+  await sleep(500);
+  const look = await p.evaluate(() => ({
+    title: document.querySelector(".x-dialog-title")?.textContent ?? null,
+    label: document.querySelector(".x-dialog")?.getAttribute("aria-label") ?? null,
+    modal: document.querySelector(".x-dialog")?.getAttribute("aria-modal") ?? null,
+    helpChrome: !!document.querySelector(".help-card.nudge-dialog, .help-pop"),
+    fields: [...document.querySelectorAll(".x-dialog-body input")].map((i) => i.getAttribute("aria-label")),
+  }));
+  // It used to wear help-pop / help-card / shortcuts-head — a preferences form
+  // styled as documentation, with its own capture-phase Escape handler.
+  t(`the nudge form uses the shared dialog (${look.title})`,
+    look.title === "Nudge amount" && look.modal === "true" && look.helpChrome === false);
+  t(`both amounts are editable there (${look.fields.join(", ")})`,
+    look.fields.length === 2 && look.fields.includes("Small nudge") && look.fields.includes("Big nudge"));
+
+  await p.evaluate(() => { const i = document.querySelector('input[aria-label="Small nudge"]'); i.focus(); i.select(); });
+  await p.keyboard.type("7");
+  await p.keyboard.press("Enter");
+  await sleep(400);
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("x-native-nudge") || "{}").small);
+  t(`a committed nudge value is stored (${saved})`, saved === 7);
+  await p.keyboard.press("Escape");
+  await sleep(350);
+  t("and the shared dialog closes on Escape", await p.evaluate(() => !document.querySelector(".x-dialog")));
+  await p.close();
+}
+
+// 39. canvas floating chrome is a dock, not near-black (PT-U4) --------------
+{
+  const p = await page();
+  await rows(p);
+  /** Resolve a CSS token/value to a canonical computed colour, so a token read
+   *  off the root ("rgba(255, 255, 255, 0.94)") compares equal to a computed
+   *  style no matter how each side is spaced. */
+  const norm = (v) => p.evaluate((val) => {
+    const d = document.createElement("div");
+    d.style.color = val;
+    document.body.appendChild(d);
+    const c = getComputedStyle(d).color;
+    d.remove();
+    return c;
+  }, v);
+  const token = (name) => p.evaluate((n) =>
+    getComputedStyle(document.documentElement).getPropertyValue(n).trim(), name);
+
+  // (a) the vector tool strip
+  await drawRect(p);
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")].find((b) => b.textContent.trim() === "Edit points").click());
+  await sleep(500);
+  const bar = await p.evaluate(() => {
+    const el = document.querySelector(".vector-edit-toolbar");
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    return {
+      bg: cs.backgroundColor,
+      radius: cs.borderRadius,
+      labels: [...el.querySelectorAll("button")].map((b) => (b.textContent || "").trim() || b.title),
+      // every inline style left inside the strip; the Icon component sets its own
+      // width/height/display, nothing here may lay the chrome out or colour it
+      inline: [...el.querySelectorAll("[style]")].map((e) => e.getAttribute("style")),
+      sep: !!el.querySelector(".dock-sep"),
+      doneBg: getComputedStyle(el.querySelector(".dock-done")).backgroundColor,
+      on: el.querySelector(".tool-btn.on")?.textContent?.trim() ?? null,
+    };
+  });
+  const dock = await token("--dock");
+  const accent = await token("--accent");
+  // It carried `background: "#18181b"` + `color: "#fff"` inline on the strip and
+  // on all nine buttons, so nothing on canvas could follow the theme.
+  t(`the vector strip is a dock surface (${bar?.bg}, radius ${bar?.radius})`,
+    bar?.bg === (await norm(dock)) && bar?.radius === "24px" &&
+    bar?.inline.every((v) => !/background|border|color|padding/.test(v)));
+  // The italic "Delete point (⌫)" comes from the button's title: it is icon-only.
+  const WANT = ["Select", "Pen", "Bend", "Paint", "Shape Builder", "Simplify path", "Clean up", "Delete point (⌫)", "Done"];
+  t(`and keeps all nine tools (${bar?.labels.join(", ")})`,
+    bar?.labels.length === WANT.length && WANT.every((w) => bar.labels.includes(w)));
+  t(`divider and Done use tokens (sep ${bar?.sep}, ${bar?.doneBg})`,
+    bar?.sep === true && bar?.doneBg === (await norm(accent)));
+
+  await p.evaluate(() => [...document.querySelectorAll(".vector-edit-toolbar .tool-btn")].find((b) => b.textContent.trim() === "Bend").click());
+  await sleep(350);
+  const switched = await p.evaluate(() => document.querySelector(".vector-edit-toolbar .tool-btn.on")?.textContent.trim());
+  t(`the active tool moves to the one chosen (${switched})`, switched === "Bend");
+  await p.keyboard.press("Escape");
+  await sleep(400);
+
+  // (b) the selected-connection chip: it renders only for a clicked connector, so
+  //     the noodles are found by their own pixels on the canvas.
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]')?.click());
+  await sleep(600);
+  await p.mouse.click(760, 200);            // empty canvas: clear the selection
+  await sleep(400);
+  const cand = await p.evaluate(() => {
+    const main = [...document.querySelectorAll("canvas")]
+      .map((c) => ({ c, r: c.getBoundingClientRect() }))
+      .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height)[0];
+    const { c, r } = main;
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    const sx = r.width / c.width, sy = r.height / c.height;
+    const seen = new Set(), out = [];
+    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
+      const i = (y * c.width + x) * 4;
+      if (Math.abs(d[i] - 16) < 26 && Math.abs(d[i + 1] - 185) < 30 && Math.abs(d[i + 2] - 129) < 30 && d[i + 3] > 200) {
+        const px = Math.round(r.left + x * sx), py = Math.round(r.top + y * sy);
+        const k = `${Math.round(px / 24)},${Math.round(py / 24)}`;
+        if (seen.has(k)) continue;
+        seen.add(k); out.push([px, py]);
+      }
+    }
+    return out.slice(0, 80);
+  });
+  /** Click the first canvas accent pixel that opens a chip. The connectors are
+   *  canvas drawings with their own hit test, so their pixels are how a test
+   *  finds one without knowing the document's geometry. */
+  const clickANoodle = async () => {
+    for (const [x, y] of cand) {
+      if (x < 240 || y < 120 || x > 1400 || y > 900) continue;
+      await p.mouse.click(x, y);
+      await sleep(90);
+      if (await p.evaluate(() => !!document.querySelector(".conn-chip"))) return [x, y];
+    }
+    return null;
+  };
+  const onNoodle = await clickANoodle();
+  t(`clicking a connector opens its chip (${onNoodle ? onNoodle.join(",") : "no noodle hit"})`, !!onNoodle);
+  if (onNoodle) {
+    const chip = await p.evaluate(() => {
+      const el = document.querySelector(".conn-chip");
+      const cs = getComputedStyle(el);
+      return {
+        text: el.querySelector("span")?.textContent,
+        bg: cs.backgroundColor, color: cs.color, radius: cs.borderRadius,
+        transform: cs.transform, shadow: cs.boxShadow,
+        inline: [...el.querySelectorAll("[style]")].map((e) => e.getAttribute("style")),
+      };
+    });
+    t(`the chip is a dock surface too (${chip.bg}, radius ${chip.radius})`,
+      chip.bg === (await norm(dock)) && chip.radius === "14px" && chip.text?.includes("→") &&
+      chip.inline.every((v) => !/background|color|border|padding/.test(v)));
+    // The ring is the selection, so it has to be the accent token, not a literal.
+    t(`its selection ring is the accent token (${chip.shadow.split(", ").pop()})`,
+      chip.shadow.includes(await norm(accent)));
+    // The same surface has to answer the theme; the old literal #18181b could not.
+    const darkBg = await p.evaluate(async () => {
+      document.documentElement.setAttribute("data-theme", "dark");
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const out = {
+        chip: getComputedStyle(document.querySelector(".conn-chip")).backgroundColor,
+        dock: getComputedStyle(document.documentElement).getPropertyValue("--dock").trim(),
+      };
+      return out;
+    });
+    t(`and follows the theme (dark dock ${darkBg.chip})`, darkBg.chip === (await norm(darkBg.dock)) && darkBg.chip !== chip.bg);
+    await p.evaluate(() => document.documentElement.removeAttribute("data-theme"));
+    await p.keyboard.press("Escape");
+    await sleep(400);
+    t("Escape dismisses the chip and leaves the connection", await p.evaluate(() => !document.querySelector(".conn-chip")));
+    // The connector is still there to be clicked: Escape dropped the chip, not
+    // the interaction (the same accent pixels are still drawn).
+    await p.mouse.move(1000, 200);
+    await sleep(400);
+    const again = await clickANoodle();
+    t(`and the connector opens again (${again ? again.join(",") : "no noodle"})`, !!again);
+  }
+  await p.close();
+}
+
+// 40. the presentation player is chrome, not inline paint (PT-U5) -----------
+{
+  const p = await page();
+  await rows(p);
+  const present = async () => {
+    await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]')?.click());
+    await sleep(600);
+    await p.evaluate(() => [...document.querySelectorAll(".inspector button")]
+      .find((b) => /Present Prototype/.test(b.textContent || ""))?.click());
+    await sleep(900);
+  };
+  await present();
+
+  const look = await p.evaluate(() => {
+    const dock = document.querySelector(".player-dock");
+    const cs = dock ? getComputedStyle(dock) : null;
+    return {
+      dock: !!dock,
+      bg: cs?.backgroundColor, radius: cs?.borderRadius, blur: cs?.backdropFilter,
+      // The Icon component keeps its own width/height/display; chrome may not
+      // lay itself out or colour itself inline.
+      inline: [...(dock?.querySelectorAll("[style]") ?? [])]
+        .map((e) => e.getAttribute("style"))
+        .filter((v) => !/^width: 1[0-9]px; height: 1[0-9]px; display: block;$/.test(v || "")),
+      layerInline: document.querySelector(".prototype-player-layer")?.getAttribute("style"),
+      children: [...(dock?.children ?? [])].map((c) => `${c.tagName.toLowerCase()}:${c.className}`),
+      selects: [...(dock?.querySelectorAll("select") ?? [])].map((s) => s.getAttribute("aria-label")),
+      buttons: [...(dock?.querySelectorAll("button") ?? [])].map((b) => (b.textContent || "").trim() || b.title),
+      pressed: [...(dock?.querySelectorAll("button[aria-pressed]") ?? [])].map((b) => `${b.title}=${b.getAttribute("aria-pressed")}`),
+      pager: dock?.querySelector(".player-page")?.textContent.trim(),
+    };
+  });
+  // Eleven inline style objects used to carry the whole player: `#18181b`,
+  // `#fff` and `rgba(255,255,255,0.7)` written out per control, unreachable by
+  // any token. The dock and its stage palette live in the stylesheet now.
+  t(`the player dock is stage chrome (${look.bg}, r${look.radius})`,
+    look.dock && look.bg === "rgba(24, 24, 27, 0.85)" && look.radius === "24px" &&
+    (look.blur || "").includes("20px") && look.inline.length === 0 && look.layerInline === null);
+  const WANT_BTNS = ["Previous frame (←)", "Next frame (→ / Space)", "Restart", "Hotspots", "Fit",
+                     "Live Inputs", "Toggle tactile sound feedback (M)", "Fullscreen (F)", "Exit"];
+  t(`every player control is still there (${look.buttons.length} buttons, ${look.selects.length} selects)`,
+    look.children.length === 13 && look.selects.join("|") === "Preview frame|Device mockup frame" &&
+    look.buttons.join("|") === WANT_BTNS.join("|"));
+  // A toggle used to say it was on only by its own inline colour; the state is
+  // in the DOM now, so assistive tech and tests can read it.
+  t(`toggles expose their state (${look.pressed.join(", ")})`,
+    look.pressed.join("|") === "Toggle hotspot hints (H)=false|Toggle live editable inputs (I)=true|Toggle tactile sound feedback (M)=true");
+
+  const step = () => p.evaluate(() => {
+    const sel = document.querySelector('.player-dock select[aria-label="Preview frame"]');
+    return {
+      pager: document.querySelector(".player-page").textContent.trim(),
+      frame: sel.selectedOptions[0]?.textContent.trim(),
+      options: [...sel.options].map((o) => o.textContent.trim()),
+      nextOff: document.querySelector('.player-dock button[title^="Next frame"]').disabled,
+      prevOff: document.querySelector('.player-dock button[title^="Previous frame"]').disabled,
+    };
+  });
+  const clickPlayer = (title) => p.evaluate((t) =>
+    document.querySelector(`.player-dock button[title^="${t}"]`).click(), title);
+
+  const first = await step();
+  // The pager used to list every frame in the document while presentGo lands on
+  // the outermost frame that contains the destination — so "2. Card" (a frame
+  // inside the phone frame) was a step that went nowhere and still grew the
+  // back history. Every step now lands somewhere.
+  t(`the pager lists only frames it can reach (${first.options.join(", ")})`,
+    first.options.join("|") === "1. iPhone 16 Pro|2. Success|3. Filter Sheet" &&
+    !first.options.some((o) => /Card/.test(o)));
+  t(`and starts on the first with prev disabled (${first.pager})`,
+    first.pager === "1 / 3" && first.prevOff === true && first.nextOff === false);
+
+  await clickPlayer("Next frame");
+  await sleep(500);
+  const second = await step();
+  t(`next actually moves the stage (${first.frame} → ${second.frame}, ${second.pager})`,
+    second.pager === "2 / 3" && second.frame === "2. Success" && second.prevOff === false);
+  await clickPlayer("Next frame");
+  await sleep(500);
+  const third = await step();
+  await clickPlayer("Previous frame");
+  await sleep(500);
+  const back = await step();
+  t(`the ends are honest (${third.pager} next-off ${third.nextOff}, back to ${back.pager})`,
+    third.pager === "3 / 3" && third.nextOff === true && back.pager === "2 / 3");
+
+  // Toggles: on is a pill in the control's own hue, off is plain text.
+  const hue = async (label) => p.evaluate((l) => {
+    const b = [...document.querySelectorAll(".player-dock button")].find((x) => (x.textContent || "").includes(l));
+    const cs = getComputedStyle(b);
+    return { pressed: b.getAttribute("aria-pressed"), color: cs.color, bg: cs.backgroundColor };
+  }, label);
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Hotspots/.test(b.textContent)).click());
+  await sleep(400);
+  const onBlue = await hue("Hotspots");
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Live Inputs/.test(b.textContent)).click());
+  await sleep(250);
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Live Inputs/.test(b.textContent)).click());
+  await sleep(400);
+  const onGreen = await hue("Live Inputs");
+  t(`a toggled control reads as on (hotspots ${onBlue.color}, inputs ${onGreen.color})`,
+    onBlue.pressed === "true" && onBlue.color === "rgb(56, 189, 248)" &&
+    onGreen.pressed === "true" && onGreen.color === "rgb(52, 211, 153)" &&
+    onBlue.color !== onGreen.color);
+
+  // It gets out of the way while the prototype is being looked at.
+  await sleep(4200);
+  const idle = await p.evaluate(() => {
+    const d = document.querySelector(".player-dock");
+    const cs = getComputedStyle(d);
+    return { hidden: d.classList.contains("hidden"), opacity: cs.opacity, pointer: cs.pointerEvents };
+  });
+  t(`the dock slides away when idle (opacity ${idle.opacity}, ${idle.pointer})`,
+    idle.hidden && idle.opacity === "0" && idle.pointer === "none");
+
+  // …and its labels are the shared pill, like every other control (the player
+  // used to be the one surface with the browser's own tooltip).
+  await p.mouse.move(800, 500);
+  await sleep(300);
+  const rb = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".player-dock button")].find((x) => /Restart/.test(x.textContent));
+    const r = b.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, hidden: document.querySelector(".player-dock").classList.contains("hidden") };
+  });
+  await p.mouse.move(rb.x, rb.y);
+  await sleep(750);
+  const tip = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    const b = [...document.querySelectorAll(".player-dock button")].find((x) => /Restart/.test(x.textContent));
+    return { pills: tips.length, text: tips.map((t) => t.textContent).join(" | "), chip: tips[0]?.querySelector(".tip-sc")?.textContent ?? null, title: b.getAttribute("title"), tip: b.dataset.tip };
+  });
+  t(`the dock wakes on a move and labels with the shared pill (${tip.text})`,
+    rb.hidden === false && tip.pills === 1 && tip.text === "Restart flowR" && tip.chip === "R" &&
+    tip.title === null && tip.tip === "Restart flow (R)");
+
+  // Exit still ends the presentation (and the stage goes with it).
+  await p.mouse.move(800, 400);
+  await p.evaluate(() => [...document.querySelectorAll(".player-dock button")].find((b) => /Exit/.test(b.textContent)).click());
+  await sleep(700);
+  t("Exit leaves the player", await p.evaluate(() =>
+    !document.querySelector(".player-dock") && !document.querySelector(".prototype-player-layer")));
+  await p.close();
+}
+
+// 41. the prototype panel is one set of controls (PT-U2, PT-U3, PT-U7) ------
+{
+  const p = await page();
+  const layerRows = await rows(p);
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]')?.click());
+  await sleep(700);
+  // View Details Button carries the sample file's interaction.
+  await clickRowById(p, "rect_5");
+  await sleep(700);
+
+  const panel = await p.evaluate(() => {
+    const right = document.querySelector(".panel.right");
+    const rowSel = right.querySelector(".proto-row select");
+    const card = right.querySelector(".proto-interaction");
+    const cardSel = card?.querySelector("select");
+    const cs = (el) => (el ? getComputedStyle(el) : null);
+    const shape = (el) => {
+      const c = cs(el);
+      return c ? `${c.height}|${c.borderStyle} ${c.borderWidth}|${c.borderRadius}|${c.fontSize}|${c.backgroundColor}` : null;
+    };
+    return {
+      rowShape: shape(rowSel),
+      cardShape: shape(cardSel),
+      card: card ? { bg: cs(card).backgroundColor, border: cs(card).borderWidth, radius: cs(card).borderRadius, gap: cs(card).gap } : null,
+      // The card's own layout was six inline style objects; only the svg
+      // children may keep theirs (the Icon component's box, the easing curve's
+      // overflow).
+      cardInline: [...(card?.querySelectorAll("[style]") ?? [])]
+        .map((e) => e.getAttribute("style"))
+        .filter((v) => !/^(width: \d+px; height: \d+px; display: block;|overflow: visible;?)$/.test(v || "")),
+      selectInline: [...right.querySelectorAll("select")].filter((s) => s.getAttribute("style")).length,
+      present: (() => {
+        const b = [...right.querySelectorAll("button")].find((x) => /Present Prototype/.test(x.textContent));
+        return b ? { cls: b.className, bg: getComputedStyle(b).backgroundColor } : null;
+      })(),
+      // The sections of the card, including the condition row (added below).
+      layouts: [".proto-top", ".proto-pair", ".proto-anim", ".proto-cond", ".proto-check", ".proto-ease"]
+        .map((sel) => [sel, !!right.querySelector(sel)]),
+    };
+  });
+  // A borderless 24px select in the panel's rows, a bordered 12px default in the
+  // card, one row apart: the same control looked like two different things.
+  t(`panel and card selects share one recipe (${panel.rowShape})`,
+    panel.rowShape === panel.cardShape && panel.rowShape.startsWith("28px|solid 1px|6px|11px"));
+  t(`the interaction is a card (${panel.card?.border}, ${panel.card?.radius}, ${panel.card?.bg})`,
+    panel.card?.border === "1px" && panel.card?.radius === "8px" && panel.card?.gap === "5px");
+  t(`and styles itself from the sheet (${panel.cardInline.length} inline, ${panel.selectInline} on selects)`,
+    panel.cardInline.length === 0 && panel.selectInline === 0);
+  // The condition row only exists once a condition does: switching it on must
+  // give the row its own layout (it used to be an inline 4-column grid).
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".proto-interaction button")].find((x) => /Condition/.test(x.textContent));
+    b?.click();
+  });
+  await sleep(400);
+  const condLayout = await p.evaluate(() => {
+    const cond = document.querySelector(".proto-cond");
+    if (!cond) return null;
+    const c = getComputedStyle(cond);
+    return { cols: c.gridTemplateColumns.split(" ").length, inline: cond.getAttribute("style") };
+  });
+  const layouts = await p.evaluate(() => [".proto-top", ".proto-pair", ".proto-anim", ".proto-check", ".proto-ease"]
+    .every((sel) => !!document.querySelector(sel)));
+  t(`every interaction control has a layout class (${layouts}, condition ${condLayout?.cols} columns)`,
+    panel.layouts.slice(0, 3).every(([, ok]) => ok) && layouts &&
+    condLayout?.cols === 4 && condLayout.inline === null);
+
+  // PT-U2: the button is a primary action, not an export one.
+  const blue = await p.evaluate(() => {
+    const d = document.createElement("div");
+    d.style.color = getComputedStyle(document.documentElement).getPropertyValue("--blue").trim();
+    document.body.appendChild(d);
+    const c = getComputedStyle(d).color;
+    d.remove();
+    return c;
+  });
+  t(`Present Prototype is a primary button (${panel.present?.cls}, ${panel.present?.bg})`,
+    panel.present?.cls === "x-primary" && panel.present?.bg === blue);
+
+  // PT-U7: the chip must name the key that starts a presentation, not the one
+  // that leaves it.
+  const box = await p.evaluate(() => {
+    const b = document.querySelector('.panel.right button[aria-label="Present"]');
+    const r = b.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  await p.mouse.move(box.x, box.y);
+  await sleep(750);
+  const tip = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return { text: tips.map((t) => t.textContent).join(" | "), chip: tips[0]?.querySelector(".tip-sc")?.textContent ?? null };
+  });
+  t(`Present's chip is the start chord (${tip.text})`, tip.chip === "⌘⌥↩" && tip.text.startsWith("Present"));
+  t(`and ${layerRows.length} layer rows were untouched by any of it`, layerRows.length === 23);
   await p.close();
 }
 

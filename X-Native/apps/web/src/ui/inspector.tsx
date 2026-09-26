@@ -24,28 +24,41 @@ import type {
   StrokeAlign,
   StrokeCap,
   StrokeJoin,
+  VariableWidthPoint,
   TextAlign,
   TextAlignVertical,
   Interaction,
+  InteractionCondition,
   ProtoDevice,
   ProtoAnim,
   ProtoEasing,
   ProtoTrigger,
   LayoutGrid,
+  GridAlignment,
   GridPattern,
   XNode,
+  CodeMapping,
+  CodePropMapping,
+  ComponentMaster,
 } from "../engine/types";
 import type { Modifier } from "../engine/modifierStack";
-import { collectColors, defaultEffect, find, findParent, framesOf, insideInstance, worldPos } from "../engine/memory";
+import { bindBlockReason, collectColors, defaultEffect, find, findParent, framesOf, insideInstance, isEffectivelyLocked, isInstanceMember, worldPos } from "../engine/memory";
+import { BINDABLE_PROPS, isAlias, resolveVariable } from "../engine/variables";
+import { lintDocument, type LintFix, type LintIssue } from "../engine/lint";
 import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
-import { evalField, hasExpression } from "./fieldExpr";
+import { evalField, evalFieldMany, hasExpression } from "./fieldExpr";
 import {
   SIDES,
+  isBranchingNetwork,
+  normalizeWidthProfile,
   parseDashPattern,
+  sampleVariableWidth,
   sideWidths,
   sidesSupported,
+  usesVariableWidth,
 } from "../engine/strokeModel";
 import {
+  bgBlurSeesThrough,
   canAddEffect,
   canShowBehindTransparent,
   countKind,
@@ -55,7 +68,9 @@ import {
   moveEffect,
   EFFECT_LIMITS,
 } from "./effectModel";
+import { fillCompositeAlpha, spreadApplies } from "../engine/paint";
 import {
+  parentAlignDelta,
   rotateAboutOrigin,
   SCALE_ANCHORS,
   SCALE_FACTORS,
@@ -65,7 +80,7 @@ import {
   unionBox,
   type ScaleAnchor,
 } from "./scaleModel";
-import { vectorNetworkToSvgPath, smoothPath } from "../engine/geometry";
+import { smoothPath } from "../engine/geometry";
 import {
   SPACING_MODES,
   alignKey,
@@ -76,6 +91,7 @@ import {
   hugsCross,
   hugsMain,
   planGrid,
+  insideStrokeWidth,
   isAutoGap,
   layoutKeyPatch,
   parsePaddingShorthand,
@@ -83,11 +99,12 @@ import {
   type AlignCell,
 } from "../engine/layout";
 import { hugSize } from "./textLayout";
-import { Icon, caretSize, rowIconSize } from "./icons";
+import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
+import { askChoice, askPrompt } from "./dialog";
 import { buildPdf } from "../engine/pdf";
-import { exportSvg } from "../engine/svgExport";
+import { contentBox, exportClipSvg, exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
 import { armPopover } from "./popoverGuard";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
@@ -97,6 +114,7 @@ import {
   FORMATS,
   SCALE_PRESETS,
   exportSize,
+  extrasOf,
   formatScale,
   newPreset,
   qualityValue,
@@ -104,7 +122,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
-import { PropertyField, XPopover } from "./x-ui";
+import { XPopover, XSegmentedControl, XTabs } from "./x-ui";
 
 /** "Round to Pixel" is only shown when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -120,8 +138,17 @@ import {
   setDevPrefs,
   subscribeDevPrefs,
   type DevFormat,
+  type DevScope,
   type DevUnit,
 } from "./devPrefs";
+import {
+  generateAndroidXml,
+  generateSubtreeCode,
+  generateTailwindTheme,
+  generateUIKitCode,
+  mappingSyncStatus,
+  type TreeFormat,
+} from "../engine/codegen";
 
 export function RightPanel({
   engine,
@@ -130,6 +157,7 @@ export function RightPanel({
   onShare,
   exportOpen,
   onCloseExport,
+  onOpenVariables,
 }: {
   engine: Engine;
   snap: Snapshot;
@@ -138,10 +166,18 @@ export function RightPanel({
   /** ⇧⌘E's bulk sheet. App owns the flag so Escape can be handled centrally. */
   exportOpen?: boolean;
   onCloseExport?: () => void;
+  /** App-owned nav switch to the Variables pane. The pane follows App nav, so
+   *  without it there is nothing to switch; the entry points say so instead of
+   *  dispatching into dead state (LP-U2). */
+  onOpenVariables?: () => void;
 }) {
   const tabs: { id: RightTab; label: string }[] = [
     { id: "design", label: "Design" },
     { id: "prototype", label: "Prototype" },
+  ];
+  const INSPECT_TABS: { id: string; label: string }[] = [
+    { id: "inspect", label: "Inspect" },
+    { id: "design", label: "Design" },
   ];
   const root = snap.pages[snap.page].root;
   const id = snap.selection[0];
@@ -149,7 +185,7 @@ export function RightPanel({
   const n = wp?.node;
   const inspect = snap.rightTab === "inspect";
   return (
-    <aside className="panel right">
+    <aside className="panel right" aria-label="Inspector">
       <div className="right-head">
         <div className="avatar" title="You">
           X
@@ -165,7 +201,10 @@ export function RightPanel({
             <Icon name="dev" />
           </button>
         </Tooltip>
-        <Tooltip label="Present" shortcut="Esc to exit">
+        {/* The chip advertised "Esc to exit" — a sentence in a shortcut slot,
+            and the player's key, not the one that starts a presentation. The
+            chord the palette lists is ⌘⌥↩ (PT-U7). */}
+        <Tooltip label="Present" shortcut="⌘⌥↩">
           <button className="icon-btn" aria-label="Present" onClick={() => onPresent?.()}>
             <Icon name="play" />
           </button>
@@ -176,32 +215,19 @@ export function RightPanel({
           </button>
         </Tooltip>
       </div>
-      <div className="tabs">
-        {inspect ? (
-          <>
-            <button className="tab" aria-current="true">
-              Inspect
-            </button>
-            <button
-              className="tab"
-              onClick={() => engine.dispatch({ type: "setRightTab", tab: "design" })}
-              style={{ color: "var(--dim)", cursor: "pointer" }}
-            >
-              Design
-            </button>
-          </>
-        ) : (
-          tabs.map((t) => (
-            <button
-              key={t.id}
-              className="tab"
-              aria-current={snap.rightTab === t.id}
-              onClick={() => engine.dispatch({ type: "setRightTab", tab: t.id })}
-            >
-              {t.label}
-            </button>
-          ))
-        )}
+      <div className="tabs-row">
+        {/* Deeper in Dev Mode the strip reads "Inspect · Design": Inspect is the
+            mode you are in, so it has no target of its own. */}
+        <XTabs
+          ariaLabel="Inspector view"
+          variant="head"
+          active={inspect ? "inspect" : snap.rightTab}
+          tabs={inspect ? INSPECT_TABS : tabs}
+          onChange={(id) => {
+            if (id === "inspect") return;
+            engine.dispatch({ type: "setRightTab", tab: id as RightTab });
+          }}
+        />
         <ZoomMenu engine={engine} snap={snap} />
       </div>
       <div className="inspector">
@@ -210,10 +236,13 @@ export function RightPanel({
         )}
         {inspect && <Inspect n={n} engine={engine} snap={snap} />}
         {snap.rightTab === "design" && !inspect && !n && (
-          <PageDesign engine={engine} tool={snap.tool} />
+          <>
+            <PageDesign engine={engine} tool={snap.tool} onOpenVariables={onOpenVariables} />
+            <DesignHealth engine={engine} snap={snap} onOpenVariables={onOpenVariables} />
+          </>
         )}
         {snap.rightTab === "design" && !inspect && n && wp && (
-          <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} />
+          <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} onOpenVariables={onOpenVariables} />
         )}
       </div>
       {exportOpen && (
@@ -240,21 +269,22 @@ function ExportAssetsDialog({
   onPresent?: () => void;
 }) {
   const root = snap.pages[snap.page].root;
+  const selected = new Set(snap.selection);
   const candidates = useMemo(() => {
     const out: XNode[] = [];
     const walk = (n: XNode) => {
       for (const ch of n.children) {
         if (ch.visible === false) continue;
-        // Frames and slices are the export units; anything else only shows up
-        // when the layer already carries its own export settings.
-        if (ch.kind === "frame" || (ch.exports?.length ?? 0) > 0) out.push(ch);
+        // Frames and slices are the export units; anything else shows up when
+        // the layer already carries its own export settings or is selected,
+        // so a selected slice or vector is never missing from the list.
+        if (ch.kind === "frame" || ch.isSlice === true || (ch.exports?.length ?? 0) > 0 || selected.has(ch.id)) out.push(ch);
         else walk(ch);
       }
     };
     walk(root);
     return out;
   }, [root]);
-  const selected = new Set(snap.selection);
   const withConfig = (n: XNode) => (n.exports?.length ?? 0) > 0;
   const presetFor = (n: XNode): ExportPreset =>
     n.exports?.[0] ?? { format: "PNG", scale: 1, suffix: "" };
@@ -280,23 +310,30 @@ function ExportAssetsDialog({
   // the sheet is being filtered or ticked; it follows the document instead.
   const thumbs = useMemo(() => {
     const out: Record<string, string> = {};
-    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "" });
+    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "" }, { root });
     return out;
   }, [candidates]);
   const chosen = candidates.filter((n) => checked[n.id]);
-  const total = chosen.reduce((acc, n) => acc + Math.max(1, (n.exports?.length ?? 0) || 1), 0);
+  const filesFor = (n: XNode): ExportPreset[] => {
+    const dialog = configs[n.id] ?? presetFor(n);
+    return [dialog, ...extrasOf(n.exports, dialog)];
+  };
+  const total = chosen.reduce((acc, n) => acc + filesFor(n).length, 0);
 
   const run = () => {
     if (!chosen.length) {
       toast("Nothing checked to export");
       return;
     }
-    // Browsers throttle simultaneous downloads, so each file gets its own turn.
-    chosen.forEach((n, i) => {
-      const p = configs[n.id] ?? presetFor(n);
-      window.setTimeout(() => runExport(n, p), i * 220);
+    // Each checked layer writes its dialog row plus any further stored
+    // presets; browsers throttle simultaneous downloads, so each file gets
+    // its own turn.
+    const jobs: { n: XNode; p: ExportPreset }[] = [];
+    for (const n of chosen) for (const p of filesFor(n)) jobs.push({ n, p });
+    jobs.forEach(({ n, p }, i) => {
+      window.setTimeout(() => runExport(n, p, { root }), i * 220);
     });
-    toast(`Exporting ${plural(chosen.length, "asset")} from "${snap.pages[snap.page].name}"`);
+    toast(`Exporting ${plural(jobs.length, "asset")} from "${snap.pages[snap.page].name}"`);
     onClose();
   };
 
@@ -327,6 +364,9 @@ function ExportAssetsDialog({
             const p = configs[n.id] ?? presetFor(n);
             const set = (patch: Partial<ExportPreset>) =>
               setConfigs((v) => ({ ...v, [n.id]: { ...p, ...patch } }));
+            // The size of the file this row writes, not the layer's design
+            // size: a 2x PNG of a 100px frame reads 200 × 200.
+            const size = exportSize(n, p);
             return (
               <label className={`xrow${checked[n.id] ? " on" : ""}`} key={n.id}>
                 <input
@@ -346,18 +386,23 @@ function ExportAssetsDialog({
                     onClose();
                   }}
                 />
-                <span className="xrow-name">{n.name}</span>
+                <span className="xrow-name" title={`${n.name}${p.suffix}.${p.format.toLowerCase()}`}>{n.name}</span>
                 <span className="xrow-size">
-                  {Math.round(n.w)} × {Math.round(n.h)}
+                  {size.width} × {size.height}
                 </span>
-                <select value={p.format} onChange={(e) => set({ format: e.target.value as ExportFormat })}>
+                <select aria-label="Export format" value={p.format} onChange={(e) => {
+                  const format = e.target.value as ExportFormat;
+                  // Vector formats are pinned at 1x, as in the sidebar: a
+                  // stale 2x would otherwise write a double-sized SVG.
+                  set({ format, scale: FORMAT_CAPS[format].oneToOne ? 1 : p.scale });
+                }}>
                   {FORMATS.map((f) => (
                     <option key={f} value={f}>
                       {f}
                     </option>
                   ))}
                 </select>
-                <select value={String(p.scale)} onChange={(e) => set({ scale: Number(e.target.value) })}>
+                <select aria-label="Export scale" value={String(p.scale)} disabled={FORMAT_CAPS[p.format].oneToOne} title={FORMAT_CAPS[p.format].oneToOne ? "Vector formats export at 1x" : "Export scale"} onChange={(e) => set({ scale: Number(e.target.value) })}>
                   {SCALES.map((x) => (
                     <option key={x} value={String(x)}>
                       {x}×
@@ -392,7 +437,7 @@ function ExportAssetsDialog({
 
 interface PresetCategory {
   category: string;
-  icon: string;
+  icon: IconName;
   items: { name: string; w: number; h: number }[];
 }
 
@@ -444,7 +489,143 @@ const PRESET_GROUPS: PresetCategory[] = [
   },
 ];
 
-function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
+/**
+ * Design health, live from the snapshot: score, issue list, click-to-select,
+ * and one-click fixes. Recomputes every render, so feedback is real-time.
+ */
+function DesignHealth({
+  engine,
+  snap,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onOpenVariables?: () => void;
+}) {
+  const report = useMemo(() => lintDocument(snap), [snap]);
+  const [open, setOpen] = useState(true);
+  const scoreColor = report.score >= 90 ? "var(--accent)" : report.score >= 70 ? "var(--amber)" : "var(--red)";
+
+  const selectIssue = (issue: LintIssue) => {
+    if (issue.nodeIds.length) {
+      engine.dispatch({ type: "setPage", index: issue.page });
+      engine.dispatch({ type: "select", ids: [issue.nodeIds[0]] });
+      zoomTo(engine, "selection");
+    } else if (issue.variableIds.length) {
+      // The left panel follows App-owned nav: opening Variables goes through
+      // the App callback, like the bridge row below.
+      if (onOpenVariables) onOpenVariables();
+      else toast("Variables and styles live in the left rail");
+    }
+  };
+
+  const runFix = (issue: LintIssue, fix: LintFix) => {
+    if (fix.kind === "delete-variable") {
+      engine.dispatch({ type: "deleteVariable", id: fix.variableId });
+      toast("Variable deleted");
+    } else if (fix.kind === "delete-style") {
+      engine.dispatch({ type: "deleteStyle", id: fix.styleId });
+      toast("Style deleted");
+    } else if (fix.kind === "reset-overrides") {
+      engine.dispatch({ type: "resetOverrides", id: fix.nodeId });
+      toast("Overrides reset");
+    } else if (fix.kind === "create-variable-bind") {
+      const collection = snap.variableCollections?.[0]?.name ?? "Brand";
+      const id = `var_${Date.now()}`;
+      const name = `token-${fix.color.replace("#", "").toLowerCase()}`;
+      engine.dispatch({ type: "addVariable", variable: { id, name, type: "color", value: fix.color, collection } });
+      engine.dispatch({ type: "bindVariable", id: fix.nodeId, prop: fix.prop, variableId: id });
+      toast(`Created ${name} and bound it`);
+    } else {
+      selectIssue(issue);
+    }
+  };
+
+  const fixLabel = (fix: LintFix): string =>
+    fix.kind === "delete-variable" || fix.kind === "delete-style"
+      ? "Delete"
+      : fix.kind === "reset-overrides"
+        ? "Reset"
+        : fix.kind === "create-variable-bind"
+          ? "Make token"
+          : "Show";
+
+  const dot = (sev: LintIssue["severity"]): string => (sev === "error" ? "var(--red)" : sev === "warning" ? "var(--amber)" : "var(--dim)");
+  const shown = report.issues.slice(0, 40);
+  return (
+    <>
+      <div className="h-row" style={{ marginTop: 4 }}>
+        <h3>Design health</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{ fontSize: 11, fontWeight: 700, color: scoreColor }}
+            title={`${report.counts.error} errors · ${report.counts.warning} warnings · ${report.counts.info} notes`}
+          >
+            {report.score} / 100
+          </span>
+          <button className="icon-btn" title={open ? "Collapse issues" : "Expand issues"} onClick={() => setOpen((v) => !v)}>
+            <Icon name={open ? "chevron-down" : "chevron-right"} size={12} />
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="insp-pad" style={{ display: "grid", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+          {report.issues.length === 0 && <p className="muted">No issues — every color, variable, and component checks out.</p>}
+          {shown.map((issue, i) => (
+            <div
+              key={`${issue.rule}-${i}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 6px",
+                borderRadius: 6,
+                background: "var(--hover)",
+                fontSize: 11,
+                cursor: issue.nodeIds.length || issue.variableIds.length ? "pointer" : "default",
+              }}
+              title={issue.nodeIds.length || issue.variableIds.length ? "Click to show" : undefined}
+              onClick={() => selectIssue(issue)}
+            >
+              <span
+                style={{ width: 7, height: 7, borderRadius: 999, background: dot(issue.severity), flexShrink: 0 }}
+                aria-hidden
+              />
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={issue.message}>
+                {issue.message}
+              </span>
+              {issue.fix && (
+                <button
+                  className="mini"
+                  title="Apply fix"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (issue.fix) runFix(issue, issue.fix);
+                  }}
+                >
+                  {issue.fix && fixLabel(issue.fix)}
+                </button>
+              )}
+            </div>
+          ))}
+          {report.issues.length > shown.length && (
+            <p className="muted">+{report.issues.length - shown.length} more</p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function PageDesign({
+  engine,
+  tool,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  tool: string;
+  onOpenVariables?: () => void;
+}) {
   const snap = engine.snapshot();
   const root = snap.pages[snap.page].root;
   return (
@@ -468,9 +649,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
       )}
       {tool === "frame" && (
         <>
-          <div className="h-row">
-            <h3>Frame Presets</h3>
-          </div>
+          <Section id="presets" title="Frame Presets">
           <div className="presets" style={{ maxHeight: 340, overflowY: "auto" }}>
             {PRESET_GROUPS.map((grp) => (
               <div key={grp.category} style={{ marginBottom: 6 }}>
@@ -481,17 +660,22 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
                 {grp.items.map((p) => (
                   <button
                     key={p.name}
-                    onClick={() =>
+                    onClick={() => {
+                      // Preset frames land at the viewport's top-left, not at a
+                      // fixed point the user may have panned away from.
+                      // Rounded: frames always snap to the pixel grid.
+                      const vx = Math.round(-snap.panX / snap.zoom + 24);
+                      const vy = Math.round(-snap.panY / snap.zoom + 48);
                       engine.dispatch({
                         type: "add",
                         kind: "frame",
-                        x: 80,
-                        y: 80,
+                        x: vx,
+                        y: vy,
                         w: p.w,
                         h: p.h,
                         extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
-                      })
-                    }
+                      });
+                    }}
                   >
                     {p.name}
                     <span className="sz">
@@ -502,12 +686,11 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
               </div>
             ))}
           </div>
+          </Section>
           <div className="hr" />
         </>
       )}
-      <div className="h-row">
-        <h3>Background</h3>
-      </div>
+      <Section id="background" title="Background">
       <div className="insp-pad">
         <ColorRow
           value={root.fill}
@@ -521,10 +704,27 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           onVisible={(v) => engine.dispatch({ type: "patch", id: root.id, patch: { fillVisible: v } })}
         />
       </div>
+      </Section>
       <div className="hr" />
-      <div className="h-row">
-        <h3>Pixel grid</h3>
+      <Section id="local-styles" title="Local styles">
+      <div className="insp-pad">
+        {/* With nothing selected the file's local styles and variables live
+            in the left panel's Variables tab; this row is the bridge there,
+            through the App-owned nav the panel actually reads. */}
+        <button
+          className="link"
+          onClick={() =>
+            onOpenVariables
+              ? onOpenVariables()
+              : toast("Variables and styles live in the left rail")
+          }
+        >
+          Open variables &amp; styles
+        </button>
       </div>
+      </Section>
+      <div className="hr" />
+      <Section id="pixel-grid" title="Pixel grid">
       <div className="insp-pad">
         <ColorRow
           value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
@@ -538,8 +738,9 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
           onVisible={(pixelGrid) => engine.dispatch({ type: "patchPage", patch: { pixelGrid } })}
         />
       </div>
+      </Section>
       <div className="hr" />
-      <ExportBlock n={root} engine={engine} />
+      <ExportBlock n={root} engine={engine} root={root} ids={[root.id]} page />
     </>
   );
 }
@@ -563,17 +764,29 @@ function Prototype({
     if (!n) return;
     engine.dispatch({ type: "setInteractions", id: n.id, interactions: next });
   };
+  const coerceVal = (raw: string): string | number | boolean => {
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    const num = Number(raw);
+    return raw !== "" && !isNaN(num) ? num : raw;
+  };
+  // §23 PT-019: Scroll-to via the panel targets direct children of scrollable
+  // frames (Figma); the noodle still reaches any object on the canvas.
+  const scrollTargets: { id: string; label: string }[] = [];
+  for (const f of frames) {
+    if (f.overflow === "scrollx" || f.overflow === "scrolly" || f.overflow === "scrollboth") {
+      for (const c of f.children) scrollTargets.push({ id: c.id, label: `${c.name || c.kind} · ${f.name}` });
+    }
+  }
   return (
     <>
-      <div className="h-row">
-        <h3>Flow starting point</h3>
-      </div>
+      <Section id="proto-start" title="Flow starting point">
       <div className="proto-row">
         <span>Start</span>
         <select
+          aria-label="Flow start frame"
           value={start || frames[0]?.id || ""}
           onChange={(e) => engine.dispatch({ type: "patchPage", patch: { flowStart: e.target.value } })}
-          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
           {frames.map((f) => (
             <option key={f.id} value={f.id}>
@@ -582,18 +795,17 @@ function Prototype({
           ))}
         </select>
       </div>
+      </Section>
 
-      <div className="h-row" style={{ marginTop: 8 }} onClick={() => {}}>
-        <h3>Prototype settings</h3>
-      </div>
+      <Section id="proto-settings" title="Prototype settings">
       <div className="proto-row">
         <span>Device</span>
         <select
+          aria-label="Prototype device"
           value={snap.prototypeDevice || "none"}
           onChange={(e) =>
             engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })
           }
-          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
           <option value="none">None (borderless)</option>
           {DEVICE_GROUPS.map((g) => (
@@ -610,11 +822,11 @@ function Prototype({
       <div className="proto-row">
         <span>Size</span>
         <select
+          aria-label="Prototype scale"
           value={snap.prototypeScale || "fit"}
           onChange={(e) =>
             engine.dispatch({ type: "setPrototypeScale", scale: e.target.value as "fit" | "100%" | "fill" })
           }
-          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
           <option value="fit">Zoom to fit</option>
           <option value="100%">Zoom to 100%</option>
@@ -641,7 +853,7 @@ function Prototype({
 
       {/* The mockup preview shows the selected frame inside the real device
           shell, so the choice is visible before pressing Play. */}
-      <div className="proto-preview device" style={{ marginTop: 8 }}>
+      <div className="proto-preview device">
         <DevicePreview
           spec={deviceFor(snap.prototypeDevice)}
           fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : "#fff"}
@@ -649,9 +861,9 @@ function Prototype({
         />
       </div>
       <p className="muted">Flow starts at {startName}. Esc steps back, then exits.</p>
+      </Section>
 
-      <div className="h-row" style={{ marginTop: 8 }}>
-        <h3>Interactions</h3>
+      <Section id="proto-interactions" title="Interactions" actions={
         <button
           className="plus"
           title="Add interaction"
@@ -672,14 +884,14 @@ function Prototype({
         >
           <Icon name="plus" size={14} />
         </button>
-      </div>
+      }>
       {!n && <p className="muted">Select a layer to add On click → Navigate.</p>}
       {n &&
         interactions.map((ix, i) => (
-          <div key={i} className="insp-pad" style={{ display: "grid", gap: 5, marginBottom: 8, background: "var(--hover)", borderRadius: 8, padding: 8 }}>
-            <div style={{ display: "flex", gap: 4 }}>
+          <div key={i} className="proto-interaction">
+            <div className="proto-top">
               <select
-                style={{ flex: 1 }}
+                aria-label="Interaction trigger"
                 value={ix.trigger}
                 onChange={(e) => {
                   const next = interactions.map((x, j) =>
@@ -693,6 +905,8 @@ function Prototype({
                 <option value="afterDelay">After delay</option>
                 <option value="mouseEnter">Mouse enter</option>
                 <option value="mouseLeave">Mouse leave</option>
+                <option value="mouseDown">Mouse down</option>
+                <option value="mouseUp">Mouse up</option>
                 <option value="keyPress">Key / Gamepad press</option>
                 <option value="onDrag">On drag</option>
               </select>
@@ -705,7 +919,36 @@ function Prototype({
               </button>
             </div>
 
+            {ix.trigger === "keyPress" && (
+              <input
+                readOnly
+                placeholder="Click here, then press a key…"
+                title="The key that fires this interaction while presenting"
+                value={ix.keyKey || ""}
+                onKeyDown={(e) => {
+                  e.preventDefault();
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, keyKey: e.key } : x)));
+                }}
+              />
+            )}
+
+            {/* §23 PT-006: After-delay was unauthorable — every such row fired
+                at 0ms although the runner honors per-row delays. */}
+            {ix.trigger === "afterDelay" && (
+              <input
+                type="number"
+                placeholder="Delay ms"
+                title="Milliseconds on the frame before this interaction fires"
+                value={ix.delay ?? 800}
+                onChange={(e) => {
+                  const d = Math.max(0, parseInt(e.target.value, 10) || 0);
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, delay: d } : x)));
+                }}
+              />
+            )}
+
             <select
+              aria-label="Interaction action"
               value={ix.action}
               onChange={(e) => {
                 const action = e.target.value as Interaction["action"];
@@ -720,32 +963,62 @@ function Prototype({
               <option value="scrollTo">Scroll to</option>
               <option value="openUrl">Open link</option>
               <option value="setVariable">Set variable</option>
+              <option value="setVariableMode">Set variable mode</option>
+              <option value="setVariant">Swap variant</option>
             </select>
+
+            {ix.action === "setVariant" && (
+              <select
+                value={ix.variantName || ""}
+                title="Variant to swap this instance to"
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, variantName: e.target.value } : x)))
+                }
+              >
+                <option value="">Choose variant…</option>
+                {(snap.components.find((c) => c.id === n.componentId)?.variants ?? []).map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {ix.action === "setVariant" && !n.componentId && (
+              <p className="muted">Put this interaction on an instance to swap its variant.</p>
+            )}
 
             {(ix.action === "navigate" ||
               ix.action === "scrollTo" ||
               ix.action === "openOverlay" ||
               ix.action === "swapOverlay") && (
               <select
+                aria-label="Navigate to"
                 value={ix.destination}
                 onChange={(e) =>
                   setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
                 }
               >
                 <option value="">Choose target…</option>
-                {frames
-                  .filter((f) => f.id !== n.id)
-                  .map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
+                {ix.action === "scrollTo" && scrollTargets.length > 0
+                  ? scrollTargets.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.label}
+                      </option>
+                    ))
+                  : frames
+                      .filter((f) => f.id !== n.id)
+                      .map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
               </select>
             )}
 
             {(ix.action === "openOverlay" || ix.action === "swapOverlay") && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <div className="proto-pair">
                 <select
+                  aria-label="Overlay position"
                   value={ix.overlayPosition || "center"}
                   onChange={(e) =>
                     setIx(
@@ -759,7 +1032,7 @@ function Prototype({
                   <option value="bottom">Bottom sheet</option>
                   <option value="top">Top banner</option>
                 </select>
-                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--dim)" }}>
+                <label className="proto-check">
                   <input
                     type="checkbox"
                     checked={ix.overlayCloseOutside !== false}
@@ -787,8 +1060,9 @@ function Prototype({
             )}
 
             {ix.action === "setVariable" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <div className="proto-pair">
                 <select
+                  aria-label="Variable"
                   value={ix.variableId || ""}
                   onChange={(e) =>
                     setIx(interactions.map((x, j) => (j === i ? { ...x, variableId: e.target.value } : x)))
@@ -802,6 +1076,7 @@ function Prototype({
                   ))}
                 </select>
                 <select
+                  aria-label="Variable operation"
                   value={ix.variableOp || "toggle"}
                   onChange={(e) =>
                     setIx(
@@ -811,16 +1086,63 @@ function Prototype({
                     )
                   }
                 >
-                  <option value="toggle">Toggle boolean</option>
+                  <option value="set">Set value</option>
+                <option value="toggle">Toggle boolean</option>
                   <option value="increment">Increment +1</option>
                   <option value="decrement">Decrement -1</option>
                 </select>
               </div>
             )}
+            {ix.action === "setVariable" && ix.variableOp === "set" && (
+              <input
+                placeholder="Value"
+                title="Literal value to write (numbers and true/false are typed)"
+                value={ix.variableValue === undefined ? "" : String(ix.variableValue)}
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, variableValue: coerceVal(e.target.value) } : x)))
+                }
+              />
+            )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 4 }}>
+            {/* §23 PT-012: Figma's Set-variable-mode action; the engine command
+                already exists, the panel just never offered it. */}
+            {ix.action === "setVariableMode" && (
+              <div className="proto-pair">
+                <select
+                  aria-label="Variable collection"
+                  value={ix.variableCollectionId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableCollectionId: e.target.value, variableModeId: "" } : x)))
+                  }
+                >
+                  <option value="">Collection…</option>
+                  {(snap.variableCollections || []).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Variable mode"
+                  value={ix.variableModeId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableModeId: e.target.value } : x)))
+                  }
+                >
+                  <option value="">Mode…</option>
+                  {((snap.variableCollections || []).find((c) => c.id === ix.variableCollectionId)?.modes ?? []).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="proto-anim">
               <select
-                value={ix.animation}
+                aria-label="Animation"
+              value={ix.animation}
                 onChange={(e) =>
                   setIx(
                     interactions.map((x, j) =>
@@ -845,14 +1167,16 @@ function Prototype({
                 title="Duration in ms"
                 value={ix.duration || 250}
                 onChange={(e) => {
-                  const d = parseInt(e.target.value, 10) || 250;
+                  // §23 PT-013: Figma clamps durations to 1–10000ms.
+                  const d = Math.max(1, Math.min(10000, parseInt(e.target.value, 10) || 250));
                   setIx(interactions.map((x, j) => (j === i ? { ...x, duration: d } : x)));
                 }}
               />
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+            <div className="proto-pair">
               <select
-                value={ix.easing || "easeOut"}
+                aria-label="Easing"
+              value={ix.easing || "easeOut"}
                 onChange={(e) =>
                   setIx(
                     interactions.map((x, j) =>
@@ -869,18 +1193,7 @@ function Prototype({
                 <option value="spring">Spring (Gentle)</option>
                 <option value="bouncy">Spring (Bouncy)</option>
               </select>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
-                  fontSize: 10,
-                  color: "var(--fg-muted)",
-                  cursor: "pointer",
-                  userSelect: "none",
-                }}
-                title="Match layers by name and interpolate their properties"
-              >
+              <label className="proto-check" title="Match layers by name and interpolate their properties">
                 <input
                   type="checkbox"
                   checked={Boolean(ix.smartMatch || ix.animation === "smart")}
@@ -896,7 +1209,7 @@ function Prototype({
                 Smart match
               </label>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px", background: "var(--bg-subtle)", borderRadius: 4 }}>
+            <div className="proto-ease">
               <svg width="32" height="18" viewBox="0 0 32 18" style={{ overflow: "visible" }}>
                 {ix.easing === "linear" && <line x1="2" y1="16" x2="30" y2="2" stroke="var(--accent)" strokeWidth="1.5" />}
                 {ix.easing === "easeIn" && <path d="M 2 16 Q 22 16, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
@@ -905,16 +1218,115 @@ function Prototype({
                 {ix.easing === "spring" && <path d="M 2 16 C 10 0, 16 2, 22 4 C 26 3, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
                 {ix.easing === "bouncy" && <path d="M 2 16 C 8 -4, 14 6, 20 0 C 24 4, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
               </svg>
-              <span style={{ fontSize: 10, color: "var(--dim)" }}>
+              <span className="proto-ease-t">
                 {ix.duration || 250}ms • {ix.easing || "easeOut"}
               </span>
             </div>
+            {!ix.condition ? (
+              <button
+                className="mini"
+                title="Only run when a variable comparison holds"
+                onClick={() =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, condition: { variableId: "", op: "truthy" as const } } : x,
+                    ),
+                  )
+                }
+              >
+                + Condition
+              </button>
+            ) : (
+              <div className="proto-cond">
+                <select
+                  value={ix.condition.variableId}
+                  title="Variable to test"
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i
+                          ? { ...x, condition: { ...(x.condition ?? { variableId: "", op: "truthy" as const }), variableId: e.target.value } }
+                          : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="">Variable…</option>
+                  {(snap.variables || []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={ix.condition.op}
+                  title="Comparison"
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i
+                          ? {
+                              ...x,
+                              condition: {
+                                ...(x.condition ?? { variableId: "", op: "truthy" as const }),
+                                op: e.target.value as InteractionCondition["op"],
+                              },
+                            }
+                          : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="truthy">is true</option>
+                  <option value="falsy">is false</option>
+                  <option value="eq">=</option>
+                  <option value="neq">≠</option>
+                  <option value="gt">&gt;</option>
+                  <option value="gte">≥</option>
+                  <option value="lt">&lt;</option>
+                  <option value="lte">≤</option>
+                </select>
+                {ix.condition.op !== "truthy" && ix.condition.op !== "falsy" ? (
+                  <input
+                    placeholder="Value"
+                    value={ix.condition.value === undefined ? "" : String(ix.condition.value)}
+                    onChange={(e) =>
+                      setIx(
+                        interactions.map((x, j) =>
+                          j === i
+                            ? {
+                                ...x,
+                                condition: {
+                                  ...(x.condition ?? { variableId: "", op: "truthy" as const }),
+                                  value: coerceVal(e.target.value),
+                                },
+                              }
+                            : x,
+                        ),
+                      )
+                    }
+                  />
+                ) : (
+                  <span />
+                )}
+                <button
+                  className="mini minus"
+                  title="Remove condition"
+                  onClick={() => setIx(interactions.map((x, j) => (j === i ? { ...x, condition: undefined } : x)))}
+                >
+                  <Icon name="minus" size={12} />
+                </button>
+              </div>
+            )}
           </div>
         ))}
+      </Section>
       <div className="insp-pad">
-        <button className="export-run" onClick={() => onPresent?.()}>
-          Present Prototype
-        </button>
+        <Tooltip label="Present" shortcut="⌘⌥↩">
+          <button className="x-primary" onClick={() => onPresent?.()}>
+            Present Prototype
+          </button>
+        </Tooltip>
       </div>
     </>
   );
@@ -957,6 +1369,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     }
     if (n.strokeDashPattern?.length)
       rules.push(`/* dashes: ${n.strokeDashPattern.join(", ")} - no CSS equivalent */`);
+    if (usesVariableWidth(n)) rules.push(`/* variable-width stroke: no CSS equivalent */`);
   }
   if (n.opacity < 1) {
     rules.push(`opacity: ${Math.round(n.opacity * 100) / 100};`);
@@ -983,7 +1396,14 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     rules.push(`font-weight: ${n.fontWeight};`);
     if (n.lineHeight) rules.push(`line-height: ${devLen(Math.round(n.lineHeight), unit)};`);
     if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
-    if (n.textAlign && n.textAlign !== "left") rules.push(`text-align: ${n.textAlign};`);
+    if (n.textAlign && n.textAlign !== "left")
+      rules.push(`text-align: ${n.textAlign === "justified" ? "justify" : n.textAlign};`);
+    if (n.textDecoration && n.textDecoration !== "none") rules.push(`text-decoration: ${n.textDecoration};`);
+    if (n.textCase && n.textCase !== "none")
+      rules.push(
+        `text-transform: ${n.textCase === "upper" ? "uppercase" : n.textCase === "lower" ? "lowercase" : n.textCase === "title" ? "capitalize" : "none"};`,
+      );
+    if (n.textCase === "small-caps") rules.push("font-variant: small-caps;");
     // The three type settings that have a real CSS equivalent are handed over
     // by name, so the snippet reproduces the paragraph instead of only noting
     // that it differs.
@@ -1052,7 +1472,13 @@ function generateTailwind(n: XNode): string {
     else if (n.fontWeight >= 600) cls.push("font-semibold");
     else if (n.fontWeight >= 500) cls.push("font-medium");
     if (n.lineHeight) cls.push(`leading-[${Math.round(n.lineHeight)}px]`);
-    if (n.textAlign && n.textAlign !== "left") cls.push(`text-${n.textAlign}`);
+    if (n.textAlign && n.textAlign !== "left")
+      cls.push(n.textAlign === "justified" ? "text-justify" : `text-${n.textAlign}`);
+    if (n.textDecoration === "underline") cls.push("underline");
+    else if (n.textDecoration === "strikethrough") cls.push("line-through");
+    if (n.textCase === "upper") cls.push("uppercase");
+    else if (n.textCase === "lower") cls.push("lowercase");
+    else if (n.textCase === "title") cls.push("capitalize");
   }
   return `<!-- ${n.name} -->\n<div className="${cls.join(" ")}">\n  {/* Children */}\n</div>`;
 }
@@ -1061,8 +1487,20 @@ function generateSwiftUI(n: XNode): string {
   const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
   if (n.kind === "text") {
     const weight = n.fontWeight >= 700 ? ".bold" : n.fontWeight >= 600 ? ".semibold" : n.fontWeight >= 500 ? ".medium" : ".regular";
+    const deco =
+      n.textDecoration === "underline"
+        ? "\n    .underline()"
+        : n.textDecoration === "strikethrough"
+          ? "\n    .strikethrough()"
+          : "";
+    const tcase =
+      n.textCase === "upper"
+        ? "\n    .textCase(.uppercase)"
+        : n.textCase === "lower"
+          ? "\n    .textCase(.lowercase)"
+          : "";
     return `Text("${n.text || n.name}")
-    .font(.system(size: ${n.fontSize}, weight: ${weight}))
+    .font(.system(size: ${n.fontSize}, weight: ${weight}))${deco}${tcase}
     .foregroundColor(Color(hex: "${hex(n.fill || "#000000")}"))`;
   }
   const stack = n.layout ? (n.layout.direction === "horizontal" ? "HStack" : "VStack") : "ZStack";
@@ -1120,7 +1558,12 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
     };
     if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
     if (n.letterSpacing) textStyle.letterSpacing = `${n.letterSpacing}px`;
-    if (n.textAlign && n.textAlign !== "left") textStyle.textAlign = n.textAlign;
+    if (n.textAlign && n.textAlign !== "left")
+      textStyle.textAlign = n.textAlign === "justified" ? "justify" : n.textAlign;
+    if (n.textDecoration && n.textDecoration !== "none") textStyle.textDecoration = n.textDecoration;
+    if (n.textCase === "upper" || n.textCase === "lower" || n.textCase === "title")
+      textStyle.textTransform = n.textCase === "title" ? "capitalize" : n.textCase;
+    else if (n.textCase === "small-caps") textStyle.fontVariant = "small-caps";
 
     const styleEntries = Object.entries(textStyle)
       .map(([k, v]) => `    ${k}: ${typeof v === "number" ? v : `"${v}"`},`)
@@ -1208,26 +1651,11 @@ function generateFlutter(n: XNode): string {
 )`;
 }
 
+/** Copy-as-SVG and the inspect panel's SVG tab: the real exporter, so children,
+ *  gradients, effects, text and rotation survive the trip. This used to be a
+ *  lossy single-path emitter that dropped everything but the outline. */
 function generateSvg(n: XNode): string {
-  let pathD = "";
-  if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
-    pathD = vectorNetworkToSvgPath(n.vectorNetwork);
-  } else if (n.path.length > 0) {
-    pathD = n.path
-      .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
-      .join(" ") + (n.closed ? " Z" : "");
-  }
-  const w = Math.round(Math.max(1, n.w));
-  const h = Math.round(Math.max(1, n.h));
-
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path
-    d="${pathD || `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`}"
-    fill="${n.fillVisible && !isNone(n.fill) ? n.fill : "none"}"
-    stroke="${n.strokeVisible && !isNone(n.strokePaint) ? n.strokePaint : "none"}"
-    stroke-width="${n.strokeWidth}"
-  />
-</svg>`;
+  return exportSvg(n, { format: "SVG", scale: 1, suffix: "" });
 }
 
 function generateLayerJson(n: XNode): string {
@@ -1404,9 +1832,10 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   // than panel state: that is what lets the right-click menu and the ⌥⇧C chord
   // copy exactly what this panel shows, and it is why the choice outlives a
   // reload.
-  const { format, unit } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
+  const { format, unit, scope } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
   const setFormat = (f: DevFormat) => setDevPrefs({ format: f });
   const setUnit = (u: DevUnit) => setDevPrefs({ unit: u });
+  const setScope = (s: DevScope) => setDevPrefs({ scope: s });
 
   if (!n) {
     return (
@@ -1433,11 +1862,12 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
     );
   }
 
-  const code = renderDevCode(n, format, unit);
+  const treeCapable = TREE_FORMATS[format] !== undefined && (n.children?.length ?? 0) > 0;
+  const code = renderDevCodeScoped(n, format, unit, scope, snap);
   return (
     <>
       <div style={{ margin: "0 12px 10px", padding: "10px 12px", borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#10b981", boxShadow: "0 0 0 4px rgba(16,185,129,0.20)", flexShrink: 0 }} />
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent)", boxShadow: "0 0 0 4px var(--accent-wash)", flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>Ready for development</div>
           <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
@@ -1446,24 +1876,16 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
       </div>
       <div className="h-row dev-head">
         <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} /> Inspect</h3>
-        <div className="seg dev-seg" role="tablist" aria-label="Inspect view">
-          <button
-            role="tab"
-            aria-selected={mode === "code"}
-            className={mode === "code" ? "on" : ""}
-            onClick={() => setMode("code")}
-          >
-            Code
-          </button>
-          <button
-            role="tab"
-            aria-selected={mode === "list"}
-            className={mode === "list" ? "on" : ""}
-            onClick={() => setMode("list")}
-          >
-            List
-          </button>
-        </div>
+        <XSegmentedControl
+          className="dev-seg"
+          ariaLabel="Inspect view"
+          value={mode}
+          options={[
+            { value: "code", label: "Code" },
+            { value: "list", label: "List" },
+          ]}
+          onChange={(v) => setMode(v as typeof mode)}
+        />
       </div>
       <div className="insp-pad dev-preview">
         {n.kind === "text" ? <TypeSpecimen n={n} /> : <BoxModelDiagram n={n} />}
@@ -1476,8 +1898,20 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
               setFormat={setFormat}
               unit={unit}
               setUnit={setUnit}
-              showUnits={format === "css"}
+              showUnits={format === "css" || scope === "subtree"}
             />
+            {treeCapable && (
+              <XSegmentedControl
+                className="dev-seg"
+                ariaLabel="Code scope"
+                value={scope}
+                options={[
+                  { value: "layer", label: "Layer" },
+                  { value: "subtree", label: "Subtree" },
+                ]}
+                onChange={(v) => setScope(v as typeof scope)}
+              />
+            )}
             <Tooltip label="Copy the snippet">
               <button
                 className="mini"
@@ -1521,7 +1955,7 @@ function kebab(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-type TokenRow = { group: string; name: string; value: string; color?: string };
+type TokenRow = { group: string; name: string; value: string; color?: string; alias?: string };
 
 /**
  * The file's colour and number tokens, offered as CSS custom properties or as a
@@ -1532,13 +1966,36 @@ type TokenRow = { group: string; name: string; value: string; color?: string };
  */
 function DevTokens({ snap }: { snap: Snapshot }) {
   const rows: TokenRow[] = [];
-  for (const v of snap.variables ?? []) {
-    const value = typeof v.value === "string" ? v.value : String(v.value);
+  const vars = snap.variables ?? [];
+  const varCollections = snap.variableCollections ?? [];
+  const activeModes = snap.activeModes ?? {};
+  // Active mode per collection, for groups that actually have alternatives.
+  const modeOf = new Map<string, string>();
+  for (const c of varCollections) {
+    if (c.modes.length < 2) continue;
+    const m = c.modes.find((x) => x.id === (activeModes[c.id] ?? c.modes[0]?.id));
+    if (m) modeOf.set(c.name, m.name);
+  }
+  const groupLabel = (collection: string) =>
+    modeOf.has(collection) ? `${collection} · ${modeOf.get(collection)}` : collection;
+  for (const v of vars) {
+    const r = resolveVariable(vars, varCollections, activeModes, v.id);
+    const value = r ? String(r.value) : "?";
+    // Aliases export as DTCG references; flat formats get the resolved value.
+    const col = varCollections.find((c) => c.name === v.collection);
+    const modeId = col ? (activeModes[col.id] ?? col.modes[0]?.id) : undefined;
+    const slot = modeId && v.values?.[modeId] !== undefined ? v.values[modeId] : v.value;
+    let alias: string | undefined;
+    if (isAlias(slot)) {
+      const t = vars.find((x) => x.id === slot.alias);
+      if (t) alias = `{${kebab(groupLabel(t.collection)) || "tokens"}.${kebab(t.name)}}`;
+    }
     rows.push({
-      group: v.collection,
+      group: groupLabel(v.collection),
       name: v.name,
       value,
       color: v.type === "color" ? value : undefined,
+      alias,
     });
   }
   for (const s of snap.styles) {
@@ -1573,7 +2030,7 @@ function DevTokens({ snap }: { snap: Snapshot }) {
           list.map((r) => [
             kebab(r.name),
             {
-              $value: r.value,
+              $value: r.alias ?? r.value,
               $type: r.color ? "color" : "dimension",
               $description: `${g} · ${r.name}`,
             },
@@ -1603,6 +2060,13 @@ function DevTokens({ snap }: { snap: Snapshot }) {
         </button>
         <button className="mini" title="Copy as Style Dictionary (W3C DTCG)" onClick={() => copy(styleDict, "Style Dictionary")}>
           DTCG
+        </button>
+        <button
+          className="mini"
+          title="Copy a tailwind.config theme.extend built from these tokens"
+          onClick={() => copy(generateTailwindTheme(snap), "Tailwind theme")}
+        >
+          TW
         </button>
         <button
           className="mini"
@@ -1694,6 +2158,10 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
       return generateTailwind(n);
     case "swiftui":
       return generateSwiftUI(n);
+    case "uikit":
+      return generateUIKitCode(n);
+    case "xml":
+      return generateAndroidXml(n);
     case "compose":
       return generateCompose(n);
     case "flutter":
@@ -1708,6 +2176,41 @@ function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
     default:
       return generateCss(n, unit);
   }
+}
+
+/**
+ * Dev formats that can render a whole subtree, and the tree emitter each
+ * one maps to. The native formats (SwiftUI, Compose, Flutter, SVG, tokens…)
+ * stay single-layer: their generators have no tree walker.
+ */
+const TREE_FORMATS: Partial<Record<DevFormat, TreeFormat>> = {
+  css: "css",
+  react: "tsx",
+  tailwind: "tailwind",
+  html: "html",
+  vue: "vue",
+  svelte: "svelte",
+};
+
+/**
+ * The panel's code renderer: single-layer snippets by default, the subtree
+ * generator when the scope says so. HTML/Vue/Svelte have no single-node
+ * generator, so even "layer" scope renders through the tree emitter with
+ * depth 0 — one element, same code path, no second implementation.
+ */
+function renderDevCodeScoped(n: XNode, format: DevFormat, unit: DevUnit, scope: DevScope, snap: Snapshot): string {
+  // A slice's SVG is its region's content, like the export's.
+  if (format === "svg" && n.isSlice === true)
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "" }, { root: snap.pages[snap.page].root });
+  const tree = TREE_FORMATS[format];
+  if (!tree) return renderDevCode(n, format, unit);
+  if (scope === "subtree" && n.children?.length) {
+    return generateSubtreeCode(n, { format: tree, unit, snap });
+  }
+  if (format === "html" || format === "vue" || format === "svelte") {
+    return generateSubtreeCode(n, { format: tree, unit, snap, maxDepth: 0 });
+  }
+  return renderDevCode(n, format, unit);
 }
 
 /** Language dropdown with the units setting underneath. */
@@ -1838,7 +2341,7 @@ function DevRow({ p }: { p: DevProp }) {
       <span className="dev-k">{p.label}</span>
       {p.swatch && <span className="dev-sw" style={{ background: p.swatch }} />}
       <span className="dev-v">{p.value}</span>
-      <Icon name="copy" size={11} />
+      <Icon name="copy" size={12} />
     </button>
   );
 }
@@ -1865,7 +2368,8 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   }
   if (n.opacity < 1) L("Opacity", `${Math.round(n.opacity * 100)}%`, "Layer");
   if (n.blendMode && n.blendMode !== "normal") L("Blend mode", n.blendMode, "Layer");
-  if (n.isMask) L("Mask", n.maskType === "luminance" ? "Luminance" : "Alpha", "Layer");
+  if (n.isMask)
+    L("Mask", n.maskType === "luminance" ? "Luminance" : n.maskType === "vector" ? "Vector" : "Alpha", "Layer");
   const fills = (n.fills ?? []).filter((f) => f.visible !== false);
   // Same reading order as the Design panel now uses: the paints stacked above
   // the base fill come first, so both sides count the stack from the canvas down.
@@ -1891,6 +2395,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
       n.strokePaint,
     );
   }
+  if (usesVariableWidth(n)) L("Stroke width", "variable", "Style");
   if (n.strokeDash && n.strokeDash > 0) L("Dashed", `${n.strokeDash}`, "Style");
   for (const e of n.effects ?? []) {
     if (e.visible === false) continue;
@@ -1922,6 +2427,20 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     if (n.lineHeight) L("Line height", devLen(n.lineHeight, unit), "Typography");
     if (n.letterSpacing) L("Letter spacing", devLen(n.letterSpacing, unit), "Typography");
     if (n.textAlign && n.textAlign !== "left") L("Alignment", n.textAlign, "Typography");
+    if (n.textDecoration && n.textDecoration !== "none")
+      L("Decoration", n.textDecoration === "strikethrough" ? "Strikethrough" : "Underline", "Typography");
+    if (n.textCase && n.textCase !== "none")
+      L(
+        "Letter case",
+        n.textCase === "upper"
+          ? "Uppercase"
+          : n.textCase === "lower"
+            ? "Lowercase"
+            : n.textCase === "title"
+              ? "Title Case"
+              : "Small caps",
+        "Typography",
+      );
     if (n.textAlignVertical && n.textAlignVertical !== "top")
       L("Vertical alignment", n.textAlignVertical, "Typography");
     if ((n.textWrap === "balance" || n.textWrap === "pretty")) L("Wrap style", n.textWrap, "Typography");
@@ -2019,7 +2538,7 @@ function DevComponent({ n, engine, snap }: { n: XNode; engine: Engine; snap: Sna
             >
               <span className="dev-k">Instance of</span>
               <span className="dev-v">{master?.name ?? "Component"}</span>
-              <Icon name="chevron-right" size={11} />
+              <Icon name="chevron-right" size={12} />
             </button>
           )}
           {n.isComponent && (
@@ -2125,7 +2644,7 @@ function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: 
                       zoomTo(engine, "selection");
                     }}
                   >
-                    <Icon name="chevron-right" size={11} />
+                    <Icon name="chevron-right" size={12} />
                   </button>
                 )}
               </div>
@@ -2182,11 +2701,7 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
   return (
     <>
       <div className="hr" />
-      <div className="h-row">
-        <h3>Annotations</h3>
-        <span className="grow" />
-        <span className="sc">{list.length}</span>
-      </div>
+      <Section id="annotations" title="Annotations" actions={<span className="sc">{list.length}</span>}>
       <div className="insp-pad dev-annos">
         {list.map((a) => (
           <div className="dev-anno" key={a.id}>
@@ -2245,6 +2760,7 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
         </div>
         <p className="dev-note">Markers show on the canvas as green dots while Dev Mode is on.</p>
       </div>
+      </Section>
     </>
   );
 }
@@ -2269,18 +2785,281 @@ function collectExportables(n: XNode): XNode[] {
   walk(n);
   return out;
 }
+const CODE_FRAMEWORKS: CodeMapping["framework"][] = [
+  "react",
+  "html",
+  "vue",
+  "svelte",
+  "tailwind",
+  "swiftui",
+  "compose",
+  "flutter",
+  "uikit",
+];
+
+/**
+ * One mapping's editor card. Text fields edit a local draft and save on
+ * blur — every keystroke as its own undo step would make ⌘Z unusable —
+ * while discrete controls (selects, add/remove) save immediately.
+ */
+function MappingCard({
+  engine,
+  master,
+  mapping,
+  propNames,
+}: {
+  engine: Engine;
+  master: ComponentMaster;
+  mapping: CodeMapping;
+  propNames: string[];
+}) {
+  const [draft, setDraft] = useState(mapping);
+  const save = (m: CodeMapping) => {
+    setDraft(m);
+    engine.dispatch({ type: "setCodeMapping", componentId: master.id, mapping: m });
+  };
+  const set = (patch: Partial<CodeMapping>) => setDraft({ ...draft, ...patch });
+  const commit = () => {
+    if (JSON.stringify(draft) !== JSON.stringify(mapping)) save(draft);
+  };
+  const status = mappingSyncStatus(master, mapping);
+  const unmapped = propNames.filter((p) => !draft.props.some((x) => x.prop === p));
+  return (
+    <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, display: "grid", gap: 6, background: "var(--panel)" }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <select
+          aria-label="Framework"
+          title="Framework"
+          value={draft.framework}
+          onChange={(e) => save({ ...draft, framework: e.target.value as CodeMapping["framework"] })}
+          style={{ width: 92 }}
+        >
+          {CODE_FRAMEWORKS.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Component name in code"
+          title="Component name in code"
+          value={draft.componentName}
+          placeholder="Button"
+          onChange={(e) => set({ componentName: e.target.value })}
+          onBlur={commit}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <button
+          className="icon-btn"
+          title={`Delete this ${draft.framework} mapping`}
+          aria-label={`Delete this ${draft.framework} mapping`}
+          onClick={() => {
+            engine.dispatch({ type: "deleteCodeMapping", componentId: master.id, mappingId: mapping.id });
+            toast("Code mapping deleted");
+          }}
+        >
+          <Icon name="trash" size={12} />
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          aria-label="Import path"
+          title="Import path"
+          value={draft.importPath ?? ""}
+          placeholder='Import path, e.g. @/components/Button'
+          onChange={(e) => set({ importPath: e.target.value })}
+          onBlur={commit}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <input
+          aria-label="Version"
+          title="Version"
+          value={draft.version ?? ""}
+          placeholder="v1"
+          onChange={(e) => set({ version: e.target.value })}
+          onBlur={commit}
+          style={{ width: 52 }}
+        />
+      </div>
+      <input
+        aria-label="Source file (optional)"
+        title="Source file (optional)"
+        value={draft.file ?? ""}
+        placeholder="Source file, e.g. src/components/Button.tsx"
+        onChange={(e) => set({ file: e.target.value })}
+        onBlur={commit}
+        style={{ width: "100%" }}
+      />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span className="insp-label">Props</span>
+        {unmapped.length > 0 && (
+          <button
+            className="mini"
+            onClick={() => {
+              save({
+                ...draft,
+                props: [...draft.props, ...unmapped.map((p) => ({ prop: p, kind: "prop" as const }))],
+              });
+              toast(`Mapped ${unmapped.length} ${unmapped.length === 1 ? "property" : "properties"}`);
+            }}
+          >
+            Auto-map all
+          </button>
+        )}
+      </div>
+      {draft.props.map((pm, ix) => (
+        <div key={`${pm.prop}-${ix}`} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <select
+            aria-label="Component property"
+            value={pm.prop}
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, prop: e.target.value };
+              save({ ...draft, props });
+            }}
+            style={{ flex: 1, minWidth: 0 }}
+          >
+            {propNames.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+          <span style={{ color: "var(--fg-muted)" }} aria-hidden>→</span>
+          <input
+            aria-label={`Code prop for ${pm.prop}`}
+            value={pm.codeProp ?? ""}
+            placeholder="prop"
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, codeProp: e.target.value };
+              setDraft({ ...draft, props });
+            }}
+            onBlur={commit}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <select
+            aria-label={`Mapping kind for ${pm.prop}`}
+            value={pm.kind}
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, kind: e.target.value as CodePropMapping["kind"] };
+              save({ ...draft, props });
+            }}
+            style={{ width: 86 }}
+          >
+            <option value="prop">prop</option>
+            <option value="children">children</option>
+            <option value="omit">omit</option>
+          </select>
+          <button
+            className="icon-btn"
+            title={`Remove the ${pm.prop} mapping`}
+            aria-label={`Remove the ${pm.prop} mapping`}
+            onClick={() => save({ ...draft, props: draft.props.filter((_, j) => j !== ix) })}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 999,
+            background: status === "synced" ? "var(--accent)" : status === "stale" ? "var(--amber)" : "var(--fg-muted)",
+          }}
+        />
+        <span className="insp-label grow" style={{ flex: 1 }}>
+          {status === "synced"
+            ? `Verified${mapping.syncedAt ? ` · ${new Date(mapping.syncedAt).toLocaleString()}` : ""}`
+            : status === "stale"
+              ? "Master changed since verification"
+              : "Never verified against the master"}
+        </span>
+        <button
+          className="mini"
+          onClick={() => {
+            engine.dispatch({ type: "syncCodeMapping", componentId: master.id, mappingId: mapping.id });
+            toast("Mapping verified against the master");
+          }}
+        >
+          Verify now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Component → code mappings (P1.10): which code component each instance
+ * becomes in generated output. Collapsed until used — most sessions never
+ * touch it, and the section is already long.
+ */
+function CodeMappingEditor({ engine, master }: { engine: Engine; master: ComponentMaster }) {
+  const mappings = master.codeMappings ?? [];
+  const [open, setOpen] = useState(mappings.length > 0);
+  const propNames = [...new Set([master.property || "Variant", ...(master.properties ?? []).map((p) => p.name)])].filter(
+    Boolean,
+  );
+  return (
+    <div style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--text)" }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700 }}>Code mappings</span>
+        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 999, background: "var(--input)", border: "1px solid var(--line)", color: "var(--muted)" }}>
+          {mappings.length}
+        </span>
+        <span style={{ flex: 1 }} />
+        <Icon name="chevron-down" size={12} />
+      </button>
+      {open && (
+        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+          {mappings.map((m) => (
+            <MappingCard key={m.id} engine={engine} master={master} mapping={m} propNames={propNames} />
+          ))}
+          <button
+            style={{ fontSize: 11, padding: "4px 8px" }}
+            onClick={() => {
+              engine.dispatch({
+                type: "setCodeMapping",
+                componentId: master.id,
+                mapping: {
+                  id: `map-${Date.now()}`,
+                  framework: "react",
+                  componentName: master.name.replace(/[^a-zA-Z0-9]/g, "") || "Component",
+                  props: [],
+                },
+              });
+              toast("Code mapping added");
+            }}
+          >
+            + Add mapping
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Design({
   n,
   x,
   y,
   engine,
   snap,
+  onOpenVariables,
 }: {
   n: XNode;
   x: number;
   y: number;
   engine: Engine;
   snap: Snapshot;
+  onOpenVariables?: () => void;
 }) {
   const [typeOpen, setTypeOpen] = useState(false);
   const [offsetDist, setOffsetDist] = useState(8);
@@ -2330,6 +3109,15 @@ function Design({
    * Scale tool below. All three ask the same question, so they share one
    * answer. */
   const inInstance = insideInstance(snap.pages[snap.page].root, n.id);
+  /* Layout overrides on instances: members keep none of the layout controls,
+   * while an instance root may override spacing (padding and gaps) but never
+   * structure (direction, wrap, alignment, distribution). The engine refuses
+   * the rest; the panel says so instead of no-op'ing. */
+  const isInstRoot = (!!n.componentId && !n.isComponent) || n.kind === "instance";
+  const layoutMemberLocked = inInstance && !isInstRoot;
+  const layoutStructLocked = inInstance;
+  const layoutMemberTitle = "Layout comes from the main component";
+  const layoutStructTitle = "An instance can only override padding and gaps";
   /* Auto layout answers three questions the panel asks in several places: is
    * the gap on Auto, does this flow wrap, and is a declared hug still a hug
    * once something inside it is filling the same axis. */
@@ -2401,7 +3189,7 @@ function Design({
     const root = snap.pages[snap.page].root;
     const picked = snap.selection
       .map((id) => find(root, id))
-      .filter((m): m is XNode => !!m && !m.locked);
+      .filter((m): m is XNode => !!m && !isEffectivelyLocked(root, m.id));
     if (!picked.length) {
       toast("Nothing to scale · the selection is empty or locked");
       return;
@@ -2475,10 +3263,159 @@ function Design({
       });
       return;
     }
-    const next = key === "opacity" ? Math.max(0, Math.min(1, v)) : v;
+    // Floor the type metrics the renderer could not honour: a sub-unit font
+    // never paints, a negative leading/paragraph gap/indent inverts the
+    // layout instead of tightening it. Zero leading stays Auto.
+    const next =
+      key === "opacity"
+        ? Math.max(0, Math.min(1, v))
+        : key === "fontSize"
+          ? Math.max(1, v)
+          : key === "lineHeight" || key === "paragraphSpacing"
+            ? Math.max(0, v)
+            : v;
     engine.dispatch({ type: "patch", id: n.id, patch: { [key]: next } });
     if (key === "fontSize" || key === "letterSpacing" || key === "lineHeight" || key === "paragraphSpacing")
       refitHug({ [key]: next });
+  };
+  // A multi-selection edits position, size and rotation together: the fields
+  // show Mixed while the layers disagree, and a commit applies to every layer
+  // that may move — locked layers and instance members sit out, the same pair
+  // the engine's `move` refuses. Each layer keeps its own aspect lock, ratio,
+  // rotation origin and hug refit.
+  const dRoot = snap.pages[snap.page].root;
+  const selNodes = snap.selection
+    .map((id) => find(dRoot, id))
+    .filter((m): m is XNode => !!m);
+  const movers =
+    selNodes.length > 1
+      ? selNodes.filter((m) => !isEffectivelyLocked(dRoot, m.id) && !isInstanceMember(dRoot, m.id))
+      : [];
+  const multiKey = (key: "x" | "y" | "w" | "h" | "rotation"): number[] =>
+    movers.map((m) => (key === "rotation" ? (m.rotation ?? 0) : m[key]));
+  const multiMixed = (key: "x" | "y" | "w" | "h" | "rotation"): string | undefined => {
+    if (!multi) return undefined;
+    const all = selNodes.map((m) => (key === "rotation" ? (m.rotation ?? 0) : m[key]));
+    return new Set(all).size > 1 ? "Mixed" : undefined;
+  };
+  const numMany = (key: "x" | "y" | "w" | "h" | "rotation", vals: number[]) => {
+    if (!movers.length) return;
+    engine.dispatch({ type: "begin" });
+    movers.forEach((m, i) => {
+      const v = vals[i];
+      if (v == null || !Number.isFinite(v)) return;
+      if (key === "x" || key === "y") {
+        engine.dispatch({
+          type: "move",
+          ids: [m.id],
+          dx: key === "x" ? v - m.x : 0,
+          dy: key === "y" ? v - m.y : 0,
+        });
+        return;
+      }
+      if (key === "w" || key === "h") {
+        let w = key === "w" ? v : m.w;
+        let h = key === "h" ? v : m.h;
+        if (snap.tool === "scale" && m.w > 0 && m.h > 0) {
+          const box = sizeKeepingRatio(
+            { x: m.x, y: m.y, w: m.w, h: m.h },
+            key === "w" ? { w: v } : { h: v },
+          );
+          w = box.w;
+          h = box.h;
+        } else if (m.aspectLocked) {
+          const ratio =
+            m.aspectRatio && m.aspectRatio > 0 ? m.aspectRatio : m.w > 0 && m.h > 0 ? m.h / m.w : 1;
+          if (key === "w") h = Math.max(1, v * ratio);
+          else w = Math.max(1, v / ratio);
+        }
+        engine.dispatch({ type: "resize", id: m.id, x: m.x, y: m.y, w, h });
+        if (key === "w") refitHugFor(m, { w, sizingW: "fixed" }, { h: m.sizingH === "hug" });
+        else refitHugFor(m, { h, sizingH: "fixed" }, { w: m.sizingW === "hug" });
+        return;
+      }
+      // rotateAboutOrigin wraps to ±180, so a typed 190 lands on -170.
+      const turned = rotateAboutOrigin(
+        { x: m.x, y: m.y, w: m.w, h: m.h, rotation: m.rotation ?? 0 },
+        m.rotOrigin ?? [0.5, 0.5],
+        v,
+      );
+      engine.dispatch({
+        type: "patch",
+        id: m.id,
+        patch: { x: turned.x, y: turned.y, rotation: turned.rotation },
+      });
+    });
+    engine.dispatch({ type: "end" });
+  };
+  // Multi-select scalars beyond geometry (IN-U1/TY-U3): the type metrics,
+  // opacity, stroke weight, corners, blend and the base fill/stroke rows
+  // show Mixed while the selection disagrees, and a commit applies to
+  // every selected layer. Unlike geometry these are plain patches, which
+  // the engine applies to locked layers and instance members exactly as
+  // it does for a single selection — so all of them take the edit, and a
+  // multi-edit means the same thing a single-edit does. Structural lists
+  // (fill/stroke/effect stacks) keep showing the first layer's, the same
+  // compromise the Export block documents for its presets.
+  const textTargets = selNodes.filter((m) => m.kind === "text");
+  const mixedProp = <T,>(get: (m: XNode) => T, pool: XNode[] = selNodes): string | undefined => {
+    if (!multi) return undefined;
+    return new Set(pool.map(get)).size > 1 ? "Mixed" : undefined;
+  };
+  const manyVals = (get: (m: XNode) => number, pool: XNode[] = selNodes): number[] =>
+    pool.map(get);
+  // A committed number per layer, with num()'s floors, then a hug refit
+  // for the metrics that change how much room the copy needs.
+  const patchNumMany = (
+    key: "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing" | "paragraphIndent" | "strokeWidth",
+    vals: number[],
+    pool: XNode[] = selNodes,
+    extra?: (m: XNode, v: number) => Partial<XNode>,
+  ) => {
+    if (!pool.length) return;
+    engine.dispatch({ type: "begin" });
+    pool.forEach((m, i) => {
+      const raw = vals[i];
+      if (raw == null || !Number.isFinite(raw)) return;
+      const v =
+        key === "opacity"
+          ? Math.max(0, Math.min(1, raw))
+          : key === "fontSize"
+            ? Math.max(1, raw)
+            : key === "lineHeight" || key === "paragraphSpacing"
+              ? Math.max(0, raw)
+              : raw;
+      engine.dispatch({ type: "patch", id: m.id, patch: { [key]: v, ...extra?.(m, v) } });
+      if (
+        key === "fontSize" ||
+        key === "letterSpacing" ||
+        key === "lineHeight" ||
+        key === "paragraphSpacing" ||
+        key === "paragraphIndent"
+      )
+        refitHugFor(m, { [key]: v });
+    });
+    engine.dispatch({ type: "end" });
+  };
+  // One patch fragment for every selected layer — fixed values (a picked
+  // colour, a corner toggle) or per-layer fragments via a function.
+  const patchMany = (p: Partial<XNode> | ((m: XNode, i: number) => Partial<XNode>)) => {
+    if (!selNodes.length) return;
+    engine.dispatch({ type: "begin" });
+    selNodes.forEach((m, i) =>
+      engine.dispatch({ type: "patch", id: m.id, patch: typeof p === "function" ? p(m, i) : p }),
+    );
+    engine.dispatch({ type: "end" });
+  };
+  // patchType for every text layer in the selection, with the same refit.
+  const patchTypeMany = (over: Partial<XNode>) => {
+    if (!textTargets.length) return;
+    engine.dispatch({ type: "begin" });
+    for (const m of textTargets) {
+      engine.dispatch({ type: "patch", id: m.id, patch: over });
+      refitHugFor(m, over);
+    }
+    engine.dispatch({ type: "end" });
   };
   const kindLabel = n.imageSrc
     ? "Image"
@@ -2513,13 +3450,32 @@ function Design({
   /* A min or max is a limit the hugging axes have to be measured against: each
    * keystroke clamps the box, and without a re-fit a limit typed as "200" would
    * leave the width at the "2" the first keystroke clamped it to. */
-  const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
-    if (n.kind !== "text") return;
-    const fit = hugSize({ ...n, ...over } as XNode, n.text, axes);
+  const refitHugFor = (m: XNode, over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
+    if (m.kind !== "text") return;
+    const fit = hugSize({ ...m, ...over } as XNode, m.text, axes);
     if (fit.w === undefined && fit.h === undefined) return;
-    patch(fit);
+    engine.dispatch({ type: "patch", id: m.id, patch: fit });
+  };
+  const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) =>
+    refitHugFor(n, over, axes);
+  // An aspect lock links the min/max limits too: typing one sets the
+  // proportional opposite alongside it, as Figma does. Clearing a limit only
+  // clears the one typed.
+  const setMinMax = (key: "minW" | "maxW" | "minH" | "maxH", v: number, extra: Partial<XNode> = {}) => {
+    const p: Partial<XNode> = { [key]: v > 0 ? v : undefined, ...extra };
+    if (n.aspectLocked && v > 0) {
+      const ratio = n.aspectRatio && n.aspectRatio > 0 ? n.aspectRatio : n.w > 0 && n.h > 0 ? n.h / n.w : 1;
+      const sib = key === "minW" ? "minH" : key === "maxW" ? "maxH" : key === "minH" ? "minW" : "maxW";
+      const wide = key === "minW" || key === "maxW";
+      p[sib] = Math.max(1, Math.round((wide ? v * ratio : v / ratio) * 100) / 100);
+    }
+    patch(p);
+    refitHug({ [key]: v });
   };
   const parent = findParent(snap.pages[snap.page].root, n.id);
+  // A member of a boolean group cannot own fill, stroke, effects or opacity -
+  // the group's own properties render instead, so the panel locks all four.
+  const boolChild = parent?.kind === "boolean";
   const hasAutoLayoutParent = !!parent?.layout;
   const gridParent = parent?.layout?.direction === "grid";
   /* First press turns the base stroke on; after that each press stacks another
@@ -2527,6 +3483,23 @@ function Design({
      and the empty-state row so both paths do exactly the same thing. */
   const addStroke = () => {
     openSection("stroke");
+    if (multi) {
+      patchMany((m) =>
+        m.strokeWidth > 0 && (!isNone(m.strokePaint) || m.strokeVisible)
+          ? {
+              strokes: [
+                ...(m.strokes ?? []),
+                { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: m.strokeAlign },
+              ],
+            }
+          : {
+              strokePaint: isNone(m.strokePaint) ? "#1e1e1e" : m.strokePaint,
+              strokeVisible: true,
+              strokeWidth: m.strokeWidth || 1,
+            },
+      );
+      return;
+    }
     const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
     if (!hasBase) {
       patch({
@@ -2557,11 +3530,15 @@ function Design({
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <div className="field">
               <select
-                value={n.fontFamily}
-                onChange={(e) =>
-                  patchType({ fontFamily: e.target.value })
-                }
+                aria-label="Font family"
+                value={mixedProp((m) => m.fontFamily, textTargets) ? "__mixed" : n.fontFamily}
+                onChange={(e) => {
+                  if (e.target.value === "__mixed") return;
+                  if (multi) patchTypeMany({ fontFamily: e.target.value });
+                  else patchType({ fontFamily: e.target.value });
+                }}
               >
+                {mixedProp((m) => m.fontFamily, textTargets) && <option value="__mixed">Mixed</option>}
                 {(() => {
                   const base = [
                     "Inter",
@@ -2600,6 +3577,7 @@ function Design({
                   );
                 })()}
               </select>
+              <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontFamily" onOpenVariables={onOpenVariables} />
               {localFonts.length === 0 && (
                 <button
                   type="button"
@@ -2630,9 +3608,16 @@ function Design({
             <div className="grid2">
               <div className="field">
                 <select
-                  value={n.fontWeight}
-                  onChange={(e) => patchType({ fontWeight: parseInt(e.target.value, 10) })}
+                  aria-label="Font weight"
+                  value={mixedProp((m) => m.fontWeight, textTargets) ? "mixed" : n.fontWeight}
+                  onChange={(e) => {
+                    if (e.target.value === "mixed") return;
+                    const fontWeight = parseInt(e.target.value, 10);
+                    if (multi) patchTypeMany({ fontWeight });
+                    else patchType({ fontWeight });
+                  }}
                 >
+                  {mixedProp((m) => m.fontWeight, textTargets) && <option value="mixed">Mixed</option>}
                   <option value={100}>Thin (100)</option>
                   <option value={200}>Extra Light (200)</option>
                   <option value={300}>Light (300)</option>
@@ -2643,15 +3628,36 @@ function Design({
                   <option value={800}>Extra Bold (800)</option>
                   <option value={900}>Black (900)</option>
                 </select>
+                <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontWeight" onOpenVariables={onOpenVariables} />
               </div>
-              <Field label="S" value={n.fontSize} onChange={(v) => num("fontSize", v)} />
+              <Field
+                label="S"
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="fontSize" onOpenVariables={onOpenVariables} />}
+                value={n.fontSize}
+                onChange={(v) => num("fontSize", v)}
+                mixed={mixedProp((m) => m.fontSize, textTargets)}
+                values={multi ? manyVals((m) => m.fontSize, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("fontSize", vs, textTargets) : undefined}
+              />
               <Field
                 label={n.lineHeight ? "↑" : "Auto"}
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="lineHeight" onOpenVariables={onOpenVariables} />}
                 value={n.lineHeight || n.fontSize * 1.2}
-                onLabelClick={() => num("lineHeight", 0)}
+                onLabelClick={() => (multi ? patchTypeMany({ lineHeight: 0 }) : num("lineHeight", 0))}
                 onChange={(v) => num("lineHeight", v)}
+                mixed={mixedProp((m) => m.lineHeight, textTargets)}
+                values={multi ? manyVals((m) => m.lineHeight, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("lineHeight", vs, textTargets) : undefined}
               />
-              <Field label="↔" value={n.letterSpacing} onChange={(v) => num("letterSpacing", v)} />
+              <Field
+                label="↔"
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="letterSpacing" onOpenVariables={onOpenVariables} />}
+                value={n.letterSpacing}
+                onChange={(v) => num("letterSpacing", v)}
+                mixed={mixedProp((m) => m.letterSpacing, textTargets)}
+                values={multi ? manyVals((m) => m.letterSpacing, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("letterSpacing", vs, textTargets) : undefined}
+              />
             </div>
             <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
               <Tooltip label="Auto width" shortcut="">
@@ -2684,26 +3690,32 @@ function Design({
             </div>
             <div className="seg icons">
               {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlign === a ? "on" : ""}
-                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
-                >
-                  <Icon name={`align-text-${a}`} size={14} />
-                </button>
+                <Tooltip key={a} label={`Align ${a}`}>
+                  <button
+                    className={n.textAlign === a ? "on" : ""}
+                    aria-label={`Align ${a}`}
+                    aria-pressed={n.textAlign === a}
+                    onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
+                  >
+                    <Icon name={`align-text-${a}`} size={14} />
+                  </button>
+                </Tooltip>
               ))}
             </div>
             <div className="seg icons">
               {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlignVertical === a ? "on" : ""}
-                  onClick={() =>
-                    engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
-                  }
-                >
-                  <Icon name={`valign-${a}`} size={14} />
-                </button>
+                <Tooltip key={a} label={`Vertical align ${a}`}>
+                  <button
+                    className={n.textAlignVertical === a ? "on" : ""}
+                    aria-label={`Vertical align ${a}`}
+                    aria-pressed={n.textAlignVertical === a}
+                    onClick={() =>
+                      engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
+                    }
+                  >
+                    <Icon name={`valign-${a}`} size={14} />
+                  </button>
+                </Tooltip>
               ))}
             </div>
           </div>
@@ -2712,35 +3724,55 @@ function Design({
               <h4>Type settings</h4>
               <div className="dir-row">
                 <div className="seg icons">
-                  <button
-                    className={n.textDecoration === "underline" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration: n.textDecoration === "underline" ? "none" : "underline",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="underline" />
-                  </button>
-                  <button
-                    className={n.textDecoration === "strikethrough" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration:
-                            n.textDecoration === "strikethrough" ? "none" : "strikethrough",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="strike" />
-                  </button>
+                  <Tooltip label="Italic" shortcut="⌘I">
+                    <button
+                      className={n.fontStyle === "italic" ? "on" : ""}
+                      aria-label="Italic"
+                      aria-pressed={n.fontStyle === "italic"}
+                      onClick={() =>
+                        patchType({ fontStyle: n.fontStyle === "italic" ? "normal" : "italic" })
+                      }
+                    >
+                      <Icon name="italic" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Underline" shortcut="⌘U">
+                    <button
+                      className={n.textDecoration === "underline" ? "on" : ""}
+                      aria-label="Underline"
+                      aria-pressed={n.textDecoration === "underline"}
+                      onClick={() =>
+                        engine.dispatch({
+                          type: "patch",
+                          id: n.id,
+                          patch: {
+                            textDecoration: n.textDecoration === "underline" ? "none" : "underline",
+                          },
+                        })
+                      }
+                    >
+                      <Icon name="underline" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Strikethrough">
+                    <button
+                      className={n.textDecoration === "strikethrough" ? "on" : ""}
+                      aria-label="Strikethrough"
+                      aria-pressed={n.textDecoration === "strikethrough"}
+                      onClick={() =>
+                        engine.dispatch({
+                          type: "patch",
+                          id: n.id,
+                          patch: {
+                            textDecoration:
+                              n.textDecoration === "strikethrough" ? "none" : "strikethrough",
+                          },
+                        })
+                      }
+                    >
+                      <Icon name="strike" />
+                    </button>
+                  </Tooltip>
                   <select
                     aria-label="Letter case"
                     value={n.textCase}
@@ -2765,12 +3797,22 @@ function Design({
                 Truncate text
               </label>
               {n.truncate && (
-                <div className="insp-pad">
+                <div
+                  className="insp-pad"
+                  title={
+                    n.sizingW === "hug" || n.sizingH === "hug"
+                      ? undefined
+                      : "Max lines needs Auto width or Auto height - a fixed box truncates at its own height"
+                  }
+                >
                   <Field
                     label="L"
                     value={n.maxLines}
+                    disabled={n.sizingW !== "hug" && n.sizingH !== "hug"}
                     onChange={(v) =>
-                      patchType({ maxLines: v })
+                      // Maximum lines and maximum height are exclusive: setting
+                      // either clears the other, in both directions.
+                      patchType({ maxLines: Math.max(1, Math.round(v)), maxH: undefined })
                     }
                   />
                 </div>
@@ -2778,17 +3820,23 @@ function Design({
               <div className="insp-pad">
                 <Field
                   label="¶"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="paragraphSpacing" onOpenVariables={onOpenVariables} />}
                   value={n.paragraphSpacing}
                   onChange={(v) => num("paragraphSpacing", v)}
                   aria="Space after each paragraph"
+                  mixed={mixedProp((m) => m.paragraphSpacing, textTargets)}
+                  values={multi ? manyVals((m) => m.paragraphSpacing, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("paragraphSpacing", vs, textTargets) : undefined}
                 />
                 <Field
                   label="⇥"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="paragraphIndent" onOpenVariables={onOpenVariables} />}
                   value={n.paragraphIndent}
-                  onChange={(v) =>
-                    patchType({ paragraphIndent: v })
-                  }
+                  onChange={(v) => patchType({ paragraphIndent: Math.max(0, v) })}
                   aria="First-line indent of each paragraph"
+                  mixed={mixedProp((m) => m.paragraphIndent, textTargets)}
+                  values={multi ? manyVals((m) => m.paragraphIndent, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("paragraphIndent", vs, textTargets) : undefined}
                 />
               </div>
               <div className="dir-row">
@@ -2799,7 +3847,7 @@ function Design({
                     value={n.textWrap}
                     onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
                   >
-                    <option value="auto">Wrap: Off</option>
+                    <option value="auto">Wrap: Auto</option>
                     <option value="balance">Wrap: Balance</option>
                     <option value="pretty">Wrap: Pretty</option>
                   </select>
@@ -2844,7 +3892,6 @@ function Design({
         <Tooltip label="Round to whole pixels" shortcut="⇧⌘P">
           <button
             className={`icon-btn${isFractional(n) ? " warn" : ""}`}
-            title="Round to whole pixels"
             aria-label="Round to whole pixels"
             onClick={() => roundToPixel(engine)}
           >
@@ -2869,10 +3916,6 @@ function Design({
           <Icon name="more" size={14} />
         </button>
       </div>
-      {/* x-ui wired: ensures shared Popover/PropertyField/elevation are bundled */}
-      <div style={{ display: "none" }}>
-        <PropertyField label="x"><span /></PropertyField>
-      </div>
       {more && (
         <ContextMenu
           x={more.x}
@@ -2893,29 +3936,75 @@ function Design({
 
       {multi && (
         <>
-          <div className="h-row">
-            <h3>Boolean</h3>
-          </div>
+          <Section id="boolean" title="Boolean">
           <div className="insp-pad">
             <div className="seg icons">
               {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
                 <button
                   key={op}
-                  title={`Boolean ${op[0].toUpperCase() + op.slice(1)}`}
-                  onClick={() => engine.dispatch({ type: "boolean", op })}
+                  className={snap.booleanPreview === op ? "on" : ""}
+                  title={
+                    snap.booleanPreview
+                      ? `Preview ${op}`
+                      : `Boolean ${op[0].toUpperCase() + op.slice(1)}`
+                  }
+                  onClick={() => {
+                    // With a preview armed, the op buttons switch the previewed
+                    // operation; otherwise they apply immediately, as before.
+                    if (snap.booleanPreview) engine.dispatch({ type: "setBooleanPreview", op });
+                    else engine.dispatch({ type: "boolean", op });
+                  }}
                 >
                   <Icon name={`boolean-${op}`} size={16} />
                 </button>
               ))}
             </div>
-            <button
-              style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
-              onClick={() => engine.dispatch({ type: "flatten" })}
-            >
-              <Icon name="flatten" size={14} />
-              <span>Flatten</span>
-            </button>
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <button
+                className={snap.booleanPreview ? "on" : ""}
+                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                title="Preview the result on the canvas before applying (Enter applies, Esc cancels)"
+                aria-pressed={!!snap.booleanPreview}
+                onClick={() =>
+                  engine.dispatch({ type: "setBooleanPreview", op: snap.booleanPreview ? null : "union" })
+                }
+              >
+                <Icon name="eye" size={14} />
+                <span>Preview</span>
+              </button>
+              <button
+                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                onClick={() => engine.dispatch({ type: "flatten" })}
+              >
+                <Icon name="flatten" size={14} />
+                <span>Flatten</span>
+              </button>
+            </div>
+            {snap.booleanPreview && (
+              <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "var(--dim)", textTransform: "capitalize" }}>
+                  {snap.booleanPreview}
+                </span>
+                <span style={{ flex: 1 }} />
+                <button
+                  title="Apply the previewed boolean (Enter)"
+                  onClick={() => {
+                    const op = snap.booleanPreview;
+                    if (op) engine.dispatch({ type: "boolean", op });
+                  }}
+                >
+                  Apply
+                </button>
+                <button
+                  title="Discard the preview (Esc)"
+                  onClick={() => engine.dispatch({ type: "setBooleanPreview", op: null })}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
+          </Section>
         </>
       )}
 
@@ -2976,8 +4065,22 @@ function Design({
           </div>
         </div>
         <div className="grid3">
-          <Field label="X" value={x} onChange={(v) => num("x", v)} />
-          <Field label="Y" value={y} onChange={(v) => num("y", v)} />
+          <Field
+            label="X"
+            value={x}
+            onChange={(v) => num("x", v)}
+            mixed={multiMixed("x")}
+            values={multi ? multiKey("x") : undefined}
+            onChangeMany={multi ? (vs) => numMany("x", vs) : undefined}
+          />
+          <Field
+            label="Y"
+            value={y}
+            onChange={(v) => num("y", v)}
+            mixed={multiMixed("y")}
+            values={multi ? multiKey("y") : undefined}
+            onChangeMany={multi ? (vs) => numMany("y", vs) : undefined}
+          />
           <button
             className={`icon-btn${conOpen ? " on" : ""}`}
             title="Constraints"
@@ -2985,7 +4088,15 @@ function Design({
           >
             <Icon name="constraints" size={14} />
           </button>
-          <Field icon="rotate" aria="Rotation" value={n.rotation} onChange={(v) => num("rotation", v)} />
+          <Field
+            icon="rotate"
+            aria="Rotation"
+            value={n.rotation}
+            onChange={(v) => num("rotation", v)}
+            mixed={multiMixed("rotation")}
+            values={multi ? multiKey("rotation") : undefined}
+            onChangeMany={multi ? (vs) => numMany("rotation", vs) : undefined}
+          />
           <div className="seg icons">
             <button
               title="Flip horizontal"
@@ -3031,29 +4142,41 @@ function Design({
           >
             <Icon name={n.layout ? "minus" : "plus"} size={14} />
           </button>
+          {(n.kind === "frame" || n.kind === "group") && (
+            <button
+              className="plus"
+              title="Resize to fit (⌥⇧⌘R)"
+              onClick={() => engine.dispatch({ type: "resizeToFit" })}
+            >
+              <Icon name="minimize" size={14} />
+            </button>
+          )}
         </div>
       }>
-      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", marginBottom:6}}>Flow</div>
+      <div className="insp-group-title flush" style={{ marginBottom: 6 }}>Flow</div>
       <div className="dir-row">
         <div className="seg icons">
           <button
             className={!n.layout ? "on" : ""}
             // "In the right sidebar, click Freeform or Remove auto layout."
-            title="Freeform (remove auto layout, ⌥⇧A)"
+            title={layoutStructLocked ? layoutStructTitle : "Freeform (remove auto layout, ⌥⇧A)"}
+            disabled={layoutStructLocked}
             onClick={() => removeAutoLayout(engine, snap, n.id)}
           >
             <Icon name="layout-none" />
           </button>
           <button
             className={n.layout?.direction === "vertical" ? "on" : ""}
-            title="Vertical"
+            title={layoutStructLocked ? layoutStructTitle : "Vertical"}
+            disabled={layoutStructLocked}
             onClick={() => setDir(engine, snap, n, "vertical")}
           >
             <Icon name="layout-v" />
           </button>
           <button
             className={n.layout?.direction === "horizontal" ? "on" : ""}
-            title="Horizontal"
+            title={layoutStructLocked ? layoutStructTitle : "Horizontal"}
+            disabled={layoutStructLocked}
             onClick={() => setDir(engine, snap, n, "horizontal")}
           >
             <Icon name="layout-h" />
@@ -3064,23 +4187,26 @@ function Design({
               back to Horizontal or Vertical drops the grid's own fields. */}
           <button
             className={n.layout?.direction === "grid" ? "on" : ""}
-            title="Grid"
+            title={layoutStructLocked ? layoutStructTitle : "Grid"}
+            disabled={layoutStructLocked}
             onClick={() => setFlow(engine, snap, n.id, "grid")}
           >
             <Icon name="layout-grid" />
           </button>
-          {/* When horizontal is selected, Wrap becomes
-              available." A vertical flow has no wrap to offer, so the button is
-              shown disabled and says why rather than silently doing nothing. */}
+          {/* Wrap is offered on horizontal and vertical flows alike (a
+              vertical flow fills top to bottom, then starts a new column);
+              only the grid flow has no wrap to offer. */}
           <button
             className={wrapOn ? "on" : ""}
-            disabled={n.layout?.direction !== "horizontal"}
+            disabled={!n.layout || n.layout.direction === "grid" || layoutStructLocked}
             title={
-              n.layout?.direction !== "horizontal"
-                ? "Wrap is available on a horizontal flow"
-                : wrapOn
-                  ? "Wrapping onto the next line"
-                  : "Wrap onto the next line"
+              layoutStructLocked
+                ? layoutStructTitle
+                : !n.layout || n.layout.direction === "grid"
+                  ? "Wrap is available on horizontal and vertical flows"
+                  : wrapOn
+                    ? "Wrapping onto the next line"
+                    : "Wrap onto the next line"
             }
             onClick={() =>
               n.layout &&
@@ -3095,21 +4221,25 @@ function Design({
           </button>
         </div>
       </div>
-      <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Sizing</div>
+      <div className="insp-group-title">Sizing</div>
       <div className="insp-pad">
-        <div className="grid3">
+        <div className="grid4">
           <Field
             label="W"
             hint={showSizing("width")}
             hintNote={hugNote("width")}
             value={n.w}
             onChange={(v) => num("w", v)}
+            mixed={multiMixed("w")}
+            values={multi ? multiKey("w") : undefined}
+            onChangeMany={multi ? (vs) => numMany("w", vs) : undefined}
             onLabelClick={() => {
               const sizingW = cycleSizing(n.sizingW);
               if (n.kind === "text") setSizing(sizingW, n.sizingH);
               else patch({ sizingW });
               setSizingAxis("width", sizingW);
             }}
+            bind={<BindControl engine={engine} snap={snap} targets={multi ? movers : [n]} prop="w" onOpenVariables={onOpenVariables} />}
           />
           <Field
             label="H"
@@ -3117,12 +4247,16 @@ function Design({
             hintNote={hugNote("height")}
             value={n.h}
             onChange={(v) => num("h", v)}
+            mixed={multiMixed("h")}
+            values={multi ? multiKey("h") : undefined}
+            onChangeMany={multi ? (vs) => numMany("h", vs) : undefined}
             onLabelClick={() => {
               const sizingH = cycleSizing(n.sizingH);
               if (n.kind === "text") setSizing(n.sizingW, sizingH);
               else patch({ sizingH });
               setSizingAxis("height", sizingH);
             }}
+            bind={<BindControl engine={engine} snap={snap} targets={multi ? movers : [n]} prop="h" onOpenVariables={onOpenVariables} />}
           />
           <button
             className={`icon-btn${n.aspectLocked ? " on" : ""}`}
@@ -3215,16 +4349,13 @@ function Design({
         )}
         {showMinMax && (
           <div className="grid2" style={{ marginTop: 4 }}>
-            <Field label="Min W" value={n.minW || 0} onChange={(v) => { patch({ minW: v > 0 ? v : undefined }); refitHug({ minW: v }); }} />
-            <Field label="Max W" value={n.maxW || 0} onChange={(v) => { patch({ maxW: v > 0 ? v : undefined }); refitHug({ maxW: v }); }} />
-            <Field label="Min H" value={n.minH || 0} onChange={(v) => { patch({ minH: v > 0 ? v : undefined }); refitHug({ minH: v }); }} />
+            <Field label="Min W" value={n.minW || 0} onChange={(v) => setMinMax("minW", v)} />
+            <Field label="Max W" value={n.maxW || 0} onChange={(v) => setMinMax("maxW", v)} />
+            <Field label="Min H" value={n.minH || 0} onChange={(v) => setMinMax("minH", v)} />
             <Field
               label="Max H"
               value={n.maxH || 0}
-              onChange={(v) => {
-                patch(n.kind === "text" ? { maxH: v > 0 ? v : undefined, maxLines: 0 } : { maxH: v > 0 ? v : undefined });
-                refitHug({ maxH: v });
-              }}
+              onChange={(v) => setMinMax("maxH", v, n.kind === "text" ? { maxLines: 0 } : {})}
             />
           </div>
         )}
@@ -3281,6 +4412,7 @@ function Design({
         <div className="insp-pad">
           <div className="field">
             <select
+              aria-label="Mask type"
               value={n.maskType || "alpha"}
               onChange={(e) => patch({ maskType: e.target.value as XNode["maskType"] })}
             >
@@ -3294,17 +4426,36 @@ function Design({
       <div className="insp-pad">
         <div className="seg">
           <button
-            title="Convert to vector path"
+            title="Edit this shape's points on the canvas (double-click does the same)"
             onClick={() => {
-              if (n.kind !== "vector") engine.dispatch({ type: "flatten" });
+              // The inspector's twin of double-clicking the layer: enter vector
+              // edit mode. It used to dispatch `flatten` — the very action of the
+              // button next to it — so the label promised editing and delivered
+              // a bake (IN-U5). Booleans still bake first, because their points
+              // only exist once the group is applied.
+              if (n.kind === "boolean") {
+                engine.dispatch({ type: "flatten" });
+                engine.dispatch({ type: "setVecEdit", id: engine.snapshot().selection[0] ?? null });
+              } else {
+                engine.dispatch({ type: "setVecEdit", id: n.id });
+              }
             }}
           >
-            Edit vector
+            {snap.vecEdit === n.id ? "Editing points" : "Edit points"}
           </button>
           <button onClick={() => engine.dispatch({ type: "flatten" })}>Flatten</button>
-          {n.strokeWidth > 0 && (
-            <button onClick={() => engine.dispatch({ type: "outlineStroke" })}>Outline stroke</button>
-          )}
+          {n.strokeWidth > 0 &&
+            !(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
+              <button
+                onClick={() => {
+                  engine.dispatch({ type: "outlineStroke", id: n.id });
+                  toast("Outlined stroke");
+                }}
+                title="Convert stroke to vector path (⇧⌘O)"
+              >
+                Outline stroke
+              </button>
+            )}
         </div>
       </div>
       {(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
@@ -3343,14 +4494,16 @@ function Design({
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <div style={{ fontSize: 10, color: "var(--dim)" }}>Alignment</div>
               <div style={{ display: "flex", gap: 2, background: "var(--bg-subtle)", padding: 2, borderRadius: 6, border: "1px solid var(--border)" }}>
-                {[
-                  { id: "left", label: "Align left", icon: "align-left" },
-                  { id: "center", label: "Align horizontal centers", icon: "align-center" },
-                  { id: "right", label: "Align right", icon: "align-right" },
-                  { id: "top", label: "Align top", icon: "align-top" },
-                  { id: "middle", label: "Align vertical centers", icon: "align-middle" },
-                  { id: "bottom", label: "Align bottom", icon: "align-bottom" },
-                ].map((a) => (
+{(
+                  [
+                    { id: "left", label: "Align left", icon: "align-left" },
+                    { id: "center", label: "Align horizontal centers", icon: "align-center" },
+                    { id: "right", label: "Align right", icon: "align-right" },
+                    { id: "top", label: "Align top", icon: "align-top" },
+                    { id: "middle", label: "Align vertical centers", icon: "align-middle" },
+                    { id: "bottom", label: "Align bottom", icon: "align-bottom" },
+                  ] as { id: string; label: string; icon: IconName }[]
+                ).map((a) => (
                   <button
                     key={a.id}
                     style={{
@@ -3368,7 +4521,7 @@ function Design({
                     onClick={() => engine.dispatch({ type: "vectorAlign", alignment: a.id as any })}
                     title={a.label}
                   >
-                    <Icon name={a.icon} size={13} />
+                    <Icon name={a.icon} size={14} />
                   </button>
                 ))}
               </div>
@@ -3525,12 +4678,16 @@ function Design({
                 className="export-run"
                 style={{ padding: "4px 8px", fontSize: 10 }}
                 onClick={() => {
+                  if (!(n.kind === "text" || n.strokeWidth > 0 || n.kind === "line" || n.kind === "arrow")) {
+                    toast("Add a stroke to outline it");
+                    return;
+                  }
                   engine.dispatch({ type: "outlineStroke", id: n.id });
                   toast("Outlined stroke");
                 }}
-                title="Convert stroke to vector path (⌥⌘O)"
+                title="Convert stroke to vector path (⇧⌘O)"
               >
-                Outline Stroke
+                Outline stroke
               </button>
             </div>
 
@@ -3648,9 +4805,11 @@ function Design({
         const propDefs = master?.properties ?? [];
         return (
           <>
-            <div className="h-row">
-              <h3>{n.isComponent ? "Component" : "Instance"}</h3>
-              <div style={{ display: "flex", gap: 4 }}>
+            <Section
+              id="component"
+              title={n.isComponent ? "Component" : "Instance"}
+              actions={
+                <div style={{ display: "flex", gap: 4 }}>
                 {n.componentId && (
                   <>
                     <button
@@ -3706,13 +4865,15 @@ function Design({
                     </button>
                   </>
                 )}
-              </div>
-            </div>
+                </div>
+              }
+            >
             <div className="insp-pad">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: "var(--fg-muted)" }}>Variant</span>
+                <span className="insp-label">Variant</span>
                 <select
                   style={{ flex: 1, maxWidth: 140 }}
+                  aria-label="Variant"
                   value={n.variant || "Default"}
                   onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
                 >
@@ -3724,11 +4885,32 @@ function Design({
                 </select>
               </div>
 
+              {!n.isComponent && n.componentId && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span className="insp-label">Swap instance</span>
+                  <select
+                    style={{ flex: 1, maxWidth: 140 }}
+                    value={n.componentId}
+                    title="Replace this instance with another component"
+                    onChange={(e) => {
+                      engine.dispatch({ type: "swapInstance", id: n.id, componentId: e.target.value });
+                      toast("Instance swapped");
+                    }}
+                  >
+                    {snap.components.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {propDefs.filter((p) => p.type !== "variant").map((prop) => {
                 const currentVal = n.componentProperties?.[prop.name] ?? prop.defaultValue;
                 return (
                   <div key={prop.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                    <span style={{ fontSize: 11, color: "var(--fg-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={prop.name}>
+                    <span className="insp-label grow" title={prop.name}>
                       {prop.name}
                     </span>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -3745,6 +4927,26 @@ function Design({
                             })
                           }
                         />
+                      ) : prop.type === "instance-swap" ? (
+                        <select
+                          style={{ width: 110, padding: "2px 4px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          value={String(currentVal)}
+                          title="Component to show in the nested instance"
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setComponentProperty",
+                              id: n.id,
+                              propName: prop.name,
+                              value: e.target.value,
+                            })
+                          }
+                        >
+                          {snap.components.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
                       ) : (
                         <input
                           type="text"
@@ -3795,12 +4997,45 @@ function Design({
                   </button>
                   <button
                     style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
-                    onClick={() => {
-                      const propType = prompt("Property type: boolean or text?", "boolean")?.toLowerCase();
-                      if (propType === "boolean" || propType === "text") {
-                        const propName = prompt(`Enter ${propType} property name (e.g. Show icon, Title):`);
+                    onClick={async () => {
+                      // A picker for the type: the old prompt asked the user to
+                      // spell "instance-swap" correctly or the click did nothing.
+                      const picked = await askChoice({
+                        title: "Property type",
+                        body: `New property on "${n.name}"`,
+                        options: [
+                          { label: "Boolean", value: "boolean", primary: true },
+                          { label: "Text", value: "text" },
+                          { label: "Instance swap", value: "instance-swap" },
+                        ],
+                      });
+                      const propType = picked?.toLowerCase();
+                      if (propType === "boolean" || propType === "text" || propType === "instance-swap") {
+                        const propName = await askPrompt({
+                          title: "Property name",
+                          label: `${propType} property name`,
+                          placeholder: propType === "boolean" ? "Show icon" : propType === "text" ? "Title" : "Icon slot",
+                          confirmLabel: "Add property",
+                          validate: (v) => (v.trim() ? null : "Enter a property name"),
+                        });
                         if (propName) {
-                          const targetLayer = prompt("Child layer name to bind to (optional):") || undefined;
+                          const targetLayer =
+                            (await askPrompt({
+                              title: propType === "instance-swap" ? "Nested instance" : "Target layer",
+                              label:
+                                propType === "instance-swap"
+                                  ? "Nested instance name to swap"
+                                  : "Child layer name to bind to",
+                              hint:
+                                propType === "instance-swap"
+                                  ? "Required — the instance this property swaps"
+                                  : "Optional — leave empty to bind to nothing yet",
+                              confirmLabel: "Add property",
+                              validate:
+                                propType === "instance-swap"
+                                  ? (v) => (v.trim() ? null : "An instance swap needs a target instance")
+                                  : undefined,
+                            })) || undefined;
                           engine.dispatch({
                             type: "addComponentProperty",
                             componentId: master.id,
@@ -3808,7 +5043,8 @@ function Design({
                               id: `prop-${Date.now()}`,
                               name: propName,
                               type: propType,
-                              defaultValue: propType === "boolean" ? true : "Text",
+                              defaultValue:
+                                propType === "boolean" ? true : propType === "instance-swap" ? (snap.components[0]?.id ?? "") : "Text",
                               targetNodeName: targetLayer,
                             },
                           });
@@ -3821,7 +5057,9 @@ function Design({
                   </button>
                 </div>
               )}
+              {master && <CodeMappingEditor engine={engine} master={master} />}
             </div>
+            </Section>
           </>
         );
       })()}
@@ -3832,10 +5070,12 @@ function Design({
                 positioned by their cells - so the packing box is the grid's
                 one exception. Per-cell alignment is on the object itself, in
                 the Position section, as the grid article describes. */}
-            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Alignment</div>
+            <div className="insp-group-title">Alignment</div>
             {!isGrid && (
               <Nine
                 layout={n.layout}
+                disabled={layoutStructLocked}
+                disabledTitle={layoutStructTitle}
                 onChange={(patch) =>
                   engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })
                 }
@@ -3843,7 +5083,8 @@ function Design({
             )}
             <button
               className="icon-btn"
-              title={n.layout.justify === "between" ? "Packed" : "Space between"}
+              title={layoutStructLocked ? layoutStructTitle : n.layout.justify === "between" ? "Packed" : "Space between"}
+              disabled={layoutStructLocked}
               onClick={() =>
                 engine.dispatch({
                   type: "autoLayout",
@@ -3860,7 +5101,14 @@ function Design({
             {n.layout.direction === "horizontal" && (
               <button
                 className={`icon-btn${n.layout.align === "baseline" ? " on" : ""}`}
-                title={n.layout.align === "baseline" ? "Baseline alignment active" : "Align to text baseline"}
+                title={
+                  layoutStructLocked
+                    ? layoutStructTitle
+                    : n.layout.align === "baseline"
+                      ? "Baseline alignment active"
+                      : "Align to text baseline"
+                }
+                disabled={layoutStructLocked}
                 onClick={() =>
                   engine.dispatch({
                     type: "autoLayout",
@@ -3880,10 +5128,12 @@ function Design({
             <GridPanel
               node={n}
               layout={n.layout}
+              disabled={layoutStructLocked}
+              disabledTitle={layoutStructTitle}
               onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
             />
           )}
-          <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Spacing</div>
+          <div className="insp-group-title">Spacing</div>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             {isGrid ? (
               // A grid has a gap per axis rather than one gap and a packing
@@ -3893,12 +5143,16 @@ function Design({
                   icon="gap"
                   aria="Gap between columns"
                   value={n.layout.gapCols ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapCols: v } })}
                 />
                 <Field
                   icon="padding-vertical"
                   aria="Gap between rows"
                   value={n.layout.gapRows ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapRows: v } })}
                 />
               </div>
@@ -3907,7 +5161,8 @@ function Design({
               {autoGap ? (
                 <button
                   className="gap-mode"
-                  title="Gap between items"
+                  title={layoutStructLocked ? layoutStructTitle : "Gap between items"}
+                  disabled={layoutStructLocked}
                   onClick={() => {
                     const modes = SPACING_MODES.map((m) => m.id);
                     const at = modes.indexOf((n.layout!.spacing ?? "between") as never);
@@ -3924,15 +5179,33 @@ function Design({
                 <Field
                   icon="gap"
                   aria="Gap between items"
+                  bind={<BindControl engine={engine} snap={snap} targets={[n]} prop="layoutGap" onOpenVariables={onOpenVariables} />}
                   value={n.layout.gap}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   onChange={(v) =>
                     engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gap: v } })
                   }
                 />
               )}
+              {/* A wrapping flow has a second gap: `gap` spaces the objects
+                  within a line, and this one spaces the lines themselves. */}
+              {wrapOn && !autoGap && (
+                <Field
+                  icon="gap"
+                  aria="Gap between lines"
+                  value={n.layout.gapCross ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  onChange={(v) =>
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapCross: v } })
+                  }
+                />
+              )}
               <button
                 className={`icon-btn${autoGap ? " on" : ""}`}
-                title={autoGap ? "Use a fixed gap" : "Set the gap to Auto"}
+                title={layoutStructLocked ? layoutStructTitle : autoGap ? "Use a fixed gap" : "Set the gap to Auto"}
+                disabled={layoutStructLocked}
                 onClick={() =>
                   engine.dispatch({
                     type: "autoLayout",
@@ -3949,13 +5222,15 @@ function Design({
               </button>
             </div>
             )}
-            <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px"}}>Padding</div>
+            <div className="insp-group-title">Padding</div>
             {padOpen ? (
               <div className="grid2">
                 {(["L", "R", "T", "B"] as const).map((lab, i) => (
                   <PadField
                     key={lab}
                     label={lab}
+                    disabled={layoutMemberLocked}
+                    disabledTitle={layoutMemberTitle}
                     value={n.layout!.padding[i]}
                     onCommit={(v) => {
                       const p = [...n.layout!.padding] as [number, number, number, number];
@@ -3979,6 +5254,9 @@ function Design({
                 <PadField
                   icon="padding-horizontal"
                   aria="Horizontal padding"
+                  bind={<BindControl engine={engine} snap={snap} targets={[n]} prop="layoutPadding" onOpenVariables={onOpenVariables} />}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   value={n.layout.padding[0]}
                   mixed={n.layout.padding[0] !== n.layout.padding[1] ? "Mixed" : undefined}
                   onCommit={(v) => {
@@ -3994,6 +5272,8 @@ function Design({
                 <PadField
                   icon="padding-vertical"
                   aria="Vertical padding"
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
                   value={n.layout.padding[2]}
                   mixed={n.layout.padding[2] !== n.layout.padding[3] ? "Mixed" : undefined}
                   onCommit={(v) => {
@@ -4016,12 +5296,19 @@ function Design({
               <Icon name="independent" size={14} />
             </button>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
-              <div className="insp-group-title" style={{fontSize:10, fontWeight:600, color:"var(--muted)", letterSpacing:0.6, textTransform:"uppercase", margin:"8px 0 6px", gridColumn:"1 / -1"}}>Positioning</div>
+              <div className="insp-group-title" style={{ gridColumn: "1 / -1" }}>Positioning</div>
               <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
               <button
                 className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
                 style={{ fontSize: 10, padding: "2px 8px", width: "auto", height: 22 }}
-                title={n.layout.itemReverseZIndex ? "First on top (earlier children overlap later ones)" : "Last on top (standard CSS/DOM order)"}
+                title={
+                  layoutStructLocked
+                    ? layoutStructTitle
+                    : n.layout.itemReverseZIndex
+                      ? "First on top (earlier children overlap later ones)"
+                      : "Last on top (standard CSS/DOM order)"
+                }
+                disabled={layoutStructLocked}
                 onClick={() =>
                   engine.dispatch({
                     type: "autoLayout",
@@ -4057,7 +5344,7 @@ function Design({
                     gutter: 20,
                     margin: 20,
                     alignment: "stretch",
-                    color: "rgba(255, 0, 0, 0.08)",
+                    color: "rgba(255, 0, 0, 0.1)",
                     visible: true,
                   };
                   engine.dispatch({
@@ -4073,7 +5360,24 @@ function Design({
           >
             {(n.layoutGrids ?? []).length > 0 && (
               <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
-                {(n.layoutGrids ?? []).map((g, gi) => (
+                {(n.layoutGrids ?? []).map((g, gi) => {
+                  const setGrid = (patch: Partial<LayoutGrid>) => {
+                    const next = [...n.layoutGrids!];
+                    next[gi] = { ...g, ...patch };
+                    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                  };
+                  // The swatch edits hue; grid paint keeps its own translucency.
+                  const alphaOf = (c: string | undefined) => {
+                    const m = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(c ?? "");
+                    return m ? parseFloat(m[1]) : 0.1;
+                  };
+                  const hexOf = (c: string | undefined) => {
+                    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
+                    if (!m) return "#ff0000";
+                    const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
+                    return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
+                  };
+                  return (
                   <div
                     key={g.id}
                     style={{
@@ -4088,6 +5392,7 @@ function Design({
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                       <select
                         style={{ fontSize: 11, fontWeight: 500 }}
+                        aria-label="Grid pattern"
                         value={g.pattern}
                         onChange={(e) => {
                           const next = [...n.layoutGrids!];
@@ -4109,7 +5414,7 @@ function Design({
                             engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
                           }}
                         >
-                          <Icon name={g.visible !== false ? "eye" : "eye-closed"} size={rowIconSize()} />
+                          <Icon name={g.visible !== false ? "eye" : "eye-off"} size={rowIconSize()} />
                         </button>
                         <button
                           className="icon-btn"
@@ -4124,22 +5429,50 @@ function Design({
                       </div>
                     </div>
                     {g.pattern === "grid" ? (
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Size</span>
-                        <input
-                          type="number"
-                          min={1}
-                          value={g.sectionSize ?? 10}
-                          style={{ width: 60, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                          onChange={(e) => {
-                            const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
-                            const next = [...n.layoutGrids!];
-                            next[gi] = { ...g, sectionSize: sz };
-                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                          }}
-                        />
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Size</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={g.sectionSize ?? 10}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
+                              setGrid({ sectionSize: sz });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.offset ?? 0}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Color</span>
+                          <input
+                            type="color"
+                            aria-label="Grid color"
+                            value={hexOf(g.color)}
+                            style={{ width: "100%", height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
+                            onChange={(e) => {
+                              const r = parseInt(e.target.value.slice(1, 3), 16);
+                              const b = parseInt(e.target.value.slice(3, 5), 16);
+                              const bl = parseInt(e.target.value.slice(5, 7), 16);
+                              setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
+                            }}
+                          />
+                        </div>
                       </div>
                     ) : (
+                      <>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
                         <div style={{ display: "grid", gap: 2 }}>
                           <span style={{ fontSize: 9, color: "var(--dim)" }}>Count</span>
@@ -4180,16 +5513,83 @@ function Design({
                             style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
                             onChange={(e) => {
                               const mg = Math.max(0, parseInt(e.target.value, 10) || 0);
-                              const next = [...n.layoutGrids!];
-                              next[gi] = { ...g, margin: mg };
-                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                              setGrid({ margin: mg });
                             }}
                           />
                         </div>
                       </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Type</span>
+                          <select
+                            aria-label="Grid alignment"
+                            value={g.alignment ?? "stretch"}
+                            style={{ fontSize: 11, padding: "2px 4px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const a = e.target.value as GridAlignment;
+                              // Stretch fills the frame, so a fixed width no
+                              // longer applies; a fixed type without a width
+                              // falls back to stretch in paint.
+                              setGrid(a === "stretch"
+                                ? { alignment: a, cell: undefined }
+                                : { alignment: a });
+                            }}
+                          >
+                            <option value="stretch">Stretch</option>
+                            <option value="min">{g.pattern === "columns" ? "Left" : "Top"}</option>
+                            <option value="center">Center</option>
+                            <option value="max">{g.pattern === "columns" ? "Right" : "Bottom"}</option>
+                          </select>
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>{g.pattern === "columns" ? "Width" : "Height"}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            disabled={(g.alignment ?? "stretch") === "stretch"}
+                            placeholder="Auto"
+                            value={g.cell ?? ""}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10);
+                              const fixed = Number.isFinite(v) ? Math.max(1, v) : undefined;
+                              setGrid({ cell: fixed });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.offset ?? 0}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Color</span>
+                        <input
+                          type="color"
+                          aria-label="Grid color"
+                          value={hexOf(g.color)}
+                          style={{ width: 60, height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
+                          onChange={(e) => {
+                            const r = parseInt(e.target.value.slice(1, 3), 16);
+                            const b = parseInt(e.target.value.slice(3, 5), 16);
+                            const bl = parseInt(e.target.value.slice(5, 7), 16);
+                            setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
+                          }}
+                        />
+                      </div>
+                      </>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Section>
@@ -4202,11 +5602,15 @@ function Design({
         <div className="grid2">
           <div className="field">
             <select
-              value={n.blendMode}
-              onChange={(e) =>
-                engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } })
-              }
+              aria-label="Blend mode"
+              value={mixedProp((m) => m.blendMode) ? "mixed" : n.blendMode}
+              onChange={(e) => {
+                if (e.target.value === "mixed") return;
+                if (multi) patchMany({ blendMode: e.target.value });
+                else engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } });
+              }}
             >
+              {mixedProp((m) => m.blendMode) && <option value="mixed">Mixed</option>}
               {(n.kind === "frame" || n.kind === "group"
                 ? ["Pass through", ...BLENDS]
                 : BLENDS
@@ -4222,8 +5626,13 @@ function Design({
           </div>
           <Field
             label="%"
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="opacity" onOpenVariables={onOpenVariables} />}
             value={Math.round(n.opacity * 100)}
+            disabled={boolChild}
             onChange={(v) => num("opacity", v / 100)}
+            mixed={mixedProp((m) => m.opacity)}
+            values={multi ? manyVals((m) => Math.round(m.opacity * 100)) : undefined}
+            onChangeMany={multi ? (vs) => patchNumMany("opacity", vs.map((v) => v / 100)) : undefined}
           />
         </div>
       </div>
@@ -4239,6 +5648,7 @@ function Design({
               <Field
                 key={lab}
                 label={lab}
+                bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="cornerRadii" onOpenVariables={onOpenVariables} />}
                 disabled={inInstance}
                 value={n.cornerRadii[i]}
                 onChange={(v) => {
@@ -4246,6 +5656,19 @@ function Design({
                   r[i] = v;
                   patch({ cornerRadii: r, cornerIndependent: true });
                 }}
+                mixed={mixedProp((m) => m.cornerRadii[i])}
+                values={multi ? manyVals((m) => m.cornerRadii[i]) : undefined}
+                onChangeMany={
+                  multi
+                    ? (vs) =>
+                        patchMany((m, j) => {
+                          const r = [...m.cornerRadii] as [number, number, number, number];
+                          const v = vs[j];
+                          if (v != null && Number.isFinite(v)) r[i] = v;
+                          return { cornerRadii: r, cornerIndependent: true };
+                        })
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -4254,9 +5677,29 @@ function Design({
             <Field
               icon="radius"
               aria="Corner radius"
+              bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="cornerRadii" onOpenVariables={onOpenVariables} />}
               value={n.cornerRadii[0]}
-              mixed={new Set(n.cornerRadii).size > 1 ? "Mixed" : undefined}
+              mixed={
+                (multi
+                  ? new Set(selNodes.flatMap((m) => m.cornerRadii)).size > 1
+                  : new Set(n.cornerRadii).size > 1)
+                  ? "Mixed"
+                  : undefined
+              }
               onChange={(v) => patch({ cornerRadii: [v, v, v, v], cornerIndependent: false })}
+              values={multi ? manyVals((m) => m.cornerRadii[0]) : undefined}
+              onChangeMany={
+                multi
+                  ? (vs) =>
+                      patchMany((m, i) => {
+                        const v = vs[i] ?? m.cornerRadii[0];
+                        return {
+                          cornerRadii: [v, v, v, v] as [number, number, number, number],
+                          cornerIndependent: false,
+                        };
+                      })
+                  : undefined
+              }
             />
             <span />
             <button
@@ -4265,7 +5708,8 @@ function Design({
               title="Independent corners"
               onClick={() => {
                 setCornersOpen(true);
-                patch({ cornerIndependent: true });
+                if (multi) patchMany({ cornerIndependent: true });
+                else patch({ cornerIndependent: true });
               }}
             >
               <Icon name="independent" size={14} />
@@ -4278,7 +5722,17 @@ function Design({
             title="Uniform corners"
             onClick={() => {
               setCornersOpen(false);
-              patch({ cornerIndependent: false, cornerRadii: [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]] });
+              if (multi)
+                patchMany((m) => ({
+                  cornerIndependent: false,
+                  cornerRadii: [m.cornerRadii[0], m.cornerRadii[0], m.cornerRadii[0], m.cornerRadii[0]] as [
+                    number,
+                    number,
+                    number,
+                    number,
+                  ],
+                }));
+              else patch({ cornerIndependent: false, cornerRadii: [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]] });
             }}
           >
             <Icon name="independent" size={14} />
@@ -4322,15 +5776,54 @@ function Design({
           Show name
         </label>
       )}
+      {n.kind === "frame" && (
+        <div className="field" style={{ marginTop: 6 }}>
+          <label style={{ fontSize: 11, color: "var(--muted)" }}>Frame</label>
+          <select
+            aria-label="Frame preset"
+            title="Swap this frame to a preset size"
+            value={PRESET_GROUPS.flatMap((g) => g.items).find((p) => p.w === Math.round(n.w) && p.h === Math.round(n.h))?.name ?? ""}
+            onChange={(e) => {
+              const p = PRESET_GROUPS.flatMap((g) => g.items).find((q) => q.name === e.target.value);
+              if (p) patch({ w: p.w, h: p.h, name: p.name });
+            }}
+          >
+            <option value="">Custom size</option>
+            {PRESET_GROUPS.map((g) => (
+              <optgroup key={g.category} label={g.category}>
+                {g.items.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name} ({p.w} × {p.h})
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      )}
       </Section>
 
       <div className="hr" />
-      <Section id="fill" title="Fill" actions={
+      <Section id="fill" title="Fill" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
         <button
           className="plus"
           title="Add fill"
+          disabled={boolChild}
           onClick={() => {
             openSection("fill");
+            if (multi) {
+              patchMany((m) =>
+                isNone(m.fill) && !m.fillVisible
+                  ? { fill: "#d9d9d9", fillVisible: true, fillOpacity: m.fillOpacity ?? 1 }
+                  : {
+                      fills: [
+                        ...(m.fills ?? []),
+                        { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                      ],
+                    },
+              );
+              return;
+            }
             // First press turns the base fill back on; after that each press
             // stacks another fill on top, the way Fill "+" behaves.
             if (isNone(n.fill) && !n.fillVisible) {
@@ -4411,6 +5904,7 @@ function Design({
               value={p.color}
               opacity={Math.round((p.opacity ?? 1) * 100)}
               visible={p.visible}
+              exportVisible={p.exportVisible !== false}
               type={p.type}
               stops={p.stops}
               gx={p.gx}
@@ -4418,12 +5912,24 @@ function Design({
               hx={p.hx}
               hy={p.hy}
               blend={p.blend}
+              image={p.image}
+              imageFit={p.imageFit}
+              imageRot={p.imageRot}
+              imageExposure={p.imageExposure}
+              imageContrast={p.imageContrast}
+              imageSaturation={p.imageSaturation}
+              imageTemperature={p.imageTemperature}
+              imageTint={p.imageTint}
+              imageHighlights={p.imageHighlights}
+              imageShadows={p.imageShadows}
+              imageTile={p.imageTile}
               recents={collectColors(snap.pages[snap.page].root)}
               background={fillBackground(snap.pages[snap.page].root, n)}
               largeText={isLargeText(n)}
               onChange={(color) => setPaint({ color, visible: true })}
               onOpacity={(v) => setPaint({ opacity: v / 100 })}
               onVisible={(v) => setPaint({ visible: v })}
+              onExportVisible={(v) => setPaint({ exportVisible: v })}
               onRemove={() =>
                 engine.dispatch({
                   type: "patch",
@@ -4446,6 +5952,22 @@ function Design({
                   type: patch.fillType,
                   color: patch.fill,
                   stops: patch.gradientStops,
+                  blend: patch.fillBlend,
+                  gx: patch.fillGX,
+                  gy: patch.fillGY,
+                  hx: patch.fillHX,
+                  hy: patch.fillHY,
+                  image: patch.imageSrc,
+                  imageFit: patch.imageFit,
+                  imageRot: patch.imageRot,
+                  imageTile: patch.imageTile,
+                  imageExposure: patch.imageExposure,
+                  imageContrast: patch.imageContrast,
+                  imageSaturation: patch.imageSaturation,
+                  imageTemperature: patch.imageTemperature,
+                  imageTint: patch.imageTint,
+                  imageHighlights: patch.imageHighlights,
+                  imageShadows: patch.imageShadows,
                 });
               }}
             />
@@ -4456,8 +5978,11 @@ function Design({
         <div className="insp-pad">
           <ColorRow
             value={n.fill}
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="fill" onOpenVariables={onOpenVariables} />}
+            mixed={!!mixedProp((m) => `${m.fillType}:${m.fill}`)}
             opacity={Math.round((n.fillOpacity ?? 1) * 100)}
             visible={n.fillVisible}
+            exportVisible={n.fillExportVisible !== false}
             type={n.fillType}
             second={n.fillB}
             blend={n.fillBlend}
@@ -4471,6 +5996,8 @@ function Design({
             imageTint={n.imageTint}
             imageHighlights={n.imageHighlights}
             imageShadows={n.imageShadows}
+            imageTile={n.imageTile}
+            onCrop={() => window.dispatchEvent(new CustomEvent("x-native-crop-image", { detail: { id: n.id } }))}
             gx={n.fillGX}
             gy={n.fillGY}
             hx={n.fillHX}
@@ -4479,29 +6006,59 @@ function Design({
             recents={collectColors(snap.pages[snap.page].root)}
             background={fillBackground(snap.pages[snap.page].root, n)}
             largeText={isLargeText(n)}
-            onChange={(fill) => engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })}
+            onChange={(fill) =>
+              multi
+                ? patchMany({ fill, fillVisible: true })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })
+            }
             onOpacity={(v) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
+              multi
+                ? patchMany({ fillOpacity: v / 100 })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
             }
-            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })}
-            onRemove={() =>
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { fillVisible: false },
-              })
+            onVisible={(v) =>
+              multi
+                ? patchMany({ fillVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })
             }
-            onMeta={(p) => engine.dispatch({ type: "patch", id: n.id, patch: p })}
-            onValueChange={(v) => engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })}
+            onExportVisible={(v) =>
+              multi
+                ? patchMany({ fillExportVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillExportVisible: v } })
+            }
+            onRemove={() => {
+              // Minus removes the base fill outright (same none+hidden pair
+              // the stroke row uses), leaving the section empty; Fill "+"
+              // then re-adds the default fill instead of stacking over a
+              // hidden one.
+              if (multi) patchMany({ fill: "#00000000", fillVisible: false });
+              else
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { fill: "#00000000", fillVisible: false },
+                });
+            }}
+            onMeta={(p) =>
+              multi
+                ? patchMany(p)
+                : engine.dispatch({ type: "patch", id: n.id, patch: p })
+            }
+            onValueChange={(v) =>
+              multi
+                ? patchMany(fillValuePatch(v))
+                : engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })
+            }
           />
         </div>
       )}
       </Section>
 
-      <Section id="stroke" title="Stroke" actions={
+      <Section id="stroke" title="Stroke" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
         <button
           className="plus"
           title="Add stroke"
+          disabled={boolChild}
           onClick={() => addStroke()}
         >
           <Icon name="plus" size={14} />
@@ -4521,31 +6078,45 @@ function Design({
         <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
           <ColorRow
             title="Stroke"
+            stroke
             value={n.strokePaint}
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="strokePaint" onOpenVariables={onOpenVariables} />}
+            mixed={!!mixedProp((m) => m.strokePaint)}
             opacity={Math.round((n.strokeOpacity ?? 1) * 100)}
             visible={n.strokeVisible}
             recents={collectColors(snap.pages[snap.page].root)}
             background={fillBackground(snap.pages[snap.page].root, n)}
             largeText={isLargeText(n)}
             onChange={(strokePaint) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeVisible: true } })
+              multi
+                ? patchMany({ strokePaint, strokeVisible: true })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeVisible: true } })
             }
             onOpacity={(v) =>
-              engine.dispatch({ type: "patch", id: n.id, patch: { strokeOpacity: v / 100 } })
+              multi
+                ? patchMany({ strokeOpacity: v / 100 })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokeOpacity: v / 100 } })
             }
-            onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { strokeVisible: v } })}
+            onVisible={(v) =>
+              multi
+                ? patchMany({ strokeVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokeVisible: v } })
+            }
             onRemove={() =>
-              engine.dispatch({
-                type: "patch",
-                id: n.id,
-                patch: { strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 },
-              })
+              multi
+                ? patchMany({ strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 })
+                : engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 },
+                  })
             }
           />
           <div className="stroke-width">
             <Field
               label="W"
               aria="Stroke weight"
+              bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="strokeWidth" onOpenVariables={onOpenVariables} />}
               value={n.strokeWidth}
               onChange={(strokeWidth) => {
                 // In Custom mode the four fields carry the weight, so typing a
@@ -4553,19 +6124,35 @@ function Design({
                 if ((n.strokeSides ?? "all") === "custom") patch({ strokeWidth, strokeSideW: [strokeWidth, strokeWidth, strokeWidth, strokeWidth] });
                 else patch({ strokeWidth });
               }}
+              mixed={mixedProp((m) => m.strokeWidth)}
+              values={multi ? manyVals((m) => m.strokeWidth) : undefined}
+              onChangeMany={
+                multi
+                  ? (vs) =>
+                      patchNumMany("strokeWidth", vs, selNodes, (m, v) =>
+                        (m.strokeSides ?? "all") === "custom" ? { strokeSideW: [v, v, v, v] } : {},
+                      )
+                  : undefined
+              }
             />
-            <div className="seg icons">
+            {(n.kind !== "line" && n.kind !== "arrow") && (
+            <div className="seg icons" title="Stroke position">
               {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
                 <button
                   key={a}
                   className={n.strokeAlign === a ? "on" : ""}
-                  title={a}
+                  title={`${a} (hover to preview)`}
                   onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { strokeAlign: a } })}
+                  onMouseEnter={() => engine.dispatch({ type: "previewStroke", id: n.id, align: a })}
+                  onMouseLeave={() => engine.dispatch({ type: "previewStroke", id: null })}
+                  onFocus={() => engine.dispatch({ type: "previewStroke", id: n.id, align: a })}
+                  onBlur={() => engine.dispatch({ type: "previewStroke", id: null })}
                 >
                   <Icon name={`stroke-${a}`} size={14} />
                 </button>
               ))}
             </div>
+            )}
           </div>
           {sidesSupported(n.kind) && (
             <div className="stroke-sides">
@@ -4616,7 +6203,7 @@ function Design({
           )}
           <div className="stroke-ends">
           <div className="seg icons caps">
-            {(["none", "round", "square", "arrow", "triangle", "reverse-triangle", "diamond"] as StrokeCap[]).map((c) => (
+            {(["none", "round", "square", "arrow", "circle", "triangle", "reverse-triangle", "diamond"] as StrokeCap[]).map((c) => (
               <button
                 key={c}
                 className={n.strokeCap === c ? "on" : ""}
@@ -4639,7 +6226,8 @@ function Design({
               </button>
             ))}
           </div>
-          <div className="seg icons">
+          {(n.kind !== "line") && (
+          <div className="seg icons" title="Join">
             {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
               <button
                 key={j}
@@ -4651,6 +6239,7 @@ function Design({
               </button>
             ))}
           </div>
+          )}
           <button
             className={`icon-btn${strokeMore ? " on" : ""}`}
             title="Advanced stroke settings"
@@ -4662,10 +6251,11 @@ function Design({
           </button>
           </div>
           {((n.kind === "line" || n.kind === "arrow" || n.kind === "vector") && !n.closed) && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 6, marginTop: 4, alignItems: "end" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, color: "var(--dim)" }}>Start point</span>
                 <select
+                  aria-label="Start cap"
                   value={n.strokeCapStart ?? "none"}
                   style={{
                     background: "var(--bg)",
@@ -4685,11 +6275,24 @@ function Design({
                   <option value="triangle">Triangle arrow</option>
                   <option value="reverse-triangle">Reverse triangle</option>
                   <option value="diamond">Diamond arrow</option>
+                  <option value="circle">Circle tip</option>
                 </select>
               </div>
+              <button
+                className="icon-btn"
+                title="Swap start and end points"
+                aria-label="Swap start and end points"
+                style={{ marginBottom: 1 }}
+                onClick={() =>
+                  patch({ strokeCapStart: n.strokeCapEnd ?? "none", strokeCapEnd: n.strokeCapStart ?? "none" })
+                }
+              >
+                <Icon name="flip-h" size={14} />
+              </button>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, color: "var(--dim)" }}>End point</span>
                 <select
+                  aria-label="End cap"
                   value={n.strokeCapEnd ?? n.strokeCap}
                   style={{
                     background: "var(--bg)",
@@ -4712,10 +6315,14 @@ function Design({
                   <option value="triangle">Triangle arrow</option>
                   <option value="reverse-triangle">Reverse triangle</option>
                   <option value="diamond">Diamond arrow</option>
+                  <option value="circle">Circle tip</option>
                 </select>
               </div>
             </div>
           )}
+          {(n.kind === "vector" || n.kind === "line" || n.kind === "arrow") &&
+            n.strokeWidth > 0 &&
+            !isBranchingNetwork(n.vectorNetwork) && <WidthProfileEditor node={n} patch={patch} />}
           {strokeMore && (
             <div className="adv-stroke">
               <div className="grid2">
@@ -4764,6 +6371,7 @@ function Design({
           <div className="insp-pad" key={i} style={{ display: "grid", gap: 4 }}>
             <ColorRow
               title="Stroke"
+              stroke
               value={sk.color}
               opacity={Math.round((sk.opacity ?? 1) * 100)}
               visible={sk.visible}
@@ -4786,7 +6394,8 @@ function Design({
                 value={sk.width}
                 onChange={(width) => setStroke({ width: Math.max(0, width) })}
               />
-              <div className="seg icons">
+              {(n.kind !== "line" && n.kind !== "arrow") && (
+              <div className="seg icons" title="Stroke position">
                 {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
                   <button
                     key={a}
@@ -4798,6 +6407,7 @@ function Design({
                   </button>
                 ))}
               </div>
+              )}
             </div>
           </div>
         );
@@ -4807,9 +6417,7 @@ function Design({
       {(n.kind === "star" || n.kind === "poly") && (
         <>
           <div className="hr" />
-          <div className="h-row">
-            <h3>{n.kind === "star" ? "Star" : "Polygon"}</h3>
-          </div>
+          <Section id="polygon" title={n.kind === "star" ? "Star" : "Polygon"}>
           <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
             <Field
               label="#"
@@ -4829,6 +6437,7 @@ function Design({
               onChange={(r) => patch({ cornerRadii: [Math.max(0, r), Math.max(0, r), Math.max(0, r), Math.max(0, r)] })}
             />
           </div>
+          </Section>
         </>
       )}
 
@@ -4871,7 +6480,7 @@ function Design({
       )}
 
       <div className="hr" />
-      <Effects n={n} engine={engine} />
+      <Effects n={n} engine={engine} locked={boolChild} root={dRoot} ids={snap.selection} />
       <ModifiersSection n={n} engine={engine} />
       <ExpressionsSection n={n} engine={engine} />
       <SelectionColors
@@ -4882,7 +6491,12 @@ function Design({
         engine={engine}
         snap={snap}
       />
-      <ExportBlock n={n} engine={engine} />
+      <ExportBlock
+        n={n}
+        engine={engine}
+        root={snap.pages[snap.page].root}
+        ids={snap.selection}
+      />
     </>
   );
 }
@@ -5026,6 +6640,7 @@ function EffectPopover({
   anchor,
   layer,
   onChange,
+  onDuplicate,
   onClose,
 }: {
   fx: Effect;
@@ -5034,26 +6649,28 @@ function EffectPopover({
    *  depends on the layer's own fills and strokes. */
   layer: XNode;
   onChange: (p: Partial<Effect>) => void;
+  onDuplicate: () => void;
   onClose: () => void;
 }) {
   const [blendOpen, setBlendOpen] = useState(false);
   useEffect(() => {
-    const click = (e: MouseEvent) => {
-      const t = e.target as HTMLElement;
-      // The colour picker portals outside this popover, so a click inside it
-      // must not count as "outside" and close the editor underneath.
-      if (!t.closest(".fx-pop") && !t.closest(".fx-row") && !t.closest(".fill-pop")) onClose();
-    };
+    // Dismissal (outside click, Escape) belongs to XPopover, which knows its own
+    // element. This used to run its own guard against a `.fx-pop` class that the
+    // shared popover replaced, so the guard matched nothing and every click
+    // *inside* the popover closed it — the shadow fields could be opened, but
+    // not used. What is left here is the one binding XPopover must not own:
+    // ⌘D with an effect open duplicates the effect, not the layer (capture
+    // phase, or the app's own ⌘D clones the layer underneath).
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if ((e.metaKey || e.ctrlKey) && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        e.stopPropagation();
+        onDuplicate();
+      }
     };
-    window.addEventListener("mousedown", click);
-    window.addEventListener("keydown", key);
-    return () => {
-      window.removeEventListener("mousedown", click);
-      window.removeEventListener("keydown", key);
-    };
-  }, [onClose]);
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [onDuplicate]);
 
   const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
   const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";
@@ -5076,12 +6693,35 @@ function EffectPopover({
           <Field label="Y" aria="Shadow Y" value={fx.y} onChange={(y) => onChange({ y })} />
         </div>
       )}
+      {fx.kind === "noise" && (
+        <ColorRow
+          title="Noise"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#ffffff", "#000000", "#00000040"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
       <div className="grid2">
-        {(shadow || blur || fx.kind === "noise") && (
+        {(shadow || blur) && (
           <Field label="Blur" aria="Blur" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
         )}
         {shadow && (
-          <Field label="Spread" aria="Spread" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+          <Field
+            label="Spread"
+            aria="Spread"
+            value={fx.spread}
+            onChange={(v) => onChange({ spread: v })}
+            hint={spreadApplies(layer) ? undefined : "Renders on rectangles, ellipses, frames and components"}
+          />
+        )}
+        {fx.kind === "noise" && (
+          <>
+            <Field label="Density" aria="Noise density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+            <Field label="Size" aria="Noise size" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+          </>
         )}
       </div>
       {fx.kind === "glass" && (
@@ -5161,7 +6801,21 @@ const EFFECT_LABEL: Record<string, string> = {
   texture: "Texture",
 };
 
-function Effects({ n, engine }: { n: XNode; engine: Engine }) {
+function Effects({
+  n,
+  engine,
+  locked,
+  root,
+  ids,
+}: {
+  n: XNode;
+  engine: Engine;
+  locked?: boolean;
+  root: XNode;
+  /** The whole selection: Add lands on every layer with room, the listed
+   *  rows stay the first layer's (the Export block's compromise). */
+  ids?: string[];
+}) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<{ i: number; rect: DOMRect } | null>(null);
   const kinds: { id: EffectKind; label: string }[] = [
@@ -5178,14 +6832,30 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
   // kind, two noise rows and a single glass or texture, and
   // the menu says so instead of silently piling on more.
   const room = (kind: EffectKind) => canAddEffect(effects, kind);
+  // Hovering a kind previews it on the canvas; anything without room, or the
+  // pointer leaving the menu, clears the preview again.
+  const preview = (kind: EffectKind | null) => {
+    if (kind && room(kind)) engine.dispatch({ type: "previewEffect", id: n.id, kind });
+    else engine.dispatch({ type: "previewEffect", id: null });
+  };
   const addKind = (kind: EffectKind) => {
     openSection("effects");
-    if (!room(kind)) {
+    engine.dispatch({ type: "previewEffect", id: null });
+    const targets = (ids ?? [n.id])
+      .map((id) => (id === n.id ? n : find(root, id)))
+      .filter((t): t is XNode => !!t);
+    const fits = targets.filter((t) => canAddEffect(t.effects ?? [], kind));
+    if (!fits.length) {
       toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
       setOpen(false);
       return;
     }
-    engine.dispatch({ type: "patch", id: n.id, patch: { effects: [...effects, defaultEffect(kind)] } });
+    engine.dispatch({ type: "begin" });
+    for (const t of fits)
+      engine.dispatch({ type: "patch", id: t.id, patch: { effects: [...(t.effects ?? []), defaultEffect(kind)] } });
+    engine.dispatch({ type: "end" });
+    if (fits.length < targets.length)
+      toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
     setOpen(false);
   };
   const [drag, setDrag] = useState<number | null>(null);
@@ -5204,32 +6874,57 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
     setEditing(null);
     engine.dispatch({ type: "patch", id: n.id, patch: { effects: effects.filter((_, j) => j !== i) } });
   };
+  // ⌘D from the popover: the copy lands next to the original.
+  const duplicate = (i: number) => {
+    const fx = effects[i];
+    if (!fx) return;
+    if (!room(fx.kind)) {
+      toast(limitMessage(fx.kind, EFFECT_LIMITS[fx.kind] ?? 1));
+      return;
+    }
+    engine.dispatch({
+      type: "patch",
+      id: n.id,
+      patch: { effects: [...effects.slice(0, i + 1), { ...fx }, ...effects.slice(i + 1)] },
+    });
+  };
   return (
     <>
       <Section
         id="effects"
         title="Effects"
         defaultOpen={effects.length > 0}
+        disabled={locked}
+        disabledTitle="Controlled by the boolean group"
         actions={
           <div style={{ position: "relative", display: "flex" }}>
             <button
               className="plus"
               title="Add effect"
+              disabled={locked}
               onClick={() => {
                 if (!effects.length) openSection("effects");
+                if (open) preview(null);
                 setOpen((v) => !v);
               }}
             >
               <Icon name="plus" size={14} />
             </button>
             {open && (
-              <div className="type-menu" style={{ right: 8, top: 28, left: "auto", width: 180 }}>
+              <div
+                className="type-menu"
+                style={{ right: 8, top: 28, left: "auto", width: 180 }}
+                onMouseLeave={() => preview(null)}
+              >
                 {kinds.map((k) => (
                   <button
                     key={k.id}
                     disabled={!room(k.id)}
                     title={room(k.id) ? undefined : limitMessage(k.id, EFFECT_LIMITS[k.id] ?? 1)}
                     onClick={() => addKind(k.id)}
+                    onMouseEnter={() => preview(k.id)}
+                    onFocus={() => preview(k.id)}
+                    onBlur={() => preview(null)}
                   >
                     {k.label}
                     <span className="fx-count">
@@ -5246,9 +6941,15 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
           <div className="insp-pad">
             <div className="empty-add">
               <span className="muted">No effects</span>
-              <div className="empty-add-menu">
+              <div className="empty-add-menu" onMouseLeave={() => preview(null)}>
                 {kinds.map((k) => (
-                  <button key={k.id} onClick={() => addKind(k.id)}>
+                  <button
+                    key={k.id}
+                    onClick={() => addKind(k.id)}
+                    onMouseEnter={() => preview(k.id)}
+                    onFocus={() => preview(k.id)}
+                    onBlur={() => preview(null)}
+                  >
                     {k.label}
                   </button>
                 ))}
@@ -5301,7 +7002,12 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
                   cursor: "pointer",
                   color: "inherit",
                 }}
-                title={`${EFFECT_LABEL[fx.kind]} settings`}
+                title={
+                  (fx.kind === "background-blur" || fx.kind === "glass") &&
+                  !bgBlurSeesThrough(fillCompositeAlpha(n))
+                    ? "Needs a fill between 0.1% and 99.99% opacity to show through"
+                    : `${EFFECT_LABEL[fx.kind]} settings`
+                }
                 aria-label={`Edit ${EFFECT_LABEL[fx.kind]}`}
                 aria-expanded={editing?.i === i}
                 onClick={(e) => {
@@ -5340,6 +7046,7 @@ function Effects({ n, engine }: { n: XNode; engine: Engine }) {
           anchor={editing.rect}
           layer={n}
           onChange={(p) => set(editing.i, p)}
+          onDuplicate={() => duplicate(editing.i)}
           onClose={() => setEditing(null)}
         />
       )}
@@ -5447,7 +7154,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
                 onClick={() => updateModifier(i, { enabled: m.enabled === false ? true : false })}
                 style={{ opacity: m.enabled === false ? 0.35 : 1 }}
               >
-                <Icon name={m.enabled === false ? "eye-off" : "eye"} size={13} />
+                <Icon name={m.enabled === false ? "eye-off" : "eye"} size={14} />
               </button>
               <span style={{ flex: 1, fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {m.type === "roundedCorners"
@@ -5549,6 +7256,7 @@ function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
                 borderRadius: 3,
                 padding: "2px 4px",
               }}
+              aria-label="Property to bind"
               value={propSelect}
               onChange={(e) => setPropSelect(e.target.value)}
             >
@@ -5650,10 +7358,14 @@ function GridPanel({
   node,
   layout,
   onChange,
+  disabled,
+  disabledTitle,
 }: {
   node: XNode;
   layout: AutoLayout;
   onChange: (patch: Partial<AutoLayout>) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const cols = Math.max(1, Math.floor(layout.columns ?? 2));
   const rowsAuto = layout.rows === "auto" || layout.rows == null;
@@ -5668,9 +7380,15 @@ function GridPanel({
     // The track list shows what the frame actually has, so the rows it counts
     // are the ones the objects need when the count is Auto.
     const need = cells.reduce((max, c) => Math.max(max, (c.gridRow ?? 0) + (c.rowSpan ?? 1)), 0);
+    // Tracks resolve inside the frame's own inside stroke, like the engine's.
+    const sw = insideStrokeWidth(node);
+    const li =
+      sw > 0 && Array.isArray(layout.padding)
+        ? { ...layout, padding: [layout.padding[0] + sw, layout.padding[1] + sw, layout.padding[2] + sw, layout.padding[3] + sw] as [number, number, number, number] }
+        : layout;
     return {
       used: { rows: Math.max(need, declaredRows, 1), cols },
-      plan: planGrid(node, cells, layout, hugsMain(layout, node, cells), hugsCross(layout, node, cells)),
+      plan: planGrid(node, cells, li, hugsMain(li, node, cells), hugsCross(li, node, cells)),
     };
   }, [node, layout, declaredRows, cols]);
   const trackRow = (axis: "col" | "row", i: number) => {
@@ -5692,7 +7410,8 @@ function GridPanel({
         </span>
         <button
           className="track-mode"
-          title="Auto shares the free space out by fractional unit, Hug wraps the objects in the track, Fixed holds a size"
+          title={disabled ? disabledTitle : "Auto shares the free space out by fractional unit, Hug wraps the objects in the track, Fixed holds a size"}
+          disabled={disabled}
           onClick={() => set({ mode: t.mode === "fill" ? "hug" : t.mode === "hug" ? "fixed" : "fill" })}
         >
           {t.mode === "fixed" ? "Fixed" : t.mode === "hug" ? "Hug" : (t.fr ?? 1) === 1 ? "Auto" : `${t.fr}fr`}
@@ -5701,6 +7420,8 @@ function GridPanel({
           <input
             className="track-size"
             aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} size`}
+            disabled={disabled}
+            title={disabled ? disabledTitle : undefined}
             defaultValue={String(Math.round(t.size ?? (axis === "col" ? plan.colW[i] : plan.rowH[i]) ?? 0))}
             onBlur={(e) => {
               const word = trackWord(e.target.value);
@@ -5716,6 +7437,8 @@ function GridPanel({
           <input
             className="track-size"
             aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} fraction`}
+            disabled={disabled}
+            title={disabled ? disabledTitle : undefined}
             defaultValue={String(t.fr ?? 1)}
             onBlur={(e) => {
               const word = trackWord(e.target.value);
@@ -5733,7 +7456,8 @@ function GridPanel({
         {!rowsAuto || axis === "col" ? (
           <button
             className="track-del"
-            title={`Delete this ${axis === "col" ? "column" : "row"}`}
+            title={disabled ? disabledTitle : `Delete this ${axis === "col" ? "column" : "row"}`}
+            disabled={disabled}
             aria-label={`Delete ${axis === "col" ? "column" : "row"} ${i + 1}`}
             onClick={() => {
               const next = [...list];
@@ -5774,6 +7498,8 @@ function GridPanel({
                 key={i}
                 className={on ? "on" : ""}
                 aria-label={`${c} columns by ${r} rows`}
+                title={disabled ? disabledTitle : undefined}
+                disabled={disabled}
                 onMouseEnter={() => setPick({ c, r })}
                 onClick={() => onChange({ columns: c, rows: r })}
               />
@@ -5784,10 +7510,14 @@ function GridPanel({
           <Field
             label="Cols"
             value={used.cols}
+            disabled={disabled}
+            disabledTitle={disabledTitle}
             onChange={(v) => onChange({ columns: Math.max(1, Math.round(v)) })}
           />
           <Field
             label="Rows"
+            disabled={disabled}
+            disabledTitle={disabledTitle}
             mixed={rowsAuto ? "Auto" : undefined}
             hint="Auto"
             hintNote="as many rows as the objects need"
@@ -5802,9 +7532,10 @@ function GridPanel({
           />
         </div>
       </div>
-      <label className="check grid-auto">
+      <label className="check grid-auto" title={disabled ? disabledTitle : undefined}>
         <input
           type="checkbox"
+          disabled={disabled}
           checked={layout.autoPosition !== false}
           onChange={(e) =>
             // Turning it back on also sets the row count to Auto, per the
@@ -5836,9 +7567,13 @@ function GridPanel({
 function Nine({
   layout,
   onChange,
+  disabled,
+  disabledTitle,
 }: {
   layout: AutoLayout;
   onChange: (p: Partial<AutoLayout>) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const cells = alignmentCells(layout);
   const jj = layout.justify === "between" ? "min" : layout.justify;
@@ -5867,12 +7602,17 @@ function Nine({
     // this box has focus the keys above are the box's, not the canvas's.
     <div
       className={`nine${reduced ? " nine-reduced" : ""}${layout.align === "baseline" ? " baseline" : ""}`}
-      title="Alignment — arrows step, W/A/S/D jump to an edge, B toggles baseline, X switches the gap"
+      title={
+        disabled && disabledTitle
+          ? disabledTitle
+          : "Alignment — arrows step, W/A/S/D jump to an edge, B toggles baseline, X switches the gap"
+      }
       data-align-box="1"
       tabIndex={0}
       role="group"
       aria-label="Alignment"
       onKeyDown={(e) => {
+        if (disabled) return;
         // Modifier chords are left to the app: ⌘A, ⌘S and friends still work.
         if (e.metaKey || e.ctrlKey) return;
         const key = alignKey(e.key);
@@ -5887,9 +7627,10 @@ function Nine({
       {cells.map((c, i) => (
         <button
           key={i}
-          title={titleOf(c)}
+          title={disabled ? disabledTitle : titleOf(c)}
           className={jj === c.j && layout.align === c.a ? "on" : ""}
           aria-label={titleOf(c)}
+          disabled={disabled}
           onClick={() => onChange({ justify: c.j, align: c.a })}
         />
       ))}
@@ -5902,6 +7643,153 @@ function Nine({
  * Anything that is not a list of non-negative numbers is refused and the field
  * snaps back to what the layer actually has, rather than clearing the dashes.
  */
+/**
+ * Variable-width profile strip: the stroke's width envelope with draggable
+ * control points. Click the strip to add a point at the width sampled there,
+ * drag a point sideways to move it along the path or up/down to change its
+ * width, double-click (or Alt-click) a point to delete it. Every gesture is
+ * a `patch`, so a drag coalesces into one undo step.
+ */
+function WidthProfileEditor({
+  node: n,
+  patch,
+}: {
+  node: XNode;
+  patch: (p: Partial<XNode>) => void;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{ t: number } | null>(null);
+  const W = 208;
+  const H = 52;
+  const PAD = 8;
+  const prof = normalizeWidthProfile(n.strokeWidthProfile);
+  const active = prof.length >= 2 && prof.some((q) => Math.abs(q.widthMultiplier - prof[0].widthMultiplier) > 1e-6);
+  // Display scale: fixed at 4x so the envelope does not jump while dragging,
+  // widened only to fit an existing hotter profile.
+  const scale = Math.max(4, ...prof.map((q) => q.widthMultiplier));
+  const xOf = (t: number) => PAD + t * (W - 2 * PAD);
+  const yOf = (m: number) => H / 2 - Math.min(m, scale) / scale * (H / 2 - PAD);
+  const tOfX = (px: number) => Math.min(1, Math.max(0, (px - PAD) / (W - 2 * PAD)));
+  const mOfY = (py: number) => Math.min(8, Math.max(0, ((H / 2 - py) / (H / 2 - PAD)) * scale));
+  // Envelope from the sampler (65 stations), mirrored about the centerline.
+  const top: string[] = [];
+  const bot: string[] = [];
+  for (let i = 0; i <= 64; i++) {
+    const t = i / 64;
+    const m = sampleVariableWidth(prof, t);
+    const x = xOf(t).toFixed(1);
+    top.push(`${i ? "L" : "M"} ${x} ${yOf(m).toFixed(1)}`);
+    bot.push(`L ${x} ${(H - yOf(m)).toFixed(1)}`);
+  }
+  const envelope = `${top.join(" ")} ${bot.reverse().join(" ")} Z`;
+  const commit = (next: VariableWidthPoint[]) => {
+    patch({ strokeWidthProfile: normalizeWidthProfile(next) });
+  };
+  const local = (e: React.PointerEvent) => {
+    const box = svgRef.current?.getBoundingClientRect();
+    if (!box || box.width <= 0 || box.height <= 0) return { x: 0, y: 0 };
+    return { x: ((e.clientX - box.left) / box.width) * W, y: ((e.clientY - box.top) / box.height) * H };
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--dim)" }}>Variable width</span>
+        <span style={{ flex: 1 }} />
+        {active && (
+          <button
+            className="link"
+            title="Remove the width profile (uniform stroke)"
+            onClick={() => patch({ strokeWidthProfile: undefined })}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        style={{
+          width: "100%",
+          height: "auto",
+          display: "block",
+          background: "var(--bg-subtle)",
+          borderRadius: 4,
+          cursor: "crosshair",
+          touchAction: "none",
+        }}
+        role="img"
+        aria-label="Stroke width profile. Click to add a width point, drag to move it, double-click to delete."
+        onPointerDown={(e) => {
+          if (e.button !== 0 || e.altKey) return;
+          const { x } = local(e);
+          const t = tOfX(x);
+          const next = normalizeWidthProfile([...prof, { position: t, widthMultiplier: sampleVariableWidth(prof, t) }]);
+          commit(next);
+          dragRef.current = { t };
+          (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const d = dragRef.current;
+          if (!d) return;
+          const { x, y } = local(e);
+          // The dragged point is the one nearest the drag's last position.
+          let bi = 0;
+          let bd = Infinity;
+          prof.forEach((q, i) => {
+            const dd = Math.abs(q.position - d.t);
+            if (dd < bd) {
+              bd = dd;
+              bi = i;
+            }
+          });
+          const t = tOfX(x);
+          const m = mOfY(y);
+          dragRef.current = { t };
+          commit(prof.map((q, i) => (i === bi ? { position: t, widthMultiplier: m } : q)));
+        }}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+        onPointerCancel={() => {
+          dragRef.current = null;
+        }}
+      >
+        <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="var(--border)" strokeWidth={1} />
+        <path d={envelope} fill="var(--accent)" opacity={active ? 0.35 : 0.15} />
+        {prof.map((q, i) => (
+          <circle
+            key={i}
+            cx={xOf(q.position)}
+            cy={H / 2}
+            r={4}
+            fill={active ? "var(--accent)" : "var(--dim)"}
+            stroke="#ffffff"
+            strokeWidth={1}
+            style={{ cursor: "move" }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (e.button !== 0) return;
+              if (e.altKey) {
+                commit(prof.filter((_, j) => j !== i));
+                return;
+              }
+              dragRef.current = { t: q.position };
+              (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              dragRef.current = null;
+              commit(prof.filter((_, j) => j !== i));
+            }}
+          >
+            <title>{`pos ${q.position.toFixed(2)} · ×${q.widthMultiplier.toFixed(2)} · ${(q.widthMultiplier * n.strokeWidth).toFixed(1)}px`}</title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function DashPatternField({
   value,
   onCommit,
@@ -5967,9 +7855,12 @@ function PadField({
   mixed,
   onCommit,
   onShorthand,
+  disabled,
+  disabledTitle,
+  bind,
 }: {
   label?: string;
-  icon?: string;
+  icon?: IconName;
   aria?: string;
   value: number;
   mixed?: string;
@@ -5977,6 +7868,10 @@ function PadField({
   /** Only the H/V fields accept shorthand: with four separate fields there is
    *  no single entry to spell four sides out in. */
   onShorthand?: (p: [number, number, number, number]) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
+  /** Property-first binding affordance (BindControl) trailing the value. */
+  bind?: ReactNode;
 }) {
   const [shorthand, setShorthand] = useState(false);
   const [draft, setDraft] = useState("");
@@ -5998,10 +7893,13 @@ function PadField({
       <input
         value={shown}
         aria-label={aria ?? label}
+        disabled={disabled}
         title={
-          shorthand
-            ? "CSS shorthand: 1 · 1,2 · 1,2,3 · 1,2,3,4 (top, right, bottom, left)"
-            : "⌘-click to set all sides, or type 1,2,3,4"
+          disabled && disabledTitle
+            ? disabledTitle
+            : shorthand
+              ? "CSS shorthand: 1 · 1,2 · 1,2,3 · 1,2,3,4 (top, right, bottom, left)"
+              : "⌘-click to set all sides, or type 1,2,3,4"
         }
         onMouseDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && onShorthand) {
@@ -6040,6 +7938,7 @@ function PadField({
         }}
       />
       {!shorthand && mixed && <span className="hint">{mixed[0].toUpperCase()}</span>}
+      {bind}
     </div>
   );
 }
@@ -6056,11 +7955,21 @@ function Field({
   mixed,
   token,
   disabled,
+  disabledTitle,
+  values,
+  onChangeMany,
+  bind,
 }: {
   label?: string;
-  icon?: string;
+  icon?: IconName;
   value: number;
   onChange: (v: number) => void;
+  /** Per-layer currents for a multi-selection. With `onChangeMany` the draft
+   *  evaluates once per layer — a plain number lands on every layer, `+10`
+   *  adds 10 to each — and scrubbing shifts every layer by the same delta. */
+  values?: number[];
+  /** Applies one committed number per entry of `values`, in order. */
+  onChangeMany?: (vals: number[]) => void;
   hint?: string;
   /** Why the hint is what it is, e.g. a hug that a filling child turned into a
    *  Fixed frame. Shown on the label, next to the value. */
@@ -6078,6 +7987,10 @@ function Field({
   token?: Record<string, number>;
   /** A property the layer cannot own here, e.g. a corner radius on an instance. */
   disabled?: boolean;
+  /** Why the field is disabled, shown on hover instead of the usual hint. */
+  disabledTitle?: string;
+  /** Property-first binding affordance (BindControl) trailing the value. */
+  bind?: ReactNode;
 }) {
   const [draft, setDraft] = useState(() => mixed ?? fmt(value));
   const focused = useRef(false);
@@ -6087,7 +8000,29 @@ function Field({
   // Reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
   // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
   // commit evaluates, so typing `12/` mid-expression does not move the layer.
+  // Over a multi-selection the same draft evaluates once per layer, each
+  // against its own current value, so `Mixed+100` adds 100 to every layer.
   const commit = () => {
+    if (onChangeMany && values) {
+      const word = token?.[draft.trim().toLowerCase()];
+      if (word != null) {
+        onChangeMany(values.map(() => word));
+        setDraft(fmt(word));
+        return;
+      }
+      const parsed = evalFieldMany(draft, values);
+      if (parsed) {
+        onChangeMany(parsed);
+        setDraft(
+          parsed.length > 0 && parsed.every((p) => p === parsed[0])
+            ? fmt(parsed[0])
+            : (mixed ?? fmt(value)),
+        );
+      } else {
+        setDraft(mixed ?? fmt(value));
+      }
+      return;
+    }
     const word = token?.[draft.trim().toLowerCase()];
     const parsed =
       word != null
@@ -6104,6 +8039,46 @@ function Field({
       setDraft(mixed ?? fmt(value));
     }
   };
+  // Dragging a field's label or icon scrubs its value, 1 unit per pixel and
+  // 10 with ⇧ held. Sliding the pointer above the start row runs at ×2 for
+  // long hauls, below it at ×1/2 then ×1/4 for fine work; a toast names the
+  // speed on every change. A press that never moves stays a click, so labels
+  // that cycle a mode on click keep working. The burst coalescer in the
+  // engine folds the drag's patches into one undo step.
+  const startScrub = (e: React.MouseEvent) => {
+    if (disabled || e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startV = value;
+    const startVs = values;
+    let dragging = false;
+    let speed = 1;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      if (!dragging && Math.abs(dx) < 3) return;
+      dragging = true;
+      const dy = ev.clientY - startY;
+      const nextSpeed = dy < -48 ? 2 : dy < 40 ? 1 : dy < 120 ? 0.5 : 0.25;
+      if (nextSpeed !== speed) {
+        speed = nextSpeed;
+        toast(`Scrub speed ×${speed}`);
+      }
+      const rate = (ev.shiftKey ? 10 : 1) * speed;
+      if (onChangeMany && startVs) {
+        onChangeMany(startVs.map((sv) => Math.round((sv + dx * rate) * 100) / 100));
+      } else {
+        onChange(Math.round((startV + dx * rate) * 100) / 100);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (!dragging && onLabelClick) onLabelClick();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
   return (
     <div
       className="field"
@@ -6114,12 +8089,22 @@ function Field({
       data-pname={icon ? (aria ?? label ?? icon) : undefined}
     >
       {icon ? (
-        <Icon name={icon} size={14} />
+        <span
+          title={disabled && disabledTitle ? disabledTitle : `${aria ?? label ?? icon} · drag to scrub (⇧ = ×10, ↑↓ = speed)`}
+          onMouseDown={startScrub}
+          style={disabled ? undefined : { cursor: "ew-resize", display: "inline-flex" }}
+        >
+          <Icon name={icon} size={14} />
+        </span>
       ) : (
         <label
-          title={hint ? `${label} · ${hintNote ?? hint}` : label}
-          onClick={onLabelClick}
-          style={onLabelClick ? { cursor: "pointer" } : undefined}
+          title={
+            disabled && disabledTitle
+              ? disabledTitle
+              : `${hint ? `${label} · ${hintNote ?? hint}` : (label ?? "")}${disabled ? "" : " · drag to scrub (⇧ = ×10, ↑↓ = speed)"}`
+          }
+          onMouseDown={startScrub}
+          style={disabled ? undefined : { cursor: "ew-resize" }}
         >
           {label}
         </label>
@@ -6128,7 +8113,16 @@ function Field({
         value={draft}
         disabled={disabled}
         aria-label={aria ?? label}
-        title={(aria && !label ? aria : "") || "Number or equation · + - * / ^ ( )"}
+        title={
+          disabled && disabledTitle
+            ? disabledTitle
+            : (aria && !label ? aria : "") || "Number or equation · + - * / ^ ( ) · ⌥-drag to scrub"
+        }
+        // Figma also scrubs from the input itself with ⌥ held; a plain press
+        // still focuses and selects as usual.
+        onMouseDown={(e) => {
+          if (e.altKey) startScrub(e);
+        }}
         onFocus={() => {
           focused.current = true;
         }}
@@ -6137,7 +8131,13 @@ function Field({
           setDraft(next);
           if (hasExpression(next)) return;
           const parsed = parseFloat(next);
-          if (!Number.isNaN(parsed)) onChange(parsed);
+          // Live typing is always an absolute number, so over a
+          // multi-selection it lands on every layer at once; equations wait
+          // for the commit, which evaluates them once per layer.
+          if (!Number.isNaN(parsed)) {
+            if (onChangeMany && values) onChangeMany(values.map(() => parsed));
+            else onChange(parsed);
+          }
         }}
         onBlur={() => {
           focused.current = false;
@@ -6148,6 +8148,7 @@ function Field({
         }}
       />
       {hint && hint !== "fixed" && <span className="hint">{hint[0].toUpperCase()}</span>}
+      {bind}
     </div>
   );
 }
@@ -6177,14 +8178,14 @@ function Constraints({
   return (
     <div className="cons-pop">
       <div className="cons-grid">
-        <select value={h} onChange={(e) => onChange("h", e.target.value as Constraint)}>
+        <select aria-label="Horizontal constraint" value={h} onChange={(e) => onChange("h", e.target.value as Constraint)}>
           {opts.map((o) => (
             <option key={o.id} value={o.id}>
               H: {o.label.split(" / ")[0]}
             </option>
           ))}
         </select>
-        <select value={v} onChange={(e) => onChange("v", e.target.value as Constraint)}>
+        <select aria-label="Vertical constraint" value={v} onChange={(e) => onChange("v", e.target.value as Constraint)}>
           {opts.map((o) => (
             <option key={o.id} value={o.id}>
               V: {o.label.split(" / ")[1] ?? o.label}
@@ -6256,6 +8257,18 @@ function ExportSettings({
         <label className="check" title="Write an id, taken from the layer's name, onto the svg element">
           <input type="checkbox" checked={settings.includeId} onChange={() => flip("includeId")} />
           Include &ldquo;id&rdquo; attribute
+        </label>
+      )}
+      {caps.outlineText && (
+        <label className="check" title="Convert text to vector outlines so the file needs no fonts">
+          <input type="checkbox" checked={settings.outlineText} onChange={() => flip("outlineText")} />
+          Outline text
+        </label>
+      )}
+      {caps.simplifyStroke && (
+        <label className="check" title="Draw strokes as filled outlines instead of clipped strokes">
+          <input type="checkbox" checked={settings.simplifyStroke} onChange={() => flip("simplifyStroke")} />
+          Simplify strokes
         </label>
       )}
       {caps.resampling && (
@@ -6336,21 +8349,59 @@ function ScaleField({
   );
 }
 
-function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
+function ExportBlock({
+  n,
+  engine,
+  root,
+  ids,
+  page,
+}: {
+  n: XNode;
+  engine: Engine;
+  root: XNode;
+  /** The whole selection: with several layers every edit applies to all of
+   *  them, and the listed presets are the first layer's. */
+  ids?: string[];
+  /** True for the page-level block, which exports the content box. */
+  page?: boolean;
+}) {
   const presets = n.exports ?? [];
   const [preview, setPreview] = useState<Record<number, boolean>>({});
   const [settingsOpen, setSettingsOpen] = useState<number | null>(null);
+  const multi = (ids ?? [n.id]).length > 1;
+  const targets = (): XNode[] => {
+    const list = (ids ?? [n.id])
+      .map((id) => (id === n.id ? n : find(root, id)))
+      .filter((t): t is XNode => !!t);
+    return list.length ? list : [n];
+  };
+  const scope = { root, page };
   const add = () => {
     openSection("export");
-    engine.dispatch({
-      type: "patch",
-      id: n.id,
-      patch: { exports: [...presets, newPreset("PNG")] },
-    });
+    engine.dispatch({ type: "begin" });
+    for (const t of targets())
+      engine.dispatch({ type: "patch", id: t.id, patch: { exports: [...(t.exports ?? []), newPreset("PNG")] } });
+    engine.dispatch({ type: "end" });
   };
   const set = (i: number, p: ExportPreset) => {
-    const next = presets.map((e, j) => (j === i ? p : e));
-    engine.dispatch({ type: "patch", id: n.id, patch: { exports: next } });
+    engine.dispatch({ type: "begin" });
+    for (const t of targets()) {
+      const cur = t.exports ?? [];
+      // A layer with fewer presets than the first one gains the setting
+      // rather than silently dropping the edit.
+      const next = i < cur.length ? cur.map((e, j) => (j === i ? p : e)) : [...cur, p];
+      engine.dispatch({ type: "patch", id: t.id, patch: { exports: next } });
+    }
+    engine.dispatch({ type: "end" });
+  };
+  const remove = (i: number) => {
+    engine.dispatch({ type: "begin" });
+    for (const t of targets()) {
+      const cur = t.exports ?? [];
+      if (i < cur.length)
+        engine.dispatch({ type: "patch", id: t.id, patch: { exports: cur.filter((_, j) => j !== i) } });
+    }
+    engine.dispatch({ type: "end" });
   };
   return (
     <>
@@ -6385,14 +8436,19 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
             <div className="export-row">
               {/* Preview the export before download — the thumbnail
                   is the real render (SVG source, so it scales with the preset). */}
+              {/* No per-row preview for a multi-selection: the row shows the
+                  first layer's preset, and a thumbnail of one layer would
+                  read as the whole selection. */}
+              {!multi && (
               <button
                 className={`export-thumb${preview[i] ? " on" : ""}`}
                 title={preview[i] ? "Hide preview" : "Preview"}
                 aria-pressed={!!preview[i]}
                 onClick={() => setPreview((v) => ({ ...v, [i]: !v[i] }))}
               >
-                {preview[i] ? <img src={previewUrl(n, p)} alt="" /> : <Icon name="image" size={12} />}
+                {preview[i] ? <img src={previewUrl(n, p, scope)} alt="" /> : <Icon name="image" size={12} />}
               </button>
+              )}
               <button
                 className="fmt"
                 title="Format"
@@ -6442,32 +8498,35 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
               >
                 <Icon name="more" size={14} />
               </button>
-              <button
-                className="mini minus"
-                title="Remove"
-                onClick={() =>
-                  engine.dispatch({
-                    type: "patch",
-                    id: n.id,
-                    patch: { exports: presets.filter((_, j) => j !== i) },
-                  })
-                }
-              >
+              <button className="mini minus" title="Remove" onClick={() => remove(i)}>
                 <Icon name="minus" size={14} />
               </button>
             </div>
             {settingsOpen === i && <ExportSettings preset={p} onChange={(next) => set(i, next)} />}
-            {preview[i] && (
+            {!multi && preview[i] && (
               <div className="export-checker">
-                <img src={previewUrl(n, p)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
+                <img src={previewUrl(n, p, scope)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
               </div>
             )}
           </div>
         ))}
         {!!presets.length && (
           <div className="insp-pad">
-            <button className="export-run" onClick={() => presets.forEach((p) => runExport(n, p))}>
-              Export
+            <button
+              className="export-run"
+              onClick={() => {
+                const jobs: { t: XNode; p: ExportPreset }[] = [];
+                for (const t of targets()) for (const p of t.exports ?? []) jobs.push({ t, p });
+                if (!jobs.length) {
+                  toast("No export settings on the selected layers");
+                  return;
+                }
+                // Browsers throttle simultaneous downloads, so each file gets
+                // its own turn.
+                jobs.forEach(({ t, p }, i) => window.setTimeout(() => runExport(t, p, scope), i * 220));
+              }}
+            >
+              Export{multi ? ` ${targets().length}` : ""}
             </button>
           </div>
         )}
@@ -6487,8 +8546,8 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
 }
 
 /** A data URL of the exact SVG this preset would write, used by the preview. */
-function previewUrl(n: XNode, p: ExportPreset) {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, p))}`;
+function previewUrl(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, p, scope))}`;
 }
 
 function downloadBlob(blob: Blob, name: string) {
@@ -6499,13 +8558,15 @@ function downloadBlob(blob: Blob, name: string) {
   window.setTimeout(() => URL.revokeObjectURL(a.href), 0);
 }
 
-function runExport(n: XNode, p: ExportPreset) {
-  const { width, height } = exportSize(n, p);
+function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
+  // A page sizes from its content box, not from the root's canvas-sized frame.
+  const box = scope?.page ? contentBox(n) : null;
+  const { width, height } = exportSize(box ?? n, p);
   const settings = resolveSettings(p);
   // The suffix is appended straight onto the layer's name, with no separator:
   // the article's own example is "HomePage" + "draft" -> "HomePagedraft.png".
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
-  const svg = exportSvg(n, p);
+  const svg = exportSvg(n, p, scope);
   if (p.format === "SVG") {
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
@@ -6552,22 +8613,34 @@ function runExport(n: XNode, p: ExportPreset) {
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+/** The inspect-panel code for one layer, without touching the clipboard, so a
+ *  multi-selection can join several blocks into a single copy. */
+export function layerCode(n: XNode, format?: DevFormat, snap?: Snapshot): string {
+  const prefs = getDevPrefs();
+  const fmt = format ?? prefs.format;
+  const scope = prefs.scope ?? "layer";
+  // Copy-as-SVG of a slice renders the region's content, like the export does.
+  if (fmt === "svg" && n.isSlice === true && snap)
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "" }, { root: snap.pages[snap.page].root });
+  return snap
+    ? renderDevCodeScoped(n, fmt, fmt === "css" || scope === "subtree" ? prefs.unit : "px", scope, snap)
+    : renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
+}
+
 /** Copy the layer's snippet in the given language — the very renderer the panel
  *  uses, so a copied answer and a shown answer cannot disagree. Omit `format`
  *  to take the developer's current preference. */
-export function copyLayerCode(n: XNode, format?: DevFormat): void {
+export function copyLayerCode(n: XNode, format?: DevFormat, snap?: Snapshot): void {
   const prefs = getDevPrefs();
   const fmt = format ?? prefs.format;
-  const code = renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
-  copyText(code);
+  copyText(layerCode(n, format, snap));
   toast(`Copied ${devLangLabel(fmt)} \u00b7 ${n.name}`);
 }
 
-/** Put a PNG of the layer on the clipboard. It reuses the export renderer, so
- *  what lands in Slack is what the downloaded file would have contained. */
-export function copyPng(n: XNode) {
-  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "" };
-  const { width, height } = exportSize(n, preset);
+/** Rasterise an SVG string and put the PNG on the clipboard. A clipboard that
+ *  will not take images (older Safari, denied permission) still gets the user
+ *  the pixels, just as a file. Shared by single- and multi-layer copy. */
+function rasterizeSvgToClipboard(svg: string, width: number, height: number, label: string) {
   const image = new Image();
   image.onload = () => {
     const c = document.createElement("canvas");
@@ -6581,22 +8654,54 @@ export function copyPng(n: XNode) {
     ctx.drawImage(image, 0, 0, width, height);
     c.toBlob(async (blob) => {
       if (!blob) {
-        toast(`Could not render ${n.name} for copying`);
+        toast(`Could not render ${label} for copying`);
         return;
       }
       try {
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        toast(`Copied ${n.name} as PNG`);
+        toast(`Copied ${label} as PNG`);
       } catch {
-        // A clipboard that will not take images (older Safari, denied
-        // permission) still gets the user the pixels, just as a file.
-        downloadBlob(blob, `${n.name}.png`);
+        downloadBlob(blob, `${label}.png`);
         toast("Clipboard cannot take images · downloaded the PNG instead");
       }
     }, "image/png");
   };
-  image.onerror = () => toast(`Could not render ${n.name} for copying`);
-  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, preset))}`;
+  image.onerror = () => toast(`Could not render ${label} for copying`);
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** Put a PNG of the layer on the clipboard. It reuses the export renderer, so
+ *  what lands in Slack is what the downloaded file would have contained. */
+export function copyPng(n: XNode, root?: XNode) {
+  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "" };
+  const { width, height } = exportSize(n, preset);
+  rasterizeSvgToClipboard(
+    exportSvg(n, preset, root ? { root } : undefined),
+    width,
+    height,
+    n.name,
+  );
+}
+
+/** Put a PNG of several layers on the clipboard, at their relative positions.
+ *  The nodes must already carry export coordinates in x/y (see `worldClones`:
+ *  nested layers arrive frame-local and would collapse onto the origin). */
+export function copyPngNodes(nodes: XNode[]) {
+  if (!nodes.length) return;
+  if (nodes.length === 1) {
+    copyPng(nodes[0]);
+    return;
+  }
+  const minX = Math.min(...nodes.map((n) => n.x));
+  const minY = Math.min(...nodes.map((n) => n.y));
+  const w = Math.max(1, Math.max(...nodes.map((n) => n.x + Math.max(1, n.w))) - minX);
+  const h = Math.max(1, Math.max(...nodes.map((n) => n.y + Math.max(1, n.h))) - minY);
+  rasterizeSvgToClipboard(
+    exportClipSvg(nodes),
+    Math.max(1, Math.round(w * 2)),
+    Math.max(1, Math.round(h * 2)),
+    `${nodes.length} layers`,
+  );
 }
 
 function fillValuePatch(v: FillValue): Partial<XNode> {
@@ -6620,6 +8725,7 @@ function fillValuePatch(v: FillValue): Partial<XNode> {
     imageTint: v.imageTint || 0,
     imageHighlights: v.imageHighlights || 0,
     imageShadows: v.imageShadows || 0,
+    imageTile: v.imageTile ?? 100,
     ...(v.gx != null
       ? { fillGX: v.gx, fillGY: v.gy, fillHX: v.hx, fillHY: v.hy }
       : handles
@@ -6665,12 +8771,17 @@ function Section({
   defaultOpen = true,
   actions,
   children,
+  disabled,
+  disabledTitle,
 }: {
   id: string;
   title: string;
   defaultOpen?: boolean;
   actions?: ReactNode;
   children: ReactNode;
+  /** Locks every control in the body, e.g. a boolean member's fill. */
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const [open, setOpen] = useState(() => readSections()[id] ?? defaultOpen);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -6704,11 +8815,248 @@ function Section({
       <div className="h-row" ref={rowRef}>
         <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
           <Icon name={open ? "chevron" : "chevron-right"} size={12} />
-          <h3>{title}</h3>
+          <h2>{title}</h2>
         </button>
         {actions}
       </div>
-      {open && children}
+      {open &&
+        (disabled ? (
+          <fieldset
+            disabled
+            title={disabledTitle}
+            style={{ border: 0, margin: 0, padding: 0, minWidth: 0, opacity: 0.55 }}
+          >
+            {children}
+          </fieldset>
+        ) : (
+          children
+        ))}
+    </>
+  );
+}
+
+/** Short labels for the bind picker, one per bindable prop. */
+const BIND_PROP_LABELS: Record<string, string> = {
+  fill: "Fill",
+  strokePaint: "Stroke",
+  strokeWidth: "Stroke width",
+  opacity: "Opacity",
+  fontSize: "Font size",
+  fontWeight: "Font weight",
+  fontFamily: "Font family",
+  letterSpacing: "Letter spacing",
+  lineHeight: "Line height",
+  paragraphSpacing: "Paragraph spacing",
+  paragraphIndent: "Paragraph indent",
+  cornerRadii: "Corner radius",
+  w: "Width",
+  h: "Height",
+  layoutGap: "Gap",
+  layoutPadding: "Padding",
+  visible: "Visibility",
+  text: "Text content",
+};
+
+/** The variable picker behind every BindControl: same-type variables with
+ *  their live resolved values, plus an unbind footer when bound. */
+function VariablePickerPopover({
+  anchor,
+  prop,
+  label,
+  snap,
+  currentId,
+  someBound,
+  onPick,
+  onUnbind,
+  onClose,
+  onOpenVariables,
+}: {
+  anchor: DOMRect;
+  prop: string;
+  label: string;
+  snap: Snapshot;
+  currentId?: string;
+  someBound: boolean;
+  onPick: (variableId: string) => void;
+  onUnbind: () => void;
+  onClose: () => void;
+  onOpenVariables?: () => void;
+}) {
+  const need = BINDABLE_PROPS[prop];
+  const all = snap.variables ?? [];
+  // Numbers render as text content too (the Figma tip) — the engine's
+  // bindVariable accepts them, so the picker lists them.
+  const vars = all.filter((x) => x.type === need || (prop === "text" && x.type === "number"));
+  return (
+    <XPopover anchor={anchor} title={`Bind ${label}`} onClose={onClose} ariaLabel={`Bind ${label} to a variable`}>
+      {vars.length === 0 ? (
+        <div className="bind-empty">
+          <p>No {need} variables yet.</p>
+          {onOpenVariables ? (
+            <button
+              className="link"
+              onClick={() => {
+                onClose();
+                onOpenVariables();
+              }}
+            >
+              Open Variables to create one
+            </button>
+          ) : (
+            <p>Create one in the Variables tab.</p>
+          )}
+        </div>
+      ) : (
+        <div className="bind-list" role="listbox" aria-label={`${label} variables`}>
+          {vars.map((x) => {
+            const res = resolveVariable(all, snap.variableCollections ?? [], snap.activeModes ?? {}, x.id);
+            const val = !res || res.broken ? "⚠ broken" : String(res.value);
+            return (
+              <button
+                key={x.id}
+                role="option"
+                aria-selected={x.id === currentId}
+                className={`bind-row${x.id === currentId ? " on" : ""}`}
+                onClick={() => onPick(x.id)}
+              >
+                {x.type === "color" && val.startsWith("#") && <span className="bind-swatch" style={{ background: val }} />}
+                <span className="bind-row-name">{x.name}</span>
+                <span className="bind-row-val">{val}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {someBound && (
+        <button className="bind-unbind" title="Remove binding (keeps the current value)" onClick={onUnbind}>
+          <Icon name="link-broken" size={12} />
+          Remove binding
+        </button>
+      )}
+    </XPopover>
+  );
+}
+
+/** Property-first variable binding: one control for every bindable row.
+ *  Bound shows the variable pill (re-pick or unbind); unbound shows a ghost
+ *  button; a multi-selection with divergent bindings shows the ghost lit.
+ *  Refusals reuse the engine's table so they always say why. Unbinding keeps
+ *  the current value — it only stops future variable updates. */
+function BindControl({
+  engine,
+  snap,
+  targets,
+  prop,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  /** Every layer the bind acts on: the selection on rows that edit the
+   *  selection, the row's own subset (text, movers) where narrower. */
+  targets: XNode[];
+  prop: string;
+  onOpenVariables?: () => void;
+}) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const need = BINDABLE_PROPS[prop];
+  const label = BIND_PROP_LABELS[prop] ?? prop;
+  const root = snap.pages[snap.page].root;
+  const vars = snap.variables ?? [];
+  const boundIds = targets.map((t) => t.variableBindings?.[prop]);
+  const sameId =
+    boundIds.length > 0 && boundIds.every((id) => id != null && id === boundIds[0]) ? boundIds[0]! : undefined;
+  const someBound = boundIds.some((id) => id != null);
+  const mixed = targets.length > 1 && someBound && !sameId;
+  const blockedEverywhere = targets.length > 0 && targets.every((t) => bindBlockReason(root, t.id, prop) != null);
+  const what = label.charAt(0).toLowerCase() + label.slice(1);
+  const pick = (variableId: string) => {
+    const v = vars.find((x) => x.id === variableId);
+    if (!v) return;
+    const fits = targets.filter((t) => bindBlockReason(root, t.id, prop) == null);
+    if (!fits.length) {
+      toast(bindBlockReason(root, targets[0].id, prop) ?? `Cannot bind ${what} here`);
+      return;
+    }
+    engine.dispatch({ type: "begin" });
+    for (const t of fits) engine.dispatch({ type: "bindVariable", id: t.id, prop, variableId });
+    engine.dispatch({ type: "end" });
+    toast(
+      targets.length > 1
+        ? `Bound ${v.name} to ${what} on ${fits.length} of ${targets.length} layers`
+        : `Bound ${v.name} to ${what}`,
+    );
+    setAnchor(null);
+  };
+  const unbind = () => {
+    engine.dispatch({ type: "begin" });
+    for (const t of targets) engine.dispatch({ type: "unbindVariable", id: t.id, prop });
+    engine.dispatch({ type: "end" });
+    toast(
+      targets.length > 1 ? `Removed ${what} bindings from ${targets.length} layers` : `Removed ${what} binding`,
+    );
+    setAnchor(null);
+  };
+  if (!need || !targets.length) return null;
+  if (blockedEverywhere && !someBound) {
+    const reason = targets.length ? bindBlockReason(root, targets[0].id, prop) : null;
+    const title = reason ? `${label}: ${reason}` : label;
+    return (
+      <button className="icon-btn bind-btn" disabled title={title} aria-label={title}>
+        <Icon name="variable" size={12} />
+      </button>
+    );
+  }
+  const v = sameId ? vars.find((x) => x.id === sameId) : undefined;
+  return (
+    <>
+      {sameId ? (
+        <span className="bind-pill">
+          <button
+            className="bind-pill-btn"
+            title={
+              v
+                ? `Bound to variable "${v.name}" — editing the value directly unbinds it`
+                : "Bound variable is missing"
+            }
+            aria-label={`Change ${what} variable (bound to ${v ? v.name : "a missing variable"})`}
+            onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+          >
+            <Icon name="variable" size={12} />
+            <span className="bind-pill-name">{v ? v.name : "Missing"}</span>
+          </button>
+          <button
+            className="icon-btn bind-x"
+            title="Remove binding (keeps the current value)"
+            aria-label={`Remove ${what} binding`}
+            onClick={unbind}
+          >
+            <Icon name="link-broken" size={12} />
+          </button>
+        </span>
+      ) : (
+        <button
+          className={`icon-btn bind-btn${mixed ? " on" : ""}`}
+          title={mixed ? `Mixed bindings — bind ${what} to one variable` : `Bind ${what} to a variable`}
+          aria-label={mixed ? `Mixed bindings — bind ${what} to one variable` : `Bind ${what} to a variable`}
+          onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+        >
+          <Icon name="variable" size={12} />
+        </button>
+      )}
+      {anchor && (
+        <VariablePickerPopover
+          anchor={anchor}
+          prop={prop}
+          label={label}
+          snap={snap}
+          currentId={sameId}
+          someBound={someBound}
+          onPick={pick}
+          onUnbind={unbind}
+          onClose={() => setAnchor(null)}
+          onOpenVariables={onOpenVariables}
+        />
+      )}
     </>
   );
 }
@@ -6718,6 +9066,7 @@ function ColorRow({
   value,
   opacity = 100,
   visible = true,
+  exportVisible = true,
   type = "solid",
   second = "#ffffff",
   blend = "Normal",
@@ -6731,6 +9080,7 @@ function ColorRow({
   imageTint = 0,
   imageHighlights = 0,
   imageShadows = 0,
+  imageTile = 100,
   gx,
   gy,
   hx,
@@ -6739,17 +9089,26 @@ function ColorRow({
   recents = [],
   background,
   largeText,
+  noImage,
+  stroke,
+  mixed,
   onChange,
   onOpacity,
   onVisible,
+  onExportVisible,
   onRemove,
   onMeta,
   onValueChange,
+  onCrop,
+  bind,
 }: {
   title?: string;
   value: string;
   opacity?: number;
   visible?: boolean;
+  /** "Show in exports": the toggle only renders when `onExportVisible` is
+   *  passed, so stroke rows never grow one. */
+  exportVisible?: boolean;
   type?: FillValue["type"];
   second?: string;
   blend?: string;
@@ -6763,6 +9122,10 @@ function ColorRow({
   imageTint?: number;
   imageHighlights?: number;
   imageShadows?: number;
+  imageTile?: number;
+  onCrop?: () => void;
+  /** Property-first binding affordance (BindControl) after the row buttons. */
+  bind?: ReactNode;
   gx?: number;
   gy?: number;
   hx?: number;
@@ -6772,9 +9135,17 @@ function ColorRow({
   /** Passed to the picker's contrast check: what this paint is actually over. */
   background?: string;
   largeText?: boolean;
+  noImage?: boolean;
+  /** Stroke paint: solid only, no blend — gradient/image/blend strokes are unimplemented. */
+  stroke?: boolean;
+  /** Multi-select disagreement: the swatch splits between this layer's
+   *  colour and grey, the hex reads Mixed, and a commit applies to every
+   *  selected layer (the call site wires the apply-to-all). */
+  mixed?: boolean;
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
   onVisible?: (v: boolean) => void;
+  onExportVisible?: (v: boolean) => void;
   onRemove?: () => void;
   onMeta?: (p: Partial<XNode>) => void;
   onValueChange?: (v: FillValue) => void;
@@ -6790,7 +9161,7 @@ function ColorRow({
   // the control impossible to type into. Commit only complete hex values,
   // matching how FillPicker already handles the same input.
   const [draft, setDraft] = useState<string | null>(null);
-  const shown = hidden ? "" : isImage ? "Image" : hex.replace("#", "");
+  const shown = mixed ? "Mixed" : hidden ? "" : isImage ? "Image" : hex.replace("#", "");
   return (
     <div className="color-row">
       <button
@@ -6799,7 +9170,9 @@ function ColorRow({
         style={
           isImage && image
             ? { backgroundImage: `url(${image})`, backgroundSize: "cover", backgroundPosition: "center" }
-            : { background: hidden ? "transparent" : hex }
+            : mixed
+              ? { background: `linear-gradient(135deg, ${hex} 50%, var(--dim) 50%)` }
+              : { background: hidden ? "transparent" : hex }
         }
         title="Color picker"
         onClick={(e) => {
@@ -6812,6 +9185,7 @@ function ColorRow({
         aria-label={title ? `${title} colour hex` : "Colour hex"}
         value={draft ?? shown}
         placeholder="None"
+        title={mixed ? "Mixed — a typed colour applies to every selected layer" : undefined}
         spellCheck={false}
         readOnly={isImage}
         onChange={(e) => {
@@ -6852,11 +9226,23 @@ function ColorRow({
       >
         <Icon name={hidden ? "eye-off" : "eye"} size={14} />
       </button>
+      {onExportVisible && (
+        <button
+          className="mini"
+          style={exportVisible ? undefined : { opacity: 0.35 }}
+          title={exportVisible ? "Show in exports" : "Hidden from exports"}
+          aria-pressed={exportVisible}
+          onClick={() => onExportVisible(!exportVisible)}
+        >
+          <Icon name="export" size={14} />
+        </button>
+      )}
       {onRemove && (
         <button className="mini minus" title="Remove" onClick={onRemove}>
           <Icon name="minus" size={14} />
         </button>
       )}
+      {bind}
       {open && anchor && (
         <FillPicker
           title={title}
@@ -6876,6 +9262,7 @@ function ColorRow({
             imageTint,
             imageHighlights,
             imageShadows,
+            imageTile,
             gx,
             gy,
             hx,
@@ -6886,6 +9273,9 @@ function ColorRow({
           anchor={anchor}
           background={background}
           largeText={largeText}
+          noImage={noImage}
+          stroke={stroke}
+          onCrop={onCrop}
           onChange={(v) => {
             if (onValueChange) {
               onValueChange(v);
@@ -7092,7 +9482,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               onClick={go(() => engine.dispatch({ type: "setPixelPreview", preview: pv }))}
             >
               {pv === "off" ? "Off" : `${pv[0]}× device pixels`}
-              <span className="sc">{pv === "off" ? "⌃P" : pv === "1x" ? "⌃⌥P" : ""}</span>
+              <span className="sc">{pv === "1x" ? "⌃P" : pv === "2x" ? "⌃⌥P" : ""}</span>
               {snap.pixelPreview === pv && <Icon name="check" size={12} className="tick" />}
             </button>
           ))}
@@ -7115,6 +9505,10 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           <button role="menuitemcheckbox" aria-checked={!!snap.outlineMode} onClick={go(() => engine.dispatch({ type: "toggleOutlines" }))}>
             Layer outlines<span className="sc">⇧O</span>
             {snap.outlineMode && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={!!snap.showMaskOutlines} onClick={go(() => engine.dispatch({ type: "toggleMaskOutlines" }))}>
+            Mask outlines
+            {snap.showMaskOutlines && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.showFlows !== false} onClick={go(() => engine.dispatch({ type: "toggleFlows" }))}>
             Prototype flows<span className="sc">⇧F</span>
@@ -7161,20 +9555,34 @@ export function align(
 ) {
   const root = snap.pages[snap.page].root;
   if (toParent && snap.selection.length) {
-    engine.dispatch({ type: "begin" });
+    // ⇧-align plants the selection on its parent's edge as one rigid group:
+    // members that share a frame move by the same delta, so their offsets
+    // survive, and members of different frames form one group per frame, each
+    // against its own parent. Locked layers and instance members sit out
+    // before the union is measured, so they neither move nor anchor the rest.
+    const groups = new Map<string, { parent: XNode; members: XNode[] }>();
     for (const id of snap.selection) {
       const n = find(root, id);
       const p = n ? findParent(root, n.id) : null;
       if (!n || !p || p === root) continue;
-      let dx = 0;
-      let dy = 0;
-      if (mode === "align-left") dx = -n.x;
-      if (mode === "align-right") dx = p.w - n.w - n.x;
-      if (mode === "align-hcenter") dx = (p.w - n.w) / 2 - n.x;
-      if (mode === "align-top") dy = -n.y;
-      if (mode === "align-bottom") dy = p.h - n.h - n.y;
-      if (mode === "align-vcenter") dy = (p.h - n.h) / 2 - n.y;
-      if (dx || dy) engine.dispatch({ type: "move", ids: [n.id], dx, dy });
+      if (isEffectivelyLocked(root, n.id) || isInstanceMember(root, n.id)) continue;
+      const g = groups.get(p.id);
+      if (g) g.members.push(n);
+      else groups.set(p.id, { parent: p, members: [n] });
+    }
+    engine.dispatch({ type: "begin" });
+    for (const { parent, members } of groups.values()) {
+      const union = {
+        x: Math.min(...members.map((m) => m.x)),
+        y: Math.min(...members.map((m) => m.y)),
+        w: 0,
+        h: 0,
+      };
+      union.w = Math.max(...members.map((m) => m.x + m.w)) - union.x;
+      union.h = Math.max(...members.map((m) => m.y + m.h)) - union.y;
+      const { dx, dy } = parentAlignDelta(mode, union, parent.w, parent.h);
+      if (dx || dy)
+        engine.dispatch({ type: "move", ids: members.map((m) => m.id), dx, dy });
     }
     engine.dispatch({ type: "end" });
     return;

@@ -1,4 +1,4 @@
-import type { StrokeSides, XNode } from "./types";
+import type { StrokeSides, VariableWidthPoint, VariableWidthProfile, VectorNetwork, XNode } from "./types";
 
 /**
  * The stroke and effect rules that need no canvas, kept apart from the painter
@@ -100,6 +100,11 @@ export function dashArray(
   return [];
 }
 
+/** Figma starts (and joins) every dashed line with a half-length dash. */
+export function dashOffset(dashes: readonly number[]): number {
+  return dashes.length ? dashes[0] / 2 : 0;
+}
+
 /**
  * "Miter angle": any join sharper than the angle is bevelled. The
  * canvas asks for the ratio between the miter's length and the stroke width,
@@ -111,4 +116,126 @@ export function miterLimitFromAngle(degrees: number | undefined): number {
   if (a <= 0) return 1_000_000;
   if (a >= 180) return 1;
   return 1 / Math.sin((a * Math.PI) / 360);
+}
+
+/* ── Variable-width profiles ──────────────────────────────────────────────
+ * A profile is only honoured on vector/line/arrow centerlines; every other
+ * consumer (paint, export, hit test, outline-stroke) funnels through these
+ * helpers so "does this node have an active profile?" can never drift. */
+
+const PROFILE_EPS = 1e-6;
+/** Clamp a multiplier into the sane range: negative widths are meaningless, and
+ *  anything past 8× the panel weight is a runaway drag, not a design choice. */
+export const MAX_WIDTH_MULTIPLIER = 8;
+
+/** Sort by position, clamp position to 0..1 and multipliers to 0..8. */
+export function normalizeWidthProfile(points: readonly VariableWidthPoint[] | undefined): VariableWidthPoint[] {
+  if (!points || !points.length) return [];
+  return [...points]
+    .map((p) => ({
+      position: Math.min(1, Math.max(0, Number.isFinite(p.position) ? p.position : 0)),
+      widthMultiplier: Math.min(
+        MAX_WIDTH_MULTIPLIER,
+        Math.max(0, Number.isFinite(p.widthMultiplier) ? p.widthMultiplier : 1),
+      ),
+    }))
+    .sort((a, b) => a.position - b.position);
+}
+
+/**
+ * Width multiplier at arc-length `t` (0..1), linearly interpolated between
+ * the neighbouring control points and clamped to the end points outside the
+ * profile's span. Accepts the bare points array the node stores or the
+ * `{ points }` profile the modifier stack carries.
+ */
+export function sampleVariableWidth(
+  profile: readonly VariableWidthPoint[] | VariableWidthProfile | undefined,
+  t: number,
+): number {
+  const list: readonly VariableWidthPoint[] | undefined =
+    profile == null ? undefined : "points" in profile ? profile.points : profile;
+  const pts = normalizeWidthProfile(list);
+  if (!pts.length) return 1.0;
+  if (t <= pts[0].position) return pts[0].widthMultiplier;
+  if (t >= pts[pts.length - 1].position) return pts[pts.length - 1].widthMultiplier;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i];
+    const p1 = pts[i + 1];
+    if (t >= p0.position && t <= p1.position) {
+      const span = p1.position - p0.position;
+      const f = span <= PROFILE_EPS ? 0 : (t - p0.position) / span;
+      return p0.widthMultiplier + (p1.widthMultiplier - p0.widthMultiplier) * f;
+    }
+  }
+  return 1.0;
+}
+
+/** True when the profile actually varies the width — anything else (missing,
+ *  empty, all-equal) takes the uniform fast path everywhere. */
+export function hasVariableWidth(points: readonly VariableWidthPoint[] | undefined): boolean {
+  const pts = normalizeWidthProfile(points);
+  if (pts.length < 2) return false;
+  const first = pts[0].widthMultiplier;
+  return pts.some((p) => Math.abs(p.widthMultiplier - first) > PROFILE_EPS);
+}
+
+/** Largest multiplier in the profile; the hit test and arrowheads size from this. */
+export function maxWidthMultiplier(points: readonly VariableWidthPoint[] | undefined): number {
+  const pts = normalizeWidthProfile(points);
+  if (!pts.length) return 1;
+  return Math.max(...pts.map((p) => p.widthMultiplier));
+}
+
+/** Effective stroke width at arc-length `t` for a profiled node. */
+export function widthAt(n: XNode, t: number): number {
+  return Math.max(0, n.strokeWidth) * sampleVariableWidth(n.strokeWidthProfile, t);
+}
+
+/** A network branches when a vertex joins three or more segments; chains and
+ *  loops (max degree 2) take width profiles, branching networks do not. */
+export function isBranchingNetwork(net: VectorNetwork | undefined): boolean {
+  if (!net || net.segments.length < 2) return false;
+  const deg = new Map<number, number>();
+  for (const s of net.segments) {
+    deg.set(s.start, (deg.get(s.start) ?? 0) + 1);
+    deg.set(s.end, (deg.get(s.end) ?? 0) + 1);
+  }
+  for (const d of deg.values()) if (d > 2) return true;
+  return false;
+}
+
+/** Whether `n` paints its base stroke through the variable-width outline. */
+export function usesVariableWidth(n: XNode): boolean {
+  if (n.kind !== "vector" && n.kind !== "line" && n.kind !== "arrow") return false;
+  if (!(n.strokeWidth > 0) || !n.strokeVisible || !n.strokePaint || isNonePaint(n.strokePaint)) return false;
+  // A profiled outline follows one centerline; on a branching network it
+  // would swallow the branches' strokes, so branching stays uniform.
+  if (isBranchingNetwork(n.vectorNetwork)) return false;
+  return hasVariableWidth(n.strokeWidthProfile);
+}
+
+function isNonePaint(paint: string): boolean {
+  return !paint || paint === "none" || paint === "#00000000";
+}
+
+/**
+ * How far a node's visible strokes spill past its box: outside strokes by
+ * their full weight, centre strokes by half — painted pixels stay clickable.
+ * Inside strokes never leave the box. Variable-width centerlines spill by
+ * their hottest point.
+ */
+export function strokeSpill(n: XNode): number {
+  const spill = (w: number, align: string | undefined) =>
+    align === "outside" ? Math.max(0, w) : align === "center" ? Math.max(0, w) / 2 : 0;
+  const forced = n.kind === "line" || n.kind === "arrow" ? "center" : undefined;
+  let pad = 0;
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint && !isNonePaint(n.strokePaint)) {
+    const w = usesVariableWidth(n) ? n.strokeWidth * maxWidthMultiplier(n.strokeWidthProfile) : n.strokeWidth;
+    pad = Math.max(pad, spill(w, forced ?? n.strokeAlign));
+  }
+  for (const s of n.strokes ?? []) {
+    if (s.visible === false || !(s.width > 0) || !s.color || isNonePaint(s.color)) continue;
+    pad = Math.max(pad, spill(s.width, forced ?? s.align));
+  }
+  return pad;
 }

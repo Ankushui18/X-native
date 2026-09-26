@@ -17,9 +17,11 @@
  * the authority; see docs/ARCHITECTURE_BOUNDARY.md.
  */
 
-import type { XNode } from "./types";
-import { shapePoly } from "./geometry";
-import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
+import type { StrokeCap, XNode } from "./types";
+import { outlineStroke, outlineVariableStroke, shapePoly } from "./geometry";
+import { applyTextCase, valignApplies } from "../ui/textLayout";
+import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
+import { convertTextToVectorPaths } from "./textVector";
 
 export function escXml(value: string) {
   return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[ch] || ch);
@@ -53,6 +55,10 @@ export const alphaOf = (value: string | undefined): number =>
  * made of several contours (an icon, a donut with a hole) exports whole rather
  * than as its first contour.
  */
+/** Kinds whose image fill the canvas clips to the layer outline: export
+ *  wraps the bitmap in the same path so rounded and polygonal shapes keep
+ *  their silhouette. Frames and groups fill the whole box unclipped. */
+const SHAPE_CLIP = new Set(["rect", "ellipse", "poly", "star", "vector", "boolean"]);
 export function svgPath(n: XNode) {
   const loops = networkLoops(n);
   if (loops) {
@@ -170,6 +176,16 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
   const defs: string[] = [];
   const filters: string[] = [];
   const fx = (n.effects ?? []).filter((e) => e.visible);
+  // Figma never rotates an effect with its layer, but the filter runs in the
+  // element's rotated user space — so offsets are counter-rotated to world
+  // axes, mirroring the canvas painter.
+  const th = ((n.rotation || 0) * Math.PI) / 180;
+  const c = Math.cos(th);
+  const s = Math.sin(th);
+  const counter = (x: number, y: number): [number, number] => [
+    Math.round((x * c + y * s) * 100) / 100,
+    Math.round((-x * s + y * c) * 100) / 100,
+  ];
   let i = 0;
   for (const e of fx) {
     const fid = `${id}_fx${i++}`;
@@ -180,9 +196,10 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
     if (e.kind === "drop-shadow") {
       const spread = e.spread > 0 ? `<feMorphology operator="dilate" radius="${e.spread}" in="SourceAlpha" result="sp"/>` : "";
       const src = e.spread > 0 ? "sp" : "SourceAlpha";
+      const [ox, oy] = counter(e.x, e.y);
       defs.push(
         `<filter id="${fid}" x="-50%" y="-50%" width="200%" height="200%">${spread}` +
-          `<feOffset dx="${e.x}" dy="${e.y}" in="${src}" result="off"/>` +
+          `<feOffset dx="${ox}" dy="${oy}" in="${src}" result="off"/>` +
           `<feGaussianBlur stdDeviation="${round(sigma)}" in="off" result="blur"/>` +
           `<feFlood flood-color="${color}" flood-opacity="${alpha}" result="col"/>` +
           `<feComposite operator="in" in="col" in2="blur" result="shadow"/>` +
@@ -190,9 +207,10 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
       );
       filters.push(`url(#${fid})`);
     } else if (e.kind === "inner-shadow") {
+      const [ox, oy] = counter(e.x, e.y);
       defs.push(
         `<filter id="${fid}" x="-50%" y="-50%" width="200%" height="200%">` +
-          `<feOffset dx="${e.x}" dy="${e.y}" in="SourceAlpha" result="off"/>` +
+          `<feOffset dx="${ox}" dy="${oy}" in="SourceAlpha" result="off"/>` +
           `<feGaussianBlur stdDeviation="${round(sigma)}" in="off" result="blur"/>` +
           `<feComposite operator="out" in="blur" in2="SourceAlpha" result="inv"/>` +
           `<feFlood flood-color="${color}" flood-opacity="${alpha}" result="col"/>` +
@@ -218,33 +236,84 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
  * but the shape, and in both cases the width is doubled so the visible half is
  * the width the layer asks for.
  */
-export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): string {
+/**
+ * Variable-width stroke as a filled outline element. SVG has no variable
+ * stroke, so the expanded outline — the same geometry the canvas paints —
+ * exports as fill. Returns "" when the node has no active profile.
+ */
+function variableStrokeSvg(n: XNode, stroke: string): string {
+  if (!usesVariableWidth(n)) return "";
+  const center =
+    n.path.length >= 2 ? n.path : n.kind === "line" || n.kind === "arrow" ? shapePoly(n) : null;
+  if (!center || center.length < 2) return "";
+  const outline = outlineVariableStroke(
+    center,
+    n.strokeWidth,
+    n.strokeWidthProfile,
+    n.closed,
+    n.strokeCap,
+    n.strokeJoin,
+    miterLimitFromAngle(n.strokeMiterAngle),
+  );
+  if (outline.length < 3) return "";
+  const d = outline.map((p, i) => `${i ? "L" : "M"} ${round(p.x)} ${round(p.y)}`).join(" ") + " Z";
+  const opacity = Math.max(0, Math.min(1, n.strokeOpacity * alphaOf(n.strokePaint)));
+  return `<path d="${d}" fill="${stroke}" fill-opacity="${opacity}" stroke="none"/>`;
+}
+
+export function svgShape(n: XNode, fill: string, stroke = "none", extra = "", opts: SvgOpts = {}): string {
   const path = svgPath(n);
   if (!path) return "";
   const caps = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
   const dashCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? (n.strokeDashCap ?? caps) : caps;
   const common = `stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-linecap="${dashCap}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
   const fillAttrs = `fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity * alphaOf(n.fill)))}" fill-rule="${fillRule(n)}"`;
-  const align = n.strokeVisible && n.strokeWidth > 0 ? (n.strokeAlign ?? "inside") : "inside";
+  const align =
+    n.kind === "line" || n.kind === "arrow" ? "center" : n.strokeVisible && n.strokeWidth > 0 ? (n.strokeAlign ?? "inside") : "inside";
   const defs: string[] = [];
   // The fill and the stroke are separate elements: an outside stroke needs a
   // mask that hides everything inside the shape, and a mask on one element
   // would hide the fill with it.
   const fillPath = fill === "none" ? "" : `<path d="${path}" ${fillAttrs}${extra}/>`;
   const strokePath = (attrs: string) => `<path d="${path}" fill="none" ${attrs}/>`;
-  let strokeEl = "";
-  if (stroke !== "none") {
+  const perSideEarly = sidesSupported(n.kind) && (n.strokeSides ?? "all") !== "all";
+  let strokeEl = stroke === "none" ? "" : variableStrokeSvg(n, stroke);
+  if (stroke !== "none" && !strokeEl) {
     const opacity = Math.max(0, Math.min(1, n.strokeOpacity * alphaOf(n.strokePaint)));
     const attrs = `stroke="${stroke}" stroke-opacity="${opacity}" stroke-linecap="${caps}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
-    if (align === "center") {
+    // "Simplify strokes": Figma's enabled output draws a non-centre stroke as
+    // a filled outline instead of a clipped or masked stroke, which is what a
+    // vector tool on the other end wants to receive. Centre strokes, dashes,
+    // per-side strokes and multi-contour networks keep the attribute
+    // construction - a dash pattern has no outline to take, and the ring
+    // builder only knows single contours.
+    if (
+      opts.simplifyStroke &&
+      align !== "center" &&
+      svgDash(n) === "none" &&
+      !perSideEarly &&
+      !networkLoops(n)
+    ) {
+      const center = n.path.length >= 2 ? n.path : shapePoly(n);
+      if (center.length >= 2) {
+        const closed =
+          n.kind === "line" || n.kind === "arrow" ? false : n.kind === "vector" ? !!n.closed : true;
+        const ring = outlineStroke(center, n.strokeWidth, closed, caps as StrokeCap, n.strokeJoin);
+        if (ring.length >= 3) {
+          const d = `${ring.map((pt, i) => `${i ? "L" : "M"} ${round(pt.x)} ${round(pt.y)}`).join(" ")} Z`;
+          strokeEl = `<path d="${d}" fill="${stroke}" fill-opacity="${opacity}" stroke="none"/>`;
+        }
+      }
+    }
+    if (!strokeEl && align === "center") {
       strokeEl = strokePath(`stroke-width="${n.strokeWidth}" ${attrs}`);
-    } else if (align === "inside") {
+    } else if (!strokeEl && align === "inside") {
       // Doubled, then clipped to the shape: the visible half is the width asked
       // for, which is what the canvas paints.
       const clip = safeId("clip", n);
       defs.push(`<clipPath id="${clip}"><path d="${path}"/></clipPath>`);
       strokeEl = strokePath(`stroke-width="${n.strokeWidth * 2}" clip-path="url(#${clip})" ${attrs}`);
-    } else {
+    } else if (!strokeEl) {
       const mask = safeId("mask", n);
       defs.push(
         `<mask id="${mask}" maskUnits="userSpaceOnUse" x="${-n.w}" y="${-n.h}" width="${n.w * 3}" height="${n.h * 3}">` +
@@ -259,6 +328,7 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): s
     n.strokeCap === "arrow" ||
     n.strokeCap === "triangle" ||
     n.strokeCap === "reverse-triangle" ||
+    n.strokeCap === "circle" ||
     n.strokeCap === "diamond";
   if (n.kind === "arrow" || ((n.kind === "line" || n.kind === "vector") && !n.closed && tipCap)) {
     const pts = n.path.length ? n.path : shapePoly(n);
@@ -278,6 +348,8 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): s
         const p2x = round(a.x - ux * ah - uy * ah * 0.72);
         const p2y = round(a.y - uy * ah + ux * ah * 0.72);
         arrowEl = `<path d="M ${p1x} ${p1y} L ${round(a.x)} ${round(a.y)} L ${p2x} ${p2y}" fill="none" stroke="${strokeColor}" stroke-width="${Math.max(0.5, n.strokeWidth)}" stroke-linecap="butt" stroke-linejoin="miter"/>`;
+      } else if (n.strokeCap === "circle") {
+        arrowEl = `<circle cx="${round(a.x)}" cy="${round(a.y)}" r="${round(ah * 0.55)}" fill="none" stroke="${strokeColor}" stroke-width="${Math.max(0.5, n.strokeWidth)}"/>`;
       } else {
         const p1x = round(a.x - ux * ah + uy * ah * 0.75);
         const p1y = round(a.y - uy * ah - ux * ah * 0.75);
@@ -293,7 +365,7 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = ""): s
   // canvas; extra strokes stack on top of the base stroke.
   const extras: string[] = [];
   for (const row of n.fills ?? []) {
-    if (!row.visible) continue;
+    if (!row.visible || row.exportVisible === false) continue;
     const c = svgColor(row.color);
     const paint = row.type === "linear" || row.type === "radial" ? c : c;
     extras.push(`<path d="${path}" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, row.opacity * alphaOf(row.color)))}" fill-rule="${fillRule(n)}"/>`);
@@ -339,11 +411,80 @@ function fillRule(n: XNode): string {
   return rule === "EVENODD" ? "evenodd" : "nonzero";
 }
 
+/** The laid-out lines of a text layer: truncation, anchor, line rhythm and the
+ *  vertical offset. Both the `<text>` branch and the outlined-text branch read
+ *  this, so the two can never drift apart. */
+function textLayout(n: XNode): {
+  lines: string[];
+  anchor: "start" | "middle" | "end";
+  tx: number;
+  lineHeight: number;
+  yOffset: number;
+} {
+  const text = applyTextCase(n.text, n.textCase);
+  let lines = text.split("\n");
+  if (n.truncate && lines.length > Math.max(1, n.maxLines || 1)) {
+    lines = lines.slice(0, Math.max(1, n.maxLines || 1));
+    lines[lines.length - 1] = `${lines[lines.length - 1].replace(/\s+$/, "")}…`;
+  }
+  const anchor = n.textAlign === "center" ? "middle" : n.textAlign === "right" ? "end" : "start";
+  const tx = n.textAlign === "center" ? n.w / 2 : n.textAlign === "right" ? n.w : 0;
+  const lineHeight = n.lineHeight || n.fontSize * 1.2;
+  const blockHeight = lines.length * lineHeight;
+  // Hug axes ignore vertical alignment, like the canvas painter.
+  const valign = valignApplies(n) ? n.textAlignVertical : "top";
+  const yOffset =
+    valign === "middle" ? (n.h - blockHeight) / 2 : valign === "bottom" ? n.h - blockHeight : 0;
+  return { lines, anchor, tx, lineHeight, yOffset };
+}
+
+/** "Outline text": the copy as filled paths instead of a `<text>` element, so
+ *  the file survives a machine without the font. Each line is traced by the
+ *  same vectoriser the editor's own outline-text command uses (with its
+ *  geometric fallback outside a browser), then placed on the line grid the
+ *  `<text>` branch would have used. Letter spacing, underlines and text
+ *  strokes do not survive the trip - the tracer draws bare glyph bodies. */
+function outlinedText(n: XNode, paint: string, filter: string): string {
+  const { lines, anchor, tx, lineHeight, yOffset } = textLayout(n);
+  const opacity = Math.max(0, Math.min(1, n.fillOpacity));
+  const paths: string[] = [];
+  lines.forEach((line, i) => {
+    const traced = convertTextToVectorPaths(
+      line === "" ? " " : line,
+      n.fontSize || 16,
+      n.fontFamily || "Inter",
+      String(n.fontWeight ?? "400"),
+    );
+    const loops = traced.network.regions?.flatMap((r) => r.loops) ?? [];
+    if (!loops.length) return;
+    const verts = traced.network.vertices;
+    const lx = tx - (anchor === "middle" ? traced.w / 2 : anchor === "end" ? traced.w : 0);
+    const ly = yOffset + i * lineHeight;
+    const d = loops
+      .map((loop) => {
+        const pts = loop
+          .map((vi) => verts[vi])
+          .filter((v): v is { x: number; y: number } => !!v);
+        if (!pts.length) return "";
+        return `${pts.map((v, j) => `${j ? "L" : "M"} ${round(lx + v.x)} ${round(ly + v.y)}`).join(" ")} Z`;
+      })
+      .filter(Boolean)
+      .join(" ");
+    if (d) paths.push(`<path d="${d}" fill="${paint}" fill-opacity="${opacity}" fill-rule="evenodd"/>`);
+  });
+  if (!paths.length) return "";
+  return `<g${filter}>${paths.join("")}</g>`;
+}
+
 /** One layer, its effects, and the layers inside it. */
-export function svgNode(n: XNode, top = false): string {
+export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
   if (!n.visible) return "";
+  // Slices never render: they are a crop region, not artwork. A frame that
+  // contains one used to export the slice's own rectangle.
+  if (n.isSlice === true) return "";
   const id = safeId("paint", n);
-  const fill = n.fillVisible !== false ? svgColor(n.fill) : "none";
+  const fill =
+    n.fillVisible !== false && n.fillExportVisible !== false ? svgColor(n.fill) : "none";
   const stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
   const defs: string[] = [];
   let paint = fill;
@@ -370,48 +511,48 @@ export function svgNode(n: XNode, top = false): string {
   const body: string[] = [];
   if (defs.length) body.push(`<defs>${defs.join("")}</defs>`);
   if (n.kind === "text") {
-    let text = n.text;
-    if (n.textCase === "upper" || n.textCase === "small-caps") text = text.toUpperCase();
-    if (n.textCase === "lower") text = text.toLowerCase();
-    if (n.textCase === "title") text = text.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
-    let lines = text.split("\n");
-    if (n.truncate && lines.length > Math.max(1, n.maxLines || 1)) {
-      lines = lines.slice(0, Math.max(1, n.maxLines || 1));
-      lines[lines.length - 1] = `${lines[lines.length - 1].replace(/\s+$/, "")}…`;
-    }
-    const anchor = n.textAlign === "center" ? "middle" : n.textAlign === "right" ? "end" : "start";
-    const tx = n.textAlign === "center" ? n.w / 2 : n.textAlign === "right" ? n.w : 0;
-    const lineHeight = n.lineHeight || n.fontSize * 1.2;
-    const blockHeight = lines.length * lineHeight;
-    const yOffset =
-      n.textAlignVertical === "middle"
-        ? (n.h - blockHeight) / 2
-        : n.textAlignVertical === "bottom"
-          ? n.h - blockHeight
-          : 0;
+    // Small caps lowers the copy and rides font-variant, exactly like the
+    // canvas painter, instead of exporting full-height capitals.
+    const smallCaps = n.textCase === "small-caps";
+    const { lines, anchor, tx, lineHeight, yOffset } = textLayout(n);
+    if (opts.outlineText) {
+      const outlined = outlinedText(n, paint, filter);
+      if (outlined) body.push(outlined);
+    } else {
     const content = lines
       .map((line, i) => `<tspan x="${tx}" dy="${i ? lineHeight : yOffset + n.fontSize}">${escXml(line)}</tspan>`)
       .join("");
     const textStroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
     body.push(
-      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}" letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${filter}>${content}</text>`,
+      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${filter}>${content}</text>`,
     );
-  } else if (n.imageSrc) {
-    const preserve = n.imageFit === "fit" ? "xMidYMid meet" : n.imageFit === "crop" ? "xMidYMid slice" : n.imageFit === "tile" ? "none" : "none";
-    body.push(
-      `<image href="${escXml(n.imageSrc)}" x="0" y="0" width="${round(n.w)}" height="${round(n.h)}" preserveAspectRatio="${preserve}" opacity="${Math.max(0, Math.min(1, n.fillOpacity))}"${filter}/>`,
-    );
+    }
+  } else if (n.fillType === "image" && n.imageSrc && n.fillExportVisible !== false) {
+    // Fill covers like the canvas does (slice, not stretch); the stored crop
+    // rect and tile geometry need the bitmap's dimensions, which export does
+    // not load, so crop falls back to a centred cover and tile to a stretch.
+    const preserve =
+      n.imageFit === "fit" ? "xMidYMid meet" : n.imageFit === "tile" ? "none" : "xMidYMid slice";
+    const img = `<image href="${escXml(n.imageSrc)}" x="0" y="0" width="${round(n.w)}" height="${round(n.h)}" preserveAspectRatio="${preserve}" opacity="${Math.max(0, Math.min(1, n.fillOpacity))}"${filter}/>`;
+    const d = SHAPE_CLIP.has(n.kind) ? svgPath(n) : "";
+    if (d) {
+      const clip = safeId("imgclip", n);
+      body.push(`<defs><clipPath id="${clip}"><path d="${d}"/></clipPath></defs>`);
+      body.push(`<g clip-path="url(#${clip})">${img}</g>`);
+    } else {
+      body.push(img);
+    }
   } else if (n.kind !== "group" && n.kind !== "frame" && n.kind !== "component" && n.kind !== "instance") {
-    body.push(svgShape(n, paint, stroke, filter));
+    body.push(svgShape(n, paint, stroke, filter, opts));
   } else if (fill !== "none" || stroke !== "none") {
-    body.push(svgShape(n, paint, stroke, filter));
+    body.push(svgShape(n, paint, stroke, filter, opts));
   }
   if (n.kind === "frame" && n.overflow !== "visible") {
     const clip = safeId("fclip", n);
     body.unshift(`<defs><clipPath id="${clip}"><path d="${svgPath(n)}"/></clipPath></defs>`);
-    body.push(`<g clip-path="url(#${clip})">${n.children.map((c) => svgNode(c)).join("")}</g>`);
+    body.push(`<g clip-path="url(#${clip})">${n.children.map((c) => svgNode(c, false, opts)).join("")}</g>`);
   } else {
-    body.push(n.children.map((c) => svgNode(c)).join(""));
+    body.push(n.children.map((c) => svgNode(c, false, opts)).join(""));
   }
   return `<g${transform ? ` transform="${transform}"` : ""} opacity="${Math.max(0, Math.min(1, n.opacity))}">${body.join("")}</g>`;
 }
@@ -423,6 +564,27 @@ export interface SvgPreset {
   /** "Include id attribute": writes an id from the layer's name so a
    *  stylesheet or a script can reach the element. */
   includeId?: boolean;
+  /** Format settings, read the same way `resolveSettings` resolves them:
+   *  absent means the format default (on for SVG, off for raster), an
+   *  explicit false forces the legacy construction. `ExportPreset` already
+   *  carries these, so a stored preset passes straight through. */
+  ignoreOverlap?: boolean;
+  outlineText?: boolean;
+  simplifyStroke?: boolean;
+}
+
+/** What tree a single-layer export renders. A slice renders its container
+ *  (or the whole page when overlap is not ignored) cropped to the slice
+ *  rect; a page renders the document root cropped to the content box. */
+export interface SvgScope {
+  root?: XNode;
+  page?: boolean;
+}
+
+/** Resolved render options, threaded from `exportSvg` down to the shapes. */
+export interface SvgOpts {
+  outlineText?: boolean;
+  simplifyStroke?: boolean;
 }
 
 /**
@@ -439,11 +601,90 @@ function svgId(name: string): string {
   return clean || "layer";
 }
 
-/** The whole document for one layer, at the preset's size. */
-export function exportSvg(n: XNode, p: SvgPreset) {
-  const size = svgSize(n, p);
+/** The parent of a layer, by id. `memory` has its own; this module stays free
+ *  of the engine so the parity tests keep importing it alone. */
+function findLocalParent(root: XNode, id: string): XNode | null {
+  for (const c of root.children) {
+    if (c.id === id) return root;
+    const hit = findLocalParent(c, id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** A layer's offset from the root, accumulating x/y down the chain. Rotation
+ *  is ignored: slice math only needs the axis position. */
+function offsetIn(root: XNode, id: string): { x: number; y: number } | null {
+  if (root.id === id) return { x: root.x, y: root.y };
+  for (const c of root.children) {
+    const hit = offsetIn(c, id);
+    if (hit) return { x: root.x + hit.x, y: root.y + hit.y };
+  }
+  return null;
+}
+
+/** The box around everything visible under a root: hidden layers and slices
+ *  do not count, and neither does the root's own frame. Rotation, strokes,
+ *  effects and clipping are ignored, so a rotated layer counts its unrotated
+ *  box and content clipped by an overflow frame still pads the result. */
+export function contentBox(root: XNode): { x: number; y: number; w: number; h: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const walk = (n: XNode, ox: number, oy: number) => {
+    for (const c of n.children) {
+      if (c.visible === false || c.isSlice === true) continue;
+      const x = ox + c.x;
+      const y = oy + c.y;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + Math.max(0, c.w));
+      maxY = Math.max(maxY, y + Math.max(0, c.h));
+      walk(c, x, y);
+    }
+  };
+  walk(root, root.x, root.y);
+  return minX === Infinity ? null : { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+/** The whole document for one layer, at the preset's size. A slice renders
+ *  its container cropped to the slice rect (or the whole page, in root
+ *  coordinates, when overlap is not ignored); a page renders the root
+ *  cropped to the content box, on a transparent ground. Both fall back to
+ *  the plain layer render when no scope is given. */
+export function exportSvg(n: XNode, p: SvgPreset, scope?: SvgScope) {
+  const opts: SvgOpts = {
+    outlineText: p.outlineText ?? p.format === "SVG",
+    simplifyStroke: p.simplifyStroke ?? p.format === "SVG",
+  };
   const id = p.includeId ? ` id="${escXml(svgId(n.name))}"` : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg"${id} width="${size.width}" height="${size.height}" viewBox="0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}"><title>${escXml(n.name)}</title>${svgNode(n, true)}</svg>`;
+  const open = (width: number, height: number, vb: string) =>
+    `<svg xmlns="http://www.w3.org/2000/svg"${id} width="${width}" height="${height}" viewBox="${vb}"><title>${escXml(n.name)}</title>`;
+  if (scope?.page) {
+    const box = contentBox(n) ?? { x: 0, y: 0, w: 1, h: 1 };
+    const size = svgSizeWH(box.w, box.h, p);
+    // The page ground stays out of the file: a page export is transparent.
+    const bare = { ...n, fill: "#00000000", imageSrc: "" };
+    return `${open(size.width, size.height, `${round(box.x)} ${round(box.y)} ${round(Math.max(1, box.w))} ${round(Math.max(1, box.h))}`)}${svgNode(bare, true, opts)}</svg>`;
+  }
+  if (n.isSlice === true && scope?.root) {
+    const size = svgSize(n, p);
+    const whole = p.ignoreOverlap === false;
+    const container = whole ? scope.root : (findLocalParent(scope.root, n.id) ?? scope.root);
+    let vx = n.x;
+    let vy = n.y;
+    if (whole || container === scope.root) {
+      const at = offsetIn(scope.root, n.id);
+      if (at) {
+        vx = at.x;
+        vy = at.y;
+      }
+    }
+    return `${open(size.width, size.height, `${round(vx)} ${round(vy)} ${round(Math.max(1, n.w))} ${round(Math.max(1, n.h))}`)}${svgNode(container, true, opts)}</svg>`;
+  }
+  const size = svgSize(n, p);
+  return `${open(size.width, size.height, `0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}`)}${svgNode(n, true, opts)}</svg>`;
 }
 
 /**
@@ -476,8 +717,14 @@ export function exportClipSvg(nodes: XNode[]): string {
  *  with a unit, and the viewBox stays the design size either way - which is
  *  what makes an SVG at 500w still readable as a vector. */
 function svgSize(n: XNode, p: SvgPreset): { width: number; height: number } {
-  const w = Math.max(1, n.w);
-  const h = Math.max(1, n.h);
+  return svgSizeWH(n.w, n.h, p);
+}
+
+/** The export size for an explicit box, which is what page exports size
+ *  from - the root's own frame is the canvas, not the artwork. */
+function svgSizeWH(w0: number, h0: number, p: SvgPreset): { width: number; height: number } {
+  const w = Math.max(1, w0);
+  const h = Math.max(1, h0);
   const raw = typeof p.scale === "number" ? String(p.scale) : String(p.scale ?? "1");
   const m = /^(\d*\.?\d+)\s*([xwh]?)$/.exec(raw.trim().toLowerCase().replace(",", "."));
   if (m) {

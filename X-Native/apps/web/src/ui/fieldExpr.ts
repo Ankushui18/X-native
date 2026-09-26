@@ -44,6 +44,13 @@ export function evalField(raw: string, current: number): number | null {
     const v = parseFloat(t);
     return Number.isFinite(v) ? v : null;
   }
+  // `Mixed`, `𝑥`, and a standalone `x` all stand for the field's current value
+  // (`Mixed+100`, `(𝑥/2)+6`), so mixed selections can be adjusted by equation.
+  // Only previously unparseable input reaches the substitution, so no working
+  // expression changes meaning.
+  t = t
+    .replace(/mixed|𝑥/gi, num(current))
+    .replace(/(^|[^a-zA-Z0-9_.])x([^a-zA-Z0-9_.]|$)/g, `$1${num(current)}$2`);
   // "starts/end with an operator" combines with what is already in the field.
   if (/^[+\-*/^]/.test(t)) t = `${num(current)}${t}`;
   else if (/[+\-*/^]$/.test(t)) t = `${t}${num(current)}`;
@@ -54,6 +61,26 @@ export function evalField(raw: string, current: number): number | null {
 }
 
 const num = (v: number): string => (Number.isFinite(v) ? String(v) : "0");
+
+/**
+ * Evaluate `raw` once per selected layer, each against its own current value:
+ * a plain number lands on every layer, while `+10` or `Mixed+100` adds 10 or
+ * 100 to each. All-or-nothing: null when the draft is empty, carries no digits
+ * at all, or fails to parse against any one layer, so the field reverts
+ * instead of moving half the selection.
+ */
+export function evalFieldMany(raw: string, currents: number[]): number[] | null {
+  const t = raw.trim();
+  if (!t) return null;
+  if (!hasExpression(t) && !/[0-9]/.test(t)) return null;
+  const out: number[] = [];
+  for (const current of currents) {
+    const v = hasExpression(t) ? evalField(t, current) : parseFloat(t);
+    if (v == null || !Number.isFinite(v)) return null;
+    out.push(v);
+  }
+  return out;
+}
 
 class Parser {
   ok = true;

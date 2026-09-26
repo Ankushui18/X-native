@@ -443,6 +443,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
               >
                 <div style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                   <select
+                    aria-label="Filter by type"
                     value={filterType}
                     onChange={(e) => setFilterType(e.target.value)}
                     style={{
@@ -641,7 +642,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                       >
                         <path
                           d={pathD}
-                          fill={n.fill || "#0d99ff"}
+                          fill={n.fill || "#10b981"}
                           stroke={n.stroke || "#ffffff"}
                           strokeWidth={Math.max(1, n.strokeWeight)}
                         />

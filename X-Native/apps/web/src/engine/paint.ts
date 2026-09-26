@@ -1,9 +1,11 @@
 import type { GradientStop, XNode } from "./types";
 import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
-import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
+import { dashArray, dashOffset, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
-/** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB). */
-function mixHex(a: string, b: string, t: number): string {
+/** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB).
+ *  Exported so the gradient editor inserts new stops in the same colour the
+ *  ramp actually shows at that point. */
+export function mixHex(a: string, b: string, t: number): string {
   const A = parseHex(a);
   const B = parseHex(b);
   const u = Math.max(0, Math.min(1, t));
@@ -76,13 +78,57 @@ function stopsOf(n: XNode): GradientStop[] {
  * Each adjacent pair is subdivided and interpolated in OKLab, which keeps
  * mid-tones from going grey the way canvas' native sRGB interpolation does.
  */
-/** Compress a ramp into 0..0.5 and mirror it into 0.5..1 for conic sweeps. */
-function conicStops(stops: GradientStop[]): GradientStop[] {
-  const fwd = stops.map((s) => ({ color: s.color, position: s.position / 2 }));
-  const back = [...stops]
-    .reverse()
-    .map((s) => ({ color: s.color, position: 1 - s.position / 2 }));
-  return [...fwd, ...back];
+function isGradientType(t: string): boolean {
+  return t === "linear" || t === "radial" || t === "angular" || t === "diamond";
+}
+
+/** Which gradient the canvas handles grab, if any. */
+export interface GradTarget {
+  /** Index into `fills`, or -1 for the base fill. */
+  index: number;
+  gx: number;
+  gy: number;
+  hx: number;
+  hy: number;
+  /** Endpoint colours for the handle dots. */
+  from: string;
+  to: string;
+}
+
+/**
+ * The topmost visible gradient fill — extra paints over the base — so the
+ * handles always match the ramp on screen. A hidden base gradient yields no
+ * handles even when its type is still set.
+ */
+export function gradTarget(n: XNode): GradTarget | null {
+  const fills = n.fills ?? [];
+  for (let i = fills.length - 1; i >= 0; i--) {
+    const p = fills[i];
+    if (p.visible === false || !isGradientType(p.type)) continue;
+    const st = p.stops && p.stops.length >= 2 ? [...p.stops].sort((a, b) => a.position - b.position) : null;
+    return {
+      index: i,
+      // An extra without explicit geometry inherits the base handles in
+      // render (see paintFill), so the handles show — and write — the same.
+      gx: p.gx ?? n.fillGX ?? 0.5,
+      gy: p.gy ?? n.fillGY ?? 0,
+      hx: p.hx ?? n.fillHX ?? 0.5,
+      hy: p.hy ?? n.fillHY ?? 1,
+      from: st ? st[0].color : p.color,
+      to: st ? st[st.length - 1].color : n.fillB || "#ffffff",
+    };
+  }
+  if (n.fillVisible === false || !n.fill || isNone(n.fill) || !isGradientType(n.fillType)) return null;
+  const stops = stopsOf(n);
+  return {
+    index: -1,
+    gx: n.fillGX ?? 0.5,
+    gy: n.fillGY ?? 0,
+    hx: n.fillHX ?? 0.5,
+    hy: n.fillHY ?? 1,
+    from: stops[0].color,
+    to: stops[stops.length - 1].color,
+  };
 }
 
 function ramp(g: CanvasGradient, stops: GradientStop[]) {
@@ -130,9 +176,13 @@ export function fillStyle(
     return g;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
-    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
+    // Conic angles run clockwise from the top while atan2 runs from the east,
+    // so the handle direction needs a quarter turn to land the sweep origin
+    // where the handle points. The ramp sweeps the full circle unmirrored —
+    // first and last stops meet at the origin with Figma's authentic seam.
+    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw) + Math.PI / 2;
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    ramp(g, conicStops(stops));
+    ramp(g, stops);
     return g;
   }
   return cssRgba(a);
@@ -150,12 +200,29 @@ export function paintFill(
   sy: number,
   sw: number,
   sh: number,
+  /** Resolves an image source to a loaded element; without it (or while a
+   *  source is still loading) image paints are skipped, never broken. */
+  imgOf?: (src: string) => HTMLImageElement | undefined,
 ) {
-  paintOnePaint(ctx, n, sx, sy, sw, sh);
+  paintOnePaint(ctx, n, sx, sy, sw, sh, imgOf);
+  paintStack(ctx, n, sx, sy, sw, sh, imgOf);
+}
+
+/** The additional paints in `n.fills`, bottom-to-top, over the base fill. */
+export function paintStack(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  imgOf?: (src: string) => HTMLImageElement | undefined,
+) {
   for (const p of n.fills ?? []) {
     if (p.visible === false) continue;
     // Each extra fill is described by a Paint; project it onto the same
-    // node-shaped surface by borrowing the node's geometry fields.
+    // node-shaped surface by borrowing the node's geometry fields. Image
+    // settings come from the paint alone - the base fill's never leak in.
     const layer: XNode = {
       ...n,
       fill: p.color,
@@ -166,13 +233,25 @@ export function paintFill(
       fillGY: p.gy ?? n.fillGY,
       fillHX: p.hx ?? n.fillHX,
       fillHY: p.hy ?? n.fillHY,
+      imageSrc: p.image ?? "",
+      imageFit: p.imageFit ?? "fill",
+      imageRot: p.imageRot ?? 0,
+      imageTile: p.imageTile ?? 100,
+      imageExposure: p.imageExposure ?? 0,
+      imageContrast: p.imageContrast ?? 0,
+      imageSaturation: p.imageSaturation ?? 0,
+      imageTemperature: p.imageTemperature ?? 0,
+      imageTint: p.imageTint ?? 0,
+      imageHighlights: p.imageHighlights ?? 0,
+      imageShadows: p.imageShadows ?? 0,
+      imageCrop: undefined,
       fills: undefined,
     };
     ctx.save();
     const op = canvasBlend(p.blend);
     if (op !== "source-over") ctx.globalCompositeOperation = op;
     if (p.opacity != null && p.opacity < 1) ctx.globalAlpha *= p.opacity;
-    paintOnePaint(ctx, layer, sx, sy, sw, sh);
+    paintOnePaint(ctx, layer, sx, sy, sw, sh, imgOf);
     ctx.restore();
   }
 }
@@ -184,7 +263,13 @@ function paintOnePaint(
   sy: number,
   sw: number,
   sh: number,
+  imgOf?: (src: string) => HTMLImageElement | undefined,
 ) {
+  if (n.fillType === "image") {
+    const im = n.imageSrc ? imgOf?.(n.imageSrc) : undefined;
+    if (im) paintImageFill(ctx, n, im, sx, sy, sw, sh);
+    return;
+  }
   const a = n.fill;
   const stops = stopsOf(n);
   const gx = n.fillGX ?? 0.5;
@@ -196,17 +281,17 @@ function paintOnePaint(
     return;
   }
   if (n.fillType === "radial") {
+    // Circular, like Figma: the handle sets centre and radius, never an
+    // ellipse — a wide frame gets a clipped circle, not a stretched oval.
     ctx.save();
     ctx.clip();
     const cx = sx + gx * sw;
     const cy = sy + gy * sh;
-    const rn = Math.hypot(hx - gx, hy - gy) || 0.5;
-    ctx.translate(cx, cy);
-    ctx.scale(Math.max(0.001, sw * rn), Math.max(0.001, sh * rn));
-    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+    const r = Math.hypot((hx - gx) * sw, (hy - gy) * sh) || Math.max(sw, sh) / 2;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     ramp(g, stops);
     ctx.fillStyle = g;
-    ctx.fillRect(-2, -2, 4, 4);
+    ctx.fillRect(sx, sy, sw, sh);
     ctx.restore();
     return;
   }
@@ -222,11 +307,11 @@ function paintOnePaint(
     return;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
-    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw);
+    // Same quarter-turn as fillStyle: the sweep origin tracks the handle.
+    // No mirroring — the seam where the ramp wraps is authentic Figma.
+    const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw) + Math.PI / 2;
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    // A cone wraps, so mirror the ramp back to the first colour at t=1 to
-    // avoid a hard seam at the sweep origin.
-    ramp(g, conicStops(stops));
+    ramp(g, stops);
     ctx.fillStyle = g;
     ctx.fill(fillRule);
     return;
@@ -403,18 +488,31 @@ export function paintImageFill(
   ctx.save();
   ctx.clip();
   if (fit === "tile") {
-    const z = sw / Math.max(1, n.w);
+    // Tile size is a percent of the image's original dimensions; the rect
+    // shrinks in step so the scaled pattern still covers exactly the box.
+    const t = Math.max(0.01, (n.imageTile ?? 100) / 100);
+    const z = (sw / Math.max(1, n.w)) * t;
     const pat = ctx.createPattern(src, "repeat");
     if (pat) {
       ctx.save();
       ctx.translate(sx, sy);
       ctx.scale(z, z);
       ctx.fillStyle = pat;
-      ctx.fillRect(0, 0, n.w, n.h);
+      ctx.fillRect(0, 0, n.w / t, n.h / t);
       ctx.restore();
     }
     ctx.restore();
     return;
+  }
+  if (fit === "crop") {
+    const crop = normalizeCropRect(n.imageCrop);
+    if (crop.x !== 0 || crop.y !== 0 || crop.w !== 1 || crop.h !== 1) {
+      ctx.drawImage(src, crop.x * iw, crop.y * ih, crop.w * iw, crop.h * ih, sx, sy, sw, sh);
+      ctx.restore();
+      return;
+    }
+    // No stored rect: the whole image as cover, so switching into Crop
+    // never distorts before the first drag materialises a rect.
   }
   const cover = fit === "fill" || fit === "crop" || !fit;
   const scale = cover ? Math.max(sw / iw, sh / ih) : Math.min(sw / iw, sh / ih);
@@ -426,11 +524,160 @@ export function paintImageFill(
   ctx.restore();
 }
 
+/** Clamp a crop rect into normalised space: inside 0..1, at least 1% a side. */
+export function normalizeCropRect(rect?: { x: number; y: number; w: number; h: number }) {
+  if (!rect) return { x: 0, y: 0, w: 1, h: 1 };
+  const w = Math.max(0.01, Math.min(1, rect.w));
+  const h = Math.max(0.01, Math.min(1, rect.h));
+  return {
+    x: Math.max(0, Math.min(1 - w, rect.x)),
+    y: Math.max(0, Math.min(1 - h, rect.y)),
+    w,
+    h,
+  };
+}
+
+/**
+ * The normalised region of the image a cover ("Fill") shows for the given
+ * image and layer sizes. Materialises the crop rect on the first crop drag
+ * so entering Crop keeps the current look.
+ */
+export function coverCrop(iw: number, ih: number, w: number, h: number) {
+  if (!(iw > 0 && ih > 0 && w > 0 && h > 0)) return { x: 0, y: 0, w: 1, h: 1 };
+  const s = Math.max(w / iw, h / ih);
+  const vw = w / (iw * s);
+  const vh = h / (ih * s);
+  return { x: (1 - vw) / 2, y: (1 - vh) / 2, w: vw, h: vh };
+}
+
+/**
+ * Partition a child list into mask runs: plain children paint live, and a
+ * visible mask opens a run that clips every sibling after it until the next
+ * mask. A mask above content masks nothing (it opens an empty run), and a
+ * hidden mask is an ordinary child.
+ */
+export function partitionMaskRuns<T extends { isMask?: boolean; visible?: boolean }>(
+  children: readonly T[],
+): { mask: T | null; kids: T[] }[] {
+  const runs: { mask: T | null; kids: T[] }[] = [];
+  let cur: { mask: T | null; kids: T[] } = { mask: null, kids: [] };
+  for (const ch of children) {
+    if (ch.isMask && ch.visible) {
+      if (cur.mask || cur.kids.length) runs.push(cur);
+      cur = { mask: ch, kids: [] };
+    } else {
+      cur.kids.push(ch);
+    }
+  }
+  runs.push(cur);
+  return runs;
+}
+
+/**
+ * One pixel of mask reduction: alpha keeps the painted alpha, vector keeps
+ * any painted pixel fully opaque, luminance derives alpha from brightness.
+ * Pure so the compositor and the headless checks share it.
+ */
+export function reduceMaskAlpha(
+  type: "alpha" | "vector" | "luminance",
+  r: number,
+  g: number,
+  b: number,
+  a: number,
+): number {
+  if (type === "alpha") return a;
+  if (type === "vector") return a > 0 ? 255 : 0;
+  return Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+}
+
 export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: number) {
+  paintDropShadowsMasked(ctx, n, z);
+}
+
+/**
+ * Whether the layer paints any fill at all: the scalar base fill, an image
+ * fill, or one of the additional paints in the stack. The drop-shadow gate
+ * and the ring-vs-silhouette choice both key off this, so a layer whose only
+ * fill is an additional paint still casts a shadow.
+ */
+export function paintsAnyFill(n: XNode): boolean {
+  if ((n.fills ?? []).some((p) => p.visible !== false)) return true;
+  if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) return true;
+  return n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow";
+}
+
+/**
+ * Figma only applies shadow spread on rectangles, ellipses, frames and
+ * components; instances render through their master so they keep it too.
+ * Frames and components additionally need clipped content and a visible
+ * fill, otherwise the value is kept but ignored on canvas.
+ */
+export function spreadApplies(n: XNode): boolean {
+  if (n.kind === "rect" || n.kind === "ellipse" || n.kind === "instance") return true;
+  if (n.kind !== "frame" && n.kind !== "component") return false;
+  if (n.overflow === "visible") return false;
+  return paintsAnyFill(n);
+}
+
+/**
+ * The alpha the layer's fills composite to, 0..1: additional paints stack
+ * over the scalar base, and a gradient's most transparent stop caps its
+ * layer. Used to decide whether a drop shadow needs masking (a translucent
+ * fill lets the shadow show through unless it is erased behind the layer)
+ * and whether a background blur has anything to show through.
+ */
+export function fillCompositeAlpha(n: XNode): number {
+  const stopMin = (stops?: GradientStop[]) => {
+    if (!stops?.length) return 1;
+    let m = 1;
+    for (const s of stops) m = Math.min(m, parseHex(s.color).a);
+    return m;
+  };
+  let t = 1;
+  const paints = (n.fills ?? []).filter((p) => p.visible !== false);
+  for (const p of paints) {
+    t *= 1 - Math.min(p.opacity ?? 1, parseHex(p.color).a, stopMin(p.stops));
+  }
+  if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
+    t *= 1 - (n.fillOpacity ?? 1);
+  } else if (n.fillVisible !== false && !!n.fill && !isNone(n.fill)) {
+    t *= 1 - Math.min(n.fillOpacity ?? 1, parseHex(n.fill).a, stopMin(n.gradientStops));
+  }
+  return 1 - t;
+}
+
+/**
+ * True when a drop shadow with "show behind transparent areas" off must be
+ * erased behind the layer: the layer paints a fill, but translucently, so
+ * the shadow would otherwise show through its own layer. Opaque layers and
+ * stroke-only layers (which already cast a ring) need no mask.
+ */
+export function dropMaskNeeds(n: XNode): boolean {
+  if (n.kind === "line" || n.kind === "arrow") return false;
+  if (!paintsAnyFill(n)) return false;
+  return fillCompositeAlpha(n) < 1;
+}
+
+/**
+ * Drop shadows with optional masking. `mask` carries what the masked path
+ * needs that the fast path does not: a re-trace of the outline (the caller
+ * owns the current path). Without `mask` every drop takes the fast path.
+ */
+export function paintDropShadowsMasked(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  z: number,
+  mask?: { trace: () => void },
+) {
   const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
+  const spreadOn = spreadApplies(n);
   for (const drop of drops) {
     const { r, g, b, a } = parseHex(drop.color);
     if (a <= 0) continue;
+    if (drop.showBehind !== true && dropMaskNeeds(n) && mask) {
+      paintMaskedDrop(ctx, n, z, drop, mask);
+      continue;
+    }
     ctx.save();
     // A shadow can carry its own blend mode; source-over (Normal) is the
     // default and needs no operation change.
@@ -438,42 +685,93 @@ export function paintDropShadows(ctx: CanvasRenderingContext2D, n: XNode, z: num
     if (op !== "source-over") ctx.globalCompositeOperation = op;
     const blur = Math.max(0, drop.blur) * z;
     if (blur) ctx.filter = `blur(${blur}px)`;
-    ctx.translate(drop.x * z, drop.y * z);
+    // Figma never rotates an effect with its layer. The painter runs under the
+    // node's rotation, so the offset is counter-rotated back to world axes;
+    // the silhouette itself still traces the rotated outline.
+    const th = ((n.rotation || 0) * Math.PI) / 180;
+    const c = Math.cos(th);
+    const s = Math.sin(th);
+    ctx.translate((drop.x * c + drop.y * s) * z, (-drop.x * s + drop.y * c) * z);
     ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
     // "Show behind transparent areas" is off by default, and off means the
     // shadow is masked by what the layer paints. A layer with a fill paints
     // its whole outline, so it casts the same shadow either way - but a
     // stroke-only layer paints a ring, and that is the shadow it casts.
-    const paintsFill =
-      n.fillVisible !== false &&
-      !!n.fill &&
-      !isNone(n.fill) &&
-      n.kind !== "line" &&
-      n.kind !== "arrow";
+    // (A translucent fill is masked by inverse clip instead; see paintMaskedDrop.)
+    const paintsFill = paintsAnyFill(n);
     const ring =
       drop.showBehind !== true &&
       !paintsFill &&
       n.strokeVisible !== false &&
       n.strokeWidth > 0 &&
       !isNone(n.strokePaint);
+    const spread = spreadOn ? Math.max(0, drop.spread) : 0;
     if (ring) {
       ctx.lineJoin = "miter";
       ctx.lineCap = "butt";
-      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z) + Math.max(0, drop.spread) * 2 * z;
+      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z) + spread * 2 * z;
       ctx.strokeStyle = ctx.fillStyle;
       ctx.stroke();
     } else {
       ctx.fill();
-      if (drop.spread) {
+      if (spread) {
         ctx.lineJoin = "round";
         ctx.lineCap = "round";
-        ctx.lineWidth = Math.max(0, drop.spread * 2) * z;
+        ctx.lineWidth = spread * 2 * z;
         ctx.strokeStyle = ctx.fillStyle;
         ctx.stroke();
       }
     }
     ctx.restore();
   }
+}
+
+/**
+ * One drop shadow masked by its own layer. The shape plus a huge rect clip
+ * even-odd to "everywhere except the layer's footprint", and the shadow
+ * paints into that region exactly like the fast path (same offset, blur,
+ * spread, blend). The cut runs along the outline the layer's own
+ * translucent fill re-covers afterwards, so no seam shows. Like the inner
+ * shadow's ring, this is pure live-canvas work - no offscreen tile, which is
+ * also why it stays correct under rotation.
+ */
+function paintMaskedDrop(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  z: number,
+  drop: { color: string; x: number; y: number; blur: number; spread: number; blend?: string },
+  mask: { trace: () => void },
+) {
+  const { r, g, b, a } = parseHex(drop.color);
+  ctx.save();
+  mask.trace();
+  ctx.rect(-1e6, -1e6, 2e6, 2e6);
+  ctx.clip("evenodd");
+  const op = canvasBlend(drop.blend);
+  if (op !== "source-over") ctx.globalCompositeOperation = op;
+  const blur = Math.max(0, drop.blur) * z;
+  if (blur) ctx.filter = `blur(${blur}px)`;
+  // Same counter-rotation as the fast path: Figma never rotates an effect
+  // with its layer.
+  const th = ((n.rotation || 0) * Math.PI) / 180;
+  const c = Math.cos(th);
+  const s = Math.sin(th);
+  ctx.translate((drop.x * c + drop.y * s) * z, (-drop.x * s + drop.y * c) * z);
+  ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+  // Re-trace the silhouette alone: the current path still holds the clip's
+  // rect, which must not paint.
+  ctx.beginPath();
+  mask.trace();
+  ctx.fill();
+  const spread = spreadApplies(n) ? Math.max(0, drop.spread) : 0;
+  if (spread) {
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.lineWidth = spread * 2 * z;
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 export function paintInnerShadows(
@@ -504,7 +802,9 @@ export function paintInnerShadows(
     // the shape with the shadow colour and then punched the shape back out,
     // which erased the layer's fill and whatever sat underneath it.
     ctx.beginPath();
-    const spread = Math.max(0, inner.spread) * z;
+    // Spread is kept on the effect but ignored on canvas for anything but
+    // rectangles, ellipses, frames and components.
+    const spread = (spreadApplies(n) ? Math.max(0, inner.spread) : 0) * z;
     if (box && spread > 0 && box.w > 0 && box.h > 0) {
       const cx = box.x + box.w / 2;
       const cy = box.y + box.h / 2;
@@ -560,19 +860,23 @@ export function paintExtraStrokes(
     const dash = s.dash ?? 0;
     const dashes = dashArray(s.pattern, dash, s.gap ?? 0, z);
     ctx.setLineDash(dashes);
+    ctx.lineDashOffset = dashOffset(dashes);
     // A second stroke carries its own per-side settings, the way stroke
     // rows each own their weight, alignment and dashes.
     const widths = sideWidths(s.sides, s.sideW, s.width);
     const perSide = box && sidesSupported(n.kind) && (s.sides ?? "all") !== "all";
     const strokePass = (weight: number) => {
       const w = Math.max(0.5, weight * z);
-      if (s.align === "inside") {
+      // Lines are always centre-stroked (see Canvas): "inside" on an open
+      // path would clip to nothing.
+      const align = n.kind === "line" || n.kind === "arrow" ? "center" : s.align;
+      if (align === "inside") {
         ctx.save();
         ctx.clip();
         ctx.lineWidth = w * 2;
         ctx.stroke();
         ctx.restore();
-      } else if (s.align === "outside") {
+      } else if (align === "outside") {
         // Canvas only centres a stroke, so an outside stroke is drawn at double
         // width with the shape interior clipped out — "clip to everything except
         // the shape" — leaving just the outer half. Erasing the interior with

@@ -17,6 +17,21 @@ import type { ImportedNode, ImportResult } from "./svgImport";
 
 export type DocSeed = Omit<PersistedDoc, "version">;
 
+/** True when a parsed file looks like an `.x.json` document export: a pages
+ *  array whose every page carries a root with children. Anything less would
+ *  crash `createFile`'s walk, so the dashboard refuses it with a toast. */
+export function isDocSeedLike(v: unknown): v is DocSeed {
+  if (!v || typeof v !== "object") return false;
+  const pages = (v as { pages?: unknown }).pages;
+  if (!Array.isArray(pages) || !pages.length) return false;
+  return pages.every(
+    (p) =>
+      !!p &&
+      typeof p === "object" &&
+      Array.isArray((p as { root?: { children?: unknown } }).root?.children),
+  );
+}
+
 export interface FileMeta {
   id: string;
   name: string;

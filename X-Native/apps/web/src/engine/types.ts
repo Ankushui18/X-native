@@ -56,6 +56,8 @@ export type TextWrap = "auto" | "balance" | "pretty";
  */
 export type ListStyle = "none" | "bulleted" | "numbered";
 export type TextDecoration = "none" | "underline" | "strikethrough";
+/** §26 KB-002: node-level italic for the ⌘I chord (absent = "normal"). */
+export type FontStyle = "normal" | "italic";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
 export type StrokeAlign = "inside" | "center" | "outside";
 export type StrokeCap =
@@ -65,14 +67,30 @@ export type StrokeCap =
   | "arrow"
   | "triangle"
   | "reverse-triangle"
-  | "diamond";
+  | "diamond"
+  | "circle";
 /** Individual strokes picker; `custom` keeps a weight per side. */
 export type StrokeSides = "all" | "top" | "right" | "bottom" | "left" | "custom";
 export type StrokeJoin = "miter" | "bevel" | "round";
+/**
+ * One control point of a variable-width stroke profile.
+ *
+ * `position` runs 0 (path start) to 1 (path end) along the centerline's
+ * arc length; `widthMultiplier` scales the node's `strokeWidth` at that
+ * point (1 = the weight in the panel, 0 = tapered to a point). Widths
+ * between points interpolate linearly. Stored sorted by position.
+ */
+export interface VariableWidthPoint {
+  position: number;
+  widthMultiplier: number;
+}
+/** The full profile; the modifier-stack `Stroke` modifier carries this shape. */
+export interface VariableWidthProfile {
+  points: VariableWidthPoint[];
+}
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
-export type LeftTab = "layers" | "assets" | "tokens";
 export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
 export type ImageFit = "fill" | "fit" | "crop" | "tile";
 export type EffectKind =
@@ -102,7 +120,9 @@ export type ProtoAction =
   | "closeOverlay"
   | "swapOverlay"
   | "openUrl"
-  | "setVariable";
+  | "setVariable"
+  | "setVariableMode"
+  | "setVariant";
 export type ProtoAnim =
   | "instant"
   | "dissolve"
@@ -126,11 +146,34 @@ export type ProtoDevice =
 
 export type VariableType = "color" | "number" | "string" | "boolean";
 
+/**
+ * A variable's value in one mode: a literal, or an alias pointing at
+ * another variable by id (same-type enforced at bind time).
+ */
+export type VariableValue = string | number | boolean | { alias: string };
+
+export interface VariableMode {
+  id: string;
+  name: string;
+}
+
+export interface VariableCollection {
+  id: string;
+  name: string;
+  modes: VariableMode[];
+}
+
 export interface VariableItem {
   id: string;
   name: string;
   type: VariableType;
-  value: string | number | boolean;
+  /** Default value (mode 0 of the collection). */
+  value: VariableValue;
+  /**
+   * Per-mode overrides, keyed by mode id. Absent entries fall back to
+   * `value`. Always resolved under the collection's active mode.
+   */
+  values?: Record<string, VariableValue>;
   collection: string;
 }
 
@@ -207,6 +250,23 @@ export interface Interaction {
   variableId?: string;
   variableOp?: "set" | "increment" | "decrement" | "toggle";
   variableValue?: string | number | boolean;
+  /** §23 PT-012: target of the `setVariableMode` action. */
+  variableCollectionId?: string;
+  variableModeId?: string;
+  /**
+   * Gate: the interaction only runs when the condition holds, evaluated
+   * against variables resolved under the active modes. Absent = always run.
+   */
+  condition?: InteractionCondition;
+  /** Variant name for the `setVariant` action (interactive components). */
+  variantName?: string;
+}
+
+/** A variable comparison gating one prototype interaction. */
+export interface InteractionCondition {
+  variableId: string;
+  op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "truthy" | "falsy";
+  value?: string | number | boolean;
 }
 
 export interface ComponentVariant {
@@ -236,7 +296,7 @@ export interface SharedStyle {
 export interface ComponentPropertyDef {
   id: string;
   name: string;
-  type: "variant" | "boolean" | "text";
+  type: "variant" | "boolean" | "text" | "instance-swap";
   defaultValue: string | boolean;
   targetNodeName?: string;
 }
@@ -248,6 +308,46 @@ export interface ComponentMaster {
   variants: ComponentVariant[];
   property: string;
   properties?: ComponentPropertyDef[];
+  /**
+   * Component → code mappings (Dev Mode codegen + design API, P1.10).
+   * Each entry links this master to a code component in one framework;
+   * the tree code generator renders mapped instances as component tags
+   * instead of expanding their layers.
+   */
+  codeMappings?: CodeMapping[];
+}
+
+/**
+ * How one component property reaches generated code: a named prop, the
+ * component's children/text, or dropped from the output entirely.
+ */
+export type CodePropKind = "prop" | "children" | "omit";
+
+export interface CodePropMapping {
+  /** Component property name (or the variant property name). */
+  prop: string;
+  /** Prop name in code; defaults to the slugified component property. */
+  codeProp?: string;
+  kind: CodePropKind;
+}
+
+/**
+ * A component → code mapping for one framework (P1.10): which code
+ * component an instance becomes, where it imports from, and how its
+ * properties map to props. `syncHash` snapshots the master the mapping
+ * was last verified against, so Dev Mode can flag drift.
+ */
+export interface CodeMapping {
+  id: string;
+  framework: "react" | "html" | "vue" | "svelte" | "tailwind" | "swiftui" | "compose" | "flutter" | "uikit";
+  componentName: string;
+  importPath?: string;
+  /** Source file the mapping points at, for the sync indicator. */
+  file?: string;
+  version?: string;
+  props: CodePropMapping[];
+  syncedAt?: number;
+  syncHash?: string;
 }
 
 export interface ExportPreset {
@@ -308,6 +408,9 @@ export interface Paint {
   color: string;
   opacity: number;
   visible: boolean;
+  /** "Show in exports" for this stacked fill: false hides it from every
+   *  export while the canvas keeps showing it. Absent means shown. */
+  exportVisible?: boolean;
   blend?: string;
   /** Gradient geometry, normalised 0..1 within the node box. */
   gx?: number;
@@ -315,6 +418,19 @@ export interface Paint {
   hx?: number;
   hy?: number;
   stops?: GradientStop[];
+  /** Image fill: source plus its own fit/rotation/tile/adjustments, so a
+   *  stacked image never inherits the base fill's image settings. */
+  image?: string;
+  imageFit?: ImageFit;
+  imageRot?: number;
+  imageTile?: number;
+  imageExposure?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageTemperature?: number;
+  imageTint?: number;
+  imageHighlights?: number;
+  imageShadows?: number;
 }
 
 /**
@@ -391,6 +507,12 @@ export type Tool =
 export interface AutoLayout {
   direction: LayoutDirection;
   gap: number;
+  /** "Gap between lines" for a wrapping flow: the gap *between* rows (or
+   *  between columns in a vertical wrap), while `gap` keeps the within-line
+   *  spacing. Falls back to `gap` for documents written before the two were
+   *  separate. Only read when the flow wraps; the grid flow keeps its own
+   *  `gapRows`/`gapCols` pair. */
+  gapCross?: number;
   padding: [number, number, number, number];
   sizing: Sizing;
   cross: Sizing;
@@ -438,6 +560,10 @@ export interface LayoutGrid {
   gutter?: number;
   margin?: number;
   alignment?: GridAlignment;
+  /** Shifts the grid over: fixed types start late, stretch types shrink to fit. */
+  offset?: number;
+  /** Fixed types: column width / row height in px. */
+  cell?: number;
   color?: string;
   visible?: boolean;
 }
@@ -464,6 +590,14 @@ export interface XNode {
   fill: string;
   fillOpacity: number;
   fillVisible: boolean;
+  /** "Show in exports", per Figma's fill-level toggle: false hides the base
+   *  fill from every export (SVG, raster, PDF) while the canvas keeps showing
+   *  it. Absent means shown. */
+  fillExportVisible?: boolean;
+  /** True for Slice-tool rects: a crop region, not artwork. The canvas keeps
+   *  painting the dashed outline, but exports render the region's content
+   *  (see `exportSvg`) instead of the rectangle itself. */
+  isSlice?: boolean;
   fillType: FillType;
   fillB: string;
   /**
@@ -484,6 +618,21 @@ export interface XNode {
   fillStyle?: string;
   /** Id of the SharedStyle driving `strokePaint`. */
   strokeStyle?: string;
+  /**
+   * Variable bindings: layer prop name -> variable id. Bound props are
+   * re-applied from the resolved variable (under the active mode) on every
+   * relayout; editing a bound prop directly clears that entry (detach).
+   * Supported props: see BINDABLE_PROPS. Type-checked at bind time.
+   */
+  variableBindings?: Record<string, string>;
+  /**
+   * The subset of `variableBindings` bound on this instance node itself
+   * (root or member) rather than flowed down from its master. Own entries
+   * pin their props across master syncs; flowed entries follow the master,
+   * so a master bind — or unbind — propagates. Plain and master layers
+   * never carry it.
+   */
+  ownBindings?: Record<string, string>;
   fillBlend: string;
   strokePaint: string;
   strokeOpacity: number;
@@ -523,6 +672,14 @@ export interface XNode {
   strokeDashCap?: "butt" | "round" | "square";
   /** "Miter angle": joins sharper than this bevel instead of pointing. */
   strokeMiterAngle?: number;
+  /**
+   * Variable-width profile for the base stroke, as width multipliers along
+   * the path centerline (see VariableWidthPoint). Only honoured on `vector`,
+   * `line` and `arrow` nodes; absent/empty/uniform means a plain stroke.
+   * A profiled stroke paints centre-aligned and ignores dashes — canvas
+   * cannot dash a filled outline — and the extra `strokes` rows stay uniform.
+   */
+  strokeWidthProfile?: VariableWidthPoint[];
   aspectLocked: boolean;
   /** The ratio the lock was taken at (height ÷ width), remembered so a size
    *  that clamps to a pixel on the way to a new one cannot leave a locked box
@@ -541,6 +698,13 @@ export interface XNode {
   imageSrc: string;
   imageFit: ImageFit;
   imageRot: number;
+  /** Tile mode only: tile size as a percent of the image's original
+   *  dimensions. 100 when unset. */
+  imageTile?: number;
+  /** Crop mode only: the visible portion of the (rotated) image in normalised
+   *  0..1 coordinates, stretched to fill the layer. Unset means the whole
+   *  image, rendered as cover so switching modes never distorts. */
+  imageCrop?: { x: number; y: number; w: number; h: number };
   imageExposure: number;
   imageContrast: number;
   imageSaturation: number;
@@ -590,6 +754,8 @@ export interface XNode {
   /** First-line offset of every paragraph, in points (x-core's paragraph_indent). */
   paragraphIndent: number;
   textDecoration: TextDecoration;
+  /** §26 KB-002: italic toggle (⌘I). Optional: older docs lack it (= normal). */
+  fontStyle?: FontStyle;
   textCase: TextCase;
   truncate: boolean;
   maxLines: number;
@@ -610,7 +776,7 @@ export interface XNode {
   fillHY: number;
   isMask: boolean;
   maskType: "alpha" | "vector" | "luminance";
-  variant: string;
+  variant?: string;
   componentProperties?: Record<string, string | boolean>;
   /** Frame layout grids (columns, rows, grid) */
   layoutGrids?: LayoutGrid[];
@@ -654,8 +820,10 @@ export interface CommentThread {
 export interface RulerGuide {
   id: string;
   axis: "x" | "y";
-  /** Position in world units. */
+  /** Position in world units — or in the frame's units when `frameId` is set. */
   at: number;
+  /** Frame-level guide: lives on this frame and moves with it. */
+  frameId?: string;
 }
 
 export interface Page {
@@ -679,12 +847,22 @@ export interface Snapshot {
   pages: Page[];
   page: number;
   selection: string[];
+  selectedGuide: string | null;
+  /** Hover preview of a stroke position; render-only, never persisted. */
+  previewStroke: { id: string; align: StrokeAlign } | null;
+  /** Hover preview of an effect kind from the type menu; render-only. */
+  previewEffect: { id: string; kind: EffectKind } | null;
+  /** Bumped on every dispatch except pure viewport moves (pan/zoom), so panels
+   *  showing document state can skip re-rendering viewport-only snapshots even
+   *  though tree edits mutate nodes in place (which defeats reference
+   *  equality). Session-only: never persisted, restored by undo like the rest
+   *  of state. */
+  treeRev: number;
   tool: Tool;
   zoom: number;
   panX: number;
   panY: number;
   rightTab: RightTab;
-  leftTab: LeftTab;
   canUndo: boolean;
   canRedo: boolean;
   components: ComponentMaster[];
@@ -713,6 +891,8 @@ export interface Snapshot {
   showRulers: boolean;
   /** View > Minimap. Off by default; it costs its own render pass. */
   showMinimap: boolean;
+  /** View > Mask outlines: masks drawn with a green outline. */
+  showMaskOutlines: boolean;
   /** "Pixel preview" in the Zoom/view options menu: vectors drawn as
    *  the raster they would export as, at 1x or 2x device pixels. */
   pixelPreview: PixelPreview;
@@ -731,6 +911,10 @@ export interface Snapshot {
   openComment: string;
   /** Variables / Tokens store */
   variables?: VariableItem[];
+  /** Variable collections (each with its own modes). */
+  variableCollections?: VariableCollection[];
+  /** Active mode id per collection id. */
+  activeModes?: Record<string, string>;
   /** Dev Mode Annotations store */
   annotations?: AnnotationItem[];
   /** Node ID currently in vector edit mode, if any. */
@@ -739,6 +923,14 @@ export interface Snapshot {
   vecPoint?: number | null;
   /** Selected vector point indices for multi-selection. */
   vecPoints?: number[];
+  /**
+   * Armed boolean live preview: the op whose result the canvas overlays on
+   * the current selection without committing. View state, never persisted
+   * and never in undo history; cleared by selection/tool change or commit.
+   */
+  booleanPreview?: BooleanOp | null;
+  /** Last top-level frame size this session: click-creation reuses it. */
+  lastFrameSize?: { w: number; h: number } | null;
 }
 
 /** Off, or the density a rasterised preview is drawn at. */
@@ -764,7 +956,6 @@ export type Command =
   | { type: "deleteComment"; id: string }
   | { type: "moveComment"; id: string; x: number; y: number }
   | { type: "openComment"; id: string }
-  | { type: "setLeftTab"; tab: LeftTab }
   | { type: "setPage"; index: number }
   | { type: "setFileName"; name: string }
   | { type: "addPage" }
@@ -779,16 +970,30 @@ export type Command =
       extra?: Partial<XNode>;
     }
   | { type: "move"; ids: string[]; dx: number; dy: number }
-  | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean }
-  | { type: "reparent"; ids: string[]; parent: string; x: number; y: number }
+  | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean; ignoreConstraints?: boolean }
+  | {
+      type: "reparent";
+      ids: string[];
+      parent: string;
+      x: number;
+      y: number;
+      /** Explicit child-list slot; without it the point picks the slot in a
+       *  flow or grid, and anything else appends. */
+      index?: number;
+      /** Drop as an absolutely positioned child: it keeps its point and stays
+       *  out of the flow (Figma's Ctrl/Cmd-drag into auto layout). */
+      absolute?: boolean;
+      /** Skip the oversize refusal below (Figma's ⌘/Ctrl bypass). */
+      bypassSizeGate?: boolean;
+    }
   /**
    * Move layers to an explicit slot in a parent's child list, preserving their
    * on-canvas position. This is what the layers-panel drag uses; `reparent`
-   * always appends and is driven by canvas coordinates instead.
+   * is driven by canvas coordinates instead.
    */
   | { type: "reorder"; ids: string[]; parent: string; index: number }
   | { type: "delete" }
-  | { type: "duplicate" }
+  | { type: "duplicate"; dx?: number; dy?: number }
   | { type: "undo" }
   | { type: "redo" }
   | { type: "patch"; id: string; patch: Partial<XNode> }
@@ -813,6 +1018,8 @@ export type Command =
   | { type: "loadClip"; nodes: XNode[] }
   | { type: "group" }
   | { type: "ungroup" }
+  | { type: "frameSelection" }
+  | { type: "resizeToFit" }
   | { type: "wrapSection" }
   | { type: "arrange"; dir: "front" | "forward" | "backward" | "back" }
   | { type: "selectAll" }
@@ -826,13 +1033,20 @@ export type Command =
   | { type: "duplicatePage" }
   | { type: "deletePage" }
   | { type: "renamePage"; name: string }
+  | { type: "movePage"; from: number; to: number }
   | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
   | { type: "tidyUp"; axis?: "auto" | "h" | "v" }
   | { type: "swapFillStroke" }
   | { type: "toggleStroke" }
+  /** §26 KB-004: one-way removals for `/` (stroke) and `⌥/` (fill). */
+  | { type: "removeStroke" }
+  | { type: "removeFill" }
   | { type: "toggleOutlines" }
+  | { type: "toggleMaskOutlines" }
   | { type: "boolean"; op: BooleanOp }
+  /** Arm (`op`) or clear (`null`) the boolean live preview overlay. View-only. */
+  | { type: "setBooleanPreview"; op: BooleanOp | null }
   /** Create a named style from the selection's current fill or stroke and
    *  bind the selection to it. */
   | { type: "createStyle"; kind: "fill" | "stroke"; name: string }
@@ -843,8 +1057,12 @@ export type Command =
   /** Recolour a style; every bound node follows. */
   | { type: "editStyle"; id: string; color?: string; name?: string }
   | { type: "deleteStyle"; id: string }
-  | { type: "addGuide"; axis: "x" | "y"; at: number }
+  | { type: "addGuide"; axis: "x" | "y"; at: number; frameId?: string }
   | { type: "moveGuide"; id: string; at: number }
+  | { type: "setGuideFrame"; id: string; frameId: string | null }
+  | { type: "selectGuide"; id: string | null }
+  | { type: "previewStroke"; id: string | null; align?: StrokeAlign }
+  | { type: "previewEffect"; id: string | null; kind?: EffectKind }
   | { type: "removeGuide"; id: string }
   | { type: "makeComponent" }
   | { type: "detachInstance" }
@@ -854,7 +1072,7 @@ export type Command =
   | { type: "patchVectorNetwork"; id: string; network: VectorNetwork }
   | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
   | { type: "bendSegment"; id: string; segIndex: number; dragX: number; dragY: number }
-  | { type: "insertPointOnPath"; id: string; x: number; y: number }
+  | { type: "insertPointOnPath"; id: string; x: number; y: number; maxDist?: number }
   | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
   | { type: "setPointCornerRadius"; id: string; pointIndex: number; radius: number }
   | { type: "flatten"; id?: string }
@@ -870,12 +1088,25 @@ export type Command =
   | { type: "setVecEdit"; id: string | null; pointIndex?: number | null; pointIndices?: number[] }
   | { type: "addComponentProperty"; componentId: string; property: ComponentPropertyDef }
   | { type: "deleteComponentProperty"; componentId: string; propId: string }
+  | { type: "setCodeMapping"; componentId: string; mapping: CodeMapping }
+  | { type: "deleteCodeMapping"; componentId: string; mappingId: string }
+  | { type: "syncCodeMapping"; componentId: string; mappingId: string }
   | { type: "setComponentProperty"; id: string; propName: string; value: string | boolean }
   | { type: "resetOverrides"; id?: string; property?: string }
   | { type: "setInteractions"; id: string; interactions: Interaction[] }
   | { type: "addVariable"; variable: VariableItem }
   | { type: "patchVariable"; id: string; patch: Partial<VariableItem> }
   | { type: "deleteVariable"; id: string }
+  | { type: "addCollection"; name: string }
+  | { type: "renameCollection"; id: string; name: string }
+  | { type: "deleteCollection"; id: string }
+  | { type: "addMode"; collectionId: string; name: string }
+  | { type: "renameMode"; collectionId: string; modeId: string; name: string }
+  | { type: "deleteMode"; collectionId: string; modeId: string }
+  | { type: "setActiveMode"; collectionId: string; modeId: string }
+  | { type: "bindVariable"; id: string; prop: string; variableId: string }
+  | { type: "unbindVariable"; id: string; prop: string }
+  | { type: "swapInstance"; id: string; componentId: string }
   | { type: "addAnnotation"; annotation: AnnotationItem }
   | { type: "deleteAnnotation"; id: string }
   | { type: "presentStart"; id?: string }

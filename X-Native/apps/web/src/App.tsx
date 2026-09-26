@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
-import { copyText } from "./engine/clipboard";
+import { copyText, worldClones } from "./engine/clipboard";
 import { worldPos } from "./engine/memory";
 import { zoomTo } from "./ui/zoom";
+import { devLangLabel, getDevPrefs, type DevFormat } from "./ui/devPrefs";
 import {
   Actions,
   FindReplaceBar,
@@ -17,16 +18,18 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { Icon } from "./ui/icons";
-import { RightPanel, copyLayerCode, copyPng } from "./ui/inspector";
+import { RightPanel, copyLayerCode, copyPng, copyPngNodes, layerCode } from "./ui/inspector";
+import { installDesignApi } from "./engine/designApi";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { ZenHUD } from "./ui/ZenHUD";
 import { RadialMenu } from "./ui/RadialMenu";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
-import { saveDoc } from "./engine/persist";
+import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
-import { ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import { DEMO_ID, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
+import { preloadGeo } from "./engine/geoBridge";
 
 /** The dashboard is the app's front door; a file opens at `#/file/<id>`. The
  *  hash is the source of truth so reload, back and a shared link all behave. */
@@ -64,6 +67,9 @@ export default function App() {
       setSeed(null);
       return;
     }
+    // A fresh browser opening a shared demo link should meet the sample file,
+    // not scratch "Untitled". A no-op once any files exist.
+    if (route.id === DEMO_ID) ensureDemoFile();
     let alive = true;
     const present = (doc: DocSeed | null) => {
       // Images are references in storage; the editor needs the bytes. Resolve
@@ -156,16 +162,42 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   const [nav, setNav] = useState<NavId>("file");
   const [leftW, setLeftW] = useState(240);
   const [rightW, setRightW] = useState(240);
-  const [minUi, setMinUi] = useState(false);
+  // A phone cannot dock two sidebars: start minimized at <=860px so the
+  // canvas owns the screen, with the chip restoring the panels as overlays.
+  const [minUi, setMinUi] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 860px)").matches,
+  );
   const [hideUi, setHideUi] = useState(false);
   const [zenMode, setZenMode] = useState(false);
   const [radialMenu, setRadialMenu] = useState<{ x: number; y: number } | null>(null);
   const [actions, setActions] = useState(false);
+  // Stable identities for the layers panel's memo: inline arrows here would
+  // defeat its comparator and re-render every row on every dispatch.
+  const toggleMinUi = useCallback(() => setMinUi((v) => !v), []);
+  const openActions = useCallback(() => setActions(true), []);
+
+  /** "New file…" (Actions): the stored copy of this file is replaced by a blank
+   *  document, so the reload opens an empty canvas instead of the file the user
+   *  just confirmed deleting. Clearing only the legacy autosave slot left the
+   *  per-file copy behind, which the next boot read straight back. */
+  const startBlankFile = useCallback(() => {
+    const blank = docFromTemplate("blank");
+    const name = getFile(fileId)?.name;
+    saveFile(fileId, (name ? { ...blank, fileName: name } : blank) as never);
+    clearDoc(); // the legacy autosave slot and its IndexedDB row
+    window.location.reload();
+  }, [fileId]);
   const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
-  const runnerRef = useRef<((ix: any) => void) | null>(null);
+  const runnerRef = useRef<((ix: any, sourceId?: string) => void) | null>(null);
   const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
   const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
+
+  // Geometry accelerator: fetch + handshake the wasm module while idle, so the
+  // first boolean bake finds it ready. Silent no-op when absent or disabled.
+  useEffect(() => {
+    preloadGeo();
+  }, [engine]);
 
   // Autosave. The document is serialised on a trailing debounce so a burst of
   // edits (dragging, typing) writes once when it settles rather than on every
@@ -174,6 +206,9 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     let timer = 0;
     let warned = false;
     const write = () => {
+      // "New file…" has already replaced this file's stored copy; the flush on
+      // the way to the reload must not put the discarded document back.
+      if (saveSuppressed()) return;
       // Stored form: image bytes live in the asset store, so this JSON is a few
       // kilobytes per image instead of its full data URL - which is what made a
       // 50-photo file take a fifth of a second to save.
@@ -225,6 +260,11 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   // silently presenting an empty file as if nothing was lost. This sets the
   // toast state directly: the bus subscription below mounts after this effect,
   // so a message raised through the bus here would be dropped.
+  // The design API for browser automation: window.__xNativeDesignApi.call().
+  useEffect(() => {
+    installDesignApi(() => engine.snapshot());
+  }, [engine]);
+
   useEffect(() => {
     if (!engine.restoreFailed) return;
     setToast("Saved document could not be read · started a new one");
@@ -315,11 +355,6 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return () => window.clearTimeout(timer);
   }, [engine]);
   useEffect(() => {
-    const selected = () => {
-      const s = engine.snapshot();
-      const id = s.selection[0];
-      return id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
-    };
     const flash = (msg: string) => {
       setToast(msg);
       window.setTimeout(() => setToast(""), 1800);
@@ -334,19 +369,40 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
     const onCopyCode = (e: Event) => {
       const s = engine.snapshot();
-      const id = s.selection[0];
-      const node = id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
-      if (!node) {
-        flash("Select one layer to copy its code");
+      const root = s.pages[s.page].root;
+      const nodes = s.selection
+        .map((id) => worldPos(root, id)?.node ?? null)
+        .filter((n): n is NonNullable<typeof n> => !!n);
+      if (!nodes.length) {
+        flash("Select a layer to copy its code");
         return;
       }
       const detail = (e as CustomEvent<{ format?: string | null }>).detail;
-      copyLayerCode(node, (detail?.format ?? undefined) as never);
+      const format = (detail?.format ?? undefined) as DevFormat | undefined;
+      if (nodes.length === 1) {
+        copyLayerCode(nodes[0], format, s);
+        return;
+      }
+      // A multi-selection copies one labelled block per layer, joined into a
+      // single clipboard write.
+      copyText(nodes.map((n) => `/* ${n.name} */\n${layerCode(n, format, s)}`).join("\n\n"));
+      flash(`Copied ${nodes.length} layers as ${devLangLabel(format ?? getDevPrefs().format)}`);
     };
     const onCopyPng = () => {
-      const node = selected();
-      if (!node) flash("Select a layer to copy it as a PNG");
-      else copyPng(node);
+      const s = engine.snapshot();
+      const root = s.pages[s.page].root;
+      const items = s.selection
+        .map((id) => worldPos(root, id))
+        .filter((w): w is NonNullable<typeof w> => !!w);
+      if (!items.length) {
+        flash("Select a layer to copy it as a PNG");
+        return;
+      }
+      if (items.length === 1) {
+        copyPng(items[0].node, root);
+        return;
+      }
+      copyPngNodes(worldClones(items));
     };
     window.addEventListener("x-native-copy-link", onCopyLink);
     window.addEventListener("x-native-copy-png", onCopyPng);
@@ -453,6 +509,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     () =>
       bindHotkeys(engine, {
         onActions: () => setActions(true),
+        onPresent: present,
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,
@@ -499,8 +556,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         engine={engine}
         snap={snap}
         nav={nav}
-        onMinimize={() => setMinUi((v) => !v)}
-        onActions={() => setActions(true)}
+        onMinimize={toggleMinUi}
+        onActions={openActions}
         onHome={onHome}
       />
       <div
@@ -508,19 +565,20 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         style={{ display: minUi || hideUi ? "none" : undefined }}
         {...leftDrag}
       />
-      <div className="canvas-col">
+      <main className="canvas-col">
+        <h1 className="sr-only">{snap.fileName}</h1>
         {minUi && !hideUi && !snap.presentFrame && (
           // Keeps the file name and a way out of the minimized state on
           // screen; ours lives at the top of the left panel, which is hidden
           // here, so the same two controls float in its place.
           <div className="min-chip">
-            <button className="icon-btn" title="Back to files" onClick={onHome}>
+            <button className="icon-btn" title="Back to files" aria-label="Back to files" onClick={onHome}>
               <Icon name="back" size={14} />
             </button>
             <span className="min-chip-name" title="UI minimized · ⇧⌘\ restores the panels">
               {snap.fileName}
             </span>
-            <button className="icon-btn" title="Restore UI (⇧⌘\)" onClick={() => setMinUi(false)}>
+            <button className="icon-btn" title="Restore UI (⇧⌘\)" aria-label="Restore panels" onClick={() => setMinUi(false)}>
               <Icon name="minimize" size={14} />
             </button>
           </div>
@@ -554,8 +612,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
           <PresentationPlayer
             engine={engine}
             snap={snap}
-            onInteraction={(ix) => {
-              if (runnerRef.current) runnerRef.current(ix);
+            onInteraction={(ix, sourceId) => {
+              if (runnerRef.current) runnerRef.current(ix, sourceId);
             }}
             onExit={() => {
               engine.dispatch({ type: "presentStop" });
@@ -564,7 +622,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
           />
         ) : (
           <>
-            <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} />
+            <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} onNav={setNav} />
             <HelpBtn />
           </>
         )}
@@ -572,6 +630,8 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
           <Actions
             engine={engine}
             onPresent={present}
+            onNewFile={startBlankFile}
+            onNav={setNav}
             onClose={() => setActions(false)}
             onHide={() => {
               setHideUi((v) => !v);
@@ -590,7 +650,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         {findOpen && (
           <FindReplaceBar engine={engine} snap={snap} onClose={() => setFindOpen(false)} />
         )}
-      </div>
+      </main>
       <RightPanel
         engine={engine}
         snap={snap}
@@ -598,6 +658,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onShare={share}
         exportOpen={exportOpen}
         onCloseExport={() => setExportOpen(false)}
+        onOpenVariables={() => setNav("variables")}
       />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
       {toast && <div className="toast">{toast}</div>}

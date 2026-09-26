@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ICON_LG, Icon, caretSize } from "./icons";
+import { ICON_LG, Icon, caretSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { THEME_OPTIONS, useTheme } from "./theme";
-import { toast } from "./toast";
+import { subscribeToast, toast } from "./toast";
+import { askPrompt } from "./dialog";
 import {
   createFile,
   deleteFile,
@@ -17,6 +18,7 @@ import {
   trashFile,
   patchFile,
   docFromImport,
+  isDocSeedLike,
   TEMPLATES,
   type FileMeta,
   type TemplateId,
@@ -40,7 +42,7 @@ type View = "recents" | "files" | "trash";
 type Sort = "recent" | "name" | "created";
 type Filter = "all" | "design" | "prototype";
 
-const VIEWS: { id: View; label: string; icon: string }[] = [
+const VIEWS: { id: View; label: string; icon: IconName }[] = [
   { id: "recents", label: "Recents", icon: "refresh" },
   { id: "files", label: "All files", icon: "layers" },
   { id: "trash", label: "Trash", icon: "trash" },
@@ -186,11 +188,30 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
 
-  /* importing: drop a .fig / .sketch / .svg anywhere on the dashboard */
+  /* importing: drop a .fig / .sketch / .svg / .x.json anywhere on the dashboard */
   const importFiles = async (files: File[]) => {
     for (const f of files) {
       setBusy(`Importing ${f.name}…`);
       try {
+        // Our own document export, written by the file menu's Export action:
+        // it reopens as a new file rather than going through an importer.
+        if (/\.x\.json$/i.test(f.name)) {
+          const doc = JSON.parse(await f.text());
+          if (!isDocSeedLike(doc)) {
+            setBusy("");
+            toast(`${f.name} is not an X document export`);
+            continue;
+          }
+          const meta = createFile({
+            name: f.name.replace(/\.x\.json$/i, "") || doc.fileName || "Untitled",
+            template: "blank",
+            doc,
+          });
+          setBusy("");
+          refresh();
+          onOpen(meta.id);
+          return;
+        }
         let result;
         if (/\.svg$/i.test(f.name) || f.type === "image/svg+xml") {
           result = await importSvg(await f.text());
@@ -200,7 +221,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           result = await importFig(await f.arrayBuffer());
         } else {
           setBusy("");
-          toast(`${f.name} is not a .fig, .sketch or .svg file`);
+          toast(`${f.name} is not a .fig, .sketch, .svg or .x.json file`);
           continue;
         }
         const name = f.name.replace(/\.[a-z0-9]+$/i, "");
@@ -275,6 +296,24 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
     window.addEventListener("mousedown", off);
     return () => window.removeEventListener("mousedown", off);
   }, [menu]);
+
+  // Every action on this screen reports through the toast bus ("File deleted",
+  // "Moved to Drafts", an import that failed), but nothing here was rendering
+  // one: the messages went nowhere and the dashboard looked like it had
+  // silently ignored the click. The editor has always drawn its own.
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    let timer = 0;
+    const off = subscribeToast((msg) => {
+      setNote(msg);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setNote(""), 1800);
+    });
+    return () => {
+      off();
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   const title = view === "recents" ? "Recently viewed" : view === "trash" ? "Trash" : "All files";
 
@@ -358,6 +397,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           <Tooltip label="Help" shortcut="?">
             <button
               className="icon-btn"
+              aria-label="Help"
               onClick={() => window.dispatchEvent(new CustomEvent("x-native-shortcuts"))}
             >
               <Icon name="help" size={16} />
@@ -367,7 +407,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
             <div className="new-split">
               <button className="primary" onClick={() => startNew("blank")}>
                 <Icon name="plus" size={14} />
-                New design file
+                <span className="new-label">New design file</span>
               </button>
               <button
                 className="primary caret-btn"
@@ -427,8 +467,16 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
             <Tooltip label="New project" placement="left">
               <button
                 className="mini"
-                onClick={() => {
-                  const name = window.prompt("Project name");
+                aria-label="New project"
+                onClick={async () => {
+                  const name = await askPrompt({
+                    title: "New project",
+                    label: "Project name",
+                    placeholder: "Marketing site",
+                    hint: "Move files into it from their ⋯ menu",
+                    confirmLabel: "Create",
+                    validate: (v) => (v.trim() ? null : "Enter a project name"),
+                  });
                   if (name?.trim()) toast(`Project "${name.trim()}" — move files into it from their ⋯ menu`);
                 }}
               >
@@ -559,6 +607,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
                           <Tooltip label="Play prototype">
                             <button
                               className="play-chip"
+                              aria-label="Play prototype"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 open(f.id);
@@ -746,11 +795,12 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
         </div>
       )}
+      {note && <div className="toast">{note}</div>}
     </div>
   );
 }
 
-const TEMPLATE_ICON: Record<string, string> = {
+const TEMPLATE_ICON: Record<string, IconName> = {
   blank: "frame",
   mobile: "phone",
   desktop: "desktop",

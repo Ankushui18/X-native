@@ -3,15 +3,17 @@ import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
 import { find } from "../engine/memory";
-import { Icon, caretSize, kindIcon } from "./icons";
+import { Icon, caretSize, kindIcon, type IconName } from "./icons";
 import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
+import { armPopover } from "./popoverGuard";
+import { askPrompt } from "./dialog";
 
 export type MenuItem =
-  | { kind: "action"; id: string; label: string; shortcut?: string; icon?: string; enabled?: boolean }
+  | { kind: "action"; id: string; label: string; shortcut?: string; icon?: IconName; enabled?: boolean }
   | { kind: "sep" }
-  | { kind: "sub"; label: string; icon?: string; items: MenuItem[] };
+  | { kind: "sub"; label: string; icon?: IconName; items: MenuItem[] };
 
 export function ContextMenu({
   x,
@@ -27,6 +29,9 @@ export function ContextMenu({
   onClose: () => void;
 }) {
   const [openSub, setOpenSub] = useState<number | null>(null);
+  // §26 KB-017: an open menu is a popover — Escape closes it (below) instead
+  // of clearing the canvas selection behind it.
+  useEffect(() => armPopover(), []);
   useEffect(() => {
     const on = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest(".ctx")) onClose();
@@ -65,7 +70,44 @@ export function ContextMenu({
   const top = Math.max(4, Math.min(y, window.innerHeight - h - 8));
 
   return createPortal(
-    <div className="ctx" ref={ref} style={{ left, top, width: w }} role="menu">
+    <div
+      className="ctx"
+      ref={ref}
+      style={{ left, top, width: w }}
+      role="menu"
+      onKeyDown={(e) => {
+        // §26 KB-017: arrows rove the rows once focus is inside the menu —
+        // Tab reaches them natively, and from there ↑/↓/Home/End walk,
+        // ← backs out of a submenu. The global hotkey handler yields
+        // arrows struck here (see bindHotkeys), so the canvas never nudges
+        // underneath. Focus stays on the canvas while the menu is
+        // mouse-driven, so Space still pans instead of firing a row.
+        const rows = Array.from(
+          e.currentTarget.querySelectorAll(".ctx-row:not([disabled]), .fly-sub button:not([disabled])"),
+        ) as HTMLElement[];
+        const at = rows.indexOf(document.activeElement as HTMLElement);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!rows.length) return;
+          const to =
+            e.key === "ArrowDown"
+              ? rows[(at + 1 + rows.length) % rows.length]
+              : rows[(at - 1 + rows.length) % rows.length];
+          to.focus();
+        } else if (e.key === "Home" || e.key === "End") {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!rows.length) return;
+          (e.key === "Home" ? rows[0] : rows[rows.length - 1]).focus();
+        } else if (e.key === "ArrowLeft" && (e.target as HTMLElement).closest?.(".fly-sub")) {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpenSub(null);
+          ((e.target as HTMLElement).closest(".fly-sub")?.parentElement as HTMLElement | null)?.focus();
+        }
+      }}
+    >
       {items.map((it, i) => {
         if (it.kind === "sep") return <hr key={i} />;
         if (it.kind === "sub") {
@@ -86,6 +128,12 @@ export function ContextMenu({
                 if (e.key === "ArrowRight" || e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   setOpenSub(i);
+                  // §26 KB-017: keyboard-opened, so land focus on the first
+                  // item — arrows continue into the submenu, not past it.
+                  const row = e.currentTarget;
+                  window.setTimeout(() => {
+                    (row.querySelector(".fly-sub button:not([disabled])") as HTMLElement | null)?.focus();
+                  }, 0);
                 }
                 if (e.key === "ArrowLeft" || e.key === "Escape") {
                   e.preventDefault();
@@ -168,11 +216,25 @@ function selectItems(under: XNode[]): MenuItem[] {
     label: "Select all with same",
     items: SAME_KINDS.map((k) => ({ kind: "action" as const, id: `select-same:${k.id}`, label: k.label })),
   });
-  out.push({ kind: "action", id: "selectMatching", label: "Select matching layers", shortcut: "⌥A", icon: "rect" });
+  // §22 MN-001: the binding is ⌥⌘A (meta+alt+A); bare ⌥A never fired this
+  // (⌥+letter is the align family), so the old "⌥A" label lied.
+  out.push({ kind: "action", id: "selectMatching", label: "Select matching layers", shortcut: "⌥⌘A", icon: "rect" });
   out.push({ kind: "action", id: "selectInverse", label: "Select inverse", shortcut: "⇧⌘A" });
   out.push({ kind: "sep" });
   return out;
 }
+
+/** §22 MN-004: which context-menu rows can actually act on the current
+ * selection. Figma greys out inapplicable rows instead of running silent
+ * no-ops (with a misleading success toast, in our case); the call sites
+ * compute these from the selected nodes and the menus default to enabled
+ * so palette-style callers without a selection keep working. */
+export type MenuCaps = {
+  detach?: boolean;
+  reset?: boolean;
+  vectorize?: boolean;
+  outline?: boolean;
+};
 
 export function canvasMenu(
   sel: number,
@@ -180,12 +242,14 @@ export function canvasMenu(
   hasImage: boolean,
   under: XNode[] = [],
   hasLayout = false,
+  caps: MenuCaps = {},
 ): MenuItem[] {
   if (sel === 0) {
     return [
       ...selectItems(under),
       { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
       { kind: "action", id: "selectAll", label: "Select all", shortcut: "⌘A", icon: "rect" },
+      { kind: "action", id: "placeImage", label: "Place image…", shortcut: "⇧⌘K", icon: "image" },
       // Right-clicking an empty canvas is the second way to get
       // to the UI-state commands, for people who never look at the menu bar.
       { kind: "sep" },
@@ -212,7 +276,7 @@ export function canvasMenu(
           id: `copyCode:${l.id}`,
           label: `Copy as ${l.label}`,
           shortcut: l.id === "css" ? "⌥⇧⌘C" : undefined,
-          icon: "code",
+          icon: "code" as IconName,
         })),
         { kind: "action" as const, id: "copyPng", label: "Copy as PNG", icon: "image" },
         { kind: "action" as const, id: "copyLink", label: "Copy link to selection", icon: "link" },
@@ -221,18 +285,20 @@ export function canvasMenu(
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
   ];
-  if (sel > 1) items.push({ kind: "action", id: "group", label: "Group selection", shortcut: "⌘G", icon: "group" });
+  // §22 MN-003: grouping is a wrap (engine min-1, floating toolbar offers
+  // it for any selection), so the menu does too — not just multi-select.
+  items.push({ kind: "action", id: "group", label: "Group selection", shortcut: "⌘G", icon: "group" });
   if (isGroup) items.push({ kind: "action", id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" });
   items.push({ kind: "action", id: "wrapSection", label: "Wrap in new section", icon: "section" });
   items.push({ kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" });
-  items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" });
-  items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" });
-  items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" });
+  items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true });
+  items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true });
+  items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌃⌘M", icon: "mask" });
   items.push(...layoutMenuItems(hasLayout));
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
   items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
   if (hasImage) {
-    /* image-specific items already covered by flip */
+    items.push({ kind: "action", id: "cropImage", label: "Crop image", icon: "image" });
   }
   items.push({ kind: "sep" });
   items.push({
@@ -261,11 +327,13 @@ export function canvasMenu(
     });
   }
   items.push({ kind: "sep" });
-  items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
-  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⌥⌘O" });
+  // §22 MN-002: multi-select already gets Flatten inside the Boolean submenu
+  // above, so the standalone row is single-select only — no twin rows.
+  if (sel < 2) items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
+  items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O", enabled: caps.outline ?? true });
   items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
   items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });
-  items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths" });
+  items.push({ kind: "action", id: "convertTextToVector", label: "Convert text to vector paths", enabled: caps.vectorize ?? true });
   items.push({ kind: "sep" });
   items.push({ kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" });
   items.push({ kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye-off" });
@@ -300,7 +368,7 @@ function layoutMenuItems(hasLayout: boolean): MenuItem[] {
   ];
 }
 
-export function layerMenu(isGroup: boolean, hasLayout = false): MenuItem[] {
+export function layerMenu(isGroup: boolean, hasLayout = false, caps: MenuCaps = {}): MenuItem[] {
   return [
     { kind: "action", id: "rename", label: "Rename", shortcut: "⌘R", icon: "text" },
     { kind: "sep" },
@@ -313,14 +381,14 @@ export function layerMenu(isGroup: boolean, hasLayout = false): MenuItem[] {
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
     { kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" },
-    { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach" },
-    { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset" },
-    { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌘⌥M", icon: "mask" },
+    { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true },
+    { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true },
+    { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌃⌘M", icon: "mask" },
     ...layoutMenuItems(hasLayout),
     { kind: "sep" },
     ...(isGroup
-      ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" }]
-      : []),
+      ? [{ kind: "action" as const, id: "ungroup", label: "Ungroup", shortcut: "⇧⌘G", icon: "group" as IconName }]
+      : [] as MenuItem[]),
     { kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" },
     { kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye-off" },
     { kind: "sep" },
@@ -336,7 +404,7 @@ export function pageMenu(canDelete: boolean): MenuItem[] {
   ];
 }
 
-export function runMenu(
+export async function runMenu(
   engine: Engine,
   id: string,
   extra?: { x?: number; y?: number; onRename?: () => void },
@@ -516,13 +584,21 @@ export function runMenu(
       engine.dispatch({ type: "outlineStroke" });
       break;
     case "offsetPath": {
-      const distStr = window.prompt("Offset vector path distance (+ to expand, - to contract):", "8");
-      if (distStr !== null) {
-        const d = parseFloat(distStr);
-        if (!isNaN(d) && d !== 0) {
-          engine.dispatch({ type: "offsetPath", distance: d });
-          toast(`Offset vector path ${d > 0 ? "+" : ""}${d}px`);
-        }
+      // The distance is checked in the dialog: the old prompt accepted "abc",
+      // closed, and then did nothing at all without saying why.
+      const text = await askPrompt({
+        title: "Offset path",
+        label: "Distance in pixels",
+        hint: "Positive expands the path, negative contracts it",
+        value: "8",
+        confirmLabel: "Offset",
+        validate: (v) => (Number.isFinite(parseFloat(v)) && parseFloat(v) !== 0 ? null : "Enter a non-zero number"),
+      });
+      if (text === null) break;
+      const d = parseFloat(text);
+      if (Number.isFinite(d) && d !== 0) {
+        engine.dispatch({ type: "offsetPath", distance: d });
+        toast(`Offset vector path ${d > 0 ? "+" : ""}${d}px`);
       }
       break;
     }
@@ -534,6 +610,17 @@ export function runMenu(
       engine.dispatch({ type: "convertTextToVector" });
       toast("Converted text to vector paths");
       break;
+    case "cropImage": {
+      // The canvas owns the crop tool (overlay, handles, Esc semantics); the
+      // menu just rings the bell with the first selected layer.
+      const id0 = engine.snapshot().selection[0];
+      if (id0) window.dispatchEvent(new CustomEvent("x-native-crop-image", { detail: { id: id0 } }));
+      break;
+    }
+    case "placeImage": {
+      window.dispatchEvent(new CustomEvent("x-native-place-image"));
+      break;
+    }
     case "useAsMask": {
       const s = engine.snapshot();
       if (s.selection.length >= 2) engine.dispatch({ type: "group" });
@@ -554,5 +641,8 @@ export function runMenu(
 }
 
 export function isGroupNode(n?: XNode | null): boolean {
-  return !!n && (n.kind === "group" || (n.kind === "frame" && n.name === "Group"));
+  // §22 MN-005: a boolean with members unwraps like a group (engine ungroup
+  // takes any node with children; Figma's boolean article says to Ungroup it),
+  // so it gets the Ungroup row too. Childless booleans stay excluded.
+  return !!n && (n.kind === "group" || (n.kind === "frame" && n.name === "Group") || (n.kind === "boolean" && n.children.length > 0));
 }

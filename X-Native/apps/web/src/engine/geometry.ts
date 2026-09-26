@@ -1,4 +1,6 @@
-import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
+import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VariableWidthPoint, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
+import { hasVariableWidth, normalizeWidthProfile, sampleVariableWidth } from "./strokeModel";
+import { getGeoMode, notifyGeoFallback, tryGeoBoolean } from "./geoBridge";
 
 /**
  * Corner geometry.
@@ -298,8 +300,10 @@ export const defaultGeometryBoolean: GeometryBoolean = {
   },
 };
 
-/** Raster-guided boolean → polyline contours (same approach as x-core). */
-export function booleanPath(
+/** Raster-guided boolean → polyline contours (same approach as x-core).
+ *  The authoritative implementation: the wasm accelerator defers here on any
+ *  anomaly, and `booleanPath` below is the choke that tries wasm first. */
+export function booleanPathTs(
   op: BooleanOp,
   shapes: { poly: PathPoint[]; ox: number; oy: number }[],
 ): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
@@ -343,7 +347,6 @@ export function booleanPath(
     }
     cov.push(row);
   }
-  const path: PathPoint[] = [];
   const rings: PathPoint[][] = [];
   const seen = new Set<string>();
   const at = (x: number, y: number) => y >= 0 && x >= 0 && y < gh && x < gw && cov[y][x];
@@ -376,13 +379,36 @@ export function booleanPath(
         cx = next[0];
         cy = next[1];
       }
-      if (ring.length >= 3) {
-        const simp = simplify(ring, Math.max(sx, sy) * 0.85);
-        const curved = shapes.some((s) => s.poly.some((p) => (p.ox && p.ox !== 0) || (p.oy && p.oy !== 0)));
-        const finalRing = curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp;
-        rings.push(finalRing);
-        path.push(...finalRing);
-      }
+      if (ring.length >= 3) rings.push(ring);
+    }
+  }
+  const curved = hasCurveHandles(shapes);
+  return shapeBooleanResult(op, rings, Math.max(sx, sy) * 0.85, curved);
+}
+
+/** True when any input point carries a nonzero bezier handle (the smoothing
+ *  trigger shared by the TS path, the wasm choke, and the bench runner). */
+export function hasCurveHandles(shapes: { poly: PathPoint[]; ox: number; oy: number }[]): boolean {
+  return shapes.some((s) => s.poly.some((p) => (p.ox && p.ox !== 0) || (p.oy && p.oy !== 0)));
+}
+
+/** Contour shaping shared by both boolean backends: simplify, optional
+ *  smoothing for curved inputs, bbox relativization, network assembly.
+ *  Kept in TS per the bridge design (output shaping in one language). */
+export function shapeBooleanResult(
+  op: BooleanOp,
+  rawRings: PathPoint[][],
+  eps: number,
+  curved: boolean,
+): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
+  const path: PathPoint[] = [];
+  const rings: PathPoint[][] = [];
+  for (const ring of rawRings) {
+    if (ring.length >= 3) {
+      const simp = simplify(ring, eps);
+      const finalRing = curved && simp.length >= 4 ? smoothPath(simp, true, 0.35) : simp;
+      rings.push(finalRing);
+      path.push(...finalRing);
     }
   }
   if (path.length < 3) return null;
@@ -423,6 +449,35 @@ export function booleanPath(
     h: Math.max(1, Math.max(...ys) - y0),
     network,
   };
+}
+
+/** Choke point: the wasm accelerator when ready, else the TS authority.
+ *  Only a complete contour set is accepted from wasm — emptiness, errors,
+ *  version skew, and an absent module all defer to `booleanPathTs`, so the
+ *  bridge can never change a result, only its provenance. Never throws. */
+export function booleanPath(
+  op: BooleanOp,
+  shapes: { poly: PathPoint[]; ox: number; oy: number }[],
+): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
+  if (shapes.length < 2) return null;
+  if (getGeoMode() !== "ts") {
+    try {
+      const raw = tryGeoBoolean(op, shapes);
+      if (raw && raw.status === 0 && raw.contours.length) {
+        const curved = hasCurveHandles(shapes);
+        // Same scale semantics as the TS grid (160 cells across the long side).
+        return shapeBooleanResult(
+          op,
+          raw.contours.map((c) => c.map((p) => ({ x: p.x, y: p.y }))),
+          (Math.max(raw.w, raw.h) / 160) * 0.85,
+          curved,
+        );
+      }
+    } catch (e) {
+      notifyGeoFallback(e);
+    }
+  }
+  return booleanPathTs(op, shapes);
 }
 
 function edge(at: (x: number, y: number) => boolean, x: number, y: number) {
@@ -1120,10 +1175,124 @@ export function insertPointOnPath(
 
   if (bestIdx === -1) return null;
 
+  // Curve-aware split: when the segment carries Bézier handles, the click
+  // projects onto the chord but the new anchor must land ON the curve, and
+  // the curve must keep its shape (De Casteljau subdivision). Inserting a
+  // bare corner on the chord would visibly flatten the arc — Figma splits
+  // the curve instead.
+  const p0 = pts[bestIdx];
+  const p1 = pts[(bestIdx + 1) % n];
+  const c1 = { x: p0.x + (p0.ox || 0), y: p0.y + (p0.oy || 0) };
+  const c2 = { x: p1.x + (p1.ix || 0), y: p1.y + (p1.iy || 0) };
+  const curved =
+    (p0.ox || 0) !== 0 || (p0.oy || 0) !== 0 || (p1.ix || 0) !== 0 || (p1.iy || 0) !== 0;
+  if (curved) {
+    // Walk the cubic for the parameter closest to the click.
+    let bt = 0.5;
+    let bd = Infinity;
+    const SAMPLES = 24;
+    for (let k = 0; k <= SAMPLES; k++) {
+      const t = k / SAMPLES;
+      const mt = 1 - t;
+      const x =
+        mt * mt * mt * p0.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p1.x;
+      const y =
+        mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p1.y;
+      const d = Math.hypot(px - x, py - y);
+      if (d < bd) {
+        bd = d;
+        bt = t;
+      }
+    }
+    const t = Math.min(0.95, Math.max(0.05, bt));
+    if (bd <= maxDist * 1.5) {
+      // De Casteljau at t: L0=p0, L1, L2, M | M, R1, R2, R3=p1.
+      const lerp = (a: number, b: number) => a + (b - a) * t;
+      const l1 = { x: lerp(p0.x, c1.x), y: lerp(p0.y, c1.y) };
+      const m1 = { x: lerp(c1.x, c2.x), y: lerp(c1.y, c2.y) };
+      const r2 = { x: lerp(c2.x, p1.x), y: lerp(c2.y, p1.y) };
+      const l2 = { x: lerp(l1.x, m1.x), y: lerp(l1.y, m1.y) };
+      const r1 = { x: lerp(m1.x, r2.x), y: lerp(m1.y, r2.y) };
+      const m = { x: lerp(l2.x, r1.x), y: lerp(l2.y, r1.y) };
+      const newPath = pts.map((q) => ({ ...q }));
+      const q0 = newPath[bestIdx];
+      const q1 = newPath[(bestIdx + 1) % n];
+      q0.ox = l1.x - p0.x;
+      q0.oy = l1.y - p0.y;
+      q1.ix = r2.x - p1.x;
+      q1.iy = r2.y - p1.y;
+      const newPt: PathPoint = {
+        x: m.x,
+        y: m.y,
+        ix: l2.x - m.x,
+        iy: l2.y - m.y,
+        ox: r1.x - m.x,
+        oy: r1.y - m.y,
+      };
+      // Splice position differs for the wrapped closing segment.
+      const at = (bestIdx + 1) % n === 0 && closed ? n : bestIdx + 1;
+      newPath.splice(at, 0, newPt);
+      return { newPath, insertedIndex: at };
+    }
+  }
+
   const newPt: PathPoint = { x: bestProj.x, y: bestProj.y };
   const newPath = [...pts];
   newPath.splice(bestIdx + 1, 0, newPt);
   return { newPath, insertedIndex: bestIdx + 1 };
+}
+
+/**
+ * Auto handles for corner→smooth conversion (double-click a point): the
+ * tangent follows the neighbouring anchors and the length is a third of the
+ * shorter adjacent edge, so the curve continues the path instead of kinking
+ * off along a fixed axis.
+ */
+export function smoothHandlesForPoint(
+  pts: PathPoint[],
+  idx: number,
+  closed: boolean,
+): { ix: number; iy: number; ox: number; oy: number } {
+  const n = pts.length;
+  const p = pts[idx];
+  const prev = closed || idx > 0 ? pts[(idx - 1 + n) % n] : null;
+  const next = closed || idx < n - 1 ? pts[(idx + 1) % n] : null;
+  let dx = 1;
+  let dy = 0;
+  let len = 20;
+  if (prev && next) {
+    dx = next.x - prev.x;
+    dy = next.y - prev.y;
+    len =
+      Math.min(Math.hypot(p.x - prev.x, p.y - prev.y), Math.hypot(next.x - p.x, next.y - p.y)) / 3;
+  } else if (next) {
+    dx = next.x - p.x;
+    dy = next.y - p.y;
+    len = Math.hypot(dx, dy) / 3;
+  } else if (prev) {
+    dx = p.x - prev.x;
+    dy = p.y - prev.y;
+    len = Math.hypot(dx, dy) / 3;
+  }
+  const m = Math.hypot(dx, dy) || 1;
+  len = Math.min(120, Math.max(1, len));
+  const ux = (dx / m) * len;
+  const uy = (dy / m) * len;
+  return { ix: -ux, iy: -uy, ox: ux, oy: uy };
+}
+
+/**
+ * Translate a subset of anchors (arrow-key nudge inside vector edit).
+ * Returns a fresh path; the caller commits it via patchPath.
+ */
+export function shiftPoints(
+  pts: PathPoint[],
+  indices: number[],
+  dx: number,
+  dy: number,
+): PathPoint[] {
+  const set = new Set(indices);
+  return pts.map((p, i) => (set.has(i) ? { ...p, x: p.x + dx, y: p.y + dy } : { ...p }));
 }
 
 /**
@@ -1582,3 +1751,253 @@ export function balanceLines(
 
 /** Alias for backward compatibility */
 export const computeFigmaNoodle = computeConnectorNoodle;
+
+/**
+ * Variable-width cousin of `outlineStroke`: expands a centerline into a closed
+ * filled contour whose half-width at arc-length `t` is
+ * `width / 2 * sampleVariableWidth(profile, t)`.
+ *
+ * Joins honour `strokeJoin` with a miter limit expressed as a ratio (miter
+ * length / half width, the canvas/SVG convention); caps are sized by the
+ * endpoint widths, so a taper to 0 needs no cap geometry at all. Arrow-family
+ * caps are tip geometry the callers draw separately, and are treated as butt
+ * here. A missing/uniform profile delegates to `outlineStroke` so plain
+ * strokes render byte-identical to before.
+ */
+export function outlineVariableStroke(
+  path: PathPoint[],
+  width: number,
+  profile: readonly VariableWidthPoint[] | undefined,
+  closed: boolean,
+  strokeCap: StrokeCap = "round",
+  strokeJoin: StrokeJoin = "round",
+  miterLimit = 4,
+): PathPoint[] {
+  if (path.length < 2 || !(width > 0)) return path;
+  if (!hasVariableWidth(profile)) return outlineStroke(path, width, closed, strokeCap, strokeJoin);
+  let pts = samplePathPoints(path, closed);
+  if (pts.length < 2) return path;
+
+  // Honour every control point exactly: a straight centerline has no samples
+  // between its endpoints, so segments are split at each interior profile
+  // position first (width interpolation along a straight split is exact;
+  // curves arrive densely sampled already).
+  {
+    const base = pts;
+    const m = base.length;
+    const segLens: number[] = [];
+    let baseTotal = 0;
+    const segCount = closed ? m : m - 1;
+    for (let i = 0; i < segCount; i++) {
+      const a = base[i];
+      const b = base[(i + 1) % m];
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      segLens.push(L);
+      baseTotal += L;
+    }
+    const cuts = normalizeWidthProfile(profile)
+      .map((q) => q.position)
+      .filter((tt) => tt > 1e-9 && tt < 1 - 1e-9)
+      .map((tt) => tt * baseTotal)
+      .sort((a, b) => a - b);
+    if (cuts.length && baseTotal > 1e-9) {
+      const grown: PathPoint[] = [];
+      let ci = 0;
+      let acc = 0;
+      for (let i = 0; i < segCount; i++) {
+        grown.push(base[i]);
+        const L = segLens[i];
+        while (ci < cuts.length && cuts[ci] <= acc + L + 1e-9) {
+          const at = cuts[ci++];
+          const f = L > 1e-9 ? (at - acc) / L : 0;
+          if (f > 1e-9 && f < 1 - 1e-9) {
+            const a = base[i];
+            const b = base[(i + 1) % m];
+            grown.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+          }
+        }
+        acc += L;
+      }
+      if (!closed) grown.push(base[m - 1]);
+      if (grown.length >= 2) pts = grown;
+    }
+  }
+  const n = pts.length;
+  if (n < 2) return path;
+
+  // Arc-length parameter per sample; duplicate points share one station and
+  // closed loops include the wrap segment in the total.
+  const cum = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  let total = cum[n - 1];
+  if (closed && n > 1) total += Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y);
+  const tOf = (i: number) => (total > 1e-9 ? cum[i] / total : n <= 1 ? 0 : i / (n - 1));
+  const halfAt = (i: number) => Math.max(0, (width / 2) * sampleVariableWidth(profile, tOf(i)));
+
+  // Unit segment directions; closed loops wrap, open ends clamp.
+  const segDir = (i: number): { x: number; y: number } => {
+    const a = pts[closed ? ((i % n) + n) % n : Math.max(0, Math.min(n - 2, i))];
+    const b = pts[closed ? (i + 1) % n : Math.max(1, Math.min(n - 1, i + 1))];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    return len > 1e-9 ? { x: dx / len, y: dy / len } : { x: 1, y: 0 };
+  };
+  const left = (d: { x: number; y: number }) => ({ x: -d.y, y: d.x });
+  const limit = Math.max(1, miterLimit);
+  const minCos = 1 / limit;
+
+  // Offset points for one side (+1 left, -1 right), with join handling at
+  // sharp corners only - dense curve samples are smooth by construction.
+  const side: PathPoint[][] = [[], []];
+  const last = closed ? n : n - 1;
+  for (let s = 0; s < 2; s++) {
+    const sign = s === 0 ? 1 : -1;
+    for (let i = 0; i <= last; i++) {
+      const idx = closed ? i % n : i;
+      const hw = halfAt(idx);
+      const p = pts[idx];
+      if (hw <= 1e-9) {
+        side[s].push({ x: p.x, y: p.y });
+        continue;
+      }
+      const interior = closed || (i > 0 && i < n - 1);
+      if (!interior) {
+        const d = left(segDir(closed ? idx : idx === 0 ? 0 : n - 2));
+        side[s].push({ x: p.x + sign * d.x * hw, y: p.y + sign * d.y * hw });
+        continue;
+      }
+      const dPrev = segDir(closed ? idx - 1 : idx - 1);
+      const dNext = segDir(closed ? idx : idx);
+      const nPrev = left(dPrev);
+      const nNext = left(dNext);
+      // Turn sharpness: 1 = straight, -1 = folded back.
+      const turn = dPrev.x * dNext.x + dPrev.y * dNext.y;
+      const miter = { x: nPrev.x + nNext.x, y: nPrev.y + nNext.y };
+      const mLen = Math.hypot(miter.x, miter.y);
+      if (turn > 0.9999 || mLen <= 1e-9) {
+        // Smooth: averaged normal, the outlineStroke behaviour.
+        const nx = mLen > 1e-9 ? miter.x / mLen : nPrev.x;
+        const ny = mLen > 1e-9 ? miter.y / mLen : nPrev.y;
+        side[s].push({ x: p.x + sign * nx * hw, y: p.y + sign * ny * hw });
+        continue;
+      }
+      const mx = miter.x / mLen;
+      const my = miter.y / mLen;
+      // cos(half-angle) between the miter and either edge normal.
+      const cosHalf = Math.max(0, mx * nPrev.x + my * nPrev.y);
+      const miterOk = strokeJoin === "miter" && cosHalf >= minCos && cosHalf > 1e-9;
+      if (miterOk) {
+        const k = hw / cosHalf;
+        side[s].push({ x: p.x + sign * mx * k, y: p.y + sign * my * k });
+      } else if (strokeJoin === "round" && turn < 0.94) {
+        // Fan across the outer arc; the inner side takes one averaged point
+        // (fanning it would loop back over the stroke interior).
+        const cross = dPrev.x * dNext.y - dPrev.y * dNext.x;
+        const outer = sign === 1 ? cross > 0 : cross < 0;
+        if (!outer) {
+          side[s].push({ x: p.x + sign * mx * hw, y: p.y + sign * my * hw });
+        } else {
+          const a0 = Math.atan2(nPrev.y, nPrev.x);
+          let a1 = Math.atan2(nNext.y, nNext.x);
+          if (sign === 1) {
+            while (a1 <= a0) a1 += Math.PI * 2;
+          } else {
+            while (a1 >= a0) a1 -= Math.PI * 2;
+          }
+          const steps = 4;
+          for (let k = 0; k <= steps; k++) {
+            const a = a0 + ((a1 - a0) * k) / steps;
+            side[s].push({ x: p.x + sign * Math.cos(a) * hw, y: p.y + sign * Math.sin(a) * hw });
+          }
+        }
+      } else {
+        // Bevel (or a miter past its limit): both edge offsets, no spike.
+        side[s].push({ x: p.x + sign * nPrev.x * hw, y: p.y + sign * nPrev.y * hw });
+        side[s].push({ x: p.x + sign * nNext.x * hw, y: p.y + sign * nNext.y * hw });
+      }
+    }
+  }
+
+  if (closed) {
+    // Drop the duplicated wrap station the loop above appended.
+    side[0].pop();
+    side[1].pop();
+    return [...side[0], ...side[1].reverse()];
+  }
+
+  const cap: PathPoint[] = [...side[0]];
+  const hwEnd = halfAt(n - 1);
+  const hwStart = halfAt(0);
+  const endD = segDir(n - 2);
+  const startSeg = segDir(0);
+  const startD = { x: -startSeg.x, y: -startSeg.y };
+  const capKind = strokeCap === "round" || strokeCap === "square" ? strokeCap : "butt";
+  const addCap = (tip: PathPoint, dir: { x: number; y: number }, hw: number, atEnd: boolean) => {
+    if (hw <= 1e-9 || capKind === "butt") return;
+    const d = left(dir);
+    if (capKind === "square") {
+      if (atEnd) {
+        cap.push({ x: tip.x + d.x * hw + dir.x * hw, y: tip.y + d.y * hw + dir.y * hw });
+        cap.push({ x: tip.x - d.x * hw + dir.x * hw, y: tip.y - d.y * hw + dir.y * hw });
+      } else {
+        cap.push({ x: tip.x - d.x * hw + dir.x * hw, y: tip.y - d.y * hw + dir.y * hw });
+        cap.push({ x: tip.x + d.x * hw + dir.x * hw, y: tip.y + d.y * hw + dir.y * hw });
+      }
+      return;
+    }
+    // Round: fan from one flank to the other through the tip direction.
+    const steps = 6;
+    for (let k = 1; k < steps; k++) {
+      const a = (k / steps) * Math.PI;
+      const along = Math.sin(a);
+      const across = Math.cos(a) * (atEnd ? 1 : -1);
+      cap.push({
+        x: tip.x + (d.x * across + dir.x * along) * hw,
+        y: tip.y + (d.y * across + dir.y * along) * hw,
+      });
+    }
+  };
+  addCap(pts[n - 1], endD, hwEnd, true);
+  for (let i = side[1].length - 1; i >= 0; i--) cap.push(side[1][i]);
+  addCap(pts[0], startD, hwStart, false);
+  return cap;
+}
+
+/**
+ * Node-local stations of each variable-width control point along a
+ * centerline: where the canvas draws the width dots. Positions resolve by
+ * arc length, so dots sit exactly where the outline honors them.
+ */
+export function widthProfileStations(
+  path: PathPoint[],
+  closed: boolean,
+  profile: readonly VariableWidthPoint[] | undefined,
+): { x: number; y: number; t: number; widthMultiplier: number }[] {
+  const pts = samplePathPoints(path, closed);
+  if (pts.length < 2) return [];
+  const cum = new Array<number>(pts.length).fill(0);
+  for (let i = 1; i < pts.length; i++)
+    cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  let total = cum[pts.length - 1];
+  if (closed) total += Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
+  const prof = normalizeWidthProfile(profile);
+  if (!(total > 1e-9))
+    return prof.map((q) => ({ x: pts[0].x, y: pts[0].y, t: q.position, widthMultiplier: q.widthMultiplier }));
+  return prof.map((q) => {
+    const target = Math.min(total, Math.max(0, q.position * total));
+    let i = 0;
+    while (i < cum.length - 1 && cum[i + 1] < target) i++;
+    const a = pts[i];
+    const b = i + 1 < pts.length ? pts[i + 1] : closed ? pts[0] : pts[i];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const f = segLen > 1e-9 ? Math.min(1, Math.max(0, (target - cum[i]) / segLen)) : 0;
+    return {
+      x: a.x + (b.x - a.x) * f,
+      y: a.y + (b.y - a.y) * f,
+      t: q.position,
+      widthMultiplier: q.widthMultiplier,
+    };
+  });
+}
+

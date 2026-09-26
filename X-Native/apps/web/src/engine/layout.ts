@@ -228,6 +228,150 @@ export interface GridPlan {
 }
 
 /**
+ * A wrapped flow's lines: consecutive children sharing the packed cross
+ * coordinate (the row they were wrapped onto, or the column in a vertical
+ * wrap). The drop index and the canvas drop indicator both read these.
+ */
+export function wrapLines(flow: XNode[], horiz: boolean): XNode[][] {
+  const lines: XNode[][] = [];
+  for (const c of flow) {
+    const at = horiz ? c.y : c.x;
+    const last = lines[lines.length - 1];
+    const lat = last ? (horiz ? last[0].y : last[0].x) : 0;
+    if (last && Math.abs(at - lat) < 0.5) last.push(c);
+    else lines.push([c]);
+  }
+  return lines;
+}
+
+/** The gap within one line that a main-axis coordinate falls into, and the
+ *  coordinate of that gap: the leading edge, the trailing edge, or the middle
+ *  of the space between two neighbours. */
+function gapInLine(line: XNode[], horiz: boolean, main: number): { k: number; at: number } {
+  let k = line.length;
+  for (let i = 0; i < line.length; i++) {
+    const mid = horiz ? line[i].x + line[i].w / 2 : line[i].y + line[i].h / 2;
+    if (main < mid) {
+      k = i;
+      break;
+    }
+  }
+  const at =
+    k === 0
+      ? horiz
+        ? line[0].x
+        : line[0].y
+      : k === line.length
+        ? horiz
+          ? line[line.length - 1].x + line[line.length - 1].w
+          : line[line.length - 1].y + line[line.length - 1].h
+        : horiz
+          ? (line[k - 1].x + line[k - 1].w + line[k].x) / 2
+          : (line[k - 1].y + line[k - 1].h + line[k].y) / 2;
+  return { k, at };
+}
+
+/**
+ * The canvas drop indicator for a linear flow: which way the line runs, where
+ * it sits on the main axis, and how far it spans on the cross axis - all
+ * parent-local. The gap is the same one `flowInsertIndex` would drop into, so
+ * the line never lies about where the object lands. Null for grids and plain
+ * frames (the frame outline is their indicator) and for empty flows.
+ */
+export function flowGapLine(
+  parent: Pick<XNode, "children" | "layout">,
+  x: number,
+  y: number,
+): { horiz: boolean; at: number; from: number; to: number } | null {
+  const kids = parent.children ?? [];
+  const l = parent.layout;
+  if (!l || l.direction === "grid") return null;
+  const horiz = l.direction === "horizontal";
+  const flow = kids.filter((c) => c.visible && !c.absolutePosition);
+  if (!flow.length) return null;
+  if (wraps(l)) {
+    const lines = wrapLines(flow, horiz);
+    const cross = horiz ? y : x;
+    let line = lines[0];
+    let best = Infinity;
+    for (const ln of lines) {
+      const lo = horiz ? ln[0].y : ln[0].x;
+      const hi = horiz
+        ? Math.max(...ln.map((c) => c.y + c.h))
+        : Math.max(...ln.map((c) => c.x + c.w));
+      const d = cross < lo ? lo - cross : cross > hi ? cross - hi : 0;
+      if (d < best) {
+        best = d;
+        line = ln;
+      }
+    }
+    const { at } = gapInLine(line, horiz, horiz ? x : y);
+    const from = horiz ? Math.min(...line.map((c) => c.y)) : Math.min(...line.map((c) => c.x));
+    const to = horiz
+      ? Math.max(...line.map((c) => c.y + c.h))
+      : Math.max(...line.map((c) => c.x + c.w));
+    return { horiz, at, from, to };
+  }
+  const { at } = gapInLine(flow, horiz, horiz ? x : y);
+  const from = horiz ? Math.min(...flow.map((c) => c.y)) : Math.min(...flow.map((c) => c.x));
+  const to = horiz ? Math.max(...flow.map((c) => c.y + c.h)) : Math.max(...flow.map((c) => c.x + c.w));
+  return { horiz, at, from, to };
+}
+
+/**
+ * Where a dropped object lands in a linear flow's child order: the first gap
+ * whose midpoint the point has passed along the main axis. Wrap-aware: the
+ * point's line is found first (the row band it falls in, or the nearest one),
+ * then the gap within that line - so the drop lands where it was aimed and
+ * everything after it flows on. A vertical wrap reads transposed (column band,
+ * then the gap down the column).
+ *
+ * The point is parent-local, like a reparent drop. The answer is a raw child
+ * index: absolutely positioned and hidden children keep their slots, and the
+ * newcomer is spliced before the first flow child at or after the gap (or
+ * after the last flow child when the gap is at the end). No flow children at
+ * all means the end, which is also what plain frames do.
+ */
+export function flowInsertIndex(parent: Pick<XNode, "children" | "layout">, x: number, y: number): number {
+  const kids = parent.children ?? [];
+  const l = parent.layout;
+  if (!l || l.direction === "grid") return kids.length;
+  const horiz = l.direction === "horizontal";
+  const flow = kids.filter((c) => c.visible && !c.absolutePosition);
+  if (!flow.length) return kids.length;
+  // A flow position first: which flow child the gap falls before, as a count
+  // of the flow children that still come first.
+  let pos = flow.length;
+  if (wraps(l)) {
+    const lines = wrapLines(flow, horiz);
+    const cross = horiz ? y : x;
+    let line = lines[0];
+    let best = Infinity;
+    for (const ln of lines) {
+      const lo = horiz ? ln[0].y : ln[0].x;
+      const hi =
+        horiz
+          ? Math.max(...ln.map((c) => c.y + c.h))
+          : Math.max(...ln.map((c) => c.x + c.w));
+      const d = cross < lo ? lo - cross : cross > hi ? cross - hi : 0;
+      if (d < best) {
+        best = d;
+        line = ln;
+      }
+    }
+    const { k } = gapInLine(line, horiz, horiz ? x : y);
+    pos = flow.indexOf(line[0]) + k;
+  } else {
+    pos = gapInLine(flow, horiz, horiz ? x : y).k;
+  }
+  if (pos >= flow.length) {
+    const last = flow[flow.length - 1];
+    return kids.indexOf(last) + 1;
+  }
+  return kids.indexOf(flow[pos]);
+}
+
+/**
  * Where a new object goes in a grid's order.
  *
  * "This also means that when you add a cell object to the grid, the layout engine will try
@@ -693,15 +837,27 @@ export function parsePaddingShorthand(raw: string): [number, number, number, num
 /**
  * A frame cannot be smaller than its own padding. The article: "If a frame is
  * set to hug contents or a fixed size smaller than its padding, the frame will
- * size up to fit the padding." Strokes are not part of this - only inside
- * strokes count towards layout sizes, and this app does not size them yet.
+ * size up to fit the padding." The minimum is that padding plus the frame's
+ * own inside stroke, which is included by default; outside and center
+ * strokes are never counted.
  */
+/**
+ * The stroke width that counts towards layout sizes: inside strokes only.
+ * The article: "when calculating things like spacing, fill sizing, and any
+ * other frame measurements", inside strokes are included; outside and center
+ * strokes never are. One number because a stroke is uniform per side.
+ */
+export function insideStrokeWidth(n: Pick<XNode, "strokeWidth" | "strokeAlign">): number {
+  return n.strokeAlign === "inside" && n.strokeWidth > 0 ? n.strokeWidth : 0;
+}
+
 export function clampToPadding(n: XNode): void {
   const l = n.layout;
   if (!l || !Array.isArray(l.padding)) return;
   const [pl, pr, pt, pb] = l.padding;
-  if (n.w < pl + pr) n.w = pl + pr;
-  if (n.h < pt + pb) n.h = pt + pb;
+  const sw = insideStrokeWidth(n);
+  if (n.w < pl + pr + sw * 2) n.w = pl + pr + sw * 2;
+  if (n.h < pt + pb + sw * 2) n.h = pt + pb + sw * 2;
 }
 
 /**
@@ -858,7 +1014,7 @@ export function hugsCross(layout: AutoLayout, node: XNode, flow: XNode[]): boole
  * file that had it keeps its data) but it stops bending the layout.
  */
 export function wraps(layout: AutoLayout | undefined): boolean {
-  return !!layout && layout.wrap === true && layout.direction === "horizontal";
+  return !!layout && layout.wrap === true && layout.direction !== "grid";
 }
 
 /**

@@ -237,10 +237,10 @@ Undo / Redo History
 ```
 
 **Actions:**
-- [ ] Audit inspector mutations for direct state changes
-- [ ] Wrap all mutations in command pattern
-- [ ] Ensure keyboard, toolbar, context menu, and command palette all use same command system
-- [ ] Test undo/redo for all inspector operations
+- [x] Audit inspector mutations for direct state changes
+- [x] Wrap all mutations in command pattern
+- [x] Ensure keyboard, toolbar, context menu, and command palette all use same command system
+- [x] Test undo/redo for all inspector operations
 
 ---
 
@@ -474,11 +474,11 @@ top: 40px;
 ```
 
 **Actions:**
-- [ ] Build layout inference engine
-- [ ] Map Auto Layout → Flexbox/Grid
-- [ ] Add framework-specific generators
-- [ ] Support token → code variable mapping
-- [ ] Add component → code component mapping
+- [x] Build layout inference engine
+- [x] Map Auto Layout → Flexbox/Grid
+- [x] Add framework-specific generators
+- [x] Support token → code variable mapping
+- [x] Add component → code component mapping
 
 ---
 
@@ -514,11 +514,11 @@ Maps To:
 ```
 
 **Integration:**
-- [ ] Works with Dev Mode
-- [ ] Works with MCP
-- [ ] Supports multiple frameworks
-- [ ] Version tracking
-- [ ] Sync status indicators
+- [x] Works with Dev Mode
+- [x] Works with MCP (`apps/mcp-server`, TS track — full design API over stdio, v1 read-only)
+- [x] Supports multiple frameworks
+- [x] Version tracking
+- [x] Sync status indicators
 
 ---
 
@@ -571,27 +571,27 @@ generate_code(options)
 ```
 
 **Requirements:**
-- [ ] All responses structured JSON
-- [ ] Machine-readable schemas
-- [ ] Proper error codes
-- [ ] Pagination for large results
-- [ ] Filtering and querying
+- [x] All responses structured JSON
+- [x] Machine-readable schemas
+- [x] Proper error codes
+- [x] Pagination for large results
+- [x] Filtering and querying
 
 ---
 
 ### P1.12 — Prototype System Enhancement
 
 **Strengthen With:**
-- [ ] Smart Animate
-- [ ] Interactive components
-- [ ] Variables in prototypes
-- [ ] Conditional logic
-- [ ] Multiple actions per trigger
-- [ ] Overlays
-- [ ] Modals
-- [ ] Bottom sheets
-- [ ] Actions: Open/close overlay, Scroll to, Back, Close
-- [ ] Triggers: After delay, Mouse enter/leave, Drag, Keyboard
+- [x] Smart Animate
+- [x] Interactive components
+- [x] Variables in prototypes
+- [x] Conditional logic
+- [x] Multiple actions per trigger
+- [x] Overlays
+- [x] Modals
+- [x] Bottom sheets
+- [x] Actions: Open/close overlay, Scroll to, Back, Close
+- [x] Triggers: After delay, Mouse enter/leave, Drag, Keyboard
 
 **Key Differentiator:**
 ```
@@ -628,12 +628,12 @@ Assets
 ```
 
 **Features:**
-- [ ] Fuzzy matching
-- [ ] Type filtering
-- [ ] Recent items
-- [ ] Keyboard shortcut activation
+- [x] Fuzzy matching
+- [x] Type filtering
+- [x] Recent items
+- [x] Keyboard shortcut activation
 - [ ] Preview thumbnails
-- [ ] Quick actions
+- [x] Quick actions
 
 ---
 
@@ -666,10 +666,10 @@ Issues:
 ```
 
 **Actions:**
-- [ ] Create linting rules engine
-- [ ] Add fix suggestions
-- [ ] Integrate into CI/CD
-- [ ] Real-time feedback in editor
+- [x] Create linting rules engine
+- [x] Add fix suggestions
+- [x] Integrate into CI/CD
+- [x] Real-time feedback in editor
 
 ---
 
@@ -677,17 +677,17 @@ Issues:
 
 **Implement & Test:**
 - [ ] Keyboard-only navigation
-- [ ] Focus management
-- [ ] Focus restoration
-- [ ] Screen reader semantics
+- [x] Focus management
+- [x] Focus restoration
+- [x] Screen reader semantics
 - [x] ~~High Contrast mode support~~ — dropped 18 Sep 2026; the product ships two
       palettes (Graphite, Daylight) and no third
-- [ ] Reduced Motion preference
+- [x] Reduced Motion preference
 - [ ] UI scaling
 - [ ] Inspector keyboard editing
-- [ ] Accessible tooltips
-- [ ] Accessible layer names
-- [ ] WCAG compliance checking
+- [x] Accessible tooltips
+- [x] Accessible layer names
+- [x] WCAG compliance checking
 
 ---
 

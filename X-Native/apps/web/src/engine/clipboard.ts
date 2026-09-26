@@ -132,6 +132,15 @@ export function nativeClipFromHtml(html: string): XNode[] | null {
 /** What a copy of `nodes` says when it is pasted somewhere that only reads
  *  text: the words inside the layers, which standard clipboards write. A copy of
  *  shapes has no words, so it falls back to the layer names. */
+/** Copies of nodes repositioned at their canvas (world) coordinates. The SVG
+ *  flavours (`exportClipSvg`, multi-copy) lay nodes out by x/y, so nested
+ *  layers must be shifted from frame-local to world position first - without
+ *  this a multi-select from inside frames collapses onto the origin. The
+ *  originals are untouched: only the exported copies move. */
+export function worldClones(items: { node: XNode; x: number; y: number }[]): XNode[] {
+  return items.map(({ node, x, y }) => ({ ...node, x, y }));
+}
+
 export function clipPlainText(nodes: XNode[]): string {
   const words: string[] = [];
   const walk = (n: XNode) => {

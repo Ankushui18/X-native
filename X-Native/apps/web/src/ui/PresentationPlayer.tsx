@@ -2,6 +2,9 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import type { Engine, Interaction, ProtoDevice, Snapshot, XNode } from "../engine/types";
 import { find, worldPos } from "../engine/memory";
 import { evaluateExpression } from "../engine/expressions";
+import { checkCondition } from "../engine/protoEval";
+import { resolveAllForMode, resolveVariable } from "../engine/variables";
+import { useReducedMotion } from "./a11y";
 import { Icon, rowIconSize } from "./icons";
 import { DEVICE_GROUPS, DeviceShell, deviceBox, deviceFor } from "./devices";
 
@@ -40,7 +43,7 @@ interface HotspotBox {
   y: number;
   w: number;
   h: number;
-  interaction: Interaction;
+  interactions: Interaction[];
 }
 
 interface FormFieldItem {
@@ -64,7 +67,7 @@ export function PresentationPlayer({
   engine: Engine;
   snap: Snapshot;
   onExit: () => void;
-  onInteraction?: (ix: Interaction) => void;
+  onInteraction?: (ix: Interaction, sourceId?: string) => void;
 }) {
   const root = snap.pages[snap.page].root;
   const presentNode = snap.presentFrame ? find(root, snap.presentFrame) : null;
@@ -84,24 +87,38 @@ export function PresentationPlayer({
 
   // Device & scale preferences
   const device = snap.prototypeDevice ?? "none";
-  const hotspotsActive = snap.prototypeHotspots ?? true;
+  // §23 PT-008: default off — hints flash on a missed click (Figma), they
+  // are not painted over every hotspot until H says otherwise.
+  const hotspotsActive = snap.prototypeHotspots ?? false;
   const liveInputsActive = snap.prototypeLiveInputs ?? true;
   const soundActive = snap.prototypeSound ?? true;
   const scaleMode = snap.prototypeScale ?? "fit";
 
-  // All frames in document
+  // The frames the player can actually page through. `presentGo` lands on the
+  // outermost frame that contains the destination (§23 PT-002), so a frame
+  // nested inside another frame can never be the stage — listing it made the
+  // pager advertise a step that went nowhere and quietly grew the back history
+  // without moving (paging past the phone frame in the sample file landed on
+  // "2. Card" and stayed put). The frame being presented right now is kept in
+  // the list either way, so presenting a nested frame still shows where the
+  // presentation is.
   const allFrames = useMemo(() => {
     const list: XNode[] = [];
-    const walk = (n: XNode) => {
-      if (n !== root && n.kind === "frame") list.push(n);
-      for (const ch of n.children) walk(ch);
+    const walk = (n: XNode, underFrame: boolean) => {
+      for (const ch of n.children) {
+        const isFrame = ch.kind === "frame";
+        if (isFrame && (!underFrame || ch.id === snap.presentFrame)) list.push(ch);
+        walk(ch, underFrame || isFrame);
+      }
     };
-    walk(root);
+    walk(root, false);
     return list;
-  }, [root]);
+  }, [root, snap.presentFrame]);
 
   // Current frame index
   const curIndex = allFrames.findIndex((f) => f.id === snap.presentFrame);
+  // §23 PT-007: "back" exists whenever history does, even at pager index 0.
+  const canGoPrev = snap.presentStack.length > 1 || curIndex > 0;
 
   // Collect clickable hotspots inside active frame
   const hotspots = useMemo(() => {
@@ -110,9 +127,9 @@ export function PresentationPlayer({
     const collect = (n: XNode, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
-      const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
-      if (ix) {
-        list.push({ id: n.id, name: n.name, x, y, w: n.w, h: n.h, interaction: ix });
+      const ixList = (n.interactions ?? []).filter((i) => i.trigger === "onClick");
+      if (ixList.length) {
+        list.push({ id: n.id, name: n.name, x, y, w: n.w, h: n.h, interactions: ixList });
       }
       for (const ch of n.children) collect(ch, x, y);
     };
@@ -178,8 +195,10 @@ export function PresentationPlayer({
   const frameH = presentNode ? presentNode.h * z : 0;
 
   // Handle missed click -> pulse hotspots and trigger ripple
+  const reducedMotion = useReducedMotion();
   const handleMissedClick = useCallback((e: React.MouseEvent) => {
     if (soundActive) playTapSound(320, 0.03);
+    if (reducedMotion) return;
     const newRipple = { id: Date.now(), x: e.clientX, y: e.clientY };
     setRipples((prev) => [...prev, newRipple]);
     setTimeout(() => {
@@ -188,14 +207,17 @@ export function PresentationPlayer({
 
     setHotspotPulse(true);
     setTimeout(() => setHotspotPulse(false), 550);
-  }, [soundActive]);
+  }, [soundActive, reducedMotion]);
 
   // Execute hotspot interaction
-  const triggerHotspot = useCallback((ix: Interaction) => {
+  const triggerHotspot = useCallback((h: { id: string; interactions: Interaction[] }) => {
     if (soundActive) playTapSound(880, 0.05);
+    for (const ix of h.interactions) {
+    // Conditions gate hotspot runs the same as canvas runs.
+    if (ix.condition && !checkCondition(snap.variables ?? [], snap.variableCollections ?? [], snap.activeModes ?? {}, ix.condition)) continue;
     if (onInteraction) {
-      onInteraction(ix);
-      return;
+      onInteraction(ix, h.id);
+      continue;
     }
     if (ix.action === "back") {
       engine.dispatch({ type: "presentBack" });
@@ -212,31 +234,60 @@ export function PresentationPlayer({
       });
     } else if (ix.action === "closeOverlay") {
       engine.dispatch({ type: "closeOverlay" });
+    } else if (ix.action === "scrollTo" && ix.destination) {
+      // §23 PT-018: the no-runner fallback now covers every action the panel
+      // can author (scroll/swap/mode were silently dropped here).
+      const s = engine.snapshot();
+      const target = worldPos(s.pages[s.page].root, ix.destination);
+      if (target) {
+        engine.dispatch({
+          type: "setPan",
+          x: -target.x * s.zoom + 120,
+          y: -target.y * s.zoom + 120,
+        });
+      }
+    } else if (ix.action === "swapOverlay" && ix.destination) {
+      const open = engine.snapshot().activeOverlay;
+      if (!open) {
+        engine.dispatch({ type: "presentGo", id: ix.destination });
+      } else {
+        engine.dispatch({
+          type: "openOverlay",
+          id: ix.destination,
+          position: open.position,
+          closeOutside: open.closeOutside,
+          backdrop: open.backdrop,
+          backdropColor: open.backdropColor,
+        });
+      }
+    } else if (ix.action === "setVariableMode" && ix.variableCollectionId && ix.variableModeId) {
+      engine.dispatch({ type: "setActiveMode", collectionId: ix.variableCollectionId, modeId: ix.variableModeId });
     } else if (ix.action === "openUrl" && ix.destination) {
       const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
       window.open(url, "_blank", "noopener,noreferrer");
     } else if (ix.action === "setVariable" && ix.variableId) {
-      const v = snap.variables?.find((varItem) => varItem.id === ix.variableId);
-      if (v) {
-        let nextVal = ix.variableValue !== undefined ? ix.variableValue : v.value;
+      const vars = snap.variables ?? [];
+      const cur = resolveVariable(vars, snap.variableCollections ?? [], snap.activeModes ?? {}, ix.variableId);
+      if (cur && !cur.broken) {
+        let nextVal: string | number | boolean = ix.variableValue !== undefined ? ix.variableValue : cur.value;
         if (typeof nextVal === "string" && nextVal.startsWith("=")) {
-          const varMap: Record<string, any> = {};
-          snap.variables?.forEach((item) => {
-            varMap[item.name] = item.value;
-            varMap[item.id] = item.value;
+          const res = evaluateExpression(nextVal.slice(1), {
+            vars: resolveAllForMode(vars, snap.variableCollections ?? [], snap.activeModes ?? {}),
           });
-          const res = evaluateExpression(nextVal.slice(1), { vars: varMap });
           if (!res.error && res.value !== undefined) {
             nextVal = res.value;
           }
         }
-        if (ix.variableOp === "increment" && typeof v.value === "number") nextVal = v.value + 1;
-        else if (ix.variableOp === "decrement" && typeof v.value === "number") nextVal = v.value - 1;
-        else if (ix.variableOp === "toggle") nextVal = !v.value;
+        if (ix.variableOp === "increment" && typeof cur.value === "number") nextVal = cur.value + 1;
+        else if (ix.variableOp === "decrement" && typeof cur.value === "number") nextVal = cur.value - 1;
+        else if (ix.variableOp === "toggle" && typeof cur.value === "boolean") nextVal = !cur.value;
         engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
       }
+    } else if (ix.action === "setVariant" && ix.variantName) {
+      engine.dispatch({ type: "setVariant", id: h.id, name: ix.variantName });
     }
-  }, [engine, snap.variables, soundActive]);
+    }
+  }, [engine, snap.variables, snap.variableCollections, snap.activeModes, soundActive]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -251,7 +302,11 @@ export function PresentationPlayer({
           onExit();
         }
       } else if (e.key === "ArrowLeft" || e.key === "Backspace") {
-        if (curIndex > 0) {
+        // §23 PT-007: back walks history first (Figma); doc order only when
+        // there is no history. (Going back used to push a NEW visit.)
+        if (snap.presentStack.length > 1) {
+          engine.dispatch({ type: "presentBack" });
+        } else if (curIndex > 0) {
           const target = allFrames[curIndex - 1];
           if (onInteraction) {
             onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
@@ -282,6 +337,21 @@ export function PresentationPlayer({
         } else {
           document.exitFullscreen().catch(() => {});
         }
+      } else if (e.key.toLowerCase() === "z") {
+        // §23 PT-015: Z cycles the scale options (Figma).
+        const order = ["fit", "100%", "fill"] as const;
+        const next = order[(order.indexOf(scaleMode) + 1) % order.length];
+        engine.dispatch({ type: "setPrototypeScale", scale: next });
+      } else if (e.key.toLowerCase() === "n") {
+        // §23 PT-015: N advances one frame (Figma).
+        if (curIndex < allFrames.length - 1) {
+          const target = allFrames[curIndex + 1];
+          if (onInteraction) {
+            onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
+          } else {
+            engine.dispatch({ type: "presentGo", id: target.id });
+          }
+        }
       }
     };
     window.addEventListener("keydown", handleKey);
@@ -305,18 +375,7 @@ export function PresentationPlayer({
   if (!presentNode) return null;
 
   return (
-    <div
-      className="prototype-player-layer"
-      onMouseMove={showDockTemporarily}
-      onClick={handleMissedClick}
-      style={{
-        position: "absolute",
-        inset: 0,
-        pointerEvents: "auto",
-        overflow: "hidden",
-        zIndex: 40,
-      }}
-    >
+    <div className="prototype-player-layer" onMouseMove={showDockTemporarily} onClick={handleMissedClick}>
       {/* Click ripple animations */}
       {ripples.map((r) => (
         <div
@@ -328,8 +387,8 @@ export function PresentationPlayer({
             width: 48,
             height: 48,
             borderRadius: "50%",
-            border: "2px solid #6366f1",
-            background: "rgba(99, 102, 241, 0.2)",
+            border: "2px solid var(--accent)",
+            background: "var(--accent-wash)",
             pointerEvents: "none",
             animation: "proto-ripple 0.5s ease-out forwards",
           }}
@@ -378,7 +437,7 @@ export function PresentationPlayer({
                     width: Math.min(sw / 2, sh - 4),
                     height: Math.min(sw / 2, sh - 4),
                     borderRadius: "50%",
-                    background: isChecked ? "#6366f1" : "#94a3b8",
+                    background: isChecked ? "var(--accent)" : "var(--dim)",
                     boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
                     transition: "all 0.15s ease",
                   }}
@@ -431,9 +490,9 @@ export function PresentationPlayer({
             key={h.id}
             onClick={(e) => {
               e.stopPropagation();
-              triggerHotspot(h.interaction);
+              triggerHotspot(h);
             }}
-            title={`${h.name} (${h.interaction.action})`}
+            title={`${h.name} (${h.interactions[0]?.action ?? "tap"})`}
             style={{
               position: "absolute",
               left: sx,
@@ -443,8 +502,8 @@ export function PresentationPlayer({
               cursor: "pointer",
               zIndex: 43,
               borderRadius: 6 * z,
-              border: isGlowing ? "2px solid #6366f1" : "1px solid transparent",
-              background: isGlowing ? "rgba(99, 102, 241, 0.16)" : "transparent",
+              border: isGlowing ? "2px solid var(--accent)" : "1px solid transparent",
+              background: isGlowing ? "var(--accent-wash)" : "transparent",
               boxShadow: isGlowing ? "0 0 12px rgba(13, 153, 255, 0.45)" : "none",
               transition: "border 0.2s, background 0.2s, box-shadow 0.2s",
             }}
@@ -452,34 +511,15 @@ export function PresentationPlayer({
         );
       })}
 
-      {/* Floating Glass Presentation Control Dock */}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          position: "absolute",
-          bottom: 24,
-          left: "50%",
-          transform: `translateX(-50%) translateY(${dockVisible ? "0px" : "80px"})`,
-          transition: "transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s",
-          opacity: dockVisible ? 1 : 0,
-          background: "rgba(24, 24, 27, 0.85)",
-          backdropFilter: "blur(20px)",
-          border: "1px solid rgba(255, 255, 255, 0.12)",
-          borderRadius: 24,
-          boxShadow: "0 10px 30px rgba(0, 0, 0, 0.45)",
-          padding: "6px 14px",
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          zIndex: 50,
-          color: "#fff",
-          fontSize: 12,
-          fontFamily: "Inter, system-ui",
-          userSelect: "none",
-        }}
-      >
+      {/* Presentation control dock. Every control used to be styled inline
+          with its own literal colours, so the player was the one surface in the
+          product that no token reached; `.player-dock` owns the stage's
+          palette and the classes below style each control (PT-U5). */}
+      <div className={`player-dock${dockVisible ? "" : " hidden"}`} onClick={(e) => e.stopPropagation()}>
         {/* Flow & Frame Selector */}
         <select
+          className="player-select"
+          aria-label="Preview frame"
           value={snap.presentFrame}
           onChange={(e) => {
             const dest = e.target.value;
@@ -489,21 +529,9 @@ export function PresentationPlayer({
               engine.dispatch({ type: "presentGo", id: dest });
             }
           }}
-          style={{
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.14)",
-            borderRadius: 14,
-            color: "#fff",
-            padding: "4px 10px",
-            fontSize: 11,
-            outline: "none",
-            cursor: "pointer",
-            maxWidth: 140,
-            textOverflow: "ellipsis",
-          }}
         >
           {allFrames.map((f, i) => (
-            <option key={f.id} value={f.id} style={{ background: "#18181b", color: "#fff" }}>
+            <option key={f.id} value={f.id}>
               {i + 1}. {f.name}
             </option>
           ))}
@@ -511,90 +539,48 @@ export function PresentationPlayer({
 
         {/* Previous Frame */}
         <button
+          className="player-btn"
           onClick={() => {
-            if (curIndex > 0) engine.dispatch({ type: "presentGo", id: allFrames[curIndex - 1].id });
+            if (snap.presentStack.length > 1) engine.dispatch({ type: "presentBack" });
+            else if (curIndex > 0) engine.dispatch({ type: "presentGo", id: allFrames[curIndex - 1].id });
           }}
-          disabled={curIndex <= 0}
+          disabled={!canGoPrev}
           title="Previous frame (←)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: curIndex <= 0 ? "rgba(255,255,255,0.3)" : "#fff",
-            cursor: curIndex <= 0 ? "default" : "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name="arrow-left" size={14} />
         </button>
 
         {/* Frame Pager Index */}
-        <span style={{ fontSize: 11, color: "rgba(255, 255, 255, 0.7)", minWidth: 40, textAlign: "center" }}>
+        <span className="player-page">
           {curIndex >= 0 ? `${curIndex + 1} / ${allFrames.length}` : "—"}
         </span>
 
         {/* Next Frame */}
         <button
+          className="player-btn"
           onClick={() => {
             if (curIndex < allFrames.length - 1) engine.dispatch({ type: "presentGo", id: allFrames[curIndex + 1].id });
           }}
           disabled={curIndex >= allFrames.length - 1}
           title="Next frame (→ / Space)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: curIndex >= allFrames.length - 1 ? "rgba(255,255,255,0.3)" : "#fff",
-            cursor: curIndex >= allFrames.length - 1 ? "default" : "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name="arrow-right" size={14} />
         </button>
 
-        <div style={{ width: 1, height: 16, background: "rgba(255, 255, 255, 0.15)" }} />
+        <div className="player-sep" />
 
         {/* Restart Flow */}
-        <button
-          onClick={() => engine.dispatch({ type: "presentStart" })}
-          title="Restart flow (R)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: "#fff",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
-        >
+        <button className="player-btn" onClick={() => engine.dispatch({ type: "presentStart" })} title="Restart flow (R)">
           <Icon name="history" size={rowIconSize()} />
           <span>Restart</span>
         </button>
 
         {/* Hotspots Toggle */}
         <button
+          className={`player-btn${hotspotsActive ? " on" : ""}`}
+          aria-pressed={hotspotsActive}
           onClick={() => engine.dispatch({ type: "togglePrototypeHotspots" })}
           title="Toggle hotspot hints (H)"
-          style={{
-            background: hotspotsActive ? "rgba(13, 153, 255, 0.25)" : "transparent",
-            border: 0,
-            color: hotspotsActive ? "#38bdf8" : "rgba(255,255,255,0.7)",
-            cursor: "pointer",
-            padding: "4px 8px",
-            borderRadius: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
         >
           <Icon name="pointer" size={rowIconSize()} />
           <span>Hotspots</span>
@@ -602,25 +588,17 @@ export function PresentationPlayer({
 
         {/* Device Preset Switcher */}
         <select
+          className="player-select"
+          aria-label="Device mockup frame"
           value={device}
           onChange={(e) => engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })}
           title="Device Mockup Frame"
-          style={{
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.14)",
-            borderRadius: 14,
-            color: "#fff",
-            padding: "4px 8px",
-            fontSize: 11,
-            outline: "none",
-            cursor: "pointer",
-          }}
         >
-          <option value="none" style={{ background: "#18181b" }}>No device</option>
+          <option value="none">No device</option>
           {DEVICE_GROUPS.map((g) => (
             <optgroup key={g.group} label={g.group}>
               {g.items.map((d) => (
-                <option key={d.id} value={d.id} style={{ background: "#18181b" }}>
+                <option key={d.id} value={d.id}>
                   {d.label}
                 </option>
               ))}
@@ -630,6 +608,7 @@ export function PresentationPlayer({
 
         {/* Scale Switcher */}
         <button
+          className="player-btn"
           onClick={() => {
             const next = scaleMode === "fit" ? "100%" : "fit";
             engine.dispatch({ type: "setPrototypeScale", scale: next });
@@ -648,35 +627,16 @@ export function PresentationPlayer({
             }
           }}
           title={`Scale mode: ${scaleMode} (click to toggle)`}
-          style={{
-            background: "rgba(255, 255, 255, 0.08)",
-            border: "1px solid rgba(255, 255, 255, 0.14)",
-            borderRadius: 14,
-            color: "#fff",
-            padding: "4px 8px",
-            fontSize: 11,
-            cursor: "pointer",
-          }}
         >
           {scaleMode === "fit" ? "Fit" : "100%"}
         </button>
 
         {/* Live Form Inputs Toggle */}
         <button
+          className={`player-btn${liveInputsActive ? " on green" : ""}`}
+          aria-pressed={liveInputsActive}
           onClick={() => engine.dispatch({ type: "togglePrototypeLiveInputs" })}
           title="Toggle live editable inputs (I)"
-          style={{
-            background: liveInputsActive ? "rgba(16, 185, 129, 0.25)" : "transparent",
-            border: 0,
-            color: liveInputsActive ? "#34d399" : "rgba(255,255,255,0.7)",
-            cursor: "pointer",
-            padding: "4px 8px",
-            borderRadius: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
         >
           <Icon name="type" size={rowIconSize()} />
           <span>Live Inputs</span>
@@ -684,60 +644,28 @@ export function PresentationPlayer({
 
         {/* Sound Toggle */}
         <button
+          className={`player-btn${soundActive ? " on" : ""}`}
+          aria-pressed={soundActive}
           onClick={() => engine.dispatch({ type: "togglePrototypeSound" })}
           title="Toggle tactile sound feedback (M)"
-          style={{
-            background: soundActive ? "rgba(255, 255, 255, 0.1)" : "transparent",
-            border: 0,
-            color: soundActive ? "#fff" : "rgba(255,255,255,0.4)",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name={soundActive ? "volume" : "volume-x"} size={rowIconSize()} />
         </button>
 
         {/* Fullscreen Toggle */}
         <button
+          className="player-btn"
           onClick={() => {
             if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
             else document.exitFullscreen().catch(() => {});
           }}
           title="Fullscreen (F)"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: "#fff",
-            cursor: "pointer",
-            padding: "4px 6px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-          }}
         >
           <Icon name="fullscreen" size={rowIconSize()} />
         </button>
 
         {/* Exit Presentation */}
-        <button
-          onClick={onExit}
-          title="Exit presentation (Esc)"
-          style={{
-            background: "rgba(239, 68, 68, 0.25)",
-            border: "1px solid rgba(239, 68, 68, 0.4)",
-            color: "#fca5a5",
-            cursor: "pointer",
-            padding: "4px 10px",
-            borderRadius: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            fontSize: 11,
-          }}
-        >
+        <button className="player-btn exit" onClick={onExit} title="Exit presentation (Esc)">
           <Icon name="close" size={12} />
           <span>Exit</span>
         </button>

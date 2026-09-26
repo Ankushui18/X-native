@@ -13,7 +13,7 @@ import { plural, toast } from "./toast";
  */
 
 /** Paint roles the "same …" commands understand. */
-export type SameKind = "fill" | "stroke" | "effect" | "text" | "font" | "properties";
+export type SameKind = "fill" | "stroke" | "effect" | "text" | "font" | "properties" | "instance";
 
 export const SAME_KINDS: { id: SameKind; label: string }[] = [
   { id: "properties", label: "Properties" },
@@ -22,6 +22,7 @@ export const SAME_KINDS: { id: SameKind; label: string }[] = [
   { id: "effect", label: "Effect" },
   { id: "text", label: "Text properties" },
   { id: "font", label: "Font" },
+  { id: "instance", label: "Instance" },
 ];
 
 const NONE = "#00000000";
@@ -139,6 +140,10 @@ function shares(n: XNode, ref: XNode, kind: SameKind): boolean {
       );
     case "properties":
       return properties(n) === properties(ref);
+    case "instance": {
+      const mine = ref.componentId && !ref.isComponent ? ref.componentId : null;
+      return !!mine && !!n.componentId && !n.isComponent && n.componentId === mine;
+    }
   }
 }
 

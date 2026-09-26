@@ -18,9 +18,9 @@
  *   T_BODY    — descriptions, empty states
  *   T_SECTION — inspector section headers
  */
-import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ReactNode, forwardRef, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { armPopover } from "./popoverGuard";
 import { evalField } from "./fieldExpr";
 import type { XNode } from "../engine/types";
@@ -46,7 +46,7 @@ export const type = {
 export interface XButtonProps {
   variant?: "primary" | "secondary" | "ghost" | "danger" | "icon";
   size?: "sm" | "md" | "lg";
-  icon?: string;
+  icon?: IconName;
   iconSize?: number;
   disabled?: boolean;
   active?: boolean;
@@ -58,20 +58,25 @@ export interface XButtonProps {
   style?: React.CSSProperties;
 }
 
-export function XButton({
-  variant = "secondary",
-  size = "md",
-  icon,
-  iconSize,
-  disabled = false,
-  active = false,
-  title,
-  ariaLabel,
-  onClick,
-  children,
-  className = "",
-  style,
-}: XButtonProps) {
+// forwardRef: a modal needs to put focus on its primary action when it opens,
+// and that is the one thing a button cannot do for itself from the outside.
+export const XButton = forwardRef<HTMLButtonElement, XButtonProps>(function XButton(
+  {
+    variant = "secondary",
+    size = "md",
+    icon,
+    iconSize,
+    disabled = false,
+    active = false,
+    title,
+    ariaLabel,
+    onClick,
+    children,
+    className = "",
+    style,
+  }: XButtonProps,
+  ref,
+) {
   const isIconOnly = variant === "icon" || (!children && !!icon);
   const sizeClass = `x-btn-${size}`;
   const variantClass = isIconOnly ? "x-btn-ghost x-btn-icon" : `x-btn-${variant}`;
@@ -80,6 +85,7 @@ export function XButton({
 
   return (
     <button
+      ref={ref}
       className={`x-btn ${variantClass} ${sizeClass}${activeClass} ${className}`}
       disabled={disabled}
       title={title}
@@ -91,7 +97,7 @@ export function XButton({
       {children}
     </button>
   );
-}
+});
 
 // ── Input ───────────────────────────────────────────────────────────────────
 export interface XInputProps {
@@ -99,7 +105,7 @@ export interface XInputProps {
   onChange: (val: string) => void;
   onCommit?: (val: string) => void;
   placeholder?: string;
-  icon?: string;
+  icon?: IconName;
   suffix?: string;
   disabled?: boolean;
   ariaLabel?: string;
@@ -153,7 +159,7 @@ export interface XNumericInputProps {
   value: number;
   onChange: (val: number) => void;
   label?: string;
-  icon?: string;
+  icon?: IconName;
   min?: number;
   max?: number;
   step?: number;
@@ -283,7 +289,7 @@ export function XNumericInput({
 export interface XSelectOption {
   value: string;
   label: string;
-  icon?: string;
+  icon?: IconName;
 }
 
 export function XSelect({
@@ -320,24 +326,86 @@ export function XSelect({
 }
 
 // ── Segmented Control ───────────────────────────────────────────────────────
+/** Roving focus + arrow keys for a horizontal tab/seg strip: the WAI-ARIA
+ *  pattern every tab list in the product was missing. Only the active control
+ *  is tabbable, arrows move between them (activating as they go, which is what
+ *  a tab strip should do), Home and End jump to the ends. */
+function tablistKeys<T extends { id: string }>(
+  items: T[],
+  activeId: string,
+  onChange: (id: string) => void,
+): { onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => void; tabIndexFor: (id: string) => number } {
+  const step = (e: React.KeyboardEvent<HTMLElement>, delta: number | "first" | "last") => {
+    if (!items.length) return;
+    const at = Math.max(0, items.findIndex((t) => t.id === activeId));
+    const next =
+      delta === "first"
+        ? 0
+        : delta === "last"
+          ? items.length - 1
+          : (at + delta + items.length) % items.length;
+    const target = items[next];
+    if (!target) return;
+    e.preventDefault();
+    onChange(target.id);
+    // Focus follows the arrow key, so the next arrow continues from there.
+    const strip = e.currentTarget as HTMLElement;
+    requestAnimationFrame(() => {
+      strip.querySelectorAll<HTMLElement>("[role='tab']")[next]?.focus();
+    });
+  };
+  return {
+    tabIndexFor: (id: string) => (id === activeId ? 0 : -1),
+    onKeyDown: (e) => {
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") step(e, 1);
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") step(e, -1);
+      else if (e.key === "Home") step(e, "first");
+      else if (e.key === "End") step(e, "last");
+    },
+  };
+}
+
+/** One segmented control for the whole product. It renders the `.seg` shape the
+ *  panels already use (so adopting it is visually neutral), and adds what the
+ *  hand-rolled copies each lacked: tab semantics, `aria-selected`, roving focus
+ *  and arrow-key navigation. */
 export function XSegmentedControl({
   value,
   options,
   onChange,
+  ariaLabel,
+  className,
 }: {
   value: string;
-  options: { value: string; label?: string; icon?: string; title?: string }[];
+  options: { value: string; label?: string; icon?: IconName; title?: string }[];
   onChange: (val: string) => void;
+  ariaLabel?: string;
+  /** Extra classes for context styling, e.g. the compact `dev-seg` height. */
+  className?: string;
 }) {
+  const keys = tablistKeys(
+    options.map((o) => ({ id: o.value })),
+    value,
+    onChange,
+  );
   return (
-    <div className="x-seg">
+    <div
+      className={className ? `seg ${className}` : "seg"}
+      role="tablist"
+      aria-label={ariaLabel}
+      onKeyDown={keys.onKeyDown}
+    >
       {options.map((opt) => (
         <button
           key={opt.value}
-          className={`x-seg-btn${value === opt.value ? " on" : ""}`}
-          title={opt.title ?? opt.label}
+          role="tab"
+          className={value === opt.value ? "on" : ""}
+          aria-selected={value === opt.value}
+          // An icon-only segment needs a name; a labelled one shows its text.
+          aria-label={opt.icon && !opt.label ? opt.title : undefined}
+          title={opt.title}
+          tabIndex={keys.tabIndexFor(opt.value)}
           onClick={() => onChange(opt.value)}
-          aria-pressed={value === opt.value}
         >
           {opt.icon && <Icon name={opt.icon} size={14} />}
           {opt.label && <span>{opt.label}</span>}
@@ -436,7 +504,7 @@ export function PropertyField({
   disabled,
 }: {
   label?: string;
-  icon?: string;
+  icon?: IconName;
   children: ReactNode;
   hint?: string;
   disabled?: boolean;
@@ -491,7 +559,7 @@ export function XSection({
       <div className="h-row">
         <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
           <Icon name={open ? "chevron" : "chevron-right"} size={12} />
-          <h3>{title}</h3>
+          <h2>{title}</h2>
         </button>
         {actions}
       </div>
@@ -529,7 +597,7 @@ export function XDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="x-dialog" style={{ width }} role="dialog" aria-label={title}>
+      <div className="x-dialog" style={{ width }} role="dialog" aria-modal="true" aria-label={title}>
         <div className="x-dialog-head">
           <span className="x-dialog-title">{title}</span>
           <button className="icon-btn" aria-label="Close" onClick={onClose}>
@@ -591,8 +659,9 @@ export function ContextToolbar({
       </span>
       <div className="sep" />
 
-      {/* Auto Layout toggle */}
-      {onAutoLayout && (isFrame || multi) && (
+      {/* Auto Layout toggle: offered for any selection, like ⇧A — a lone
+          rectangle wraps in a frame just as well as a frame takes layout. */}
+      {onAutoLayout && (node || multi) && (
         <button
           className="icon-btn"
           title="Auto Layout (⇧A)"
@@ -696,18 +765,35 @@ export function XTabs({
   tabs,
   active,
   onChange,
+  ariaLabel,
+  variant = "head",
 }: {
   tabs: { id: string; label: string; count?: number }[];
   active: string;
   onChange: (id: string) => void;
+  ariaLabel?: string;
+  /** "head" is the inspector's underline strip; "pane" fills a side panel. */
+  variant?: "head" | "pane";
 }) {
+  const keys = tablistKeys(tabs, active, onChange);
   return (
-    <div className="tabs">
+    <div
+      className={variant === "pane" ? "tabs pane" : "tabs"}
+      role="tablist"
+      aria-label={ariaLabel}
+      onKeyDown={keys.onKeyDown}
+    >
       {tabs.map((t) => (
         <button
           key={t.id}
+          role="tab"
           className="tab"
+          // aria-current still drives the underline styling; aria-selected is
+          // what the tab pattern promises a screen reader. Both, so the look
+          // and every existing consumer of `aria-current` keep working.
           aria-current={active === t.id}
+          aria-selected={active === t.id}
+          tabIndex={keys.tabIndexFor(t.id)}
           onClick={() => onChange(t.id)}
         >
           {t.label}

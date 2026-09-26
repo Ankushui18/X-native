@@ -4,6 +4,7 @@ import type {
   Command,
   ComponentMaster,
   Effect,
+  EffectKind,
   Engine,
   NodeKind,
   Page,
@@ -12,12 +13,26 @@ import type {
   Snapshot,
   Tool,
   XNode,
+  StrokeAlign,
+  BooleanOp,
   VariableItem,
+  VariableCollection,
   AnnotationItem,
 } from "./types";
+import {
+  BINDABLE_PROPS,
+  applyBinding,
+  fallbackForType,
+  isAlias,
+  migrateCollections,
+  resolveAllForMode,
+  resolveVariable,
+  wouldCycle,
+} from "./variables";
 import { clipPlainText, copyText, nativeClipHtml, writeClipboard } from "./clipboard";
 import { dehydrateNode } from "./assets";
-import { exportClipSvg } from "./svgExport";
+import { computeMasterHash } from "./codegen";
+import { exportClipSvg, exportSvg } from "./svgExport";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
 import {
@@ -27,6 +42,8 @@ import {
   cellBox,
   fillPatch,
   clampToPadding,
+  flowInsertIndex,
+  insideStrokeWidth,
   hugsCross,
   hugsMain,
   isAutoGap,
@@ -53,7 +70,9 @@ import {
   pathBounds,
   normalizeVectorNode,
   samplePathPoints,
+  outlineVariableStroke,
 } from "./geometry";
+import { maxWidthMultiplier, strokeSpill, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
 import {
   type Transaction,
@@ -112,12 +131,12 @@ export function node(
     strokeVisible: kind === "line" || kind === "arrow",
     strokeWidth: kind === "line" || kind === "arrow" ? 1 : 0,
     effects: [] as Effect[],
-    strokeAlign: "inside",
+    strokeAlign: kind === "line" || kind === "arrow" ? "center" : "inside",
     strokeDash: 0,
     strokeGap: 0,
-    strokeCap: kind === "arrow" ? "arrow" : "none",
-    strokeCapStart: "none",
-    strokeCapEnd: kind === "arrow" ? "arrow" : "none",
+    strokeCap: kind === "arrow" ? "arrow" : kind === "line" ? "round" : "none",
+    strokeCapStart: kind === "line" ? "round" : "none",
+    strokeCapEnd: kind === "arrow" ? "arrow" : kind === "line" ? "round" : "none",
     strokeJoin: "miter",
     opacity: 1,
     visible: true,
@@ -143,6 +162,7 @@ export function node(
     imageSrc: "",
     imageFit: "fill",
     imageRot: 0,
+    imageTile: 100,
     imageExposure: 0,
     imageContrast: 0,
     imageSaturation: 0,
@@ -214,16 +234,268 @@ function findParent(root: XNode, id: string): XNode | null {
   return null;
 }
 
+const TEXT_BINDS = new Set([
+  "text",
+  "fontSize",
+  "letterSpacing",
+  "lineHeight",
+  "paragraphSpacing",
+  "paragraphIndent",
+  "fontWeight",
+  "fontFamily",
+]);
+
+/**
+ * Why `bindVariable` would refuse this prop on this layer: the text-only
+ * props, corner radii without corners, layout props without a layout,
+ * and the instance geometry rules (members take no size/radii/layout
+ * bindings; roots take no layout bindings — C-001). One source of truth
+ * for the command and every bind UI, so a refusal always says why.
+ */
+export function bindBlockReason(root: XNode, id: string, prop: string): string | null {
+  const n = find(root, id);
+  if (!n) return "Select a layer first";
+  if (TEXT_BINDS.has(prop) && n.kind !== "text") return "That property needs a text layer";
+  if (prop === "cornerRadii" && !n.cornerRadii) return "This layer has no corner radius";
+  if ((prop === "layoutGap" || prop === "layoutPadding") && !n.layout)
+    return "That property needs auto layout";
+  const memberGeometry =
+    prop === "w" ||
+    prop === "h" ||
+    prop === "cornerRadii" ||
+    prop === "layoutGap" ||
+    prop === "layoutPadding";
+  if (memberGeometry && isInstanceMember(root, id)) return "That property belongs to the main component";
+  if ((prop === "layoutGap" || prop === "layoutPadding") && findInstanceRoot(root, id))
+    return "Layout belongs to the main component";
+  return null;
+}
+
+/**
+ * Figma lock inheritance: locking a frame/group locks its whole subtree, and
+ * a child cannot be unlocked while an ancestor stays locked. All canvas
+ * interaction and structural ops go through this instead of `n.locked`. Exported
+ * for the inspector, which needs the same guard when it resolves a
+ * multi-selection down to the layers a panel edit may actually touch.
+ */
+function isEffectivelyLocked(root: XNode, id: string): boolean {
+  let cur: XNode | null = find(root, id);
+  while (cur) {
+    if (cur.locked) return true;
+    if (cur.id === root.id) break;
+    cur = findParent(root, cur.id);
+  }
+  return false;
+}
+
 function findInstanceRoot(root: XNode, id: string): XNode | null {
   const curr = find(root, id);
   if (!curr) return null;
-  if (curr.componentId && !curr.isComponent) return curr;
+  if (curr.componentId && !curr.isComponent) {
+    // A nested root carries its own link and resolves to itself; a member
+    // stamped with its root's link by an older sync heals to the true root.
+    let q = findParent(root, id);
+    while (q && q !== root) {
+      if (q.componentId && !q.isComponent) {
+        if (q.componentId !== curr.componentId) return curr;
+        curr.componentId = "";
+        return q;
+      }
+      q = findParent(root, q.id);
+    }
+    return curr;
+  }
   let p = findParent(root, id);
   while (p && p !== root) {
     if (p.componentId && !p.isComponent) return p;
     p = findParent(root, p.id);
   }
   return null;
+}
+
+/**
+ * The master-def counterpart of an instance member: descend the def by the
+ * member's name path from its instance root, falling back to the child
+ * index path when a rename broke the name trail.
+ */
+function findDefCounterpart(instRoot: XNode, defNode: XNode, memberId: string): XNode | null {
+  const names: string[] = [];
+  const idxs: number[] = [];
+  let cur: XNode | null = find(instRoot, memberId);
+  if (!cur) return null;
+  while (cur && cur.id !== instRoot.id) {
+    const p = findParent(instRoot, cur.id);
+    if (!p) return null;
+    names.unshift(cur.name);
+    idxs.unshift(p.children.indexOf(cur));
+    cur = p;
+  }
+  let byName: XNode | null = defNode;
+  for (const nm of names) {
+    if (!byName) break;
+    const next: XNode | null = byName.children.find((c) => c.name === nm) ?? null;
+    if (!next) { byName = null; break; }
+    byName = next;
+  }
+  if (byName && byName !== defNode) return byName;
+  let byIdx: XNode | null = defNode;
+  for (const i of idxs) {
+    if (!byIdx.children[i]) return null;
+    byIdx = byIdx.children[i];
+  }
+  return byIdx === defNode ? null : byIdx;
+}
+
+/** Nearest enclosing main component (self counts): master-subtree edits publish through it. */
+function findMasterRoot(root: XNode, id: string): XNode | null {
+  const curr = find(root, id);
+  if (!curr) return null;
+  if (curr.isComponent) return curr;
+  let p = findParent(root, id);
+  while (p && p !== root) {
+    if (p.isComponent) return p;
+    p = findParent(root, p.id);
+  }
+  return null;
+}
+
+/** True when the layer sits strictly inside an instance (the instance root
+ *  itself is editable — it is the members whose geometry belongs to the master).
+ *  Exported for the inspector's multi-selection resolver, same as the lock guard. */
+function isInstanceMember(root: XNode, id: string): boolean {
+  const r = findInstanceRoot(root, id);
+  return !!r && r.id !== id;
+}
+
+/** The gap Figma's tidy-up repeats: the strictly most common spacing between
+ *  consecutive layers, compared at 1/100px so float dust does not split the
+ *  vote. Null when no gap repeats — the caller then falls back to an even
+ *  split, which is what distribute would have done with the same span. */
+function modeStep(gaps: number[]): number | null {
+  const counts = new Map<number, number>();
+  for (const g of gaps) {
+    const k = Math.round(g * 100) / 100;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  let bestCount = 1;
+  let tied = false;
+  for (const [k, c] of counts) {
+    if (c > bestCount) {
+      best = k;
+      bestCount = c;
+      tied = false;
+    } else if (best !== null && c === bestCount) {
+      tied = true;
+    }
+  }
+  return tied ? null : best;
+}
+
+/** Move a world-measured layer to a world point: the node keeps its offset
+ *  from its own parent by taking a delta, and rounding follows the pixel
+ *  grid exactly as under `move`. Shared by distribute and tidy-up. */
+function shiftWorld(
+  w: { x: number; y: number; node: XNode },
+  nx: number,
+  ny: number,
+  snap: boolean,
+) {
+  w.node.x += nx - w.x;
+  w.node.y += ny - w.y;
+  if (snap) {
+    w.node.x = Math.round(w.node.x);
+    w.node.y = Math.round(w.node.y);
+  }
+  w.x = nx;
+  w.y = ny;
+}
+
+/**
+ * Patch keys a member inside an instance may not take. Figma refuses order,
+ * position, constraints, and text bounds there (structure belongs to the
+ * main component); X's own policy already refuses radii, aspect lock, and
+ * the Scale tool, so size/rotation/vector/grid/crop/layout/kind refuse here
+ * too. Paint, text, effects, exports, visibility, and names stay overridable.
+ */
+const MEMBER_REFUSED_KEYS = new Set([
+  "x", "y", "w", "h", "rotation",
+  "cornerRadii", "cornerIndependent", "cornerSmoothing",
+  "aspectLocked", "aspectRatio",
+  "constraintH", "constraintV",
+  "path", "closed", "vectorNetwork",
+  "gridCol", "gridRow", "gridPinned",
+  "imageCrop", "kind", "booleanOp",
+  // Layout belongs to the main component: members refuse it through the
+  // generic patch too, not just through the autoLayout action. (Roots keep
+  // spacing fragments - padding and gaps - via `layoutSpacingFragment`.)
+  "layout",
+]);
+
+/**
+ * The layout keys an instance root may override: padding and gaps only. The
+ * components article's table lets instances adjust auto-layout spacing while
+ * the structure - direction, wrap, alignment, sizing - stays with the main
+ * component. Stored as a fragment and merged over the master's layout at sync,
+ * so a master direction change still flows to instances that overrode padding.
+ */
+const LAYOUT_SPACING_KEYS = ["padding", "gap", "gapCross", "gapRows", "gapCols"] as const;
+function layoutSpacingFragment(l: Partial<AutoLayout> | null | undefined): Partial<AutoLayout> | null {
+  if (!l) return null;
+  const frag: Partial<AutoLayout> = {};
+  for (const k of LAYOUT_SPACING_KEYS) {
+    const v = l[k];
+    if (v !== undefined) (frag as Record<string, unknown>)[k] = v;
+  }
+  return Object.keys(frag).length ? frag : null;
+}
+
+/**
+ * On instance roots and members a style is a paint override: mirror it
+ * into the override record, or the next master sync restores the master's
+ * own style link. Plain layers need no record (nothing syncs them back).
+ */
+function recordStyleOverride(root: XNode, n: XNode, kind: "fill" | "stroke"): void {
+  if (!findInstanceRoot(root, n.id)) return;
+  n.overrides =
+    kind === "fill"
+      ? { ...(n.overrides || {}), fill: n.fill, fillStyle: n.fillStyle }
+      : { ...(n.overrides || {}), strokePaint: n.strokePaint, strokeStyle: n.strokeStyle };
+}
+
+/**
+ * Dropping a style link inside an instance records the absence, or sync
+ * re-binds the master's link. The `undefined` value survives the assign
+ * spread (it is the value that wins), not just the key check.
+ */
+function recordStyleDetach(root: XNode, n: XNode, kind: "fill" | "stroke"): void {
+  if (!findInstanceRoot(root, n.id)) return;
+  n.overrides =
+    kind === "fill"
+      ? { ...(n.overrides || {}), fillStyle: undefined }
+      : { ...(n.overrides || {}), strokeStyle: undefined };
+}
+
+/**
+ * Merge a live-link map (variable bindings, expressions) across a master
+ * sync or variant swap: the master's map supplies new keys, the
+ * instance's own entries win per prop — the same rule as overrides.
+ */
+function mergeLinkMaps<T>(
+  master: Record<string, T> | undefined,
+  local: Record<string, T> | undefined,
+): Record<string, T> | undefined {
+  const out = { ...(master ?? {}), ...(local ?? {}) };
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Strip member-refused keys; null when nothing overridable remains. */
+function stripMemberPatch(patch: Partial<XNode>): Partial<XNode> | null {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(patch)) {
+    if (!MEMBER_REFUSED_KEYS.has(k)) out[k] = (patch as Record<string, unknown>)[k];
+  }
+  return Object.keys(out).length ? (out as Partial<XNode>) : null;
 }
 
 /**
@@ -243,6 +515,17 @@ export function stripLayout(n: XNode): void {
   if (n.kind === "instance") return;
   // The model stores "no auto layout" as null, the same value the panel sends.
   n.layout = null;
+  // Gap/padding bindings die with the layout they pointed into.
+  if (n.variableBindings) {
+    delete n.variableBindings.layoutGap;
+    delete n.variableBindings.layoutPadding;
+    if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+  }
+  if (n.ownBindings) {
+    delete n.ownBindings.layoutGap;
+    delete n.ownBindings.layoutPadding;
+    if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+  }
   for (const c of n.children) stripLayout(c);
 }
 
@@ -268,6 +551,8 @@ function sizeSignature(n: XNode): string {
 
 function applyLayout(n: XNode, gesture = false) {
   for (const c of n.children) applyLayout(c, gesture);
+  const entryW = n.w;
+  const entryH = n.h;
   const l = n.layout;
   if (!l) {
     if (n.children.length && (n.sizingW === "hug" || n.sizingH === "hug")) {
@@ -278,6 +563,9 @@ function applyLayout(n: XNode, gesture = false) {
       }
     }
     clampDims(n);
+    // A hug is a resize like any other: absolutely positioned children with
+    // constraints follow it, the same as after an explicit resize.
+    applyConstraints(n, entryW, entryH, n.w, n.h, true);
     return;
   }
   const flow = n.children.filter((c) => c.visible && !c.absolutePosition);
@@ -290,12 +578,20 @@ function applyLayout(n: XNode, gesture = false) {
     // With automatic positioning off the objects stay where they are put - a
     // drop into a cell keeps it, empty cells and all - so their cells are read
     // off the arrangement the tracks were resolved from.
-    const first = planGrid(n, flow, l, hugW, hugH);
+    // The frame's own inside stroke counts as padding: tracks resolve inside
+    // it, cells paint inside it, and the hug grows around it. Outside and
+    // center strokes never count (layout.ts `insideStrokeWidth`).
+    const gsw = insideStrokeWidth(n);
+    const li =
+      gsw > 0 && Array.isArray(l.padding)
+        ? { ...l, padding: [l.padding[0] + gsw, l.padding[1] + gsw, l.padding[2] + gsw, l.padding[3] + gsw] as [number, number, number, number] }
+        : l;
+    const first = planGrid(n, flow, li, hugW, hugH);
     const plan =
       l.autoPosition === false && !gesture
-        ? planGrid(n, flow, l, hugW, hugH, flow.map((c) => cellAt(first, l, c)))
+        ? planGrid(n, flow, li, hugW, hugH, flow.map((c) => cellAt(first, li, c)))
         : first;
-    const [gl, gr, gt, gb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+    const [gl, gr, gt, gb] = Array.isArray(li.padding) ? li.padding : [0, 0, 0, 0];
     flow.forEach((c, i) => {
       const cell = plan.cells[i];
       if (!cell) return;
@@ -328,12 +624,19 @@ function applyLayout(n: XNode, gesture = false) {
     if (hugH) n.h = Math.max(1, gt + plan.totalH + gb);
     clampToPadding(n);
     clampDims(n);
+    applyConstraints(n, entryW, entryH, n.w, n.h, true);
     return;
   }
-  const [pl, pr, pt, pb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+  const [ql, qr, qt, qb] = Array.isArray(l.padding) ? l.padding : [0, 0, 0, 0];
+  // The frame's own inside stroke behaves as extra padding on every side, so
+  // the inner size, the children's origin, and the hug all account for it at
+  // once. Outside and center strokes never count.
+  const sw = insideStrokeWidth(n);
+  const pl = ql + sw;
+  const pr = qr + sw;
+  const pt = qt + sw;
+  const pb = qb + sw;
   const horiz = l.direction === "horizontal";
-  // Wrap is offered on a horizontal flow only, so a vertical frame that still
-  // carries the flag lays out as a plain stack rather than wrapping.
   const doesWrap = wraps(l);
   const gap = typeof l.gap === "number" ? l.gap : 0;
   const innerW = n.w - pl - pr;
@@ -384,6 +687,10 @@ function applyLayout(n: XNode, gesture = false) {
     let y = pt;
     let rowH = 0;
     let rowW = 0;
+    // A wrapping flow has two gaps: `gap` spaces the objects within a line,
+    // `gapCross` spaces the lines themselves (rows, or columns in a vertical
+    // wrap). Older documents only have the one, which both fall back to.
+    const gapBetween = typeof l.gapCross === "number" ? l.gapCross : gap;
     const limit = horiz ? n.w - pr : n.h - pb;
     for (const c of flow) {
       const main = horiz ? c.w : c.h;
@@ -391,10 +698,10 @@ function applyLayout(n: XNode, gesture = false) {
       if (cur > (horiz ? pl : pt) && cur + main > limit) {
         if (horiz) {
           x = pl;
-          y += rowH + gap;
+          y += rowH + gapBetween;
         } else {
           y = pt;
-          x += rowW + gap;
+          x += rowW + gapBetween;
         }
         rowH = 0;
         rowW = 0;
@@ -420,6 +727,7 @@ function applyLayout(n: XNode, gesture = false) {
     for (const c of flow) clampDims(c);
     clampToPadding(n);
     clampDims(n);
+    applyConstraints(n, entryW, entryH, n.w, n.h, true);
     return;
   }
   const mainTotal = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0) + gap * Math.max(0, flow.length - 1);
@@ -482,6 +790,7 @@ function applyLayout(n: XNode, gesture = false) {
   // A frame is never narrower than its own padding.
   clampToPadding(n);
   clampDims(n);
+  applyConstraints(n, entryW, entryH, n.w, n.h, true);
 }
 
 export function demoPage(): Page {
@@ -505,11 +814,11 @@ export function demoPage(): Page {
     fontSize: 13,
     fill: "#5a5f6b",
   });
-  const pill = node("rect", "View Details Button", 0, 0, 110, 32, {
+  const pill = node("rect", "View Details Button", 0, 0, 136, 32, {
     fill: "#0d99ff",
     cornerRadii: [16, 16, 16, 16],
   });
-  const pillLabel = node("text", "Label", 18, 8, 80, 16, {
+  const pillLabel = node("text", "Label", 17, 8, 102, 16, {
     text: "View Details →",
     fontSize: 12,
     fontWeight: 600,
@@ -517,7 +826,7 @@ export function demoPage(): Page {
   });
   pill.children = [pillLabel];
 
-  const card = node("frame", "Card", 24, 172, 342, 170, {
+  const card = node("frame", "Card", 24, 192, 342, 170, {
     fill: "#f8fafc",
     cornerRadii: [16, 16, 16, 16],
     overflow: "clip",
@@ -545,7 +854,7 @@ export function demoPage(): Page {
   });
   card.children = [cardTitle, cardBody, pill];
 
-  const filterBtn = node("rect", "Filter Options Button", 24, 360, 342, 44, {
+  const filterBtn = node("rect", "Filter Options Button", 24, 380, 342, 44, {
     fill: "#f1f5f9",
     cornerRadii: [12, 12, 12, 12],
     strokePaint: "#cbd5e1",
@@ -690,12 +999,13 @@ interface Internal {
   pages: Page[];
   page: number;
   selection: string[];
+  /** See Snapshot.treeRev. */
+  treeRev: number;
   tool: Tool;
   zoom: number;
   panX: number;
   panY: number;
   rightTab: Snapshot["rightTab"];
-  leftTab: Snapshot["leftTab"];
   components: ComponentMaster[];
   styles: SharedStyle[];
   presentFrame: string;
@@ -712,15 +1022,24 @@ interface Internal {
   showMinimap: boolean;
   showComments: boolean;
   outlineMode: boolean;
+  showMaskOutlines: boolean;
   pixelPreview: PixelPreview;
   viewLayoutGuides: boolean;
   propertyLabels: boolean;
   openComment: string;
   variables: VariableItem[];
+  variableCollections: VariableCollection[];
+  activeModes: Record<string, string>;
   annotations: AnnotationItem[];
   vecEdit: string | null;
   vecPoint: number | null;
   vecPoints: number[];
+  booleanPreview: BooleanOp | null;
+  /** Selected ruler guide; mutually exclusive with the layer selection. */
+  selectedGuide: string | null;
+  /** Hover preview of a stroke position (inspector → canvas). */
+  previewStroke: { id: string; align: StrokeAlign } | null;
+  previewEffect: { id: string; kind: EffectKind } | null;
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -730,18 +1049,23 @@ const MAX_UNDO = 200;
 /** Commands whose rapid repeats collapse into a single undo step. Only
  *  incremental, self-repeating gestures belong here — structural edits must
  *  always get their own entry. */
-const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch", "autoLayout"]);
+const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch", "autoLayout", "moveGuide"]);
 
 /** Identity used to decide whether two consecutive history commands belong to
  *  the same burst. For `patch` this includes the target ids and the property
  *  names being written, so typing "45" into the rotation field coalesces into
  *  one undo step while a patch of a *different* property still starts a new
  *  one. Without this, each keystroke in a numeric field cost its own undo. */
-function coalesceKey(cmd: Command): string {
+function coalesceKey(cmd: Command, lastType: string | null = null): string {
   if (cmd.type === "patch") {
     const c = cmd as Extract<Command, { type: "patch" }>;
     const ids = "id" in c && c.id ? String(c.id) : "";
     return `patch:${ids}:${Object.keys(c.patch ?? {}).sort().join(",")}`;
+  }
+  if (cmd.type === "moveGuide") {
+    // The drag that places a newborn guide joins the addGuide's undo step.
+    if (lastType === "addGuide") return "addGuide";
+    return `moveGuide:${(cmd as Extract<Command, { type: "moveGuide" }>).id}`;
   }
   if (cmd.type === "autoLayout") {
     // Typing into a gap/padding field rewrites the whole layout object, so key
@@ -804,7 +1128,12 @@ function clipBounds(nodes: XNode[]): { minX: number; minY: number; cx: number; c
  * headless test run — leaves the in-app copy untouched, so paste still works
  * here; nothing throws and no rejection escapes.
  */
-function publishClip(nodes: XNode[], fileName: string): void {
+function publishClip(
+  nodes: XNode[],
+  fileName: string,
+  world?: { x: number; y: number }[],
+  root?: XNode,
+): void {
   if (!nodes.length || typeof document === "undefined") return;
   const portable = nodes.map((n) => {
     try {
@@ -815,7 +1144,19 @@ function publishClip(nodes: XNode[], fileName: string): void {
   });
   let svg = "";
   try {
-    svg = exportClipSvg(nodes);
+    // The SVG flavour lays roots out by x/y, which for nested layers is the
+    // frame-local position: reposition the copies at their world coordinates
+    // so a multi-select from inside frames keeps its arrangement. The native
+    // payload keeps local coordinates, which is what paste expects.
+    const positioned =
+      world && world.length === nodes.length
+        ? nodes.map((n, i) => ({ ...n, x: world[i].x, y: world[i].y }))
+        : nodes;
+    // A lone copied slice pastes as its region's content, like the export's.
+    svg =
+      nodes.length === 1 && nodes[0].isSlice === true && root
+        ? exportSvg(nodes[0], { format: "SVG", scale: 1, suffix: "" }, { root })
+        : exportClipSvg(positioned);
   } catch {
     /* The vector flavour is a convenience for other apps; our own payload still
      * carries the layers in full. */
@@ -830,10 +1171,18 @@ export class MemoryEngine implements Engine {
   private redo: Internal[] = [];
   private listeners = new Set<() => void>();
   private snapCache: Snapshot;
-  private grouping = false;
+  /** One marker per open gesture, innermost last: the undo-stack top at the
+   *  moment it began (null when the stack was empty). A stack rather than a
+   *  flag, so a nested gesture's `end` neither ungroups the outer one nor
+   *  settles history early — and the outermost `end` can tell, by reference,
+   *  whether an undo or redo mid-gesture moved its entry away. */
+  private groupStack: (Internal | null)[] = [];
   /** True between `begin` and `end`: a pointer gesture is in flight, and a
    *  manually positioned grid lets its objects follow the pointer until the
    *  gesture ends and they settle into a cell. */
+  private get grouping(): boolean {
+    return this.groupStack.length > 0;
+  }
   private gesture = false;
   /** Last history-pushing command type and its timestamp, used to coalesce
    *  rapid repeats of the same command (e.g. holding an arrow key) into a
@@ -842,6 +1191,7 @@ export class MemoryEngine implements Engine {
   private clip: XNode[] = [];
   private copiedProps: Partial<XNode> | null = null;
   private lastDupDelta: { dx: number; dy: number } | null = null;
+  private lastFrameSize: { w: number; h: number } | null = null;
   private justDuplicated = false;
 
   /** Set when a stored document existed but could not be read, so the UI can
@@ -870,17 +1220,27 @@ export class MemoryEngine implements Engine {
       }
     }
     this.restoreFailed = corrupt;
+    // Variables predate persistence: documents written before them carry
+    // neither variables nor collections, so seed both and derive collections
+    // from whatever variables exist.
+    const seedVariables: VariableItem[] = doc?.variables ?? [
+      { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
+      { id: "var-2", name: "secondary", type: "color", value: "#6366f1", collection: "Brand" },
+      { id: "var-3", name: "spacing-sm", type: "number", value: 8, collection: "Spacing" },
+      { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
+      { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
+    ];
     this.state = {
       fileName: doc?.fileName ?? "Untitled",
       pages: doc?.pages ?? [demoPage()],
       page: doc?.page ?? 0,
       selection: [],
+      treeRev: 0,
       tool: "select",
       zoom: doc?.zoom ?? 0.75,
       panX: doc?.panX ?? 40,
       panY: doc?.panY ?? 20,
       rightTab: "design",
-      leftTab: "layers",
       components: doc?.components ?? [],
       styles: doc?.styles ?? [],
       presentFrame: "",
@@ -888,7 +1248,9 @@ export class MemoryEngine implements Engine {
       prototypeDevice: "none",
       prototypeOrientation: "portrait",
       prototypeScale: "fit",
-      prototypeHotspots: true,
+      // §23 PT-008: hints appear on a missed click (Figma "Show hints on
+      // click"); they are not painted permanently over every hotspot.
+      prototypeHotspots: false,
       prototypeLiveInputs: true,
       prototypeSound: true,
       activeOverlay: null,
@@ -897,22 +1259,23 @@ export class MemoryEngine implements Engine {
       showMinimap: doc?.showMinimap ?? false,
       showComments: doc?.showComments ?? false,
       outlineMode: false,
+      showMaskOutlines: false,
       pixelPreview: "off",
       viewLayoutGuides: true,
       propertyLabels: false,
       openComment: "",
-      variables: [
-        { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
-        { id: "var-2", name: "secondary", type: "color", value: "#6366f1", collection: "Brand" },
-        { id: "var-3", name: "spacing-sm", type: "number", value: 8, collection: "Spacing" },
-        { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
-        { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
-      ],
+      variables: seedVariables,
+      variableCollections: doc?.variableCollections ?? migrateCollections(seedVariables),
+      activeModes: doc?.activeModes ?? {},
       // Handoff notes belong to the file, not to the session (see F1).
       annotations: doc?.annotations ?? [],
       vecEdit: null,
       vecPoint: null,
       vecPoints: [],
+      booleanPreview: null,
+      selectedGuide: null,
+      previewStroke: null,
+      previewEffect: null,
     };
     this.relayout();
     this.snapCache = this.build();
@@ -935,6 +1298,9 @@ export class MemoryEngine implements Engine {
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
       annotations: this.state.annotations,
+      variables: this.state.variables,
+      variableCollections: this.state.variableCollections,
+      activeModes: this.state.activeModes,
     };
   }
 
@@ -971,6 +1337,7 @@ export class MemoryEngine implements Engine {
       }
       throw err;
     }
+    this.state.treeRev++;
     this.relayout();
     this.snapCache = this.build();
     this.listeners.forEach((f) => f());
@@ -1014,6 +1381,8 @@ export class MemoryEngine implements Engine {
       case "setVariable": {
         const idx = s.variables.findIndex((v) => v.id === op.variableId);
         if (idx >= 0) {
+          // A prototype write replaces the default slot; per-mode
+          // overrides keep working on top of it.
           s.variables[idx].value = op.newValue;
         } else {
           s.variables.push({
@@ -1023,6 +1392,7 @@ export class MemoryEngine implements Engine {
             type: typeof op.newValue === "number" ? "number" : typeof op.newValue === "boolean" ? "boolean" : "string",
             value: op.newValue,
           });
+          this.ensureCollection("Brand");
         }
         break;
       }
@@ -1081,14 +1451,30 @@ export class MemoryEngine implements Engine {
   }
 
   private evaluateExpressionsInTree(root: XNode) {
-    const varMap: Record<string, any> = {};
-    for (const v of this.state.variables) {
-      varMap[v.name] = v.value;
-      varMap[v.id] = v.value;
-    }
+    // Expressions see literals resolved under the active modes, never raw
+    // alias objects.
+    const varMap: Record<string, any> = resolveAllForMode(
+      this.state.variables,
+      this.state.variableCollections,
+      this.state.activeModes,
+    );
     const graph = new DependencyGraph();
 
     const evaluateNode = (node: XNode, parent: XNode | null) => {
+      // Variable bindings apply first; an explicit expression on the same
+      // prop wins, since it is the more specific instruction.
+      if (node.variableBindings) {
+        for (const [prop, varId] of Object.entries(node.variableBindings)) {
+          if (node.expressions?.[prop]) continue;
+          const r = resolveVariable(
+            this.state.variables,
+            this.state.variableCollections,
+            this.state.activeModes,
+            varId,
+          );
+          if (r && !r.broken) applyBinding(node, prop, r.value);
+        }
+      }
       if (node.expressions) {
         for (const [prop, expr] of Object.entries(node.expressions)) {
           if (!expr) continue;
@@ -1123,25 +1509,42 @@ export class MemoryEngine implements Engine {
 
   dispatch(cmd: Command): void {
     if (cmd.type === "begin") {
-      this.undo.push(clone(this.state));
-      this.redo = [];
-      this.grouping = true;
+      // Only the outermost gesture owns an undo entry: a nested gesture is
+      // one user action with its parent, not a sub-step of its own.
+      if (this.groupStack.length === 0) {
+        this.undo.push(clone(this.state));
+        if (this.undo.length > MAX_UNDO) this.undo.shift();
+      }
+      this.groupStack.push(this.undo[this.undo.length - 1] ?? null);
       this.gesture = true;
+      // A gesture is its own burst context: without this, a nudge after a
+      // drag could coalesce with a nudge from before it and lose its step.
+      this.lastHist = null;
       return;
     }
     if (cmd.type === "end") {
-      this.grouping = false;
+      const saved = this.groupStack.pop();
       // The end of a gesture is a drop: a grid in manual positioning reads the
       // cell the object was let go nearest to, so it settles here rather than
-      // mid-drag.
-      this.gesture = false;
+      // mid-drag. Nested gestures keep the flag until the outermost ends.
+      this.gesture = this.groupStack.length > 0;
       this.relayout();
-      const previous = this.undo[this.undo.length - 1];
-      if (previous && JSON.stringify(previous) === JSON.stringify(this.state)) {
-        this.undo.pop();
-        this.snapCache = this.build();
-        this.listeners.forEach((f) => f());
+      // Only the outermost `end` settles history; a stray `end` (no open
+      // gesture) only settles the grid. The reference check notices an undo
+      // or redo mid-gesture (the top moved away): a compromised gesture
+      // touches neither stack.
+      if (saved && this.groupStack.length === 0 && this.undo[this.undo.length - 1] === saved) {
+        if (JSON.stringify(saved) === JSON.stringify(this.state)) {
+          // A no-op gesture (a click that never moved): the entry goes, and
+          // the redo chain survives — an abandoned drag is not a new branch.
+          this.undo.pop();
+        } else {
+          this.redo = [];
+        }
       }
+      this.lastHist = null;
+      this.snapCache = this.build();
+      this.listeners.forEach((f) => f());
       return;
     }
     // Pure selection/view commands must never enter history: a user pressing
@@ -1156,6 +1559,19 @@ export class MemoryEngine implements Engine {
       "togglePropertyLabels",
       "toggleFlows",
       "toggleMinimap",
+      "toggleMaskOutlines",
+      // Outline mode is a View-menu toggle (Figma ⌘Y), not a document edit.
+      "toggleOutlines",
+      // Present runtime: opening/closing overlays and present-viewer options
+      // while presenting are navigation, not edits.
+      "openOverlay",
+      "closeOverlay",
+      "setPrototypeDevice",
+      "setPrototypeOrientation",
+      "setPrototypeScale",
+      "togglePrototypeHotspots",
+      "togglePrototypeLiveInputs",
+      "togglePrototypeSound",
       // Comments are annotations layered over the design, not part of it.
       // Keep them off the design undo stack entirely: ⌘Z after posting
       // a comment reverts your last *design* edit, it does not delete the note.
@@ -1171,7 +1587,6 @@ export class MemoryEngine implements Engine {
       "pan",
       "setPan",
       "setRightTab",
-      "setLeftTab",
       "setPage",
       "setFileName",
       "undo",
@@ -1186,14 +1601,26 @@ export class MemoryEngine implements Engine {
       "presentStart",
       "presentStop",
       "setVecEdit",
+      "setBooleanPreview",
+      // Creation's second half (canvas- vs frame-level); the addGuide owns it.
+      "setGuideFrame",
+      // Guide selection, like layer selection, is not a document edit.
+      "selectGuide",
+      // Stroke-position hover preview; render-only by design.
+      "previewStroke",
+      // Effect-kind hover preview; render-only by design.
+      "previewEffect",
     ].includes(cmd.type);
+    let pushedEntry: Internal | null = null;
+    let histKey = "";
+    let histAt = 0;
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
       // resize steps) into one undo entry so a single undo reverses the whole
       // gesture instead of one keypress at a time.
       const now = Date.now();
       const COALESCE_MS = 600;
-      const key = coalesceKey(cmd);
+      const key = coalesceKey(cmd, this.lastHist?.type ?? null);
       const repeat =
         COALESCABLE.has(cmd.type) &&
         this.lastHist !== null &&
@@ -1202,14 +1629,40 @@ export class MemoryEngine implements Engine {
       if (!repeat) {
         this.undo.push(clone(this.state));
         if (this.undo.length > MAX_UNDO) this.undo.shift();
+        pushedEntry = this.undo[this.undo.length - 1];
       }
-      this.redo = [];
-      this.lastHist = { type: key, at: now };
+      histKey = key;
+      histAt = now;
     } else if (!hist && cmd.type !== "undo" && cmd.type !== "redo") {
       // A non-history command (select, zoom, ...) ends the current burst.
       this.lastHist = null;
     }
+    if (cmd.type === "undo" || cmd.type === "redo") {
+      // Undo and redo end the current burst: the next edit is always its own
+      // step. Without this, an edit within the coalesce window of a
+      // pre-undo burst would merge into thin air — unundoable — and eat redo.
+      this.lastHist = null;
+    }
     this.apply(cmd);
+    if (hist && !this.grouping) {
+      const top = this.undo[this.undo.length - 1];
+      if (pushedEntry && top === pushedEntry && JSON.stringify(pushedEntry) === JSON.stringify(this.state)) {
+        // A guard refused the command (delete with no selection, paste with
+        // an empty clipboard): no document change, so the entry goes, the
+        // redo chain survives, and the burst breaks — a refused command must
+        // never lend its coalescing identity to the next real edit.
+        this.undo.pop();
+        this.lastHist = null;
+      } else {
+        this.redo = [];
+        this.lastHist = { type: histKey, at: histAt };
+      }
+    }
+    // Tree edits mutate nodes in place, so document panels cannot use reference
+    // equality to detect them; the revision does that job instead. Pure
+    // viewport moves leave it alone, letting those panels skip the frame.
+    // Conservative by design: anything not provably viewport-only bumps.
+    if (cmd.type !== "pan" && cmd.type !== "setPan" && cmd.type !== "setZoom") this.state.treeRev++;
     this.relayout();
     this.snapCache = this.build();
     this.listeners.forEach((f) => f());
@@ -1239,7 +1692,13 @@ export class MemoryEngine implements Engine {
     const l = parent.layout;
     if (!l || l.direction !== "grid" || l.autoPosition === false) return null;
     const flow = parent.children.filter((c) => c.visible && !c.absolutePosition);
-    return gridSpotForPoint(parent, flow, l, hugsMain(l, parent, flow), hugsCross(l, parent, flow), x, y);
+    // Cells resolve inside the frame's own inside stroke, like the tracks do.
+    const sw = insideStrokeWidth(parent);
+    const li =
+      sw > 0 && Array.isArray(l.padding)
+        ? { ...l, padding: [l.padding[0] + sw, l.padding[1] + sw, l.padding[2] + sw, l.padding[3] + sw] as [number, number, number, number] }
+        : l;
+    return gridSpotForPoint(parent, flow, li, hugsMain(li, parent, flow), hugsCross(li, parent, flow), x, y);
   }
 
   /**
@@ -1260,7 +1719,7 @@ export class MemoryEngine implements Engine {
       .map((id) => find(root, id))
       .filter((n): n is XNode => !!n && !n.locked);
     if (!nodes.length) return;
-    if (nodes.length === 1 && nodes[0].kind === "group") {
+    if (nodes.length === 1 && nodes[0].kind === "group" && !insideInstance(root, nodes[0].id)) {
       nodes[0].kind = "frame";
       nodes[0].name = nodes[0].name === "Group" ? "Frame" : nodes[0].name;
       nodes[0].layout = layout;
@@ -1318,12 +1777,15 @@ export class MemoryEngine implements Engine {
       pages: this.state.pages,
       page: this.state.page,
       selection: this.state.selection,
+      selectedGuide: this.state.selectedGuide,
+      previewStroke: this.state.previewStroke,
+      previewEffect: this.state.previewEffect,
+      treeRev: this.state.treeRev,
       tool: this.state.tool,
       zoom: this.state.zoom,
       panX: this.state.panX,
       panY: this.state.panY,
       rightTab: this.state.rightTab,
-      leftTab: this.state.leftTab,
       canUndo: this.undo.length > 0,
       canRedo: this.redo.length > 0,
       components: this.state.components,
@@ -1333,6 +1795,7 @@ export class MemoryEngine implements Engine {
       showMinimap: this.state.showMinimap,
       showComments: this.state.showComments,
       outlineMode: this.state.outlineMode ?? false,
+      showMaskOutlines: this.state.showMaskOutlines ?? false,
       pixelPreview: this.state.pixelPreview,
       viewLayoutGuides: this.state.viewLayoutGuides,
       propertyLabels: this.state.propertyLabels,
@@ -1350,10 +1813,14 @@ export class MemoryEngine implements Engine {
       prototypeSound: this.state.prototypeSound,
       activeOverlay: this.state.activeOverlay,
       variables: this.state.variables,
+      variableCollections: this.state.variableCollections,
+      activeModes: this.state.activeModes,
       annotations: this.state.annotations,
       vecEdit: this.state.vecEdit,
       vecPoint: this.state.vecPoint,
       vecPoints: this.state.vecPoints ?? [],
+      booleanPreview: this.state.booleanPreview,
+      lastFrameSize: this.lastFrameSize,
     };
   }
 
@@ -1362,6 +1829,10 @@ export class MemoryEngine implements Engine {
     switch (cmd.type) {
       case "select":
         s.selection = cmd.ids;
+        s.booleanPreview = null;
+        s.selectedGuide = null;
+        s.previewStroke = null;
+        s.previewEffect = null;
         this.justDuplicated = false;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
@@ -1369,8 +1840,18 @@ export class MemoryEngine implements Engine {
           s.vecPoints = [];
         }
         break;
+      case "selectGuide":
+        s.selectedGuide = cmd.id;
+        break;
+      case "previewStroke":
+        s.previewStroke = cmd.id && cmd.align ? { id: cmd.id, align: cmd.align } : null;
+        break;
+      case "previewEffect":
+        s.previewEffect = cmd.id && cmd.kind ? { id: cmd.id, kind: cmd.kind } : null;
+        break;
       case "setTool":
         s.tool = cmd.tool;
+        s.booleanPreview = null;
         break;
       case "setZoom": {
         const next = clampZoom(cmd.zoom);
@@ -1418,6 +1899,9 @@ export class MemoryEngine implements Engine {
       case "toggleOutlines":
         s.outlineMode = !s.outlineMode;
         break;
+      case "toggleMaskOutlines":
+        s.showMaskOutlines = !s.showMaskOutlines;
+        break;
       case "swapFillStroke": {
         for (const id of s.selection) {
           const n = find(this.root(), id);
@@ -1448,39 +1932,144 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      // §26 KB-004: `/` removes the stroke, `⌥/` removes the fill (Figma).
+      // One way, like Figma's: the paint underneath survives, so the stroke
+      // panel's eye (or ⇧B) brings it back.
+      case "removeStroke": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) n.strokeVisible = false;
+        }
+        break;
+      }
+      case "removeFill": {
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (n && !n.locked) n.fillVisible = false;
+        }
+        break;
+      }
       case "tidyUp": {
+        const rt = this.root();
+        // Same footing as distribute: world coordinates, locked layers and
+        // instance members sit out, rounding follows the pixel grid.
         const items = s.selection
-          .map((id) => find(this.root(), id))
-          .filter((n): n is XNode => !!n && !n.locked);
+          .map((id) => worldPos(rt, id))
+          .filter(
+            (w): w is { x: number; y: number; node: XNode } =>
+              !!w && !isEffectivelyLocked(rt, w.node.id) && !isInstanceMember(rt, w.node.id),
+          );
         if (items.length < 2) break;
-        const xs = items.map((i) => i.x);
-        const ys = items.map((i) => i.y);
-        const spanX = Math.max(...xs) - Math.min(...xs);
-        const spanY = Math.max(...ys) - Math.min(...ys);
-        const isHoriz = cmd.axis === "h" || (cmd.axis !== "v" && spanX >= spanY);
-        if (isHoriz) {
-          items.sort((a, b) => a.x - b.x);
-          const minX = items[0].x;
-          const maxX = items[items.length - 1].x + items[items.length - 1].w;
-          const totalW = items.reduce((sum, n) => sum + n.w, 0);
-          const gap = Math.max(0, (maxX - minX - totalW) / (items.length - 1));
-          let cur = minX;
-          for (const item of items) {
-            item.x = Math.round(cur);
-            cur += item.w + gap;
-          }
-        } else {
-          items.sort((a, b) => a.y - b.y);
-          const minY = items[0].y;
-          const maxY = items[items.length - 1].y + items[items.length - 1].h;
-          const totalH = items.reduce((sum, n) => sum + n.h, 0);
-          const gap = Math.max(0, (maxY - minY - totalH) / (items.length - 1));
-          let cur = minY;
-          for (const item of items) {
-            item.y = Math.round(cur);
-            cur += item.h + gap;
+        const snap = snapOn(this.state, s.page);
+        // Which arrangement this is: a single row's members overlap in Y but
+        // not in X, a single column's the reverse, and a grid overlaps both.
+        const span = (w: { x: number; y: number; node: XNode }, horiz: boolean): [number, number] =>
+          horiz ? [w.x, w.x + w.node.w] : [w.y, w.y + w.node.h];
+        let overlapsX = false;
+        let overlapsY = false;
+        for (let i = 0; i < items.length && !(overlapsX && overlapsY); i++) {
+          for (let j = i + 1; j < items.length && !(overlapsX && overlapsY); j++) {
+            const [ax0, ax1] = span(items[i], true);
+            const [bx0, bx1] = span(items[j], true);
+            const [ay0, ay1] = span(items[i], false);
+            const [by0, by1] = span(items[j], false);
+            if (!overlapsX && ax0 < bx1 && bx0 < ax1) overlapsX = true;
+            if (!overlapsY && ay0 < by1 && by0 < ay1) overlapsY = true;
           }
         }
+        // A one-dimensional pass along an axis: every layer steps forward
+        // from the first by the most common gap, so the row keeps the spacing
+        // it already had instead of being stretched even. With no repeated
+        // gap the even split keeps both ends where distribute would put them.
+        const pass1D = (horiz: boolean) => {
+          const at = (w: { x: number; y: number; node: XNode }) => (horiz ? w.x : w.y);
+          const len = (w: { node: XNode }) => (horiz ? w.node.w : w.node.h);
+          const sorted = [...items].sort((a, b) => at(a) - at(b));
+          const gaps: number[] = [];
+          for (let i = 1; i < sorted.length; i++)
+            gaps.push(at(sorted[i]) - (at(sorted[i - 1]) + len(sorted[i - 1])));
+          const first = at(sorted[0]);
+          const last = at(sorted[sorted.length - 1]) + len(sorted[sorted.length - 1]);
+          const total = sorted.reduce((sum, w) => sum + len(w), 0);
+          const step = modeStep(gaps) ?? (last - first - total) / (sorted.length - 1);
+          let cursor = first;
+          for (const w of sorted) {
+            if (horiz) shiftWorld(w, cursor, w.y, snap);
+            else shiftWorld(w, w.x, cursor, snap);
+            cursor += len(w) + step;
+          }
+        };
+        // An explicit axis forces a one-dimensional pass; otherwise a grid
+        // (overlap on both axes) tidies into rows and columns from the
+        // selection's top-left, which never moves.
+        if (cmd.axis !== "h" && cmd.axis !== "v" && overlapsX && overlapsY) {
+          const byY = [...items].sort((a, b) => a.y - b.y);
+          const rows: Array<typeof items> = [];
+          for (const w of byY) {
+            const row = rows[rows.length - 1];
+            const bottom = row ? Math.max(...row.map((m) => m.y + m.node.h)) : -Infinity;
+            if (row && w.y < bottom) row.push(w);
+            else rows.push([w]);
+          }
+          // Banding can still collapse to one row (or one column of
+          // singleton rows): those are one-dimensional after all.
+          if (rows.length < 2) {
+            pass1D(true);
+            break;
+          }
+          if (rows.every((r) => r.length < 2)) {
+            pass1D(false);
+            break;
+          }
+          const left = Math.min(...items.map((w) => w.x));
+          const top = Math.min(...items.map((w) => w.y));
+          rows.sort(
+            (a, b) => Math.min(...a.map((m) => m.y)) - Math.min(...b.map((m) => m.y)),
+          );
+          const rowTops = rows.map((r) => Math.min(...r.map((m) => m.y)));
+          const rowBottoms = rows.map((r) => Math.max(...r.map((m) => m.y + m.node.h)));
+          const rowGaps: number[] = [];
+          for (let i = 1; i < rows.length; i++) rowGaps.push(rowTops[i] - rowBottoms[i - 1]);
+          const rowsTotal = rowBottoms.reduce((sum, b, i) => sum + (b - rowTops[i]), 0);
+          const rowStep =
+            modeStep(rowGaps) ??
+            (rowBottoms[rowBottoms.length - 1] - top - rowsTotal) / (rows.length - 1);
+          let cursorY = top;
+          for (let i = 0; i < rows.length; i++) {
+            const row = [...rows[i]].sort((a, b) => a.x - b.x);
+            const gaps: number[] = [];
+            for (let k = 1; k < row.length; k++)
+              gaps.push(row[k].x - (row[k - 1].x + row[k - 1].node.w));
+            const rowRight = Math.max(...row.map((m) => m.x + m.node.w));
+            const rowTotal = row.reduce((sum, m) => sum + m.node.w, 0);
+            const colStep =
+              row.length > 1
+                ? (modeStep(gaps) ?? (rowRight - row[0].x - rowTotal) / (row.length - 1))
+                : 0;
+            let cursorX = left;
+            const rowH = rowBottoms[i] - rowTops[i];
+            for (const w of row) {
+              // Within-row stagger survives: only the row's top edge is grid-aligned.
+              shiftWorld(w, cursorX, cursorY + (w.y - rowTops[i]), snap);
+              cursorX += w.node.w + colStep;
+            }
+            cursorY += rowH + rowStep;
+          }
+          break;
+        }
+        let horiz: boolean;
+        if (cmd.axis === "h") horiz = true;
+        else if (cmd.axis === "v") horiz = false;
+        else if (overlapsX && !overlapsY) horiz = false;
+        else if (overlapsY && !overlapsX) horiz = true;
+        else {
+          const minX = Math.min(...items.map((w) => w.x));
+          const maxX = Math.max(...items.map((w) => w.x + w.node.w));
+          const minY = Math.min(...items.map((w) => w.y));
+          const maxY = Math.max(...items.map((w) => w.y + w.node.h));
+          horiz = maxX - minX >= maxY - minY;
+        }
+        pass1D(horiz);
         break;
       }
       case "openComment":
@@ -1531,9 +2120,6 @@ export class MemoryEngine implements Engine {
       case "setRightTab":
         s.rightTab = cmd.tab;
         break;
-      case "setLeftTab":
-        s.leftTab = cmd.tab;
-        break;
       case "setFileName":
         s.fileName = cmd.name;
         break;
@@ -1566,6 +2152,8 @@ export class MemoryEngine implements Engine {
           cmd.extra,
         );
         const into = parent ?? this.root();
+        // Instances take no new children: structure belongs to the master.
+        if (into !== this.root() && (isInstanceMember(this.root(), into.id) || (!!into.componentId && !into.isComponent))) break;
         const spot = this.gridSpotFor(into, cmd.x, cmd.y);
         into.children.splice(spot?.index ?? into.children.length, 0, n);
         // "Place it between the cell objects - in layer order
@@ -1577,7 +2165,9 @@ export class MemoryEngine implements Engine {
           n.gridPinned = true;
         }
         s.selection = [n.id];
+        this.publishIfMasterEdit(n.id);
         if (cmd.kind === "text" || cmd.extra?.imageSrc) s.tool = "select";
+        if (cmd.kind === "frame" && into === this.root()) this.lastFrameSize = { w: n.w, h: n.h };
         break;
       }
       case "move":
@@ -1587,20 +2177,21 @@ export class MemoryEngine implements Engine {
         }
         for (const id of cmd.ids) {
           const n = find(this.root(), id);
-          if (n && !n.locked) {
+          if (n && !isEffectivelyLocked(this.root(), id) && !isInstanceMember(this.root(), id)) {
             n.x += cmd.dx;
             n.y += cmd.dy;
             if (snapOn(this.state, s.page)) {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
             }
+            this.publishIfMasterEdit(id);
           }
         }
         break;
       case "nudge":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (!n || n.locked) continue;
+          if (!n || isEffectivelyLocked(this.root(), id) || isInstanceMember(this.root(), id)) continue;
           const parent = findParent(this.root(), id);
           if (parent?.layout && !n.absolutePosition) {
             const idx = parent.children.findIndex((c) => c.id === id);
@@ -1620,11 +2211,12 @@ export class MemoryEngine implements Engine {
               n.y = Math.round(n.y);
             }
           }
+          this.publishIfMasterEdit(id);
         }
         break;
       case "resize": {
         const n = find(this.root(), cmd.id);
-        if (n && !n.locked) {
+        if (n && !isEffectivelyLocked(this.root(), cmd.id) && !isInstanceMember(this.root(), cmd.id)) {
           const oldW = n.w;
           const oldH = n.h;
           // What the person asked for, before snapping: an axis counts as
@@ -1638,6 +2230,18 @@ export class MemoryEngine implements Engine {
           n.y = snapOn(this.state, s.page) ? Math.round(cmd.y) : cmd.y;
           n.w = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.w) : cmd.w);
           n.h = Math.max(1, snapOn(this.state, s.page) ? Math.round(cmd.h) : cmd.h);
+          // An explicit resize wins over w/h bindings (Figma detaches on
+          // on-canvas edits); otherwise the next relayout snaps it back.
+          if (n.variableBindings) {
+            delete n.variableBindings.w;
+            delete n.variableBindings.h;
+            if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+          }
+          if (n.ownBindings) {
+            delete n.ownBindings.w;
+            delete n.ownBindings.h;
+            if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+          }
           if (n.kind === "text" && !cmd.scaleProps) {
             if (askedW !== oldW) n.sizingW = "fixed";
             if (askedH !== oldH) n.sizingH = "fixed";
@@ -1664,32 +2268,68 @@ export class MemoryEngine implements Engine {
               if (n.sizingH !== "fixed") n.sizingH = "fixed";
             }
           }
+          // A child of an auto layout frame that is resized by hand stops
+          // filling on the adjusted axis - "any manual adjustments you make
+          // will set the layer to Fixed" - or the next layout pass would snap
+          // it back to the fill size and the drag would do nothing.
+          const par = findParent(this.root(), n.id);
+          if (par?.layout && !cmd.scaleProps) {
+            if (askedW !== oldW) n.sizingW = "fixed";
+            if (askedH !== oldH) n.sizingH = "fixed";
+          }
           // A locked box that was resized by hand takes its new ratio with it.
           if (n.aspectLocked && askedW !== oldW && askedH !== oldH && n.w > 0 && n.h > 0) {
             n.aspectRatio = n.h / n.w;
           }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
-          } else {
+          } else if (!cmd.ignoreConstraints) {
             applyConstraints(n, oldW, oldH, n.w, n.h);
           }
           this.publishMaster(n);
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
       case "reparent": {
         const dest = find(this.root(), cmd.parent) ?? this.root();
+        // A locked container takes no new children, and neither does an
+        // instance: its structure belongs to the main component. Same rule as
+        // `reorder`, which the panel drag goes through.
+        if (isEffectivelyLocked(this.root(), dest.id)) break;
+        if (dest !== this.root() && (isInstanceMember(this.root(), dest.id) || (!!dest.componentId && !dest.isComponent))) break;
         for (const id of cmd.ids) {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
           if (!p || !n || id === dest.id || !!find(n, dest.id)) continue;
+          if (isEffectivelyLocked(this.root(), id)) continue;
+          // Figma refuses to add an object that is larger than an auto layout
+          // parent ("you won't see the option"), unless the drop bypasses with
+          // ⌘/Ctrl. A hug axis always fits, since the frame grows around the
+          // newcomer; absolute drops never join the flow, so they never refuse.
+          if (dest.layout && !cmd.absolute && !cmd.bypassSizeGate) {
+            const dl = dest.layout;
+            const dflow = dest.children.filter((c) => c.visible && !c.absolutePosition);
+            const dhoriz = dl.direction === "horizontal";
+            const hugW = dhoriz ? hugsMain(dl, dest, dflow) : dl.direction === "grid" ? hugsMain(dl, dest, dflow) : hugsCross(dl, dest, dflow);
+            const hugH = dhoriz ? hugsCross(dl, dest, dflow) : dl.direction === "grid" ? hugsCross(dl, dest, dflow) : hugsMain(dl, dest, dflow);
+            if ((n.w > dest.w && !hugW) || (n.h > dest.h && !hugH)) continue;
+          }
           // Where it lands is worked out against the destination as it stands,
-          // before this object joins it.
+          // before this object joins it: an explicit slot wins, then the grid
+          // cell under the point, then the flow gap under the point. Anything
+          // else appends, as before.
           const spot = this.gridSpotFor(dest, cmd.x, cmd.y);
           p.children = p.children.filter((c) => c.id !== id);
           n.x = cmd.x;
           n.y = cmd.y;
-          dest.children.splice(spot?.index ?? dest.children.length, 0, n);
+          if (cmd.absolute) n.absolutePosition = true;
+          const flowIdx =
+            cmd.index === undefined && !spot && dest.layout && dest.layout.direction !== "grid"
+              ? flowInsertIndex(dest, cmd.x, cmd.y)
+              : null;
+          const at = cmd.index ?? spot?.index ?? flowIdx ?? dest.children.length;
+          dest.children.splice(Math.max(0, Math.min(at, dest.children.length)), 0, n);
           if (spot) {
             n.gridCol = spot.col;
             n.gridRow = spot.row;
@@ -1708,10 +2348,14 @@ export class MemoryEngine implements Engine {
           const n = find(root, id);
           const wp = worldPos(root, id);
           // Refuse to drop a node into itself or its own subtree.
-          if (!n || n.locked || id === dest.id || find(n, dest.id)) continue;
+          if (!n || isEffectivelyLocked(root, id) || isInstanceMember(root, id) || id === dest.id || find(n, dest.id)) continue;
           moving.push({ node: n, wx: wp?.x ?? n.x, wy: wp?.y ?? n.y });
         }
         if (!moving.length) break;
+        // A locked container takes no new children, and neither does an
+        // instance: its structure belongs to the main component.
+        if (isEffectivelyLocked(root, dest.id)) break;
+        if (dest !== root && (isInstanceMember(root, dest.id) || (!!dest.componentId && !dest.isComponent))) break;
         // Count how many of the moved nodes sit before the target slot in the
         // destination, so the index still points at the intended gap after
         // they are spliced out.
@@ -1720,9 +2364,13 @@ export class MemoryEngine implements Engine {
           const at = dest.children.indexOf(node);
           if (at >= 0 && at < index) index--;
         }
+        const oldParentIds: string[] = [];
         for (const { node } of moving) {
           const p = findParent(root, node.id);
-          if (p) p.children = p.children.filter((c) => c.id !== node.id);
+          if (p) {
+            oldParentIds.push(p.id);
+            p.children = p.children.filter((c) => c.id !== node.id);
+          }
         }
         const destWorld = dest === root ? { x: 0, y: 0 } : worldPos(root, dest.id);
         index = Math.max(0, Math.min(index, dest.children.length));
@@ -1731,24 +2379,51 @@ export class MemoryEngine implements Engine {
           m.node.x = m.wx - (destWorld?.x ?? 0);
           m.node.y = m.wy - (destWorld?.y ?? 0);
         }
+        // Structural master edits republish (moves out count as much as in).
+        this.publishIfMasterEdit(dest.id);
+        for (const pid of oldParentIds) this.publishIfMasterEdit(pid);
         break;
       }
       case "delete": {
         for (const id of s.selection) {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
-          if (p && n && !n.locked) p.children = p.children.filter((c) => c.id !== id);
+          if (!p || !n || isEffectivelyLocked(this.root(), id)) continue;
+          // Figma: "You can't delete a layer or object from an instance. If
+          // you try, Figma will only toggle the layer's visibility instead of
+          // removing it." Locked still wins over the toggle above.
+          if (isInstanceMember(this.root(), id)) {
+            n.visible = !n.visible;
+            n.overrides = { ...(n.overrides || {}), visible: n.visible };
+            this.publishIfMasterEdit(p.id);
+            continue;
+          }
+          p.children = p.children.filter((c) => c.id !== id);
+          this.publishIfMasterEdit(p.id);
         }
         s.selection = s.selection.filter((id) => !!find(this.root(), id));
+        // Frame-level guides die with their frame rather than going stale.
+        const gone = new Set(
+          s.pages[s.page].guides.map((g) => g.frameId).filter((f): f is string => !!f && !find(this.root(), f)),
+        );
+        if (gone.size) {
+          s.pages[s.page].guides = s.pages[s.page].guides.filter((g) => !g.frameId || !gone.has(g.frameId));
+          if (s.selectedGuide && !s.pages[s.page].guides.some((g) => g.id === s.selectedGuide)) s.selectedGuide = null;
+        }
         break;
       }
       case "duplicate": {
         const created: string[] = [];
-        const delta = this.lastDupDelta ?? { dx: 10, dy: 10 };
+        // An explicit dx/dy (frame quick-add) places the copy exactly and
+        // leaves the ⌘D cascade delta alone.
+        const delta =
+          cmd.dx !== undefined || cmd.dy !== undefined
+            ? { dx: cmd.dx ?? 0, dy: cmd.dy ?? 0 }
+            : (this.lastDupDelta ?? { dx: 10, dy: 10 });
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
-          if (!n || n.locked) continue;
+          if (!n || isEffectivelyLocked(this.root(), id) || isInstanceMember(this.root(), id)) continue;
           const copy = clone(n);
           const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
@@ -1766,6 +2441,9 @@ export class MemoryEngine implements Engine {
           if (n.isComponent) {
             copy.isComponent = false;
             copy.componentId = masterId;
+            walk(copy, (m) => {
+              delete m.ownBindings;
+            });
           }
           // Put the duplicate directly above the one it came from, and
           // "the new frames will fill the subsequent cells" - so a copy of an
@@ -1775,6 +2453,7 @@ export class MemoryEngine implements Engine {
           if (at === -1) p.children.push(copy);
           else p.children.splice(at + 1, 0, copy);
           created.push(copy.id);
+          this.publishIfMasterEdit(copy.id);
         }
         s.selection = created;
         this.justDuplicated = true;
@@ -1783,21 +2462,77 @@ export class MemoryEngine implements Engine {
       case "patch": {
         const n = find(this.root(), cmd.id);
         if (n) {
+          // Members inside an instance only override paint/text/effects: the
+          // refused keys never reach the node or its override record.
+          // (A local, not a cmd reassign: reassigning the switch discriminant
+          // invalidates narrowing for every other case in this dispatch.)
+          let incoming = cmd.patch;
+          if (isInstanceMember(this.root(), cmd.id)) {
+            const stripped = stripMemberPatch(incoming);
+            if (!stripped) break;
+            incoming = stripped;
+          }
+          // Layout belongs to the main component: members were already stripped
+          // above, and an instance root keeps only spacing fragments (padding
+          // and gaps), merged over the layout it already has. Anything else in
+          // the fragment is refused, exactly like a member's.
+          let rootLayoutFrag: Partial<AutoLayout> | null = null;
+          let prevLayoutFrag: unknown = null;
+          if (incoming.layout !== undefined && findInstanceRoot(this.root(), cmd.id)) {
+            rootLayoutFrag = layoutSpacingFragment(incoming.layout);
+            const rest = { ...incoming };
+            if (!rootLayoutFrag || !n.layout) {
+              rootLayoutFrag = null;
+              delete rest.layout;
+            } else {
+              rest.layout = { ...n.layout, ...rootLayoutFrag };
+              prevLayoutFrag = n.overrides && (n.overrides as Record<string, unknown>).layout;
+              // A hand-set spacing wins over the instance's own gap/padding
+              // bindings, or the next relayout would snap it back.
+              if (n.ownBindings) {
+                delete n.ownBindings.layoutGap;
+                delete n.ownBindings.layoutPadding;
+                if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+              }
+              if (n.variableBindings) {
+                delete n.variableBindings.layoutGap;
+                delete n.variableBindings.layoutPadding;
+                if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+              }
+            }
+            if (!Object.keys(rest).length) break;
+            incoming = rest;
+          }
           // A hand-typed name pins the layer name; automatic naming stops.
-          if (cmd.patch.name !== undefined) n.nameLocked = true;
+          if (incoming.name !== undefined) n.nameLocked = true;
           // Editing a bound colour by hand detaches it from its style, as in
           // Standard behavior — the alternative is silently diverging from the style, or
           // silently reverting the user's edit. Re-binding is explicit.
-          if (cmd.patch.fill !== undefined && cmd.patch.fillStyle === undefined && n.fillStyle) {
+          if (incoming.fill !== undefined && incoming.fillStyle === undefined && n.fillStyle) {
             delete n.fillStyle;
+            recordStyleDetach(this.root(), n, "fill");
           }
-          if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
+          if (incoming.strokePaint !== undefined && incoming.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
+            recordStyleDetach(this.root(), n, "stroke");
+          }
+          // Same detach rule for variables: editing a bound prop by hand
+          // clears that binding, otherwise the next relayout would revert
+          // the edit.
+          if (n.variableBindings) {
+            for (const k of Object.keys(incoming)) {
+              if (k in n.variableBindings) delete n.variableBindings[k];
+            }
+            if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+          }
+          if (n.ownBindings) {
+            for (const k of Object.keys(incoming)) delete n.ownBindings[k];
+            if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
           }
           // Text rule: a text layer cannot hold a max height and a max
           // line count at once - setting either clears the other - so the pair
           // is resolved here rather than in whichever panel did the writing.
-          const patch = n.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
+          const patch = n.kind === "text" ? textDimensionRule(incoming) : incoming;
           // Turning the aspect lock on remembers the ratio it was taken at, so
           // a later size that clamps to a pixel cannot leave the box square.
           if (patch.aspectLocked === true && patch.aspectRatio === undefined && n.w > 0 && n.h > 0) {
@@ -1811,27 +2546,69 @@ export class MemoryEngine implements Engine {
             n.name = first ? first.slice(0, 60) : "Text";
           }
           if (n.isComponent && n.componentId) {
-            const lib = s.components.find((c) => c.id === n.componentId);
-            if (lib) {
-              lib.name = n.name;
-              lib.node = clone(n);
-            }
-            syncInstances(s.pages, n);
+            this.publishMaster(n);
           } else if (n.componentId && !n.isComponent) {
-            n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+            n.overrides = { ...(n.overrides || {}), ...incoming };
+            // The merged layout above is the node's working copy, not the
+            // override: the record keeps fragments only, so the master's
+            // structure still flows through at sync.
+            if (rootLayoutFrag) {
+              const prev =
+                prevLayoutFrag && typeof prevLayoutFrag === "object" ? (prevLayoutFrag as Partial<AutoLayout>) : {};
+              n.overrides = { ...(n.overrides || {}), layout: { ...prev, ...rootLayoutFrag } };
+            }
           } else {
             const inst = findInstanceRoot(this.root(), n.id);
             if (inst && inst !== n) {
-              n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+              n.overrides = { ...(n.overrides || {}), ...incoming };
             }
           }
+          // Content edits anywhere under a master republish it, so every
+          // instance receives the update (master roots publish above).
+          if (!n.isComponent) this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
       case "autoLayout": {
         const n = find(this.root(), cmd.id);
-        if (n) {
+        // Instance layout belongs to the main component: refused on members,
+        // while an instance root keeps spacing fragments (padding and gaps).
+        // Masters publish through.
+        const instRoot = n && n.componentId && !n.isComponent ? n : null;
+        if (instRoot && instRoot.layout) {
+          const frag = layoutSpacingFragment(cmd.layout);
+          if (frag) {
+            instRoot.layout = { ...instRoot.layout, ...frag };
+            const prev = instRoot.overrides?.layout;
+            instRoot.overrides = {
+              ...(instRoot.overrides || {}),
+              layout: { ...(prev && typeof prev === "object" ? prev : {}), ...frag },
+            };
+            if (instRoot.ownBindings) {
+              delete instRoot.ownBindings.layoutGap;
+              delete instRoot.ownBindings.layoutPadding;
+              if (Object.keys(instRoot.ownBindings).length === 0) delete instRoot.ownBindings;
+            }
+            if (instRoot.variableBindings) {
+              delete instRoot.variableBindings.layoutGap;
+              delete instRoot.variableBindings.layoutPadding;
+              if (Object.keys(instRoot.variableBindings).length === 0) delete instRoot.variableBindings;
+            }
+          }
+        } else if (n && !insideInstance(this.root(), cmd.id)) {
           n.layout = cmd.layout;
+          // A fresh preset wins over gap/padding bindings; without the
+          // detach the next relayout would snap the preset back.
+          if (n.variableBindings) {
+            delete n.variableBindings.layoutGap;
+            delete n.variableBindings.layoutPadding;
+            if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+          }
+          if (n.ownBindings) {
+            delete n.ownBindings.layoutGap;
+            delete n.ownBindings.layoutPadding;
+            if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+          }
           this.publishMaster(n);
         }
         break;
@@ -1854,6 +2631,7 @@ export class MemoryEngine implements Engine {
         const prev = this.undo.pop();
         if (prev) {
           this.redo.push(clone(this.state));
+          if (this.redo.length > MAX_UNDO) this.redo.shift();
           this.state = prev;
         }
         break;
@@ -1867,11 +2645,19 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "copy": {
-        this.clip = s.selection
-          .map((id) => find(this.root(), id))
-          .filter((n): n is XNode => !!n)
-          .map(clone);
-        publishClip(this.clip, this.state.fileName);
+        const items = s.selection
+          .map((id) => {
+            const wp = worldPos(this.root(), id);
+            return wp ? { node: clone(wp.node), x: wp.x, y: wp.y } : null;
+          })
+          .filter((w): w is NonNullable<typeof w> => !!w);
+        this.clip = items.map((w) => w.node);
+        publishClip(
+          this.clip,
+          this.state.fileName,
+          items.map((w) => ({ x: w.x, y: w.y })),
+          this.root(),
+        );
         break;
       }
       case "cut":
@@ -1898,12 +2684,19 @@ export class MemoryEngine implements Engine {
         if (!this.clip.length) break;
         const created: string[] = [];
         const selected = s.selection.length === 1 ? find(this.root(), s.selection[0]) : null;
+        // Instances take no pasted children: with an instance (or member)
+        // selected, the paste lands beside it instead of inside it.
+        const selParent =
+          selected && insideInstance(this.root(), selected.id)
+            ? findParent(this.root(), selected.id) ?? this.root()
+            : null;
         const parent =
-          selected && (selected.kind === "frame" || selected.kind === "group" || selected.kind === "boolean")
+          selParent ??
+          (selected && (selected.kind === "frame" || selected.kind === "group" || selected.kind === "boolean")
             ? selected
             : selected
               ? findParent(this.root(), selected.id) ?? this.root()
-              : this.root();
+              : this.root());
         const parentWorld = parent === this.root() ? { x: 0, y: 0 } : worldPos(this.root(), parent.id) ?? { x: 0, y: 0 };
         const grid = snapOn(this.state, s.page);
         // "Paste here" aims the whole copy at one point, so the group's centre
@@ -1933,6 +2726,7 @@ export class MemoryEngine implements Engine {
           }
           parent.children.push(copy);
           created.push(copy.id);
+          this.publishIfMasterEdit(copy.id);
         }
         s.selection = created;
         break;
@@ -1951,31 +2745,55 @@ export class MemoryEngine implements Engine {
       case "lockSel":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (n) n.locked = !n.locked;
+          if (n) {
+            n.locked = !n.locked;
+            this.publishIfMasterEdit(id);
+          }
         }
         break;
       case "hideSel":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (n) n.visible = !n.visible;
+          if (n) {
+            n.visible = !n.visible;
+            // FS-U6': an explicit visibility toggle wins over a `visible`
+            // binding (same detach rule as patch/resize/autoLayout) —
+            // otherwise the next relayout re-applies the binding and the
+            // toggle silently reverts.
+            if (n.variableBindings?.visible) {
+              delete n.variableBindings.visible;
+              if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+            }
+            if (n.ownBindings?.visible) {
+              delete n.ownBindings.visible;
+              if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+            }
+            this.publishIfMasterEdit(id);
+          }
         }
         break;
       case "flip":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (!n) continue;
+          if (!n || isEffectivelyLocked(this.root(), id) || isInstanceMember(this.root(), id)) continue;
+          // On an instance root only the flag flips: member positions belong
+          // to the master, and the flag itself is recorded as an override.
+          const inInst = !!findInstanceRoot(this.root(), id);
           if (cmd.axis === "h") {
             n.flipH = !n.flipH;
             const [tl, tr, bl, br] = n.cornerRadii;
             n.cornerRadii = [tr, tl, br, bl];
-            for (const c of n.children) c.x = n.w - c.x - c.w;
+            if (!inInst) for (const c of n.children) c.x = n.w - c.x - c.w;
+            else n.overrides = { ...(n.overrides || {}), flipH: n.flipH, cornerRadii: [...n.cornerRadii] };
           } else {
             n.flipV = !n.flipV;
             const [tl, tr, bl, br] = n.cornerRadii;
             n.cornerRadii = [bl, br, tl, tr];
-            for (const c of n.children) c.y = n.h - c.y - c.h;
+            if (!inInst) for (const c of n.children) c.y = n.h - c.y - c.h;
+            else n.overrides = { ...(n.overrides || {}), flipV: n.flipV, cornerRadii: [...n.cornerRadii] };
           }
-          this.publishMaster(n);
+          if (n.isComponent) this.publishMaster(n);
+          else this.publishIfMasterEdit(id);
         }
         break;
       case "copyCode": {
@@ -2099,25 +2917,87 @@ export class MemoryEngine implements Engine {
         });
         break;
       }
-      case "ungroup": {
-        const id = s.selection[0];
-        if (!id) break;
-        const parent = findParent(this.root(), id);
-        const n = find(this.root(), id);
-        if (!parent || !n || !n.children.length) break;
-        const i = parent.children.findIndex((c) => c.id === id);
-        const kids = n.children.map((c) => {
-          const k = clone(c);
-          k.x += n.x;
-          k.y += n.y;
-          return k;
+      case "frameSelection": {
+        // Plain frame around the selection: no auto layout, unlike ⇧A.
+        this.wrapSel("Frame", {
+          kind: "frame",
+          fill: "#ffffff",
+          fillVisible: true,
+          overflow: "clip",
         });
-        parent.children.splice(i, 1, ...kids);
-        s.selection = kids.map((k) => k.id);
+        break;
+      }
+      case "resizeToFit": {
+        // One-shot redraw of each selected frame around the outermost bounds
+        // of its visible children; children keep their absolute positions.
+        for (const id of s.selection) {
+          const n = find(this.root(), id);
+          if (!n || (n.kind !== "frame" && n.kind !== "group") || isEffectivelyLocked(this.root(), id)) continue;
+          const kids = n.children.filter((c) => c.visible && !c.absolutePosition);
+          if (!kids.length) continue;
+          const x0 = Math.min(...kids.map((c) => c.x));
+          const y0 = Math.min(...kids.map((c) => c.y));
+          const x1 = Math.max(...kids.map((c) => c.x + c.w));
+          const y1 = Math.max(...kids.map((c) => c.y + c.h));
+          for (const c of kids) {
+            c.x -= x0;
+            c.y -= y0;
+          }
+          n.x += x0;
+          n.y += y0;
+          n.w = Math.max(1, x1 - x0);
+          n.h = Math.max(1, y1 - y0);
+        }
+        break;
+      }
+      case "ungroup": {
+        const rt = this.root();
+        const out: string[] = [];
+        for (const id of [...s.selection]) {
+          const parent = findParent(rt, id);
+          const n = find(rt, id);
+          if (!parent || !n || !n.children.length) continue;
+          if (isEffectivelyLocked(rt, id)) continue;
+          // Instances detach; they never ungroup — and neither do their
+          // members or masters, whose structure the library owns.
+          if (isInstanceMember(rt, id) || n.isComponent || (!!n.componentId && !n.isComponent)) continue;
+          // Preserve world geometry through the unwrap: each child's center
+          // rotates about the group's rotation origin, and the rotation is
+          // inherited, so an unrotated group behaves exactly as before.
+          const rot = ((n.rotation ?? 0) * Math.PI) / 180;
+          const o = n.rotOrigin ?? [0.5, 0.5];
+          const lox = o[0] * n.w;
+          const loy = o[1] * n.h;
+          const cos = Math.cos(rot);
+          const sin = Math.sin(rot);
+          const kids = n.children.map((c) => {
+            const k = clone(c);
+            const cx = c.x + c.w / 2;
+            const cy = c.y + c.h / 2;
+            const ncx = lox + (cx - lox) * cos - (cy - loy) * sin;
+            const ncy = loy + (cx - lox) * sin + (cy - loy) * cos;
+            k.x = n.x + ncx - k.w / 2;
+            k.y = n.y + ncy - k.h / 2;
+            // Rotation lives in ±180 everywhere (the panel, the canvas drag,
+            // and the Figma ±180 convention), so the inherited turn wraps the
+            // same way instead of spilling past 180 into [0, 360).
+            let combined = (k.rotation ?? 0) + (n.rotation ?? 0);
+            while (combined > 180) combined -= 360;
+            while (combined <= -180) combined += 360;
+            k.rotation = combined;
+            return k;
+          });
+          const i = parent.children.findIndex((c) => c.id === id);
+          parent.children.splice(i, 1, ...kids);
+          out.push(...kids.map((k) => k.id));
+          this.publishIfMasterEdit(parent.id);
+        }
+        if (out.length) s.selection = out;
         break;
       }
       case "arrange": {
-        const selected = new Set(s.selection);
+        const rt = this.root();
+        const selected = new Set(s.selection.filter((id) => !isEffectivelyLocked(rt, id) && !isInstanceMember(rt, id)));
         const groups = new Map<XNode, string[]>();
         const collect = (parent: XNode) => {
           const ids = parent.children.filter((c) => selected.has(c.id)).map((c) => c.id);
@@ -2130,6 +3010,7 @@ export class MemoryEngine implements Engine {
             const picked = parent.children.filter((c) => ids.includes(c.id));
             const rest = parent.children.filter((c) => !ids.includes(c.id));
             parent.children = cmd.dir === "front" ? [...rest, ...picked] : [...picked, ...rest];
+            this.publishIfMasterEdit(parent.id);
             continue;
           }
           const next = [...parent.children];
@@ -2147,6 +3028,7 @@ export class MemoryEngine implements Engine {
             }
           }
           parent.children = next;
+          this.publishIfMasterEdit(parent.id);
         }
         break;
       }
@@ -2183,10 +3065,22 @@ export class MemoryEngine implements Engine {
       case "renamePage":
         s.pages[s.page].name = cmd.name;
         break;
+      case "movePage": {
+        const from = cmd.from;
+        const to = cmd.to;
+        if (from < 0 || from >= s.pages.length || to < 0 || to >= s.pages.length || from === to) break;
+        const [pg] = s.pages.splice(from, 1);
+        s.pages.splice(to, 0, pg);
+        if (s.page === from) s.page = to;
+        else if (from < s.page && to >= s.page) s.page -= 1;
+        else if (from > s.page && to <= s.page) s.page += 1;
+        break;
+      }
       case "patchPage":
         Object.assign(s.pages[s.page], cmd.patch);
         break;
       case "boolean": {
+        s.booleanPreview = null;
         const ids = s.selection.filter((id) => {
           const n = find(this.root(), id);
           return !!n && n.kind !== "frame";
@@ -2227,6 +3121,10 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      case "setBooleanPreview": {
+        s.booleanPreview = cmd.op;
+        break;
+      }
       case "createStyle": {
         const nodes = s.selection.map((id) => find(this.root(), id)).filter((n): n is XNode => !!n);
         if (!nodes.length) break;
@@ -2247,6 +3145,7 @@ export class MemoryEngine implements Engine {
             n.strokeVisible = true;
             if (!(n.strokeWidth > 0)) n.strokeWidth = 1;
           }
+          recordStyleOverride(this.root(), n, cmd.kind);
         }
         break;
       }
@@ -2266,6 +3165,7 @@ export class MemoryEngine implements Engine {
             n.strokeVisible = true;
             if (!(n.strokeWidth > 0)) n.strokeWidth = 1;
           }
+          recordStyleOverride(this.root(), n, cmd.kind);
         }
         break;
       }
@@ -2276,6 +3176,7 @@ export class MemoryEngine implements Engine {
           if (!n) continue;
           if (cmd.kind === "fill") delete n.fillStyle;
           else delete n.strokeStyle;
+          recordStyleDetach(this.root(), n, cmd.kind === "fill" ? "fill" : "stroke");
         }
         break;
       }
@@ -2307,7 +3208,7 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "addGuide": {
-        s.pages[s.page].guides.push({ id: uid("guide"), axis: cmd.axis, at: cmd.at });
+        s.pages[s.page].guides.push({ id: uid("guide"), axis: cmd.axis, at: cmd.at, frameId: cmd.frameId });
         break;
       }
       case "moveGuide": {
@@ -2315,9 +3216,18 @@ export class MemoryEngine implements Engine {
         if (g) g.at = cmd.at;
         break;
       }
+      case "setGuideFrame": {
+        const g = s.pages[s.page].guides.find((x) => x.id === cmd.id);
+        if (g) {
+          if (cmd.frameId) g.frameId = cmd.frameId;
+          else delete g.frameId;
+        }
+        break;
+      }
       case "removeGuide": {
         const pg = s.pages[s.page];
         pg.guides = pg.guides.filter((x) => x.id !== cmd.id);
+        if (s.selectedGuide === cmd.id) s.selectedGuide = null;
         break;
       }
       case "makeComponent": {
@@ -2334,9 +3244,19 @@ export class MemoryEngine implements Engine {
         }
         const n = find(this.root(), s.selection[0]);
         if (!n) break;
-        const cid = n.componentId || uid("comp");
+        // Fresh master content carries no ownership pins: bindings cloned
+        // in are the master's own, and instances must flow with them.
+        walk(n, (m) => {
+          delete m.ownBindings;
+        });
+        // A component from an instance is a NEW master: reusing the old id
+        // would hijack the library entry every sibling syncs from. Only an
+        // existing master republishes under its own id.
+        const cid = n.isComponent && n.componentId ? n.componentId : uid("comp");
         n.isComponent = true;
         n.componentId = cid;
+        n.variant = undefined;
+        n.overrides = undefined;
         if (!n.name || n.name === "Group" || n.name === "Rectangle") n.name = "Component";
         const existing = s.components.find((c) => c.id === cid);
         if (existing) existing.node = clone(n);
@@ -2367,6 +3287,32 @@ export class MemoryEngine implements Engine {
         lib.properties = lib.properties.filter((p) => p.id !== cmd.propId && p.name !== cmd.propId);
         break;
       }
+      case "setCodeMapping": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib) break;
+        if (!lib.codeMappings) lib.codeMappings = [];
+        const ix = lib.codeMappings.findIndex((m) => m.id === cmd.mapping.id);
+        // A mapping edit invalidates the last sync check: the pointer is
+        // new, so "verified against the master" no longer holds.
+        const mapping = { ...cmd.mapping, syncedAt: undefined, syncHash: undefined };
+        if (ix >= 0) lib.codeMappings[ix] = mapping;
+        else lib.codeMappings.push(mapping);
+        break;
+      }
+      case "deleteCodeMapping": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        if (!lib?.codeMappings) break;
+        lib.codeMappings = lib.codeMappings.filter((m) => m.id !== cmd.mappingId);
+        break;
+      }
+      case "syncCodeMapping": {
+        const lib = s.components.find((c) => c.id === cmd.componentId || c.node.id === cmd.componentId);
+        const mapping = lib?.codeMappings?.find((m) => m.id === cmd.mappingId);
+        if (!lib || !mapping) break;
+        mapping.syncedAt = Date.now();
+        mapping.syncHash = computeMasterHash(lib);
+        break;
+      }
       case "setComponentProperty": {
         const n = find(this.root(), cmd.id);
         if (!n) break;
@@ -2383,6 +3329,15 @@ export class MemoryEngine implements Engine {
             const child = n.children.find((c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase() && c.kind === "text");
             if (child) child.text = String(cmd.value);
           }
+          if (propDef.type === "instance-swap" && propDef.targetNodeName) {
+            const child = n.children.find(
+              (c) => c.name.toLowerCase() === propDef.targetNodeName?.toLowerCase() && !!c.componentId && !c.isComponent,
+            );
+            if (child) this.swapNodeToComponent(child, String(cmd.value));
+          }
+          const beforeW = n.w;
+          const beforeH = n.h;
+          const beforeKids = n.children;
           if (propDef.type === "variant") {
             const v = lib?.variants?.find((x) => x.name === String(cmd.value));
             if (v) {
@@ -2390,7 +3345,15 @@ export class MemoryEngine implements Engine {
               const y = n.y;
               const id = n.id;
               const props = clone(n.componentProperties);
-              Object.assign(n, clone(v.node), {
+              const oldBindings = n.variableBindings;
+              const oldExpr = n.expressions;
+              const oldOwn = n.ownBindings;
+              // Fresh child ids: without the reid every instance on this
+              // variant would share the library's node ids, and the next
+              // patch would land on whichever instance `find` meets first.
+              const swapped = clone(v.node);
+              reid(swapped);
+              Object.assign(n, swapped, {
                 x,
                 y,
                 id,
@@ -2399,17 +3362,40 @@ export class MemoryEngine implements Engine {
                 variant: String(cmd.value),
                 componentProperties: props,
               });
+              n.variableBindings = mergeLinkMaps(n.variableBindings, oldBindings);
+              n.expressions = mergeLinkMaps(n.expressions, oldExpr);
+              n.ownBindings = oldOwn;
+              // By-name preservation plus Figma's size rule: a manual size
+              // survives only when the new variant measures the same.
+              carryNestedOverrides(beforeKids, n.children);
+              if (n.overrides && (n.w !== beforeW || n.h !== beforeH)) {
+                delete n.overrides.w;
+                delete n.overrides.h;
+              }
             }
           }
         }
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "detachInstance": {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           if (!n || (!n.componentId && n.kind !== "instance")) continue;
+          // Masters cannot detach: clearing one would orphan the library
+          // entry (and every live instance) behind it.
+          if (n.isComponent || isInstanceMember(this.root(), id)) continue;
           n.isComponent = false;
           n.componentId = "";
+          n.variant = undefined;
+          // Override records are meaningless on plain layers — but nested
+          // instances stay linked (Figma), so their subtrees keep theirs.
+          const clear = (m: XNode) => {
+            if (m !== n && m.componentId && !m.isComponent) return;
+            m.overrides = undefined;
+            for (const c of m.children) clear(c);
+          };
+          clear(n);
         }
         break;
       }
@@ -2422,6 +3408,9 @@ export class MemoryEngine implements Engine {
         copy.y = cmd.y;
         copy.isComponent = false;
         copy.componentId = lib.id;
+        walk(copy, (m) => {
+          delete m.ownBindings;
+        });
         copy.name = lib.name;
         copy.componentProperties = {};
         for (const p of lib.properties ?? []) {
@@ -2466,7 +3455,7 @@ export class MemoryEngine implements Engine {
       }
       case "patchPath": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked) break;
+        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
         n.path = cmd.path;
         if (cmd.closed != null) n.closed = cmd.closed;
         n.kind = "vector";
@@ -2474,6 +3463,7 @@ export class MemoryEngine implements Engine {
         const pb = pathBounds(n.path, n.closed);
         n.w = pb.w;
         n.h = pb.h;
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "patchVectorNetwork": {
@@ -2495,7 +3485,9 @@ export class MemoryEngine implements Engine {
       case "addVectorBranch": {
         const n = find(this.root(), cmd.id);
         if (!n || n.locked) break;
-        const currentVn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
+        const branchSrc = n.path.length ? n.path : shapePoly(n);
+        const branchClosed = n.path.length ? n.closed : n.kind !== "line" && n.kind !== "arrow";
+        const currentVn = n.vectorNetwork || pathToVectorNetwork(branchSrc, branchClosed);
         const updated = addVectorBranch(
           currentVn,
           cmd.fromVertexIndex,
@@ -2539,8 +3531,16 @@ export class MemoryEngine implements Engine {
       }
       case "bendSegment": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked || n.path.length < 2) break;
-        n.path = bendSegment(n.path, cmd.segIndex, n.closed, cmd.dragX, cmd.dragY);
+        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
+        // In-place vector edit: a basic shape carries no path until the first
+        // edit, so seed from its outline and convert on write, like patchPath.
+        const src = n.path.length >= 2 ? n.path : shapePoly(n);
+        if (src.length < 2) break;
+        const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+        n.path = bendSegment(src, cmd.segIndex, effClosed, cmd.dragX, cmd.dragY);
+        this.publishIfMasterEdit(cmd.id);
+        n.closed = effClosed;
+        n.kind = "vector";
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         const pb = pathBounds(n.path, n.closed);
         n.w = pb.w;
@@ -2549,17 +3549,23 @@ export class MemoryEngine implements Engine {
       }
       case "insertPointOnPath": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked || n.path.length < 2) break;
-        const res = insertPointOnPath(n.path, cmd.x, cmd.y, n.closed);
+        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
+        const src = n.path.length >= 2 ? n.path : shapePoly(n);
+        if (src.length < 2) break;
+        const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+        const res = insertPointOnPath(src, cmd.x, cmd.y, effClosed, cmd.maxDist ?? 12);
         if (res) {
           n.path = res.newPath;
+          n.closed = effClosed;
+          n.kind = "vector";
           n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
       case "setPointMirror": {
         const n = find(this.root(), cmd.id);
-        if (!n || !n.path[cmd.pointIndex]) break;
+        if (!n || !n.path[cmd.pointIndex] || isInstanceMember(this.root(), cmd.id)) break;
         const pt = n.path[cmd.pointIndex];
         pt.mirrorMode = cmd.mode;
         if (cmd.mode === "angleAndLength" && (pt.ox || pt.oy)) {
@@ -2567,13 +3573,15 @@ export class MemoryEngine implements Engine {
           pt.iy = -(pt.oy || 0);
         }
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "setPointCornerRadius": {
         const n = find(this.root(), cmd.id);
-        if (!n || !n.path[cmd.pointIndex]) break;
+        if (!n || !n.path[cmd.pointIndex] || isInstanceMember(this.root(), cmd.id)) break;
         n.path[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "setVecEdit": {
@@ -2768,10 +3776,26 @@ export class MemoryEngine implements Engine {
           if (n.strokeWidth <= 0 && n.kind !== "line" && n.kind !== "arrow") continue;
           const sw = n.strokeWidth > 0 ? n.strokeWidth : 1;
           const src = n.path.length ? n.path : shapePoly(n);
-          const isClosed = n.closed || (n.kind !== "line" && n.kind !== "arrow");
-          const out = outlineStrokeNetwork(src, sw, isClosed, n.strokeCap || "round", n.strokeJoin || "round");
-          n.path = out.path;
-          n.vectorNetwork = out.network;
+          // An open vector outlines to a ribbon, not a ring: forcing closed
+          // here used to bake a degenerate loop (the closing chord has no
+          // width). Shape outlines from shapePoly are closed loops already.
+          const isClosed = n.path.length ? n.closed : n.kind !== "line" && n.kind !== "arrow";
+          if (usesVariableWidth(n)) {
+            const baked = outlineVariableStroke(
+              src,
+              sw,
+              n.strokeWidthProfile,
+              isClosed,
+              n.strokeCap || "round",
+              n.strokeJoin || "round",
+            );
+            n.path = baked;
+            n.vectorNetwork = pathToVectorNetwork(baked, true);
+          } else {
+            const out = outlineStrokeNetwork(src, sw, isClosed, n.strokeCap || "round", n.strokeJoin || "round");
+            n.path = out.path;
+            n.vectorNetwork = out.network;
+          }
           n.kind = "vector";
           n.closed = true;
           n.fill = n.strokePaint || "#000000";
@@ -2779,6 +3803,7 @@ export class MemoryEngine implements Engine {
           n.fillOpacity = n.strokeOpacity ?? 1;
           n.strokeWidth = 0;
           n.strokeVisible = false;
+          n.strokeWidthProfile = undefined;
         }
         break;
       }
@@ -2913,10 +3938,18 @@ export class MemoryEngine implements Engine {
         const lib = s.components.find((c) => c.id === n.componentId);
         const v = lib?.variants?.find((x) => x.name === cmd.name);
         if (!v) break;
+        const swapped = clone(v.node);
+        reid(swapped);
         const x = n.x;
         const y = n.y;
         const id = n.id;
-        Object.assign(n, clone(v.node), {
+        const oldKids = n.children;
+        const oldW = n.w;
+        const oldH = n.h;
+        const oldBindings = n.variableBindings;
+        const oldExpr = n.expressions;
+        const oldOwn = n.ownBindings;
+        Object.assign(n, swapped, {
           x,
           y,
           id,
@@ -2924,20 +3957,58 @@ export class MemoryEngine implements Engine {
           componentId: n.componentId,
           variant: cmd.name,
         });
+        n.variableBindings = mergeLinkMaps(n.variableBindings, oldBindings);
+        n.expressions = mergeLinkMaps(n.expressions, oldExpr);
+        n.ownBindings = oldOwn;
+        carryNestedOverrides(oldKids, n.children);
+        if (n.overrides && (n.w !== oldW || n.h !== oldH)) {
+          delete n.overrides.w;
+          delete n.overrides.h;
+        }
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "resetOverrides": {
         const ids = cmd.id ? [cmd.id] : s.selection;
         for (const id of ids) {
-          const n = find(this.root(), id);
-          if (!n) continue;
+          const target = find(this.root(), id);
+          if (!target) continue;
+          // Per-property reset on a member restores that layer's own master
+          // value (looked up in the CURRENT variant def), not the root's.
+          if (cmd.property && isInstanceMember(this.root(), id)) {
+            const ir = findInstanceRoot(this.root(), id);
+            const rlib = ir ? s.components.find((c) => c.id === ir.componentId) : undefined;
+            const rdef = rlib
+              ? ((ir!.variant && rlib.variants?.find((v) => v.name === ir!.variant)?.node) || rlib.node)
+              : null;
+            const counter = rdef ? findDefCounterpart(ir!, rdef, id) : null;
+            if (target.overrides) delete target.overrides[cmd.property];
+            const masterVal = counter
+              ? (counter as unknown as Record<string, unknown>)[cmd.property]
+              : undefined;
+            if (masterVal !== undefined) {
+              (target as unknown as Record<string, unknown>)[cmd.property] = clone(masterVal);
+            }
+            continue;
+          }
+          // A member resets through its instance root, never in place:
+          // replacing a member with the master root would graft a whole
+          // component inside it.
+          let n = target;
+          if (isInstanceMember(this.root(), id)) {
+            const ir = findInstanceRoot(this.root(), id);
+            if (!ir) continue;
+            n = ir;
+          }
           const cid = n.componentId;
           if (!cid && n.kind !== "instance") continue;
           const lib = s.components.find((c) => c.id === cid || c.node.id === cid);
           if (!lib) continue;
+          // Reset restores the CURRENT variant, not the default master.
+          const def = (n.variant && lib.variants?.find((v) => v.name === n.variant)?.node) || lib.node;
           if (cmd.property) {
             if (n.overrides) delete n.overrides[cmd.property];
-            const masterVal = (lib.node as unknown as Record<string, unknown>)[cmd.property];
+            const masterVal = (def as unknown as Record<string, unknown>)[cmd.property];
             if (masterVal !== undefined) {
               (n as unknown as Record<string, unknown>)[cmd.property] = clone(masterVal);
             }
@@ -2945,15 +4016,22 @@ export class MemoryEngine implements Engine {
           }
           const x = n.x;
           const y = n.y;
-          const copy = clone(lib.node);
+          const copy = clone(def);
           reid(copy);
           copy.x = x;
           copy.y = y;
           copy.id = n.id;
           copy.isComponent = false;
           copy.componentId = cid;
+          copy.variant = n.variant;
+          if (copy.componentProperties && n.variant !== undefined && "Variant" in copy.componentProperties) {
+            copy.componentProperties = { ...copy.componentProperties, Variant: n.variant };
+          }
           copy.overrides = undefined;
-          walk(copy, (c) => { c.overrides = undefined; });
+          walk(copy, (c) => {
+            c.overrides = undefined;
+            delete c.ownBindings;
+          });
           Object.assign(n, copy);
         }
         break;
@@ -2964,16 +4042,190 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "addVariable": {
+        // Duplicate ids would silently shadow a variable in resolution.
+        if (s.variables.some((x) => x.id === cmd.variable.id)) break;
+        // Cyclic aliases are refused at author (Figma: "that selection
+        // would create an infinite loop of variables").
+        const newSlots = cmd.variable.values ?? {};
+        const newEdges: { target: string; modeId?: string }[] = [];
+        if (isAlias(cmd.variable.value)) newEdges.push({ target: cmd.variable.value.alias });
+        for (const [mid, slot] of Object.entries(newSlots)) {
+          if (isAlias(slot)) newEdges.push({ target: slot.alias, modeId: mid });
+        }
+        if (
+          newEdges.some((e) =>
+            wouldCycle(s.variables, s.variableCollections, cmd.variable.id, e.target, e.modeId),
+          )
+        ) {
+          break;
+        }
         s.variables.push(cmd.variable);
+        this.ensureCollection(cmd.variable.collection);
         break;
       }
       case "patchVariable": {
         const v = s.variables.find((x) => x.id === cmd.id);
-        if (v) Object.assign(v, cmd.patch);
+        if (v) {
+          const { values, ...rest } = cmd.patch;
+          // Cyclic aliases are refused at author (Figma: "that selection
+          // would create an infinite loop of variables").
+          const edges: { target: string; modeId?: string }[] = [];
+          if (isAlias(rest.value)) edges.push({ target: rest.value.alias });
+          if (values) {
+            for (const [mid, slot] of Object.entries(values)) {
+              if (isAlias(slot)) edges.push({ target: slot.alias, modeId: mid });
+            }
+          }
+          if (
+            edges.some((e) => wouldCycle(s.variables, s.variableCollections, v.id, e.target, e.modeId))
+          ) {
+            break;
+          }
+          // A type change invalidates every stored slot: keep the raw
+          // values and bindings would silently mis-resolve, so reset to
+          // the new type's fallback instead.
+          if (rest.type && rest.type !== v.type) {
+            v.value = fallbackForType(rest.type);
+            v.values = {};
+            // Bindings that no longer match the new type are scrubbed: a
+            // fill still pointing at a number would sit silently dead.
+            // (number→text stays valid: numbers render as text content.)
+            const keep = (prop: string) =>
+              BINDABLE_PROPS[prop] === rest.type || (prop === "text" && rest.type === "number");
+            for (const pg of s.pages) {
+              walk(pg.root, (n) => {
+                if (!n.variableBindings) return;
+                for (const prop of Object.keys(n.variableBindings)) {
+                  if (n.variableBindings[prop] === v.id && !keep(prop)) {
+                    delete n.variableBindings[prop];
+                    if (n.ownBindings) {
+                      delete n.ownBindings[prop];
+                      if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+                    }
+                  }
+                }
+                if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+              });
+            }
+          }
+          Object.assign(v, rest);
+          // Per-mode values merge slot by slot; a wholesale replace would
+          // wipe every other mode's overrides.
+          if (values) v.values = { ...(v.values ?? {}), ...values };
+          if (rest.collection) this.ensureCollection(rest.collection);
+        }
         break;
       }
       case "deleteVariable": {
         s.variables = s.variables.filter((x) => x.id !== cmd.id);
+        // Bindings and aliases pointing at the id stay in place and report
+        // broken, so undo heals them instead of leaving silent gaps.
+        break;
+      }
+      case "addCollection": {
+        const name = cmd.name.trim();
+        if (!name || s.variableCollections.some((c) => c.name === name)) break;
+        const id = uid("col");
+        s.variableCollections.push({ id, name, modes: [{ id: `${id}-mode-1`, name: "Default" }] });
+        break;
+      }
+      case "renameCollection": {
+        const c = s.variableCollections.find((x) => x.id === cmd.id);
+        const name = cmd.name.trim();
+        if (!c || !name) break;
+        if (s.variableCollections.some((x) => x.id !== c.id && x.name === name)) break;
+        for (const v of s.variables) if (v.collection === c.name) v.collection = name;
+        c.name = name;
+        break;
+      }
+      case "deleteCollection": {
+        const c = s.variableCollections.find((x) => x.id === cmd.id);
+        if (!c) break;
+        s.variableCollections = s.variableCollections.filter((x) => x.id !== cmd.id);
+        s.variables = s.variables.filter((v) => v.collection !== c.name);
+        delete s.activeModes[cmd.id];
+        break;
+      }
+      case "addMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        const name = cmd.name.trim();
+        if (!c || !name || c.modes.some((m) => m.name === name)) break;
+        const id = uid("mode");
+        c.modes.push({ id, name });
+        // Figma duplicates the first column into the new mode: later
+        // default edits must not leak into it (fallback would leak).
+        for (const v of s.variables) {
+          if (v.collection !== c.name) continue;
+          if (!v.values) v.values = {};
+          if (v.values[id] === undefined) v.values[id] = clone(v.value);
+        }
+        break;
+      }
+      case "renameMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        const m = c?.modes.find((x) => x.id === cmd.modeId);
+        const name = cmd.name.trim();
+        if (!c || !m || !name) break;
+        if (c.modes.some((x) => x.id !== m.id && x.name === name)) break;
+        m.name = name;
+        break;
+      }
+      case "deleteMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        if (!c || c.modes.length <= 1) break;
+        c.modes = c.modes.filter((m) => m.id !== cmd.modeId);
+        for (const v of s.variables) {
+          if (v.collection === c.name && v.values) delete v.values[cmd.modeId];
+        }
+        if (s.activeModes[c.id] === cmd.modeId) s.activeModes[c.id] = c.modes[0].id;
+        break;
+      }
+      case "setActiveMode": {
+        const c = s.variableCollections.find((x) => x.id === cmd.collectionId);
+        if (!c || !c.modes.some((m) => m.id === cmd.modeId)) break;
+        s.activeModes[c.id] = cmd.modeId;
+        this.evaluateExpressionsInTree(this.root());
+        break;
+      }
+      case "bindVariable": {
+        const n = find(this.root(), cmd.id);
+        const v = s.variables.find((x) => x.id === cmd.variableId);
+        const need = BINDABLE_PROPS[cmd.prop];
+        if (!n || !v || !need) break;
+        // Numbers render as text content (Figma tip for calculated copy).
+        if (v.type !== need && !(cmd.prop === "text" && v.type === "number")) break;
+        if (bindBlockReason(this.root(), cmd.id, cmd.prop)) break;
+        if (!n.variableBindings) n.variableBindings = {};
+        n.variableBindings[cmd.prop] = cmd.variableId;
+        // Bound on the instance itself (not flowed from the master): pin it.
+        if (findInstanceRoot(this.root(), cmd.id)) {
+          if (!n.ownBindings) n.ownBindings = {};
+          n.ownBindings[cmd.prop] = cmd.variableId;
+        }
+        // Apply immediately so the canvas updates before the next relayout.
+        const r = resolveVariable(s.variables, s.variableCollections, s.activeModes, cmd.variableId);
+        if (r && !r.broken) applyBinding(n, cmd.prop, r.value);
+        // A master bind is master content: publish so instances receive it.
+        this.publishIfMasterEdit(cmd.id);
+        break;
+      }
+      case "unbindVariable": {
+        const n = find(this.root(), cmd.id);
+        if (n?.variableBindings) {
+          delete n.variableBindings[cmd.prop];
+          if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
+        }
+        if (n?.ownBindings) {
+          delete n.ownBindings[cmd.prop];
+          if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
+        }
+        // A master unbind propagates; instance-own entries stay pinned.
+        this.publishIfMasterEdit(cmd.id);
+        break;
+      }
+      case "swapInstance": {
+        const n = find(this.root(), cmd.id);
+        if (n) this.swapNodeToComponent(n, cmd.componentId);
         break;
       }
       case "addAnnotation": {
@@ -3002,9 +4254,28 @@ export class MemoryEngine implements Engine {
         if (!cmd.id) break;
         let destId = cmd.id;
         const targetNode = find(this.root(), destId);
+        let resolved = false;
         if (targetNode && (targetNode.kind === "group" || targetNode.name.toLowerCase().includes("section"))) {
           const childFrame = targetNode.children.find((c) => c.kind === "frame");
-          if (childFrame) destId = childFrame.id;
+          if (childFrame) {
+            destId = childFrame.id;
+            resolved = true;
+          }
+        }
+        // §23 PT-002: Navigate lands on top-level frames (Figma), so a noodle
+        // dropped on a nested layer resolves to its top-level frame instead
+        // of stranding the player on a rect. The group/section rule above wins
+        // when it fires; scroll-to keeps raw object ids — it never routes
+        // through presentGo.
+        if (!resolved) {
+          const rt = this.root();
+          let top: XNode | null = find(rt, destId);
+          while (top) {
+            const par = findParent(rt, top.id);
+            if (!par || par === rt) break;
+            top = par;
+          }
+          if (top && top.kind === "frame") destId = top.id;
         }
         s.presentStack = [...s.presentStack, destId];
         s.presentFrame = destId;
@@ -3016,10 +4287,9 @@ export class MemoryEngine implements Engine {
           s.presentStack = s.presentStack.slice(0, -1);
           s.presentFrame = s.presentStack[s.presentStack.length - 1];
           focusFrame(s, this.root(), s.presentFrame);
-        } else {
-          s.presentFrame = "";
-          s.presentStack = [];
         }
+        // §23 PT-001: Back with nowhere to go stays put (Figma) — it used
+        // to clear presentFrame, which dropped out of present mode entirely.
         break;
       }
       case "presentStop":
@@ -3058,31 +4328,41 @@ export class MemoryEngine implements Engine {
         s.activeOverlay = null;
         break;
       case "distribute": {
+        const rt = this.root();
+        // World coordinates, like multi-align: members of different frames
+        // share one span, and each layer keeps its offset from its own parent
+        // by taking a delta rather than an absolute. Locked layers and
+        // instance members sit out, exactly as under `move`. The outermost
+        // layers stay where they are; the middle is split evenly.
         const items = s.selection
-          .map((id) => find(this.root(), id))
-          .filter((n): n is XNode => !!n && !n.locked);
+          .map((id) => worldPos(rt, id))
+          .filter(
+            (w): w is { x: number; y: number; node: XNode } =>
+              !!w && !isEffectivelyLocked(rt, w.node.id) && !isInstanceMember(rt, w.node.id),
+          );
         if (items.length < 3) break;
+        const snap = snapOn(this.state, s.page);
         if (cmd.axis === "h") {
           items.sort((a, b) => a.x - b.x);
           const min = items[0].x;
-          const max = items[items.length - 1].x + items[items.length - 1].w;
-          const total = items.reduce((sum, n) => sum + n.w, 0);
+          const max = items[items.length - 1].x + items[items.length - 1].node.w;
+          const total = items.reduce((sum, w) => sum + w.node.w, 0);
           const gap = (max - min - total) / (items.length - 1);
           let cursor = min;
-          for (const n of items) {
-            n.x = cursor;
-            cursor += n.w + gap;
+          for (const w of items) {
+            shiftWorld(w, cursor, w.y, snap);
+            cursor += w.node.w + gap;
           }
         } else {
           items.sort((a, b) => a.y - b.y);
           const min = items[0].y;
-          const max = items[items.length - 1].y + items[items.length - 1].h;
-          const total = items.reduce((sum, n) => sum + n.h, 0);
+          const max = items[items.length - 1].y + items[items.length - 1].node.h;
+          const total = items.reduce((sum, w) => sum + w.node.h, 0);
           const gap = (max - min - total) / (items.length - 1);
           let cursor = min;
-          for (const n of items) {
-            n.y = cursor;
-            cursor += n.h + gap;
+          for (const w of items) {
+            shiftWorld(w, w.x, cursor, snap);
+            cursor += w.node.h + gap;
           }
         }
         break;
@@ -3113,6 +4393,7 @@ export class MemoryEngine implements Engine {
           if (!n.expressions) n.expressions = {};
           n.expressions[cmd.property] = cmd.expression;
           this.evaluateExpressionsInTree(this.root());
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
@@ -3121,9 +4402,57 @@ export class MemoryEngine implements Engine {
         if (n && n.expressions) {
           delete n.expressions[cmd.property];
           this.evaluateExpressionsInTree(this.root());
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
+    }
+  }
+
+  /** Collections are named buckets; a variable whose collection name has no
+   *  entry (prototype-created, legacy, renamed file) gets one on demand so
+   *  resolution and the panel never see an orphan. */
+  private ensureCollection(name: string) {
+    const s = this.state;
+    if (!name.trim() || s.variableCollections.some((c) => c.name === name)) return;
+    const id = uid("col");
+    s.variableCollections.push({ id, name, modes: [{ id: `${id}-mode-1`, name: "Default" }] });
+  }
+
+  /** Replace an instance's content with another component's master, keeping
+   *  its identity (id, position, name) and same-named property values. */
+  private swapNodeToComponent(n: XNode, componentId: string) {
+    const s = this.state;
+    const lib = s.components.find((c) => c.id === componentId || c.node.id === componentId);
+    if (!lib || n.isComponent || !n.componentId) return;
+    const keepProps = clone(n.componentProperties ?? {});
+    const fresh = clone(lib.node);
+    reid(fresh);
+    const props: Record<string, string | boolean> = {};
+    for (const p of lib.properties ?? []) props[p.name] = keepProps[p.name] ?? p.defaultValue;
+    const oldKids = n.children;
+    const oldW = n.w;
+    const oldH = n.h;
+    const oldBindings = n.variableBindings;
+    const oldExpr = n.expressions;
+    const oldOwn = n.ownBindings;
+    Object.assign(n, fresh, {
+      x: n.x,
+      y: n.y,
+      id: n.id,
+      name: n.name,
+      isComponent: false,
+      componentId: lib.id,
+      variant: undefined,
+      componentProperties: props,
+    });
+    n.variableBindings = mergeLinkMaps(n.variableBindings, oldBindings);
+    n.expressions = mergeLinkMaps(n.expressions, oldExpr);
+    n.ownBindings = oldOwn;
+    carryNestedOverrides(oldKids, n.children);
+    if (n.overrides && (n.w !== oldW || n.h !== oldH)) {
+      delete n.overrides.w;
+      delete n.overrides.h;
     }
   }
 
@@ -3131,35 +4460,89 @@ export class MemoryEngine implements Engine {
     if (!n.isComponent || !n.componentId) return;
     const lib = this.state.components.find((c) => c.id === n.componentId);
     if (lib) {
-      lib.name = n.name;
-      lib.node = clone(n);
+      // A variant copy publishes to its own variant def — never to the
+      // default node every plain instance reads.
+      if (n.variant) {
+        const v = lib.variants?.find((x) => x.name === n.variant);
+        if (v) v.node = clone(n);
+        else lib.variants?.push({ name: n.variant, node: clone(n) });
+      } else {
+        lib.name = n.name;
+        lib.node = clone(n);
+      }
     }
-    syncInstances(this.state.pages, n);
+    syncInstances(this.state.pages, n, lib?.node ?? n, lib?.variants);
+  }
+
+  /** Content edits at or under a master republish it, so every instance
+   *  receives the update; outside a master this is a no-op. Parent anchors
+   *  (delete, arrange, reorder) legitimately pass the master id itself. */
+  private publishIfMasterEdit(id: string) {
+    const m = findMasterRoot(this.root(), id);
+    if (m) this.publishMaster(m);
   }
 
   private wrapSel(name: string, extra: Partial<XNode>) {
     const s = this.state;
     const ids = s.selection;
     if (ids.length < 1) return;
-    const parent = findParent(this.root(), ids[0]);
+    const rt = this.root();
+    const parent = findParent(rt, ids[0]);
     if (!parent) return;
-    const nodes = parent.children.filter((c) => ids.includes(c.id));
-    if (nodes.length !== ids.length) return;
-    const minX = Math.min(...nodes.map((n) => n.x));
-    const minY = Math.min(...nodes.map((n) => n.y));
-    const maxX = Math.max(...nodes.map((n) => n.x + n.w));
-    const maxY = Math.max(...nodes.map((n) => n.y + n.h));
-    const g = node(extra.kind ?? "group", name, minX, minY, maxX - minX, maxY - minY, extra);
-    g.children = nodes.map((n) => {
+    const nodes: XNode[] = [];
+    for (const id of ids) {
+      const n = find(rt, id);
+      if (!n) return;
+      nodes.push(n);
+    }
+    // A selected ancestor already carries its selected descendants; grouping
+    // the pair would clone the child twice, so this stays a no-op.
+    for (const a of nodes) {
+      for (const b of nodes) {
+        if (a !== b && find(a, b.id)) return;
+      }
+    }
+    // Instance members cannot be grouped away: that would rewrite structure
+    // the main component owns. (Grouping the instance itself is fine.)
+    for (const n of nodes) {
+      if (isInstanceMember(rt, n.id)) return;
+    }
+    // Figma groups across parents: everything is measured in world coords and
+    // the group lands in the first selection's parent, preserving visuals.
+    const worlds = nodes.map((n) => ({ n, wp: worldPos(rt, n.id)! }));
+    const minX = Math.min(...worlds.map(({ wp }) => wp.x));
+    const minY = Math.min(...worlds.map(({ wp }) => wp.y));
+    const maxX = Math.max(...worlds.map(({ n, wp }) => wp.x + n.w));
+    const maxY = Math.max(...worlds.map(({ n, wp }) => wp.y + n.h));
+    const pwp = parent === rt ? { x: 0, y: 0 } : worldPos(rt, parent.id)!;
+    const g = node(
+      extra.kind ?? "group",
+      name,
+      minX - pwp.x,
+      minY - pwp.y,
+      Math.max(1, maxX - minX),
+      Math.max(1, maxY - minY),
+      extra,
+    );
+    g.children = worlds.map(({ n, wp }) => {
       const c = clone(n);
-      c.x -= minX;
-      c.y -= minY;
+      c.x = wp.x - minX;
+      c.y = wp.y - minY;
       return c;
     });
-    const firstIndex = parent.children.findIndex((c) => ids.includes(c.id));
-    parent.children = parent.children.filter((c) => !ids.includes(c.id));
-    parent.children.splice(Math.max(0, Math.min(firstIndex, parent.children.length)), 0, g);
+    const selSet = new Set(ids);
+    const oldPids = nodes.map((n) => findParent(rt, n.id)?.id).filter((x): x is string => !!x);
+    const firstIndex = parent.children.findIndex((c) => selSet.has(c.id));
+    const detach = (p: XNode) => {
+      p.children = p.children.filter((c) => !selSet.has(c.id));
+      for (const c of p.children) detach(c);
+    };
+    detach(rt);
+    parent.children.splice(Math.max(0, firstIndex < 0 ? parent.children.length : Math.min(firstIndex, parent.children.length)), 0, g);
+    if (g.kind === "frame" && parent === this.root()) this.lastFrameSize = { w: g.w, h: g.h };
     s.selection = [g.id];
+    this.publishIfMasterEdit(g.id);
+    for (const pid of oldPids) this.publishIfMasterEdit(pid);
   }
 }
 
@@ -3192,30 +4575,102 @@ function framesOf(root: XNode): XNode[] {
   return out;
 }
 
-function syncInstances(pages: Page[], master: XNode) {
-  const cid = master.componentId;
+/** Figma preserves by-name overrides across variant switches and swaps:
+ *  each fresh child inherits the override record of its same-named predecessor. */
+function carryNestedOverrides(oldKids: XNode[], newKids: XNode[]) {
+  for (const c of newKids) {
+    const prev = oldKids.find((o) => o.name === c.name);
+    if (prev?.overrides && Object.keys(prev.overrides).length) {
+      c.overrides = { ...prev.overrides };
+      Object.assign(c, clone(prev.overrides));
+    }
+  }
+}
+
+function syncInstances(pages: Page[], edited: XNode, defaultDef: XNode, variants?: { name: string; node: XNode }[]) {
+  const cid = edited.componentId;
   if (!cid) return;
 
-  function syncNode(instNode: XNode, masterDef: XNode) {
-    const x = instNode.x;
-    const y = instNode.y;
+  function syncNode(instNode: XNode, masterDef: XNode, isRoot: boolean) {
+    // A nested instance keeps its own library link and content: the outer
+    // sync refreshes its shell (geometry follows the outer master) while
+    // its children stay owned by its own master.
+    const nestedLink =
+      !instNode.isComponent && instNode.componentId && instNode.componentId !== cid
+        ? instNode.componentId
+        : null;
+    // Only the instance root keeps its own position: members take the
+    // master's geometry, so master position edits flow to every instance.
+    const x = isRoot ? instNode.x : masterDef.x;
+    const y = isRoot ? instNode.y : masterDef.y;
     const id = instNode.id;
     const interactions = instNode.interactions;
     const localOverrides = instNode.overrides ? { ...instNode.overrides } : {};
+    // A layout override is fragments (root spacing), never a whole layout: it
+    // merges over the master's layout after the assign rather than replacing
+    // it, so master structure edits still flow through.
+    const { layout: layoutFrag, ...restOverrides } = localOverrides as Record<string, unknown>;
+    const localBindings = instNode.variableBindings;
+    const localExpr = instNode.expressions;
+    // Own bindings (bound on the instance itself) pin their props against
+    // the master's map; flowed bindings follow the master, so a master
+    // unbind propagates. Nested instances pin their whole map: their
+    // binding state is owned by their own master, the outer sync only adds.
+    const pinned: Record<string, string> = {};
+    if (nestedLink) {
+      Object.assign(pinned, localBindings ?? {});
+    } else if (instNode.ownBindings) {
+      for (const k of Object.keys(instNode.ownBindings)) {
+        if (localBindings?.[k] !== undefined) pinned[k] = localBindings[k];
+      }
+    }
 
     const masterKids = masterDef.children ?? [];
     const instKids = instNode.children ?? [];
     const syncedKids: XNode[] = [];
 
-    for (let i = 0; i < masterKids.length; i++) {
-      const mk = masterKids[i];
-      if (i < instKids.length) {
-        const ik = instKids[i];
-        syncNode(ik, mk);
+    // Figma preserves overrides by layer name: each master child syncs the
+    // same-named instance child, so a master reorder never cross-wires two
+    // layers' masters. A positional fallback keeps plain renames alive when
+    // nothing structural changed; instance children with no master
+    // counterpart are dropped, and new master children are appended fresh.
+    const matchFor = new Array<number>(masterKids.length).fill(-1);
+    const used = new Set<number>();
+    const byName = new Map<string, number[]>();
+    masterKids.forEach((mk, i) => {
+      const list = byName.get(mk.name) ?? [];
+      list.push(i);
+      byName.set(mk.name, list);
+    });
+    instKids.forEach((ik, j) => {
+      const list = byName.get(ik.name) ?? [];
+      const mi = list.find((i) => matchFor[i] < 0);
+      if (mi !== undefined && mi >= 0) {
+        matchFor[mi] = j;
+        used.add(j);
+      }
+    });
+    const freeInst = instKids.map((_, j) => j).filter((j) => !used.has(j));
+    let fi = 0;
+    for (let mi = 0; mi < masterKids.length; mi++) {
+      if (matchFor[mi] < 0 && fi < freeInst.length) {
+        matchFor[mi] = freeInst[fi++];
+      }
+    }
+    const kidCount = nestedLink ? 0 : masterKids.length;
+    for (let mi = 0; mi < kidCount; mi++) {
+      const mk = masterKids[mi];
+      const j = matchFor[mi];
+      if (j >= 0) {
+        const ik = instKids[j];
+        syncNode(ik, mk, false);
         syncedKids.push(ik);
       } else {
         const newKid = clone(mk);
         reid(newKid);
+        walk(newKid, (m) => {
+          delete m.ownBindings;
+        });
         syncedKids.push(newKid);
       }
     }
@@ -3230,18 +4685,40 @@ function syncInstances(pages: Page[], master: XNode) {
       id,
       interactions,
       isComponent: false,
-      componentId: cid,
-      children: syncedKids,
+      // Only the instance root carries the library link: stamping members
+      // would make every member look like a root (breaking member guards
+      // and re-syncing members against the master root). This also clears
+      // stamps left by older syncs.
+      componentId: nestedLink ?? (isRoot ? cid : ""),
+      children: nestedLink ? instNode.children : syncedKids,
+      // Bindings and expressions are live links, not synced content: the
+      // master's maps supply new keys, the instance's own entries win.
+      // The pin set itself passes through untouched.
+      variableBindings: mergeLinkMaps(masterProps.variableBindings, pinned),
+      expressions: mergeLinkMaps(masterProps.expressions, localExpr),
+      ownBindings: instNode.ownBindings,
       overrides: localOverrides,
-      ...localOverrides,
+      ...restOverrides,
     });
+    if (layoutFrag && typeof layoutFrag === "object" && instNode.layout) {
+      const frag = layoutSpacingFragment(layoutFrag as Partial<AutoLayout>);
+      if (frag) instNode.layout = { ...instNode.layout, ...frag };
+    }
   }
 
   for (const page of pages) {
     walk(page.root, (n) => {
-      if (n === master) return;
+      if (n === edited) return;
       if (n.componentId !== cid || n.isComponent) return;
-      syncNode(n, master);
+      // Members sync through their root's recursion, never directly: a
+      // member stamped with the link would otherwise be re-synced against
+      // the master root and inherit its name, size, and children.
+      const ir = findInstanceRoot(page.root, n.id);
+      if (!ir || ir.id !== n.id) return;
+      // Variant instances sync from their own variant def: a master edit
+      // must never silently reset them to the default variant.
+      const def = (n.variant && variants?.find((v) => v.name === n.variant)?.node) || defaultDef;
+      syncNode(n, def, true);
     });
   }
 }
@@ -3416,6 +4893,38 @@ function worldMatrix(root: XNode, id: string): Matrix | null {
   return result;
 }
 
+/**
+ * Boolean live preview, in page coordinates.
+ *
+ * Runs the same `booleanPath` the `boolean` command bakes, over the same
+ * inputs (`transformedPoly` + node offsets), without touching the document.
+ * Returns null unless the selection is exactly what the command would act
+ * on: 2+ same-parent, non-frame nodes. Operand order is selection order, so
+ * the overlay is the result the Apply button would commit.
+ */
+export function previewBoolean(
+  op: BooleanOp,
+  root: XNode,
+  ids: string[],
+): { path: PathPoint[]; x: number; y: number; w: number; h: number } | null {
+  if (ids.length < 2) return null;
+  const nodes = ids.map((id) => find(root, id)).filter((n): n is XNode => !!n && n.kind !== "frame");
+  if (nodes.length < 2) return null;
+  const parent = findParent(root, nodes[0].id);
+  if (!parent || !nodes.every((n) => findParent(root, n.id) === parent)) return null;
+  const baked = booleanPath(
+    op,
+    nodes.map((c) => ({ poly: transformedPoly(c), ox: c.x, oy: c.y })),
+  );
+  if (!baked) return null;
+  // `boolean` wraps the selection in a group first, so its baked path is
+  // group-relative; the preview adds the parent chain offset instead.
+  const pw = worldPos(root, parent.id);
+  const ox = pw ? pw.x : 0;
+  const oy = pw ? pw.y : 0;
+  return { path: baked.path, x: baked.x + ox, y: baked.y + oy, w: baked.w, h: baked.h };
+}
+
 /** Convert a point in page coordinates into a node's local coordinate system. */
 export function worldToLocal(root: XNode, id: string, x: number, y: number) {
   const m = worldMatrix(root, id);
@@ -3445,7 +4954,7 @@ function segmentDistance(px: number, py: number, ax: number, ay: number, bx: num
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-function nodeShapeHit(n: XNode, px: number, py: number): boolean {
+function nodeShapeHit(n: XNode, px: number, py: number, pad = 0): boolean {
   if (n.kind === "ellipse") {
     const dx = (px - n.w / 2) / Math.max(1, n.w / 2);
     const dy = (py - n.h / 2) / Math.max(1, n.h / 2);
@@ -3453,7 +4962,10 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
     return n.fillVisible !== false && !n.fill.startsWith("#00000000") ? d <= 1 : Math.abs(Math.sqrt(d) - 1) <= Math.max(4, n.strokeWidth / 2);
   }
   if (n.kind === "line" || n.kind === "arrow") {
-    return segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <= Math.max(12, n.strokeWidth / 2 + 4);
+    return (
+      segmentDistance(px, py, 0, n.h / 2, n.w, n.h / 2) <=
+      Math.max(12, ((n.strokeWidth || 1) * maxWidthMultiplier(n.strokeWidthProfile)) / 2 + 4)
+    );
   }
   if (n.kind === "vector" || n.kind === "boolean") {
     const rawPoly = n.path.length ? n.path : shapePoly(n);
@@ -3464,7 +4976,7 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
         if (polygonHit(poly as any, px, py)) return true;
       }
       // Also allow selecting by clicking near stroke even when closed
-      const strokeTol = Math.max(6, (n.strokeWidth || 1) / 2 + 3);
+      const strokeTol = Math.max(6, ((n.strokeWidth || 1) * maxWidthMultiplier(n.strokeWidthProfile)) / 2 + 3);
       for (let i = 0; i < poly.length; i++) {
         const a = poly[i] as any;
         const b = poly[(i + 1) % poly.length] as any;
@@ -3473,7 +4985,7 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
       }
       if (isClosed) return false;
     } else if (poly.length >= 2) {
-      const strokeTol = Math.max(6, (n.strokeWidth || 1) / 2 + 4);
+      const strokeTol = Math.max(6, ((n.strokeWidth || 1) * maxWidthMultiplier(n.strokeWidthProfile)) / 2 + 4);
       for (let i = 0; i < poly.length - 1; i++) {
         const a = poly[i] as any;
         const b = poly[i + 1] as any;
@@ -3495,7 +5007,7 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
     }
     return false;
   }
-  return px >= 0 && py >= 0 && px <= n.w && py <= n.h;
+  return px >= -pad && py >= -pad && px <= n.w + pad && py <= n.h + pad;
 }
 
 export function hitTest(
@@ -3505,27 +5017,33 @@ export function hitTest(
   opts?: { deep?: boolean; selection?: string[]; includeLocked?: boolean },
 ): XNode | null {
   let hit: XNode | null = null;
-  const visit = (n: XNode, parentWorld: Matrix) => {
-    if (!n.visible || (n.locked && !opts?.includeLocked)) return;
+  const visit = (n: XNode, parentWorld: Matrix, lockedAbove = false) => {
+    const effLocked = lockedAbove || !!n.locked;
+    if (!n.visible || (effLocked && !opts?.includeLocked)) return;
     const world = n === root ? parentWorld : multiply(parentWorld, nodeMatrix(n));
     const local = n === root ? { x: wx, y: wy } : applyMatrix(inverse(world) ?? IDENTITY, wx, wy);
+    // A visible outside/centre stroke spills painted pixels past the box and
+    // they stay clickable; the shape test gets the same pad so the two agree.
+    const pad = n === root ? 0 : strokeSpill(n);
     const inside =
       n === root ||
-      (local.x >= 0 && local.y >= 0 && local.x <= n.w && local.y <= n.h);
+      (local.x >= -pad && local.y >= -pad && local.x <= n.w + pad && local.y <= n.h + pad);
     if (n === root || n.overflow === "visible" || inside) {
-      for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], world);
+      for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], world, effLocked);
     }
-    if (n === root || !inside || !nodeShapeHit(n, local.x, local.y) || hit) return;
+    if (n === root || !inside || !nodeShapeHit(n, local.x, local.y, pad) || hit) return;
     hit = n;
   };
   visit(root, IDENTITY);
   if (!hit || opts?.deep) return hit;
+  // A plain click always lands on the group/boolean, even when that parent is
+  // already selected: drilling in is double-click's and Enter's job, never a
+  // single click's. Frames stay transparent, as in Figma.
   let n: XNode | null = hit;
   while (n) {
     const p = findParent(root, n.id);
     if (!p || p === root) break;
     if (p.kind === "group" || p.kind === "boolean") {
-      if (opts?.selection?.includes(p.id)) break;
       n = p;
       continue;
     }
@@ -3534,13 +5052,19 @@ export function hitTest(
   return n;
 }
 
-function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: number, newH: number) {
+function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: number, newH: number, absoluteOnly = false) {
   const dw = newW - oldW;
   const dh = newH - oldH;
   if (!dw && !dh) return;
   for (const c of parent.children) {
+    // After a hug the flow children are already packed where they belong, so
+    // only the absolutely positioned ones follow the resize; constraints never
+    // move a flow child. The cascade below still runs whole subtrees.
+    if (absoluteOnly && !c.absolutePosition) continue;
     const h = c.constraintH;
     const v = c.constraintV;
+    const cw = c.w;
+    const ch = c.h;
     if (h === "max") c.x += dw;
     else if (h === "center") c.x += dw / 2;
     else if (h === "stretch") c.w = Math.max(1, c.w + dw);
@@ -3554,6 +5078,11 @@ function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: numbe
     else if (v === "scale" && oldH > 0) {
       c.y *= newH / oldH;
       c.h = Math.max(1, c.h * (newH / oldH));
+    }
+    // A resized child is a resized parent for its own subtree: stretch /
+    // scale must cascade, not stop at the first level.
+    if ((c.w !== cw || c.h !== ch) && c.children.length) {
+      applyConstraints(c, cw, ch, c.w, c.h);
     }
   }
 }
@@ -3639,7 +5168,7 @@ export function deepestFrame(root: XNode, wx: number, wy: number, skip?: Set<str
   return hit;
 }
 
-export { find, findParent, framesOf };
+export { find, findParent, framesOf, isEffectivelyLocked, isInstanceMember, findInstanceRoot };
 
 export function collectColors(root: XNode): string[] {
   const out: string[] = [];
@@ -3661,7 +5190,9 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
         ? "#ffffff80"
         : kind === "texture"
           ? "#00000020"
-          : "#000000",
+          : kind === "noise"
+            ? "#ffffff"
+            : "#000000",
     x: 0,
     y: shadow ? 4 : 0,
     blur:

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
-import { deepestFrame, find, findParent, hitTest, insideInstance, worldToLocal, worldPos } from "../engine/memory";
+import type { Effect, Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
+import { checkCondition, triggerInteractions } from "../engine/protoEval";
+import { resolveAllForMode, resolveVariable } from "../engine/variables";
+import { evaluateExpression } from "../engine/expressions";
+import { prefersReducedMotion } from "./a11y";
+import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
@@ -20,27 +24,36 @@ import {
   hasCornerSmoothing,
   roundRectRadii,
   pathBounds,
+  smoothHandlesForPoint,
   fillNetworkRegionAtPoint,
+  outlineVariableStroke,
+  widthProfileStations,
 } from "../engine/geometry";
-import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "../engine/strokeModel";
+import { dashArray, dashOffset, miterLimitFromAngle, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
+  roundBox,
   snapCandidates,
   snapMove,
   snapResize,
+  wantsPixelSnap,
   type Box,
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, paintDropShadows, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha } from "../engine/paint";
+import { withPreviewEffect } from "./effectModel";
+import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
+import { coverCrop, normalizeCropRect } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
+import { registerConnDismiss } from "./connSelection";
 import { clampZoom, normalizeWheelDelta, wheelZoomFactor } from "../engine/view";
 import { Rulers } from "./Rulers";
 import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
-import { hugSize, listGutter, listMarker, measureCached, textMetrics, wrapLines } from "./textLayout";
+import { applyTextCase, fitLineCount, hugSize, indentOf, listGutter, listMarker, measureCached, textMetrics, valignApplies, wrapLines } from "./textLayout";
 import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import { importSvg, type ImportedNode } from "../engine/svgImport";
@@ -57,7 +70,7 @@ import { toast } from "./toast";
 import { Icon } from "./icons";
 import { zoomAtPoint, zoomToRect } from "./zoom";
 import { getNudgePrefs } from "./nudgePrefs";
-import { alignKey } from "../engine/layout";
+import { alignKey, flowGapLine, flowInsertIndex, wrapLines as flowWrapLines, wraps } from "../engine/layout";
 import { ContextToolbar } from "./x-ui";
 import { addAutoLayout, removeAutoLayout } from "./layoutActions";
 import { align } from "./inspector";
@@ -66,11 +79,28 @@ import { align } from "./inspector";
 const SNAP_PX = 6;
 /** Eraser brush radius, in screen pixels. */
 const ERASER_PX = 10;
+
+/**
+ * Effective closed flag for vector editing. Basic shapes carry no path (and
+ * closed:false) until the first edit, but a rect/ellipse/poly/star is
+ * semantically a loop — only lines and arrows are open.
+ */
+function effClosed(n: { path: unknown[]; closed?: boolean; kind?: string }): boolean {
+  if (n.path.length) return !!n.closed;
+  return n.kind !== "line" && n.kind !== "arrow";
+}
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
 
 /** X-Native signature brand accents (Graphite & Signal Emerald). */
 const BRAND_ACCENT = "#10b981";
+/** Component/prototype identity on canvas. Paired with `--comp` in styles.css
+ *  (layer rows); canvas literals can't read CSS vars per-frame, so the two
+ *  are kept in step by hand — change both. */
+const COMP_PURPLE = "#a855f7";
+/** Locked-selection chrome: ring, pill and grab guards share one grey so
+ *  "selected but not grabbable" reads instantly against the brand accent. */
+const LOCK_GREY = "#9aa0a6";
 const BRAND_ACCENT_WASH = "rgba(16, 185, 129, 0.14)";
 const BRAND_ACCENT_GLOW = "rgba(16, 185, 129, 0.35)";
 
@@ -86,6 +116,17 @@ const CREATE: Tool[] = [
   "star",
   "image",
 ];
+
+/** Ruler guides in world positions for snapping; frame-level guides resolve
+ *  against their frame, stale ones (frame gone) drop out. */
+function worldGuides(root: XNode, guides: RulerGuide[]): { axis: "x" | "y"; at: number }[] {
+  return guides.flatMap((g) => {
+    if (!g.frameId) return [{ axis: g.axis, at: g.at }];
+    const wp = worldPos(root, g.frameId);
+    if (!wp) return [];
+    return [{ axis: g.axis, at: (g.axis === "x" ? wp.x : wp.y) + g.at }];
+  });
+}
 
 function kindOf(t: Tool): NodeKind | null {
   if (t === "section") return "frame";
@@ -134,13 +175,17 @@ type Drag =
         | "polyCount"
         | "radius"
         | "arc"
-        | "rotOrigin";
+        | "rotOrigin"
+        | "crop"
+        | "cropMove";
       /** Zoom-tool drag: the create block zooms to the rect instead of
        *  committing a node. */
       zoom?: boolean;
       point?: number;
       segIndex?: number;
       handle?: "in" | "out" | "g" | "h";
+      /** Gradient-handle drag: which `fills` index the handles grabbed, -1 for the base fill. */
+      gindex?: number;
       padEdge?: "top" | "right" | "bottom" | "left";
       forcedSide?: "right" | "bottom" | "left" | "top";
       /** ⌥ at the padding handle: the opposite side follows. ⌥⇧: all four. */
@@ -165,7 +210,17 @@ type Drag =
       origLocal?: { x: number; y: number };
       corner?: number;
       id?: string;
+      /** Crop drag: the handle being pulled, and the pointer's last local
+       *  point for the move (reposition) variant. */
+      cropHandle?: CropHandle;
+      cropLX?: number;
+      cropLY?: number;
+      /** Crop drag: the rect at drag start; every move recomputes from it. */
+      cropStart?: CropRect;
       duped?: boolean;
+      /** Selection when a ⇧-marquee started: the band unions with this, so
+       *  shrinking the band lets go of layers instead of accumulating them. */
+      sel0?: string[];
       axis?: "x" | "y" | null;
       /** Combined selection bounds at drag start (group transforms). */
       bounds?: { x: number; y: number; w: number; h: number };
@@ -182,7 +237,7 @@ function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
   const out: MultiOrigin[] = [];
   for (const id of ids) {
     const wp = worldPos(root, id);
-    if (!wp || wp.node.locked) continue;
+    if (!wp || isEffectivelyLocked(root, id) || isInstanceMember(root, id)) continue;
     out.push({
       id,
       x: wp.x,
@@ -234,14 +289,125 @@ export function Canvas({
 }: {
   engine: Engine;
   snap: Snapshot;
-  onRunInteraction?: (runner: (ix: Interaction) => void) => void;
+  onRunInteraction?: (runner: (ix: Interaction, sourceId?: string) => void) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const editRef = useRef<HTMLTextAreaElement | null>(null);
+  // Mousedown lands before blur: when editing text A and pressing on text B,
+  // the intercept below stashes B here so the blur commits A and opens B
+  // instead of closing the editor outright.
+  const editSwitch = useRef<string | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
+  // Mirrors the ref so the grab cursor flips the moment Space lands; the ref
+  // alone would leave the cursor stale until the next render.
+  const [spaceHeld, setSpaceHeld] = useState(false);
   const imgs = useRef(new Map<string, HTMLImageElement>());
+  /** Resolve an image source to a loaded element, kicking off the load and
+   *  repainting on arrival when it is not there yet. */
+  /** Crop tool: the layer being cropped (its rect patches live, one undo
+   *  per gesture), plus the pre-tool rect for Esc and a dirty flag. */
+  const [cropId, setCropId] = useState<string | null>(null);
+  const cropOrig = useRef<CropRect | undefined>(undefined);
+  const cropDirty = useRef(false);
+  /** Place-image queue: sources picked from the file dialog, placed one per
+   *  click (a click on a shape fills it instead of adding a layer). */
+  const [placing, setPlacing] = useState<{ srcs: { src: string; name: string }[]; i: number } | null>(null);
+  const imgOf = (src: string) => {
+    let im = imgs.current.get(src);
+    if (!im && src) {
+      im = new Image();
+      im.src = src;
+      im.onload = () => engine.dispatch({ type: "select", ids: engine.snapshot().selection });
+      imgs.current.set(src, im);
+    }
+    return im && im.complete && im.naturalWidth ? im : undefined;
+  };
+  /** Enter the crop tool on an image layer: select it, switch its mode to
+   *  Crop, and remember the pre-tool rect for Esc. */
+  const enterCrop = (id: string) => {
+    const now = engine.snapshot();
+    const n = find(now.pages[now.page].root, id);
+    if (!n || (!n.imageSrc && n.fillType !== "image")) return;
+    if (n.fillType === "image" && !n.imageSrc) return;
+    cropOrig.current = n.imageCrop ? { ...n.imageCrop } : undefined;
+    cropDirty.current = false;
+    if (n.imageFit !== "crop") engine.dispatch({ type: "patch", id, patch: { imageFit: "crop" } });
+    engine.dispatch({ type: "select", ids: [id] });
+    if (n.imageSrc) imgOf(n.imageSrc);
+    setCropId(id);
+  };
+  /** Leave the crop tool, reverting to the pre-tool rect. */
+  const cancelCrop = () => {
+    if (cropDirty.current && cropId) {
+      engine.dispatch({ type: "patch", id: cropId, patch: { imageCrop: cropOrig.current } });
+    }
+    setCropId(null);
+  };
+  useEffect(() => {
+    const onCropEvent = (e: Event) => {
+      const id = (e as CustomEvent).detail?.id;
+      if (id) enterCrop(id);
+    };
+    const onPlaceEvent = () => {
+      // A cancelled image-tool click leaves a stale point behind; the menu
+      // path queues everything instead of landing the first on it.
+      pendingImage.current = null;
+      fileRef.current?.click();
+    };
+    window.addEventListener("x-native-crop-image", onCropEvent);
+    window.addEventListener("x-native-place-image", onPlaceEvent);
+    return () => {
+      window.removeEventListener("x-native-crop-image", onCropEvent);
+      window.removeEventListener("x-native-place-image", onPlaceEvent);
+    };
+  }, []);
+  /** Processed image dimensions for the crop tool (rotation-aware), or
+   *  null while the source is still loading. */
+  const cropImageDims = (cn: XNode) => {
+    const im = cn.imageSrc ? imgs.current.get(cn.imageSrc) : undefined;
+    if (!im || !im.complete || !im.naturalWidth) return null;
+    const rot = ((cn.imageRot % 360) + 360) % 360;
+    const swap = rot === 90 || rot === 270;
+    return { iw: swap ? im.naturalHeight : im.naturalWidth, ih: swap ? im.naturalWidth : im.naturalHeight };
+  };
+  // A selection that leaves the cropped layer applies the crop.
+  useEffect(() => {
+    if (cropId && !snap.selection.includes(cropId)) setCropId(null);
+  }, [snap.selection]);
+  // Enter applies, Escape reverts, while cropping or placing. Keystrokes
+  // aimed at a field belong to the field, not the tool.
+  useEffect(() => {
+    if (!cropId && !placing) return;
+    const key = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (cropId) cancelCrop();
+        if (placing) {
+          setPlacing(null);
+          engine.dispatch({ type: "setTool", tool: "select" });
+        }
+      } else if (e.key === "Enter" && cropId) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCropId(null);
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [cropId, placing]);
+  // Layer-blur raster cache: a filtered node repaints identically every pan
+  // frame while the blur dominates paint cost (profiled: 99.7% native in
+  // d-pan), so each eligible leaf's filtered raster is kept offscreen and
+  // blitted until its inputs change. The signature fully determines the
+  // raster, so entries are safe to share across documents; bounded by bytes
+  // with LRU eviction.
+  const blurCache = useRef(new Map<string, { c: HTMLCanvasElement; pad: number; bytes: number }>());
+  const blurCacheBytes = useRef(0);
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
@@ -261,6 +427,7 @@ export function Canvas({
   const [draft, setDraft] = useState<PathPoint[]>([]);
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
+  const [panelHover, setPanelHover] = useState("");
   const [transition, setTransition] = useState<ProtoAnim | null>(null);
   const [animFrame, setAnimFrame] = useState<{
     frame: XNode;
@@ -287,6 +454,11 @@ export function Canvas({
     }
   }, [snap.vecPoint]);
   const hoverIx = useRef("");
+  /** §23 PT-005: a while-hovering navigation's way home (node, origin frame,
+   *  destination); leaving the hotspot returns unless a Mouse-leave ran. */
+  const hoverReturn = useRef<{ nodeId: string; fromFrame: string; destId: string } | null>(null);
+  /** Present-mode drag origin for the onDrag trigger; cleared on pointer-up. */
+  const dragIx = useRef<{ x: number; y: number; id: string; fired: boolean } | null>(null);
   /** Cursor implied by whatever selection chrome is under the pointer. */
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
   /* Keeps the rotation origin out of the way until `⌥R` asks for it. */
@@ -306,6 +478,15 @@ export function Canvas({
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
+  /** Live drop target during a move drag: the frame outline plus, for a linear
+   *  flow, the blue insertion line - all in world coordinates. */
+  const [dropHint, setDropHint] = useState<{
+    fx: number;
+    fy: number;
+    fw: number;
+    fh: number;
+    line: { horiz: boolean; at: number; from: number; to: number } | null;
+  } | null>(null);
   /** Live Alt/Option distance measurement state */
   const [altMeasure, setAltMeasure] = useState(false);
   /** Live prototype connection dragging state */
@@ -326,11 +507,19 @@ export function Canvas({
     midY: number;
     label: string;
   } | null>(null);
+  /** §23 PT-016: copied connection rows (⌘C on a noodle); a layer copy/cut clears it. */
+  const connClipboard = useRef<Interaction[]>([]);
   /** Static snap targets, captured once at drag start so they never shift mid-drag. */
   const snapTargets = useRef<Box[]>([]);
   const { theme } = useTheme();
   const runInteraction = useCallback(
-    (ix: Interaction) => {
+    (ix: Interaction, sourceId?: string) => {
+      // Conditions gate the whole interaction, animated or not.
+      if (ix.condition) {
+        const s = engine.snapshot();
+        if (!checkCondition(s.variables ?? [], s.variableCollections ?? [], s.activeModes ?? {}, ix.condition)) return;
+      }
+      const reduced = prefersReducedMotion();
       const run = () => {
         if (ix.action === "back") engine.dispatch({ type: "presentBack" });
         else if (ix.action === "navigate" && ix.destination) engine.dispatch({ type: "presentGo", id: ix.destination });
@@ -338,14 +527,28 @@ export function Canvas({
           const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
           window.open(url, "_blank", "noopener,noreferrer");
         } else if (ix.action === "scrollTo" && ix.destination) {
-          const root = engine.snapshot().pages[engine.snapshot().page].root;
-          const target = worldPos(root, ix.destination);
+          const s = engine.snapshot();
+          const target = worldPos(s.pages[s.page].root, ix.destination);
           if (target) {
-            engine.dispatch({
-              type: "setPan",
-              x: -target.x * engine.snapshot().zoom + 120,
-              y: -target.y * engine.snapshot().zoom + 120,
-            });
+            const toX = -target.x * s.zoom + 120;
+            const toY = -target.y * s.zoom + 120;
+            // §23 PT-011: Scroll-to honors the animation (Figma: instant or
+            // eased) instead of always jumping.
+            if (!ix.animation || ix.animation === "instant") {
+              engine.dispatch({ type: "setPan", x: toX, y: toY });
+            } else {
+              const fromX = s.panX;
+              const fromY = s.panY;
+              const dur = ix.duration || 250;
+              const start = performance.now();
+              const tick = () => {
+                const t = Math.min(1, Math.max(0, (performance.now() - start) / dur));
+                const k = solveEasing(ix.easing || "easeOut", t);
+                engine.dispatch({ type: "setPan", x: fromX + (toX - fromX) * k, y: fromY + (toY - fromY) * k });
+                if (t < 1) requestAnimationFrame(tick);
+              };
+              requestAnimationFrame(tick);
+            }
           }
         } else if (ix.action === "openOverlay" && ix.destination) {
           engine.dispatch({
@@ -357,29 +560,51 @@ export function Canvas({
             backdropColor: ix.overlayBackdropColor,
           });
         } else if (ix.action === "swapOverlay" && ix.destination) {
-          engine.dispatch({
-            type: "openOverlay",
-            id: ix.destination,
-            position: ix.overlayPosition || "center",
-            closeOutside: ix.overlayCloseOutside !== false,
-            backdrop: ix.overlayBackdrop !== false,
-            backdropColor: ix.overlayBackdropColor,
-          });
+          // §23 PT-003: Swap retains the open overlay's settings (Figma) and
+          // never touches history; from a plain frame it navigates instead.
+          const open = engine.snapshot().activeOverlay;
+          if (!open) {
+            engine.dispatch({ type: "presentGo", id: ix.destination });
+          } else {
+            engine.dispatch({
+              type: "openOverlay",
+              id: ix.destination,
+              position: open.position,
+              closeOutside: open.closeOutside,
+              backdrop: open.backdrop,
+              backdropColor: open.backdropColor,
+            });
+          }
         } else if (ix.action === "closeOverlay") {
           engine.dispatch({ type: "closeOverlay" });
         } else if (ix.action === "setVariable" && ix.variableId) {
           const s = engine.snapshot();
-          const v = s.variables?.find((varItem) => varItem.id === ix.variableId);
-          if (v) {
-            let nextVal = ix.variableValue !== undefined ? ix.variableValue : v.value;
-            if (ix.variableOp === "increment" && typeof v.value === "number") nextVal = v.value + 1;
-            else if (ix.variableOp === "decrement" && typeof v.value === "number") nextVal = v.value - 1;
-            else if (ix.variableOp === "toggle") nextVal = !v.value;
+          const vars = s.variables ?? [];
+          const cur = resolveVariable(vars, s.variableCollections ?? [], s.activeModes ?? {}, ix.variableId);
+          if (cur && !cur.broken) {
+            let nextVal: string | number | boolean = ix.variableValue !== undefined ? ix.variableValue : cur.value;
+            // §23 PT-017: =expressions evaluate here too, like the player's
+            // own fallback path already did.
+            if (typeof nextVal === "string" && nextVal.startsWith("=")) {
+              const res = evaluateExpression(nextVal.slice(1), {
+                vars: resolveAllForMode(vars, s.variableCollections ?? [], s.activeModes ?? {}),
+              });
+              if (!res.error && res.value !== undefined) nextVal = res.value;
+            }
+            if (ix.variableOp === "increment" && typeof cur.value === "number") nextVal = cur.value + 1;
+            else if (ix.variableOp === "decrement" && typeof cur.value === "number") nextVal = cur.value - 1;
+            else if (ix.variableOp === "toggle" && typeof cur.value === "boolean") nextVal = !cur.value;
             engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
           }
+        } else if (ix.action === "setVariableMode" && ix.variableCollectionId && ix.variableModeId) {
+          // §23 PT-012: Figma's Set-variable-mode action.
+          engine.dispatch({ type: "setActiveMode", collectionId: ix.variableCollectionId, modeId: ix.variableModeId });
+        } else if (ix.action === "setVariant" && ix.variantName && sourceId) {
+          // Interactive components: swap the interaction's own instance.
+          engine.dispatch({ type: "setVariant", id: sourceId, name: ix.variantName });
         }
       };
-      if (ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable") {
+      if (reduced || ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable" || ix.action === "setVariableMode" || ix.action === "setVariant") {
         run();
         return;
       }
@@ -434,9 +659,45 @@ export function Canvas({
     [engine],
   );
 
+  /** Run every match for a trigger (innermost node wins); true when any ran. */
+  const runTrigger = useCallback(
+    (root: XNode, startId: string, trigger: ProtoTrigger) => {
+      const hit = triggerInteractions(root, startId, trigger);
+      if (!hit) return false;
+      // §23 PT-005: while-hovering navigations remember where they came from
+      // (read before the run below moves presentFrame away).
+      if (trigger === "onHover") {
+        const s = engine.snapshot();
+        const nav = hit.list.find((ix) => ix.action === "navigate" && ix.destination);
+        hoverReturn.current = nav && s.presentFrame ? { nodeId: hit.nodeId, fromFrame: s.presentFrame, destId: nav.destination } : null;
+      }
+      for (const ix of hit.list) runInteraction(ix, hit.nodeId);
+      return true;
+    },
+    [runInteraction],
+  );
+
   useEffect(() => {
     if (onRunInteraction) onRunInteraction(runInteraction);
   }, [onRunInteraction, runInteraction]);
+
+  // The chip's Escape lives in the hotkey layer's cascade (ui/connSelection.ts
+  // explains why the canvas listener cannot answer it itself); it is registered
+  // for exactly as long as a connection is selected.
+  useEffect(() => {
+    registerConnDismiss(selectedConn ? () => setSelectedConn(null) : null);
+    return () => registerConnDismiss(null);
+  }, [selectedConn]);
+
+  // §23 PT-016: a layer copy/cut invalidates a copied connection, so the most
+  // recent copy always wins the next ⌘V.
+  useEffect(() => {
+    const clear = () => {
+      connClipboard.current = [];
+    };
+    window.addEventListener("x-native-layer-copy", clear);
+    return () => window.removeEventListener("x-native-layer-copy", clear);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -448,6 +709,27 @@ export function Canvas({
         targetEl?.isContentEditable ||
         !!targetEl?.closest?.("input, textarea, select, [contenteditable='true'], .x-field, .x-popover, .inspector");
       if (isTyping && e.key !== "Escape") return;
+
+      // Present-mode key triggers: every matching interaction in the frame runs.
+      if (e.type === "keydown" && snap.presentFrame && e.key !== "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const root = snap.pages[snap.page].root;
+        const frame = find(root, snap.presentFrame);
+        if (frame) {
+          const matches: { nodeId: string; ix: Interaction }[] = [];
+          const collect = (n: XNode) => {
+            for (const ix of n.interactions ?? []) {
+              if (ix.trigger === "keyPress" && ix.keyKey === e.key) matches.push({ nodeId: n.id, ix });
+            }
+            for (const ch of n.children) collect(ch);
+          };
+          collect(frame);
+          if (matches.length) {
+            e.preventDefault();
+            for (const m of matches) runInteraction(m.ix, m.nodeId);
+            return;
+          }
+        }
+      }
 
       // The alignment box in the right panel owns arrows and W/A/S/D while it
       // is focused, so the canvas does not nudge under it. Other letters still
@@ -464,6 +746,7 @@ export function Canvas({
       }
       if (e.code === "Space") {
         space.current = e.type === "keydown";
+        setSpaceHeld(e.type === "keydown");
         if (e.type === "keydown" && !isTyping)
           e.preventDefault();
       }
@@ -476,7 +759,40 @@ export function Canvas({
         penBranch.current = null;
         return;
       }
-      if (e.type === "keydown" && e.key === "Escape" && draft.length < 2) {
+      if (e.type === "keydown" && e.key === "Escape" && snap.booleanPreview && draft.length < 2 && !penBranch.current) {
+        engine.dispatch({ type: "setBooleanPreview", op: null });
+        e.stopImmediatePropagation();
+        return;
+      }
+      if (e.type === "keydown" && e.key === "Enter" && snap.booleanPreview && !draft.length && !penBranch.current && !edit && !vecEdit) {
+        engine.dispatch({ type: "boolean", op: snap.booleanPreview });
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
+      // ⌘↵/Ctrl↵ commits vector editing, as the dock's Done button advertises
+      // ("Esc or ⌘↵"). A pending pen draft still commits first, so the chord
+      // never eats points; the generic Enter branch below must not see it.
+      if (
+        e.type === "keydown" &&
+        e.key === "Enter" &&
+        (e.metaKey || e.ctrlKey) &&
+        vecEdit &&
+        !edit &&
+        !draft.length &&
+        !penBranch.current
+      ) {
+        setVecEdit(null);
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
+      // Only a *stray pen point* is this branch's business. Without the
+      // draft-length guard it swallowed every Escape on canvas (a no-op clear,
+      // then `return`), so the rotation-origin, vector-edit and selected-
+      // connection handlers below never ran — Escape looked dead on a
+      // connection chip even though the code to dismiss it was right there.
+      if (e.type === "keydown" && e.key === "Escape" && draft.length > 0 && draft.length < 2) {
         setDraft([]);
         setCloseHint(null);
         penBranch.current = null;
@@ -488,10 +804,13 @@ export function Canvas({
         setDraft((d) => d.slice(0, -1));
         return;
       }
-      if (e.type === "keydown" && e.altKey && (e.key === "r" || e.key === "R") && !edit) {
-        // Option/Alt R reveals the target; it rotates about itself until
-        // it is moved, and Escape puts it away again. A multi-selection turns
-        // about the middle of its bounds and has nothing to drag.
+      // ⌥R reveals the rotation-origin target (e.code: macOS types ® for ⌥R).
+      // Meta and shift stay out: ⌥⇧⌘R is resize-to-fit and must not also
+      // toggle this, since both key handlers hear every keystroke.
+      if (e.type === "keydown" && e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyR" && !edit) {
+        // It rotates about itself until it is moved, and Escape puts it away
+        // again. A multi-selection turns about the middle of its bounds and
+        // has nothing to drag.
         setRotTarget((v) => !v);
         if (!rotTarget && snap.selection.length > 1) {
           toast("Rotation origin · pick one layer to move it");
@@ -506,6 +825,9 @@ export function Canvas({
         return;
       }
       if (e.type === "keydown" && e.key === "Tab" && !edit && !draft.length) {
+        // §26 KB-018: Tab on a focused layer row walks the rows natively —
+        // it must not also cycle the canvas selection's siblings.
+        if ((e.target as HTMLElement).closest?.("[data-row-id]")) return;
         const root = snap.pages[snap.page].root;
         const id = snap.selection[0];
         if (id) {
@@ -561,7 +883,15 @@ export function Canvas({
             n.kind === "line" ||
             n.kind === "arrow")
         ) {
-          if (n.kind !== "vector") {
+          if (isInstanceMember(snap.pages[snap.page].root, n.id)) {
+            toast("Edit the main component to change this layer");
+            e.stopImmediatePropagation();
+            return;
+          }
+          if (n.kind === "boolean") {
+            // Childless booleans still bake down; basic shapes edit in
+            // place — entering and leaving without touching a point leaves
+            // the node untouched, and the first real edit converts kind.
             engine.dispatch({ type: "flatten" });
             const newId = engine.snapshot().selection[0];
             setVecEdit(newId);
@@ -577,6 +907,46 @@ export function Canvas({
         setVecEdit(null);
         e.stopImmediatePropagation();
       }
+      // §23 PT-016: connections copy/paste like Figma — ⌘C on the noodle,
+      // ⌘V onto a selected layer. Plain ⌘C/⌘V only, so shifted/alted layer
+      // and property clipboards keep working.
+      if (e.type === "keydown" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !edit && !isTyping) {
+        if (e.key.toLowerCase() === "c" && selectedConn) {
+          const src = worldPos(snap.pages[snap.page].root, selectedConn.srcId)?.node;
+          const rows = (src?.interactions ?? []).filter((ix) => ix.destination === selectedConn.destId);
+          if (rows.length) {
+            connClipboard.current = rows.map((r) => ({ ...r }));
+            toast("Connection copied");
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+          }
+        }
+        if (e.key.toLowerCase() === "v" && connClipboard.current.length && snap.selection[0]) {
+          const target = worldPos(snap.pages[snap.page].root, snap.selection[0])?.node;
+          if (target) {
+            const prev = target.interactions ?? [];
+            const fresh = connClipboard.current.filter(
+              (c) => !prev.some((p) => p.trigger === c.trigger && p.action === c.action && p.destination === c.destination),
+            );
+            if (fresh.length) {
+              engine.dispatch({ type: "setInteractions", id: target.id, interactions: [...prev, ...fresh.map((r) => ({ ...r }))] });
+              toast("Interaction pasted");
+            } else {
+              toast("Already has that interaction");
+            }
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+          }
+        }
+      }
+      // §23 PT-014: Escape drops the selected connection (it survived Esc).
+      if (e.type === "keydown" && e.key === "Escape" && selectedConn) {
+        setSelectedConn(null);
+        e.stopImmediatePropagation();
+        return;
+      }
       if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && selectedConn && !edit) {
         engine.dispatch({ type: "deleteInteraction", id: selectedConn.srcId, destId: selectedConn.destId });
         setSelectedConn(null);
@@ -586,20 +956,28 @@ export function Canvas({
       }
       if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && vecEdit && !edit) {
         const n = worldPos(snap.pages[snap.page].root, vecEdit)?.node;
-        if (n?.path.length) {
-          const selectedSet = new Set<number>(
+        const base = n ? (n.path.length ? n.path : shapePoly(n)) : [];
+        if (n && base.length) {
+          // No point selected deletes nothing (Figma): the old fallback ate
+          // the last anchor on every stray Backspace.
+          const selList =
             snap.vecPoints && snap.vecPoints.length > 0
               ? snap.vecPoints
               : vecPt.current >= 0
                 ? [vecPt.current]
-                : [n.path.length - 1],
-          );
+                : [];
+          if (!selList.length) {
+            e.stopImmediatePropagation();
+            return;
+          }
+          const selectedSet = new Set<number>(selList);
           const isHeal = e.shiftKey;
-          let path = [...n.path];
+          const closed = effClosed(n);
+          let path = [...base];
           if (isHeal && path.length >= 3 && selectedSet.size === 1) {
             const i = Array.from(selectedSet)[0];
-            const prevIdx = i > 0 ? i - 1 : (n.closed ? path.length - 1 : null);
-            const nextIdx = i < path.length - 1 ? i + 1 : (n.closed ? 0 : null);
+            const prevIdx = i > 0 ? i - 1 : (closed ? path.length - 1 : null);
+            const nextIdx = i < path.length - 1 ? i + 1 : (closed ? 0 : null);
             if (prevIdx !== null && nextIdx !== null) {
               const p0 = path[prevIdx];
               const p1 = path[nextIdx];
@@ -616,7 +994,7 @@ export function Canvas({
             toast("Point deleted & healed");
           }
           path = path.filter((_, j) => !selectedSet.has(j));
-          engine.dispatch({ type: "patchPath", id: n.id, path, closed: n.closed });
+          engine.dispatch({ type: "patchPath", id: n.id, path, closed });
           const firstSel = Math.min(...Array.from(selectedSet));
           const nextPt = path.length ? Math.max(0, Math.min(path.length - 1, firstSel)) : -1;
           vecPt.current = nextPt;
@@ -661,7 +1039,7 @@ export function Canvas({
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKey, true);
     };
-  }, [snap, edit, draft, engine, vecEdit]);
+  }, [snap, edit, draft, engine, vecEdit, runInteraction, selectedConn]);
 
   // Escape finishes the path and leaves it open. The finisher is published
   // to ui/penDraft.ts because that is the layer which actually decides Escape.
@@ -700,11 +1078,15 @@ export function Canvas({
       hoverIx.current = "";
       return;
     }
-    const n = find(snap.pages[snap.page].root, snap.presentFrame);
-    const ix = (n?.interactions ?? []).find((i) => i.trigger === "afterDelay");
-    if (!ix) return;
-    const t = window.setTimeout(() => runInteraction(ix), Math.max(0, ix.delay ?? 800));
-    return () => window.clearTimeout(t);
+    const root = snap.pages[snap.page].root;
+    const n = snap.presentFrame ? find(root, snap.presentFrame) : null;
+    const hit = n ? triggerInteractions(root, n.id, "afterDelay") : null;
+    if (!hit) return;
+    // Each action keeps its own delay.
+    const timers = hit.list.map((ix) =>
+      window.setTimeout(() => runInteraction(ix, hit.nodeId), Math.max(0, ix.delay ?? 800)),
+    );
+    return () => timers.forEach((t) => window.clearTimeout(t));
   }, [snap.presentFrame, snap.page, snap.pages, runInteraction]);
 
   useEffect(() => {
@@ -716,8 +1098,12 @@ export function Canvas({
     const h = box.clientHeight;
     c.width = Math.max(1, Math.floor(w * dpr));
     c.height = Math.max(1, Math.floor(h * dpr));
-    const ctx = c.getContext("2d");
-    if (!ctx) return;
+    const mainCtx = c.getContext("2d");
+    if (!mainCtx) return;
+    // Swap slot for the blur cache: a cache miss re-enters paint() with ctx
+    // pointed at an offscreen canvas, guarded by cachingBlur.
+    let ctx: CanvasRenderingContext2D = mainCtx;
+    let cachingBlur = false;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const css = getComputedStyle(document.documentElement);
     const canvasBg = css.getPropertyValue("--canvas").trim() || "#e5e5e5";
@@ -793,14 +1179,92 @@ export function Canvas({
         if (n.flipH || n.flipV) ctx.scale(n.flipH ? -1 : 1, n.flipV ? -1 : 1);
         ctx.translate(-cx, -cy);
       }
+      // Ancestor alpha, captured before this node's own applies: a cache blit
+      // re-applies exactly this, since the raster already holds the node's.
+      const parentAlpha = ctx.globalAlpha;
       ctx.globalAlpha *= n.opacity;
       ctx.globalCompositeOperation = canvasBlend(n.blendMode);
-      const layerBlur = (n.effects ?? []).find((e) => e.kind === "layer-blur" && e.visible);
+      // The effect list this paint reads: the stored stack plus the type-menu
+      // hover preview when it targets this layer. Render-only - painters that
+      // take the node get a wrapper, so the document is never touched.
+      const previewFx = snap.previewEffect;
+      const fxList =
+        previewFx && previewFx.id === n.id
+          ? withPreviewEffect(n.effects ?? [], { ...previewFx, effect: defaultEffect(previewFx.kind) }, n.id)
+          : (n.effects ?? []);
+      const fxNode = { ...n, effects: [...fxList] };
+      const layerBlur = fxList.find((e) => e.kind === "layer-blur" && e.visible);
       if (layerBlur) ctx.filter = `blur(${Math.max(0, layerBlur.blur) * z}px)`;
       const sx = snap.panX + x * z;
       const sy = snap.panY + y * z;
       const sw = n.w * z;
       const sh = n.h * z;
+      // Layer-blur raster cache. Eligible only when the node paints purely
+      // from its own fields: leaves (no child recursion to sign), unrotated
+      // (axis-aligned blit), source-over (associative compositing), no
+      // background-blur/glass (reads the live canvas), no image fill and no
+      // text (async loads would bake a half-painted raster). Blitting at
+      // fractional offsets resamples vs direct rasterization (measured max
+      // 7/255, mean 0.6/255 on the blur corpus at 32% zoom — visually
+      // identical); only smooth filtered content is cached, never crisp.
+      const cacheable =
+        !!layerBlur &&
+        !cachingBlur &&
+        !n.children.length &&
+        !n.rotation &&
+        !n.flipH &&
+        !n.flipV &&
+        n.kind !== "text" &&
+        ctx.globalCompositeOperation === "source-over" &&
+        !fxList.some((e) => e.visible && (e.kind === "background-blur" || e.kind === "glass")) &&
+        !(previewFx && previewFx.id === n.id) &&
+        !(n.fillType === "image" || (n.imageSrc && isNone(n.fill)));
+      if (cacheable && layerBlur) {
+        const pad = Math.ceil(Math.max(0, layerBlur.blur) * z * 3) + 2;
+        const sig = `${z.toFixed(4)}|${JSON.stringify(n)}`;
+        let hit = blurCache.current.get(sig);
+        if (hit) {
+          blurCache.current.delete(sig);
+          blurCache.current.set(sig, hit);
+        } else if (sw > 0 && sh > 0 && sw + pad * 2 <= 2048 && sh + pad * 2 <= 2048) {
+          // Miss: rasterize through the exact same paint path into an
+          // offscreen, shifted so screen coords land inside the bitmap.
+          const oc = document.createElement("canvas");
+          oc.width = Math.max(1, Math.floor((sw + pad * 2) * dpr));
+          oc.height = Math.max(1, Math.floor((sh + pad * 2) * dpr));
+          const octx = oc.getContext("2d");
+          if (octx) {
+            octx.setTransform(dpr, 0, 0, dpr, (pad - sx) * dpr, (pad - sy) * dpr);
+            const prev = ctx;
+            ctx = octx;
+            cachingBlur = true;
+            try {
+              paint(n, px, py);
+            } finally {
+              cachingBlur = false;
+              ctx = prev;
+            }
+            hit = { c: oc, pad, bytes: oc.width * oc.height * 4 };
+            blurCache.current.set(sig, hit);
+            blurCacheBytes.current += hit.bytes;
+            while (blurCacheBytes.current > 67108864 && blurCache.current.size > 1) {
+              const oldest = blurCache.current.keys().next();
+              if (oldest.done) break;
+              const ev = blurCache.current.get(oldest.value);
+              blurCache.current.delete(oldest.value);
+              if (ev) blurCacheBytes.current -= ev.bytes;
+            }
+          }
+        }
+        if (hit) {
+          ctx.globalAlpha = parentAlpha;
+          ctx.filter = "none";
+          ctx.drawImage(hit.c, sx - hit.pad, sy - hit.pad, sw + hit.pad * 2, sh + hit.pad * 2);
+          ctx.restore();
+          return;
+        }
+        // No hit and unrasterizable: fall through to the live paint below.
+      }
       const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
       const round = () => {
         ctx.beginPath();
@@ -814,14 +1278,27 @@ export function Canvas({
         else ctx.rect(sx, sy, sw, sh);
       };
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
-        const dropB = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
-        if (dropB) {
-          ctx.shadowColor = cssRgba(dropB.color);
-          ctx.shadowBlur = Math.max(0, dropB.blur) * z;
-          ctx.shadowOffsetX = dropB.x * z;
-          ctx.shadowOffsetY = dropB.y * z;
+        // Every visible drop gets its own pass over the union; the stroke
+        // paints shadowless afterwards, like a text stroke.
+        const dropBs = fxList.filter((e) => e.kind === "drop-shadow" && e.visible);
+        for (const dropB of dropBs.length ? dropBs : [undefined]) {
+          if (dropB) {
+            ctx.shadowColor = cssRgba(dropB.color);
+            ctx.shadowBlur = Math.max(0, dropB.blur) * z;
+            ctx.shadowOffsetX = dropB.x * z;
+            ctx.shadowOffsetY = dropB.y * z;
+          } else {
+            ctx.shadowColor = "transparent";
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+          }
+          paintBoolean(ctx, fxNode, x, y, snap);
         }
-        paintBoolean(ctx, n, x, y, snap);
+        ctx.shadowColor = "transparent";
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
         if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
           ctx.save();
           ctx.strokeStyle = cssRgba(n.strokePaint);
@@ -918,7 +1395,7 @@ export function Canvas({
         ctx.stroke();
         ctx.restore();
         if (n.kind === "text" && edit?.id !== n.id) {
-          paintText(ctx, n, sx, sy, sw, sh, z);
+          paintText(ctx, fxNode, sx, sy, sw, sh, z);
         }
         if (n.kind === "frame" && n.overflow !== "visible") {
           round();
@@ -928,9 +1405,7 @@ export function Canvas({
         ctx.restore();
         return;
       }
-      const bgBlur = (n.effects ?? []).find(
-        (e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible,
-      );
+      const bgBlur = fxList.find((e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible);
       if (bgBlur && sw > 1 && sh > 1) {
         try {
           ctx.save();
@@ -945,24 +1420,21 @@ export function Canvas({
       const canShadow =
         n.kind !== "text" &&
         (!!n.imageSrc ||
-          (n.fillVisible !== false && !!n.fill && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") ||
+          paintsAnyFill(n) ||
           (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)));
-      if (canShadow) paintDropShadows(ctx, n, z);
+      if (canShadow) paintDropShadowsMasked(ctx, fxNode, z, { trace: traceShape });
       if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
-        let im = n.imageSrc ? imgs.current.get(n.imageSrc) : undefined;
-        if (n.imageSrc && !im) {
-          im = new Image();
-          im.src = n.imageSrc;
-          im.onload = () => engine.dispatch({ type: "select", ids: snap.selection });
-          imgs.current.set(n.imageSrc, im);
-        }
-        if (im?.complete && im.naturalWidth) {
+        // A hidden base image paints nothing, but the stack above it still
+        // does - each fill carries its own visibility.
+        const im = n.imageSrc && n.fillVisible !== false ? imgOf(n.imageSrc) : undefined;
+        if (im) {
           ctx.save();
           ctx.globalAlpha *= n.fillOpacity ?? 1;
           ctx.globalCompositeOperation = canvasBlend(n.fillBlend);
           paintImageFill(ctx, n, im, sx, sy, sw, sh);
           ctx.restore();
         }
+        paintStack(ctx, n, sx, sy, sw, sh, imgOf);
       } else if (
         n.fillVisible !== false &&
         n.fill &&
@@ -973,7 +1445,7 @@ export function Canvas({
         ctx.save();
         ctx.globalAlpha *= n.fillOpacity ?? 1;
         ctx.globalCompositeOperation = canvasBlend(n.fillBlend);
-        paintFill(ctx, n, sx, sy, sw, sh);
+        paintFill(ctx, n, sx, sy, sw, sh, imgOf);
         ctx.restore();
       }
       if (n.kind === "vector" && n.vectorNetwork?.regions?.some((r) => r.fill)) {
@@ -1018,15 +1490,8 @@ export function Canvas({
           ctx.restore();
         }
       }
-      const noise = (n.effects ?? []).find((e) => e.kind === "noise" && e.visible);
-      if (noise) {
-        ctx.save();
-        const op = canvasBlend(noise.blend);
-        if (op !== "source-over") ctx.globalCompositeOperation = op;
-        paintNoise(ctx, sx, sy, sw, sh, noise.blur);
-        ctx.restore();
-      }
-      const glass = (n.effects ?? []).find((e) => e.kind === "glass" && e.visible);
+      // Noise and texture paint last (after children), over everything else.
+      const glass = fxList.find((e) => e.kind === "glass" && e.visible);
       if (glass) {
         ctx.save();
         ctx.clip();
@@ -1035,13 +1500,11 @@ export function Canvas({
         ctx.fill();
         ctx.restore();
       }
-      const texture = (n.effects ?? []).find((e) => e.kind === "texture" && e.visible);
-      if (texture) paintTexture(ctx, sx, sy, sw, sh, texture.blur || 16, texture.spread || 4);
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
-      paintInnerShadows(ctx, n, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
+      paintInnerShadows(ctx, fxNode, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
       if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
@@ -1052,9 +1515,12 @@ export function Canvas({
         const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
         // Dashes carry their own cap: a dotted line is a 1px dash
         // with round caps, and only the segments take the rounding.
-        ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? ctx.lineCap : ctx.lineCap;
+        // Unset means butt — a dashed line with round end caps still
+        // draws square dashes until the dash cap says otherwise.
+        ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? "butt" : ctx.lineCap;
         if (dashes.length) ctx.setLineDash(dashes);
         else ctx.setLineDash([]);
+        ctx.lineDashOffset = dashOffset(dashes);
         // Individual strokes: the outline is stroked once per side, each pass
         // clipped to a 45° cone from the centre, which is how CSS mitres a
         // border and keeps a rounded corner split evenly between its sides.
@@ -1068,19 +1534,30 @@ export function Canvas({
           } else {
             traceShape();
           }
-          if (n.strokeAlign === "inside") {
+          // Lines are always centre-stroked: clipping an open two-point path
+          // to "inside" would clip to a zero-area region and erase the shaft.
+          // A hover preview from the inspector temporarily wins over the
+          // stored position; lines never preview (no position control).
+          const preview = snap.previewStroke;
+          const align =
+            preview && preview.id === n.id
+              ? preview.align
+              : n.kind === "line" || n.kind === "arrow"
+                ? "center"
+                : n.strokeAlign;
+          if (align === "inside") {
             ctx.save();
             ctx.clip();
             ctx.lineWidth = w * 2;
             ctx.stroke();
             ctx.restore();
-          } else if (n.strokeAlign === "outside") {
+          } else if (align === "outside") {
             ctx.lineWidth = w * 2;
             ctx.stroke();
             if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
               ctx.save();
               ctx.globalCompositeOperation = "source-over";
-              paintFill(ctx, n, sx, sy, sw, sh);
+              paintFill(ctx, n, sx, sy, sw, sh, imgOf);
               ctx.restore();
             }
           } else {
@@ -1088,7 +1565,31 @@ export function Canvas({
             ctx.stroke();
           }
         };
-        if (perSide) {
+        // Variable-width stroke: expand the centerline to a filled outline.
+        // Centre-aligned by construction — dashes and per-side splits do not
+        // apply to a filled outline — and a vector with no path centerline
+        // (a bare branch network) keeps its uniform segment strokes.
+        let varOutline: PathPoint[] | null = null;
+        if (usesVariableWidth(n)) {
+          const center =
+            n.path.length >= 2 ? n.path : n.kind === "line" || n.kind === "arrow" ? shapePoly(n) : null;
+          if (center && center.length >= 2) {
+            varOutline = outlineVariableStroke(
+              center,
+              sides[0],
+              n.strokeWidthProfile,
+              n.closed,
+              n.strokeCap,
+              n.strokeJoin,
+              miterLimitFromAngle(n.strokeMiterAngle),
+            );
+          }
+        }
+        if (varOutline && varOutline.length >= 2) {
+          tracePath(ctx, varOutline, snap.panX + x * z, snap.panY + y * z, z, true);
+          ctx.fillStyle = cssRgba(n.strokePaint);
+          ctx.fill();
+        } else if (perSide) {
           const cones = sideCones(sx, sy, sw, sh);
           for (let i = 0; i < 4; i++) {
             if (sides[i] <= 0) continue;
@@ -1107,7 +1608,7 @@ export function Canvas({
           pass(sides[0]);
         }
         const isTip = (c?: StrokeCap) =>
-          c === "arrow" || c === "triangle" || c === "reverse-triangle" || c === "diamond";
+          c === "arrow" || c === "triangle" || c === "reverse-triangle" || c === "diamond" || c === "circle";
         const effEndCap = n.strokeCapEnd ?? (isTip(n.strokeCap) ? n.strokeCap : (n.kind === "arrow" ? "triangle" : "none"));
         const effStartCap = n.strokeCapStart ?? "none";
         const hasArrowCap =
@@ -1116,8 +1617,12 @@ export function Canvas({
         if (hasArrowCap) {
           ctx.setLineDash([]);
           const ah = Math.max(6, n.strokeWidth * 3 * z);
+          // Variable-width tips scale with the width at their end and vanish
+          // where the stroke tapers to nothing.
+          const varProf = usesVariableWidth(n) ? n.strokeWidthProfile : undefined;
+          const tipScale = (at: 0 | 1) => (varProf ? sampleVariableWidth(varProf, at) : 1);
           // Tips are placed on ends of an open path, with individual caps
-          const ends: { ex: number; ey: number; ux: number; uy: number; cap: StrokeCap }[] = [];
+          const ends: { ex: number; ey: number; ux: number; uy: number; cap: StrokeCap; at: 0 | 1 }[] = [];
           const pts = n.kind === "vector" || n.kind === "line" || n.kind === "arrow" ? (n.path.length ? n.path : shapePoly(n)) : [];
           if (pts.length > 1) {
             // End point (pts[pts.length - 1]): points in the direction the path was traveling
@@ -1127,7 +1632,7 @@ export function Canvas({
               const dxEnd = (lastA.x - lastB.x) * z;
               const dyEnd = (lastA.y - lastB.y) * z;
               const lenEnd = Math.hypot(dxEnd, dyEnd) || 1;
-              ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd, cap: effEndCap });
+              ends.push({ ex: sx + lastA.x * z, ey: sy + lastA.y * z, ux: dxEnd / lenEnd, uy: dyEnd / lenEnd, cap: effEndCap, at: 1 });
             }
 
             // Start point (pts[0]): only if start cap is explicitly configured
@@ -1137,51 +1642,61 @@ export function Canvas({
               const dxStart = (startA.x - startB.x) * z;
               const dyStart = (startA.y - startB.y) * z;
               const lenStart = Math.hypot(dxStart, dyStart) || 1;
-              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart, cap: effStartCap });
+              ends.push({ ex: sx + startA.x * z, ey: sy + startA.y * z, ux: dxStart / lenStart, uy: dyStart / lenStart, cap: effStartCap, at: 0 });
             }
           } else {
             if (isTip(effEndCap)) {
-              ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0, cap: effEndCap });
+              ends.push({ ex: sx + sw, ey: sy + sh / 2, ux: 1, uy: 0, cap: effEndCap, at: 1 });
             }
             if (isTip(effStartCap)) {
-              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0, cap: effStartCap });
+              ends.push({ ex: sx, ey: sy + sh / 2, ux: -1, uy: 0, cap: effStartCap, at: 0 });
             }
           }
-          const back = (e: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
-            x: e.ex - e.ux * ah + e.uy * k * s,
-            y: e.ey - e.uy * ah - e.ux * k * s,
-          });
           for (const e of ends) {
+            const eah = ah * tipScale(e.at);
+            if (eah < 0.5) continue;
+            const back = (be: { ex: number; ey: number; ux: number; uy: number }, k: number, s: number) => ({
+              x: be.ex - be.ux * eah + be.uy * k * s,
+              y: be.ey - be.uy * eah - be.ux * k * s,
+            });
             ctx.beginPath();
             if (e.cap === "arrow") {
               // Two 45° lines, the same weight as the path.
-              const p1 = back(e, ah * 0.72, 1);
-              const p2 = back(e, ah * 0.72, -1);
+              const p1 = back(e, eah * 0.72, 1);
+              const p2 = back(e, eah * 0.72, -1);
               ctx.moveTo(p1.x, p1.y);
               ctx.lineTo(e.ex, e.ey);
               ctx.lineTo(p2.x, p2.y);
-              ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+              ctx.lineWidth = Math.max(0.5, n.strokeWidth * tipScale(e.at) * z);
               ctx.lineCap = "butt";
               ctx.lineJoin = "miter";
               ctx.stroke();
               continue;
             }
+            if (e.cap === "circle") {
+              // Ring on the endpoint, stroked at the path's own weight.
+              ctx.arc(e.ex, e.ey, Math.max(1, eah * 0.55), 0, Math.PI * 2);
+              ctx.lineWidth = Math.max(0.5, n.strokeWidth * tipScale(e.at) * z);
+              ctx.strokeStyle = cssRgba(n.strokePaint);
+              ctx.stroke();
+              continue;
+            }
             if (e.cap === "diamond") {
-              const mid = { x: e.ex - e.ux * ah * 0.8, y: e.ey - e.uy * ah * 0.8 };
+              const mid = { x: e.ex - e.ux * eah * 0.8, y: e.ey - e.uy * eah * 0.8 };
               ctx.moveTo(e.ex, e.ey);
-              ctx.lineTo(mid.x - e.uy * ah * 0.5, mid.y + e.ux * ah * 0.5);
-              ctx.lineTo(e.ex - e.ux * ah * 1.6, e.ey - e.uy * ah * 1.6);
-              ctx.lineTo(mid.x + e.uy * ah * 0.5, mid.y - e.ux * ah * 0.5);
+              ctx.lineTo(mid.x - e.uy * eah * 0.5, mid.y + e.ux * eah * 0.5);
+              ctx.lineTo(e.ex - e.ux * eah * 1.6, e.ey - e.uy * eah * 1.6);
+              ctx.lineTo(mid.x + e.uy * eah * 0.5, mid.y - e.ux * eah * 0.5);
             } else if (e.cap === "reverse-triangle") {
               // Flipped: the base sits on the end point, the apex points inward.
               ctx.moveTo(e.ex, e.ey);
-              ctx.lineTo(e.ex - e.uy * ah * 0.7, e.ey + e.ux * ah * 0.7);
-              ctx.lineTo(e.ex - e.ux * ah * 1.1, e.ey - e.uy * ah * 1.1);
-              ctx.lineTo(e.ex + e.uy * ah * 0.7, e.ey - e.ux * ah * 0.7);
+              ctx.lineTo(e.ex - e.uy * eah * 0.7, e.ey + e.ux * eah * 0.7);
+              ctx.lineTo(e.ex - e.ux * eah * 1.1, e.ey - e.uy * eah * 1.1);
+              ctx.lineTo(e.ex + e.uy * eah * 0.7, e.ey - e.ux * eah * 0.7);
             } else {
               ctx.moveTo(e.ex, e.ey);
-              ctx.lineTo(back(e, ah * 0.75, 1).x, back(e, ah * 0.75, 1).y);
-              ctx.lineTo(back(e, ah * 0.75, -1).x, back(e, ah * 0.75, -1).y);
+              ctx.lineTo(back(e, eah * 0.75, 1).x, back(e, eah * 0.75, 1).y);
+              ctx.lineTo(back(e, eah * 0.75, -1).x, back(e, eah * 0.75, -1).y);
             }
             ctx.closePath();
             ctx.fillStyle = cssRgba(n.strokePaint);
@@ -1192,7 +1707,7 @@ export function Canvas({
       }
       paintExtraStrokes(ctx, n, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
       if (n.kind === "text" && edit?.id !== n.id) {
-        paintText(ctx, n, sx, sy, sw, sh, z);
+        paintText(ctx, fxNode, sx, sy, sw, sh, z);
       }
       if (n.kind === "frame" && n.overflow !== "visible") {
         round();
@@ -1208,40 +1723,62 @@ export function Canvas({
         snap.viewLayoutGuides !== false
       ) {
         ctx.save();
+        // Layout grids live inside their frame even when the frame's own
+        // overflow is visible - an offset count can push columns past the
+        // edge, and the spill must not paint over the canvas.
+        ctx.beginPath();
+        ctx.rect(snap.panX + x * z, snap.panY + y * z, n.w * z, n.h * z);
+        ctx.clip();
         for (const g of n.layoutGrids) {
           if (g.visible === false) continue;
-          const color = g.color || "rgba(255, 0, 0, 0.08)";
+          const color = g.color || "rgba(255, 0, 0, 0.1)";
           ctx.fillStyle = color;
           if (g.pattern === "columns") {
             const count = g.count || 12;
             const gutter = g.gutter !== undefined ? g.gutter : 20;
             const margin = g.margin !== undefined ? g.margin : 20;
-            const avail = n.w - margin * 2 - gutter * (count - 1);
-            const colW = Math.max(1, avail / count);
+            const offset = g.offset !== undefined ? g.offset : 0;
+            const x0 = x + margin + offset;
+            const avail = n.w - margin * 2 - offset - gutter * (count - 1);
+            const colW = g.cell !== undefined ? g.cell : Math.max(1, avail / count);
+            // Fixed-width columns narrower than the frame honour alignment;
+            // stretch columns fill margin to margin, so there is no slack.
+            const total = colW * count + gutter * (count - 1);
+            const slack = Math.max(0, n.w - margin * 2 - offset - total);
+            const start = x0 + (g.alignment === "center" ? slack / 2 : g.alignment === "max" ? slack : 0);
             for (let ci = 0; ci < count; ci++) {
-              const cx = x + margin + ci * (colW + gutter);
+              const cx = start + ci * (colW + gutter);
               ctx.fillRect(snap.panX + cx * z, snap.panY + y * z, colW * z, n.h * z);
             }
           } else if (g.pattern === "rows") {
             const count = g.count || 8;
             const gutter = g.gutter !== undefined ? g.gutter : 20;
             const margin = g.margin !== undefined ? g.margin : 20;
-            const avail = n.h - margin * 2 - gutter * (count - 1);
-            const rowH = Math.max(1, avail / count);
+            const offset = g.offset !== undefined ? g.offset : 0;
+            const y0 = y + margin + offset;
+            const avail = n.h - margin * 2 - offset - gutter * (count - 1);
+            const rowH = g.cell !== undefined ? g.cell : Math.max(1, avail / count);
+            const total = rowH * count + gutter * (count - 1);
+            const slack = Math.max(0, n.h - margin * 2 - offset - total);
+            const start = y0 + (g.alignment === "center" ? slack / 2 : g.alignment === "max" ? slack : 0);
             for (let ri = 0; ri < count; ri++) {
-              const cy = y + margin + ri * (rowH + gutter);
+              const cy = start + ri * (rowH + gutter);
               ctx.fillRect(snap.panX + x * z, snap.panY + cy * z, n.w * z, rowH * z);
             }
           } else if (g.pattern === "grid") {
             const sz = g.sectionSize || 10;
+            const offset = g.offset !== undefined ? g.offset : 0;
+            const origin = ((offset % sz) + sz) % sz;
             ctx.strokeStyle = color;
             ctx.lineWidth = 1;
             ctx.beginPath();
-            for (let gx = sz; gx < n.w; gx += sz) {
+            // Zero offset keeps the old rhythm (first line at one cell in);
+            // a nonzero offset shifts the whole lattice over by it.
+            for (let gx = origin === 0 ? sz : origin; gx < n.w; gx += sz) {
               ctx.moveTo(snap.panX + (x + gx) * z, snap.panY + y * z);
               ctx.lineTo(snap.panX + (x + gx) * z, snap.panY + (y + n.h) * z);
             }
-            for (let gy = sz; gy < n.h; gy += sz) {
+            for (let gy = origin === 0 ? sz : origin; gy < n.h; gy += sz) {
               ctx.moveTo(snap.panX + x * z, snap.panY + (y + gy) * z);
               ctx.lineTo(snap.panX + (x + n.w) * z, snap.panY + (y + gy) * z);
             }
@@ -1250,45 +1787,183 @@ export function Canvas({
         }
         ctx.restore();
       }
-      let maskOn = 0;
-      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
-      for (const ch of renderChildren) {
-        if (ch.isMask && ch.visible) {
-          ctx.save();
-          const mx = snap.panX + (x + ch.x) * z;
-          const my = snap.panY + (y + ch.y) * z;
-          const mw = ch.w * z;
-          const mh = ch.h * z;
-          const mcx = mx + mw / 2;
-          const mcy = my + mh / 2;
-          ctx.save();
-          if (ch.rotation || ch.flipH || ch.flipV) {
-            ctx.translate(mcx, mcy);
-            if (ch.rotation) ctx.rotate((ch.rotation * Math.PI) / 180);
-            if (ch.flipH || ch.flipV) ctx.scale(ch.flipH ? -1 : 1, ch.flipV ? -1 : 1);
-            ctx.translate(-mcx, -mcy);
+      // Masked runs: a mask clips every sibling after it until the next mask.
+      // Each run composites offscreen - the mask is painted for real (fills,
+      // strokes, glyphs, blurs, image alpha all count), its tile is reduced
+      // per the mask type, and every masked sibling is painted into its own
+      // tile, punched by the mask, and blitted back under the live transform.
+      const paintMaskedRun = (mask: XNode, kids: XNode[]): boolean => {
+        if (!kids.length) return true;
+        // Screen-space union of the run, padded for spill (shadows, blurs)
+        // and rotation slack, mirroring the cull bounds above.
+        const spill = (c: XNode) => {
+          let pad = (c.strokeWidth ?? 0) + 2;
+          for (const st of c.strokes ?? []) if (st.visible) pad = Math.max(pad, st.width + 2);
+          for (const e of c.effects ?? []) {
+            if (!e.visible) continue;
+            pad = Math.max(
+              pad,
+              Math.abs(e.x ?? 0) + Math.abs(e.y ?? 0) + Math.abs(e.blur ?? 0) * 2 + Math.abs(e.spread ?? 0),
+            );
           }
-          ctx.beginPath();
-          if (ch.kind === "ellipse") {
-            ctx.ellipse(mcx, mcy, Math.abs(mw / 2), Math.abs(mh / 2), 0, 0, Math.PI * 2);
-          } else if (ch.path.length) {
-            tracePath(ctx, ch.path, mx, my, z, ch.closed);
-          } else if (typeof ctx.roundRect === "function") {
-            const rr = ch.cornerIndependent
-              ? [ch.cornerRadii[0] * z, ch.cornerRadii[1] * z, ch.cornerRadii[3] * z, ch.cornerRadii[2] * z]
-              : ch.cornerRadii[0] * z;
-            ctx.roundRect(mx, my, mw, mh, rr);
-          } else {
-            ctx.rect(mx, my, mw, mh);
-          }
-          ctx.restore();
-          ctx.clip();
-          maskOn += 1;
-          continue;
+          if (c.rotation) pad += Math.hypot(c.w, c.h) / 2 - Math.min(c.w, c.h) / 2;
+          return pad * z + 4;
+        };
+        let ox = Infinity;
+        let oy = Infinity;
+        let ex = -Infinity;
+        let ey = -Infinity;
+        for (const c of [mask, ...kids]) {
+          const q = spill(c);
+          const bx = snap.panX + (x + c.x) * z - q;
+          const by = snap.panY + (y + c.y) * z - q;
+          ox = Math.min(ox, bx);
+          oy = Math.min(oy, by);
+          ex = Math.max(ex, bx + c.w * z + q * 2);
+          ey = Math.max(ey, by + c.h * z + q * 2);
         }
-        paint(ch, x, y);
+        ox = Math.floor(ox);
+        oy = Math.floor(oy);
+        const ow = Math.ceil(ex - ox);
+        const oh = Math.ceil(ey - oy);
+        if (!(ow > 0 && oh > 0)) return true;
+        // Tile pixels per user unit, straight from the live transform (which
+        // carries the dpr scale and every ancestor rotation above this node).
+        const m = ctx.getTransform();
+        const sx = Math.hypot(m.a, m.b) || 1;
+        const sy = Math.hypot(m.c, m.d) || 1;
+        const tw = Math.max(1, Math.ceil(ow * sx));
+        const th = Math.max(1, Math.ceil(oh * sy));
+        if (tw > 8192 || th > 8192 || tw * th > 16777216) return false;
+        const tile = () => {
+          const c = document.createElement("canvas");
+          c.width = tw;
+          c.height = th;
+          const t = c.getContext("2d");
+          if (t) t.setTransform(m.a, m.b, m.c, m.d, m.e - (ox * m.a + oy * m.c), m.f - (ox * m.b + oy * m.d));
+          return t;
+        };
+        const prev = ctx;
+        const into = (t: CanvasRenderingContext2D | null, c: XNode) => {
+          if (!t) return false;
+          ctx = t;
+          try {
+            paint(c, x, y);
+          } finally {
+            ctx = prev;
+          }
+          return true;
+        };
+        // The mask paints with its opacity but never its blend mode: blending
+        // against a transparent tile is meaningless, and the mask's job is
+        // only to supply alpha (or luminance).
+        const mt = tile();
+        if (!into(mt, { ...mask, blendMode: "normal" })) return false;
+        const mc = mt!.canvas;
+        const type = mask.maskType || "alpha";
+        if (type !== "alpha") {
+          try {
+            const img = mt!.getImageData(0, 0, tw, th);
+            const d = img.data;
+            for (let i = 0; i < d.length; i += 4) {
+              d[i + 3] = reduceMaskAlpha(type, d[i], d[i + 1], d[i + 2], d[i + 3]);
+            }
+            mt!.putImageData(img, 0, 0);
+          } catch {
+            // Tainted tile (an external image without CORS): the unprocessed
+            // alpha stands in for the requested reduction.
+          }
+        }
+        for (const k of kids) {
+          const kt = tile();
+          if (!into(kt, k)) return false;
+          kt!.save();
+          kt!.globalCompositeOperation = "destination-in";
+          kt!.drawImage(mc, 0, 0);
+          kt!.restore();
+          ctx.drawImage(kt!.canvas, ox, oy, ow, oh);
+        }
+        return true;
+      };
+      const paintGeometricMask = (ch: XNode) => {
+        ctx.save();
+        const mx = snap.panX + (x + ch.x) * z;
+        const my = snap.panY + (y + ch.y) * z;
+        const mw = ch.w * z;
+        const mh = ch.h * z;
+        const mcx = mx + mw / 2;
+        const mcy = my + mh / 2;
+        ctx.save();
+        if (ch.rotation || ch.flipH || ch.flipV) {
+          ctx.translate(mcx, mcy);
+          if (ch.rotation) ctx.rotate((ch.rotation * Math.PI) / 180);
+          if (ch.flipH || ch.flipV) ctx.scale(ch.flipH ? -1 : 1, ch.flipV ? -1 : 1);
+          ctx.translate(-mcx, -mcy);
+        }
+        ctx.beginPath();
+        if (ch.kind === "ellipse") {
+          ctx.ellipse(mcx, mcy, Math.abs(mw / 2), Math.abs(mh / 2), 0, 0, Math.PI * 2);
+        } else if (ch.path.length) {
+          tracePath(ctx, ch.path, mx, my, z, ch.closed);
+        } else if (typeof ctx.roundRect === "function") {
+          const rr = ch.cornerIndependent
+            ? [ch.cornerRadii[0] * z, ch.cornerRadii[1] * z, ch.cornerRadii[3] * z, ch.cornerRadii[2] * z]
+            : ch.cornerRadii[0] * z;
+          ctx.roundRect(mx, my, mw, mh, rr);
+        } else {
+          ctx.rect(mx, my, mw, mh);
+        }
+        ctx.restore();
+        ctx.clip();
+      };
+      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
+      for (const run of partitionMaskRuns(renderChildren)) {
+        if (!run.mask) {
+          for (const k of run.kids) paint(k, x, y);
+        } else if (!paintMaskedRun(run.mask, run.kids)) {
+          paintGeometricMask(run.mask);
+          for (const k of run.kids) paint(k, x, y);
+          ctx.restore();
+        }
       }
-      while (maskOn--) ctx.restore();
+      // Noise and texture sit on top of everything the layer paints -
+      // strokes, glyphs and children included - in row order. The clip keeps
+      // them inside the outline; open paths clip to the stroke's band instead
+      // of their zero-area trace.
+      const topFx = fxList.filter((e) => (e.kind === "noise" || e.kind === "texture") && e.visible);
+      if (topFx.length) {
+        ctx.save();
+        ctx.beginPath();
+        if (n.kind === "line" || n.kind === "arrow") {
+          const pad = Math.max(1, ((n.strokeWidth || 1) * z) / 2);
+          ctx.rect(sx - pad, sy - pad, sw + pad * 2, sh + pad * 2);
+        } else {
+          traceShape();
+        }
+        ctx.clip();
+        for (const e of topFx) {
+          if (e.kind === "noise") {
+            ctx.save();
+            const op = canvasBlend(e.blend);
+            if (op !== "source-over") ctx.globalCompositeOperation = op;
+            paintNoise(ctx, sx, sy, sw, sh, e.blur, e.spread, e.color);
+            ctx.restore();
+          } else {
+            paintTexture(ctx, sx, sy, sw, sh, e.blur || 16, e.spread || 4);
+          }
+        }
+        ctx.restore();
+      }
+      if (snap.showMaskOutlines && n.isMask && n.visible) {
+        ctx.save();
+        ctx.strokeStyle = "#00c853";
+        ctx.lineWidth = Math.max(1, z);
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        traceShape();
+        ctx.stroke();
+        ctx.restore();
+      }
       ctx.restore();
     };
     const present = snap.presentFrame ? find(root, snap.presentFrame) : null;
@@ -1429,7 +2104,7 @@ export function Canvas({
     // stays the same size as the canvas zooms. Selected or hovered, it takes
     // the accent colour indicating the name belongs to the frame you
     // are about to act on.
-    const labelNames = (n: XNode, px: number, py: number) => {
+    const labelNames = (n: XNode, parentIsFrame: boolean, px: number, py: number) => {
       const x = px + n.x;
       const y = py + n.y;
       const screenX = snap.panX + x * z;
@@ -1437,6 +2112,10 @@ export function Canvas({
       if (
         n.kind === "frame" &&
         n.showName !== false &&
+        // A frame nested in another frame lives in the content flow: its tag
+        // would float over sibling layers (the demo card's "Card" sat 4px
+        // under body text). Top-level frames, sections and groups keep theirs.
+        !parentIsFrame &&
         // Skip names whose frame is off-screen: at any zoom a page can hold
         // hundreds of them, and fillText for each is the one thing on this
         // canvas that runs per layer rather than per visible pixel.
@@ -1445,7 +2124,7 @@ export function Canvas({
         screenY > -40 &&
         screenY < h + 400
       ) {
-        const active = snap.selection.includes(n.id) || hoverId === n.id;
+        const active = snap.selection.includes(n.id) || hoverId === n.id || panelHover === n.id;
         ctx.save();
         ctx.font = active ? "600 11px Inter, system-ui" : "500 11px Inter, system-ui";
         ctx.fillStyle = active ? BRAND_ACCENT : canvasLabel;
@@ -1453,10 +2132,10 @@ export function Canvas({
         ctx.fillText(n.name, screenX, screenY - 8);
         ctx.restore();
       }
-      for (const c of n.children) labelNames(c, x, y);
+      for (const c of n.children) labelNames(c, n.kind === "frame", x, y);
     };
     if (!snap.presentFrame) {
-      for (const ch of root.children) labelNames(ch, 0, 0);
+      for (const ch of root.children) labelNames(ch, false, 0, 0);
     }
 
     if (penBranch.current && snap.tool === "pen") {
@@ -1610,7 +2289,7 @@ export function Canvas({
           ctx.stroke();
         }
 
-        ctx.strokeStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.strokeStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
         ctx.lineWidth = isSelected ? 2.5 : 1.8;
         if (isOverlay) ctx.setLineDash([5, 4]);
 
@@ -1620,7 +2299,7 @@ export function Canvas({
         ctx.stroke();
 
         // Source circular anchor dot
-        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.fillStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
         ctx.beginPath();
         ctx.arc(sax, say, isSelected ? 5.5 : 4.5, 0, Math.PI * 2);
         ctx.fill();
@@ -1632,7 +2311,7 @@ export function Canvas({
         ctx.save();
         ctx.translate(sbx, sby);
         ctx.rotate(noodle.angle);
-        ctx.fillStyle = isOverlay ? "#a855f7" : BRAND_ACCENT;
+        ctx.fillStyle = isOverlay ? COMP_PURPLE : BRAND_ACCENT;
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.lineTo(-8, -4.5);
@@ -1830,8 +2509,11 @@ export function Canvas({
       });
     }
 
-    if (hoverId && !snap.selection.includes(hoverId)) {
-      const hp = worldPos(root, hoverId);
+    // Either hover source — canvas pointer or Layers-panel row — draws the
+    // same outline; the canvas pointer wins when both are set.
+    const hovId = hoverId || panelHover;
+    if (hovId && !snap.selection.includes(hovId)) {
+      const hp = worldPos(root, hovId);
       if (hp) {
         ctx.save();
         const hb = nodeVisualBounds(hp);
@@ -1851,6 +2533,34 @@ export function Canvas({
       }
     }
 
+    // Frame tool: hovering a frame parks a + badge on each side edge for
+    // one-click duplication; ⌥-click places a blank same-size frame instead.
+    if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
+      const qf = worldPos(root, hoverId);
+      const qb = qf && qf.node.kind === "frame" && !qf.node.rotation ? nodeVisualBounds(qf) : null;
+      if (qf && qb) {
+        const qx = snap.panX + qb.x * z;
+        const qw = qb.w * z;
+        const cy = snap.panY + (qb.y + qb.h / 2) * z;
+        ctx.save();
+        for (const cx of [qx, qx + qw]) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, 9, 0, Math.PI * 2);
+          ctx.fillStyle = BRAND_ACCENT;
+          ctx.fill();
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(cx - 4, cy);
+          ctx.lineTo(cx + 4, cy);
+          ctx.moveTo(cx, cy - 4);
+          ctx.lineTo(cx, cy + 4);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
     const multiSel = snap.selection.length > 1;
     for (const id of snap.selection) {
       if (edit?.id === id || vecEdit === id || (vecEdit && snap.selection.includes(vecEdit))) continue;
@@ -1861,7 +2571,8 @@ export function Canvas({
       const sy = snap.panY + nb.y * z;
       const sw = nb.w * z;
       const sh = nb.h * z;
-      const accent = wp.node.isComponent || wp.node.componentId ? "#a855f7" : BRAND_ACCENT;
+      const accent = wp.node.isComponent || wp.node.componentId ? COMP_PURPLE : BRAND_ACCENT;
+      const lockedSel = isEffectivelyLocked(root, wp.node.id);
       // P0-A contextual chrome: frame/section/group vs shape vs vector vs text
       const kind = wp.node.kind;
       const isFrame = kind === "frame" || kind === "component" || kind === "instance";
@@ -1875,9 +2586,14 @@ export function Canvas({
         if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
         ctx.translate(-(sx + sw / 2), -(sy + sh / 2));
       }
-      ctx.strokeStyle = accent;
+      // A locked layer keeps its outline but loses the editable accent: the
+      // grey dashed ring says "selected, not grabbable" (move/resize refuse
+      // it; the resize handles below are suppressed for the same reason).
+      ctx.strokeStyle = lockedSel ? LOCK_GREY : accent;
       ctx.lineWidth = 1;
+      if (lockedSel) ctx.setLineDash([4, 3]);
       ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
+      ctx.setLineDash([]);
       // With several layers picked, each member only gets a thin outline; the
       // handles, rotate stem and size badge belong to the combined box below.
       if (multiSel) {
@@ -1893,6 +2609,7 @@ export function Canvas({
       } else if (isLine) {
         hs = [[sx, sy + sh / 2], [sx + sw, sy + sh / 2]]; // only ends for line
       }
+      if (lockedSel) hs = [];
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
         ctx.strokeStyle = accent;
@@ -1920,14 +2637,16 @@ export function Canvas({
       const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
       const dim = isRotating
         ? `${Math.round(wp.node.rotation ?? 0)}°`
-        : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
+        : lockedSel
+          ? "Locked"
+          : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
       ctx.font = "500 11px Inter, system-ui";
       const tw = ctx.measureText(dim).width;
       const bw = tw + 16;
       const bh = 20;
       const bx = sx + sw / 2 - bw / 2;
       const by = sy + sh + 8;
-      ctx.fillStyle = accent;
+      ctx.fillStyle = lockedSel && !isRotating ? LOCK_GREY : accent;
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
         ctx.roundRect(bx, by, bw, bh, 4);
@@ -1941,24 +2660,24 @@ export function Canvas({
       ctx.fillText(dim, bx + bw / 2, by + bh / 2);
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
-      const ft = wp.node.fillType;
-      if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
-        const ax = sx + (wp.node.fillGX ?? 0.5) * sw;
-        const ay = sy + (wp.node.fillGY ?? 0) * sh;
-        const bx = sx + (wp.node.fillHX ?? 0.5) * sw;
-        const by = sy + (wp.node.fillHY ?? 1) * sh;
+      const gt = gradTarget(wp.node);
+      if (gt) {
+        const ax = sx + gt.gx * sw;
+        const ay = sy + gt.gy * sh;
+        const bx = sx + gt.hx * sw;
+        const by = sy + gt.hy * sh;
         ctx.strokeStyle = BRAND_ACCENT;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
         ctx.stroke();
-        ctx.fillStyle = wp.node.fill;
+        ctx.fillStyle = gt.from;
         ctx.beginPath();
         ctx.arc(ax, ay, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        ctx.fillStyle = wp.node.fillB || "#ffffff";
+        ctx.fillStyle = gt.to;
         ctx.beginPath();
         ctx.arc(bx, by, 6, 0, Math.PI * 2);
         ctx.fill();
@@ -2118,11 +2837,15 @@ export function Canvas({
         band(sx, sy + pt * z, pl * z, Math.max(0, sh - (pt + pb) * z));
         band(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, sh - (pt + pb) * z));
 
-        // Gap band between each pair of flowed children.
+        // Gap band between each pair of flowed children. In a wrapping flow the
+        // pairs that straddle a line break are skipped, and the space between
+        // the lines gets a band of its own, spanning the frame's inner size.
         const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
+        const wrapped = wraps(l);
         for (let i = 1; i < flowKids.length; i++) {
           const a = flowKids[i - 1];
           const b = flowKids[i];
+          if (wrapped && Math.abs((horiz ? a.y - b.y : a.x - b.x)) >= 0.5) continue;
           if (horiz) {
             const x0 = sx + (a.x + a.w) * z;
             const x1 = sx + b.x * z;
@@ -2131,6 +2854,22 @@ export function Canvas({
             const y0 = sy + (a.y + a.h) * z;
             const y1 = sy + b.y * z;
             band(sx + (b.x || 0) * z, y0, Math.max(2, b.w * z), (y1 - y0) || l.gap * z);
+          }
+        }
+        if (wrapped && flowKids.length >= 2) {
+          const lines = flowWrapLines(flowKids, horiz);
+          for (let i = 1; i < lines.length; i++) {
+            const prev = lines[i - 1];
+            const cur = lines[i];
+            if (horiz) {
+              const y0 = Math.max(...prev.map((c) => c.y + c.h));
+              const y1 = Math.min(...cur.map((c) => c.y));
+              band(sx + pl * z, sy + y0 * z, Math.max(0, sw - (pl + pr) * z), Math.max(0, (y1 - y0) * z));
+            } else {
+              const x0 = Math.max(...prev.map((c) => c.x + c.w));
+              const x1 = Math.min(...cur.map((c) => c.x));
+              band(sx + x0 * z, sy + pt * z, Math.max(0, (x1 - x0) * z), Math.max(0, sh - (pt + pb) * z));
+            }
           }
         }
         ctx.restore();
@@ -2181,21 +2920,25 @@ export function Canvas({
         const sw = bb.w * z;
         const sh = bb.h * z;
         ctx.save();
-        ctx.strokeStyle = BRAND_ACCENT;
+        const allLocked = snap.selection.every((id) => isEffectivelyLocked(root, id));
+        ctx.strokeStyle = allLocked ? LOCK_GREY : BRAND_ACCENT;
         ctx.lineWidth = 1;
+        if (allLocked) ctx.setLineDash([4, 3]);
         ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
-        for (const [hx, hy] of handles(sx, sy, sw, sh)) {
+        ctx.setLineDash([]);
+        const hsMulti: [number, number][] = allLocked ? [] : handles(sx, sy, sw, sh);
+        for (const [hx, hy] of hsMulti) {
           ctx.fillStyle = "#ffffff";
           ctx.strokeStyle = BRAND_ACCENT;
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
-        const dim = `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
+        const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
         ctx.font = "500 11px Inter, system-ui";
         const bw = ctx.measureText(dim).width + 16;
         const bx = sx + sw / 2 - bw / 2;
         const by = sy + sh + 8;
-        ctx.fillStyle = BRAND_ACCENT;
+        ctx.fillStyle = allLocked ? LOCK_GREY : BRAND_ACCENT;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(bx, by, bw, 20, 4);
@@ -2254,6 +2997,78 @@ export function Canvas({
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
       ctx.restore();
+    }
+    // The drop target during a move drag: the frame's outline, plus the blue
+    // insertion line in a flow - the same gap the drop would land in.
+    if (dropHint) {
+      ctx.save();
+      ctx.strokeStyle = "#0d99ff";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(
+        snap.panX + dropHint.fx * z,
+        snap.panY + dropHint.fy * z,
+        Math.max(1, dropHint.fw * z),
+        Math.max(1, dropHint.fh * z),
+      );
+      const ln = dropHint.line;
+      if (ln) {
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if (ln.horiz) {
+          const x = snap.panX + ln.at * z;
+          ctx.moveTo(x, snap.panY + ln.from * z);
+          ctx.lineTo(x, snap.panY + ln.to * z);
+        } else {
+          const y = snap.panY + ln.at * z;
+          ctx.moveTo(snap.panX + ln.from * z, y);
+          ctx.lineTo(snap.panX + ln.to * z, y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Boolean live preview: the armed op's result over the live selection,
+    // recomputed every frame so it tracks drags and nudges until Apply/Esc.
+    if (snap.booleanPreview && snap.selection.length >= 2 && !snap.presentFrame) {
+      const prev = previewBoolean(snap.booleanPreview, root, snap.selection);
+      if (prev && prev.path.length >= 3) {
+        ctx.save();
+        tracePath(ctx, prev.path, snap.panX + prev.x * z, snap.panY + prev.y * z, z, true);
+        ctx.fillStyle = "rgba(16, 185, 129, 0.14)"; // BRAND_ACCENT at 14%
+        ctx.fill();
+        ctx.strokeStyle = BRAND_ACCENT;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Variable-width control points on the selected stroke. Display-only —
+    // the inspector's profile strip edits them — and hidden under rotation,
+    // where the translation-only page offset would misplace them.
+    if (snap.selection.length === 1 && !snap.presentFrame && !vecEdit) {
+      const sel = find(root, snap.selection[0]);
+      if (sel && usesVariableWidth(sel) && sel.path.length >= 2 && !sel.rotation && !sel.flipH && !sel.flipV) {
+        const wp = worldPos(root, sel.id);
+        if (wp) {
+          const dots = widthProfileStations(sel.path, sel.closed, sel.strokeWidthProfile);
+          if (dots.length) {
+            ctx.save();
+            for (const d of dots) {
+              ctx.beginPath();
+              ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 3.5, 0, Math.PI * 2);
+              ctx.fillStyle = "#ffffff";
+              ctx.fill();
+              ctx.lineWidth = 1.5;
+              ctx.strokeStyle = BRAND_ACCENT;
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+        }
+      }
     }
 
     if (vecEdit) {
@@ -2354,7 +3169,7 @@ export function Canvas({
         if (cursorPos && !drag.current) {
           const local = nodeLocalPoint(cursorPos.x, cursorPos.y, wp.x, wp.y, wp.node);
           const npts = pts.length;
-          const count = wp.node.closed ? npts : npts - 1;
+          const count = effClosed(wp.node) ? npts : npts - 1;
           for (let si = 0; si < count; si++) {
             const p1 = pts[si];
             const p2 = pts[(si + 1) % npts];
@@ -2584,7 +3399,90 @@ export function Canvas({
         }
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, ghost, guides, gapBadges, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos]);
+    // Crop tool overlay, painted last: the faded full image, the blue crop
+    // window (the layer box), and eight handles.
+    if (cropId && !snap.presentFrame) {
+      const wp = worldPos(root, cropId);
+      const cn = wp?.node;
+      const cim = cn?.imageSrc ? imgs.current.get(cn.imageSrc) : undefined;
+      if (wp && cn && cn.visible && cim?.complete && cim.naturalWidth) {
+        const bsx = snap.panX + wp.x * z;
+        const bsy = snap.panY + wp.y * z;
+        const bsw = cn.w * z;
+        const bsh = cn.h * z;
+        const crot = ((cn.imageRot % 360) + 360) % 360;
+        const cswap = crot === 90 || crot === 270;
+        const ciw = cswap ? cim.naturalHeight : cim.naturalWidth;
+        const cih = cswap ? cim.naturalWidth : cim.naturalHeight;
+        const crect = initialCropRect(cn.imageCrop, ciw, cih, cn.w, cn.h);
+        const full = cropFullExtent({ x: bsx, y: bsy, w: bsw, h: bsh }, crect);
+        const ccx = bsx + bsw / 2;
+        const ccy = bsy + bsh / 2;
+        ctx.save();
+        if (cn.rotation || cn.flipH || cn.flipV) {
+          ctx.translate(ccx, ccy);
+          if (cn.rotation) ctx.rotate((cn.rotation * Math.PI) / 180);
+          if (cn.flipH || cn.flipV) ctx.scale(cn.flipH ? -1 : 1, cn.flipV ? -1 : 1);
+          ctx.translate(-ccx, -ccy);
+        }
+        // Dimmed surround with the window cut out (a huge rect covers the
+        // viewport under any rotation), then the faded full image.
+        const dd = Math.hypot(w, h);
+        ctx.fillStyle = "rgba(13, 20, 38, 0.45)";
+        ctx.beginPath();
+        ctx.rect(ccx - dd, ccy - dd, dd * 2, dd * 2);
+        ctx.rect(bsx, bsy, bsw, bsh);
+        ctx.fill("evenodd");
+        ctx.save();
+        ctx.globalAlpha = 0.5;
+        if (crot) {
+          ctx.translate(full.x + full.w / 2, full.y + full.h / 2);
+          ctx.rotate((crot * Math.PI) / 180);
+          const dw = cswap ? full.h : full.w;
+          const dh = cswap ? full.w : full.h;
+          ctx.drawImage(cim, -dw / 2, -dh / 2, dw, dh);
+        } else {
+          ctx.drawImage(cim, full.x, full.y, full.w, full.h);
+        }
+        ctx.restore();
+        ctx.strokeStyle = "#0d99ff";
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(bsx, bsy, bsw, bsh);
+        for (const hh of cropHandleRects({ x: bsx, y: bsy, w: bsw, h: bsh }, 8)) {
+          ctx.fillStyle = "#0d99ff";
+          ctx.fillRect(hh.x, hh.y, 8, 8);
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(hh.x, hh.y, 8, 8);
+        }
+        ctx.restore();
+      }
+    }
+    // Place-image badge at the cursor: how many are left to place.
+    if (placing && cursorPos) {
+      const r = wrap.current?.getBoundingClientRect();
+      if (r) {
+        const left = placing.srcs.length - placing.i;
+        const label = left === 1 ? "Click to place · Esc to stop" : `${left} to place · click · Esc to stop`;
+        ctx.save();
+        ctx.font = "500 11px Inter, system-ui";
+        const tw = ctx.measureText(label).width + 16;
+        const bx = cursorPos.x - r.left + 14;
+        const by = cursorPos.y - r.top + 14;
+        ctx.fillStyle = "rgba(13, 20, 38, 0.92)";
+        if (typeof ctx.roundRect === "function") {
+          ctx.beginPath();
+          ctx.roundRect(bx, by, tw, 22, 5);
+          ctx.fill();
+        } else ctx.fillRect(bx, by, tw, 22);
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, bx + 8, by + 11);
+        ctx.restore();
+      }
+    }
+  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, panelHover, ghost, guides, gapBadges, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -2592,6 +3490,27 @@ export function Canvas({
       x: (cx - r.left - snap.panX) / snap.zoom,
       y: (cy - r.top - snap.panY) / snap.zoom,
     };
+  };
+
+  /**
+   * The frame a drop would land in: the deepest frame under the point that may
+   * take children. Instances refuse (their structure belongs to the main
+   * component) and locked frames refuse, so the search climbs past them to an
+   * enclosing frame, if there is one.
+   */
+  const dropTargetFrame = (root: XNode, wx: number, wy: number, skip: Set<string>): XNode | null => {
+    let frame = deepestFrame(root, wx, wy, skip);
+    while (frame) {
+      const bad =
+        isInstanceMember(root, frame.id) ||
+        (!!frame.componentId && !frame.isComponent) ||
+        isEffectivelyLocked(root, frame.id);
+      if (!bad) return frame;
+      let q = findParent(root, frame.id);
+      while (q && q !== root && q.kind !== "frame") q = findParent(root, q.id);
+      frame = q && q !== root ? q : null;
+    }
+    return null;
   };
 
   /**
@@ -2652,8 +3571,53 @@ export function Canvas({
   );
 
   const onDown = (e: React.MouseEvent) => {
+    if (dropHint) setDropHint(null);
     if (edit && (e.target as HTMLElement).closest(".text-edit")) return;
     if (e.button === 2) return;
+    // Frame quick-add badges, painted beside the hover outline. Left badge
+    // places the new frame to the left, right badge to the right; ⌥ makes
+    // the new frame blank instead of a duplicate.
+    if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
+      const qroot = snap.pages[snap.page].root;
+      const qf = worldPos(qroot, hoverId);
+      const qb = qf && qf.node.kind === "frame" && !qf.node.rotation ? nodeVisualBounds(qf) : null;
+      if (qf && qb) {
+        const c = ref.current;
+        if (c) {
+          const box = c.getBoundingClientRect();
+          const px = e.clientX - box.left;
+          const py = e.clientY - box.top;
+          const qx = snap.panX + qb.x * snap.zoom;
+          const qw = qb.w * snap.zoom;
+          const cy = snap.panY + (qb.y + qb.h / 2) * snap.zoom;
+          const side =
+            Math.hypot(px - qx, py - cy) <= 11 ? -1
+            : Math.hypot(px - (qx + qw), py - cy) <= 11 ? 1
+            : 0;
+          if (side !== 0) {
+            e.preventDefault();
+            const f = qf.node;
+            if (e.altKey) {
+              const par = findParent(qroot, f.id);
+              engine.dispatch({
+                type: "add",
+                kind: "frame",
+                x: side < 0 ? f.x - f.w - 24 : f.x + f.w + 24,
+                y: f.y,
+                w: f.w,
+                h: f.h,
+                parent: par && par !== qroot ? par.id : undefined,
+                extra: { name: "Frame" },
+              });
+            } else {
+              engine.dispatch({ type: "select", ids: [f.id] });
+              engine.dispatch({ type: "duplicate", dx: side * (f.w + 24), dy: 0 });
+            }
+            return;
+          }
+        }
+      }
+    }
     if (eyedropArmed()) {
       const c = ref.current;
       if (c) {
@@ -2693,6 +3657,8 @@ export function Canvas({
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
+      const pressHit = hitTest(root, wpt.x, wpt.y, { deep: true, includeLocked: true });
+      dragIx.current = { x: wpt.x, y: wpt.y, id: pressHit ? pressHit.id : "", fired: false };
 
       // Handle active overlay clicks & dismiss
       if (snap.activeOverlay?.id) {
@@ -2716,16 +3682,10 @@ export function Canvas({
               wpt.y >= oy &&
               wpt.y <= oy + overlayNode.h
             ) {
-              let n: XNode | null = hitTest(overlayNode, wpt.x - ox + overlayNode.x, wpt.y - oy + overlayNode.y, { includeLocked: true });
-              while (n) {
-                const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
-                if (ix) {
-                  runInteraction(ix);
-                  return;
-                }
-                const p = findParent(overlayNode, n.id);
-                n = p && p !== overlayNode ? p : null;
-              }
+              const n: XNode | null = hitTest(overlayNode, wpt.x - ox + overlayNode.x, wpt.y - oy + overlayNode.y, { includeLocked: true });
+              // §23 PT-004: the press pair fires around the click, overlay or canvas.
+              if (n) runTrigger(overlayNode, n.id, "mouseDown");
+              if (n) runTrigger(overlayNode, n.id, "onClick");
               return;
             } else if (snap.activeOverlay.closeOutside !== false) {
               engine.dispatch({ type: "closeOverlay" });
@@ -2735,16 +3695,9 @@ export function Canvas({
         }
       }
 
-      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
-      while (n) {
-        const ix = (n.interactions ?? []).find((i) => i.trigger === "onClick");
-        if (ix) {
-          runInteraction(ix);
-          return;
-        }
-        const p = findParent(root, n.id);
-        n = p && p !== root ? p : null;
-      }
+      const n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
+      if (n) runTrigger(root, n.id, "mouseDown");
+      if (n) runTrigger(root, n.id, "onClick");
       return;
     }
     if (snap.tool === "eraser") {
@@ -2769,10 +3722,48 @@ export function Canvas({
       const near = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by) < 8 / snap.zoom;
       // A branch is anchored on a vertex of the selected vector, so the pen can
       // keep drawing in that shape instead of starting a second one.
+      // In vector edit, a pen click on the edited path inserts an anchor
+      // (Figma) instead of starting a second path — vertices still fall
+      // through to branch-drawing below.
+      if (vecEdit && !penBranch.current && !draft.length) {
+        const loc = worldPos(rootForPen, vecEdit);
+        if (loc && !loc.node.locked) {
+          const epts = loc.node.path.length ? loc.node.path : shapePoly(loc.node);
+          const elocal = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, loc.node);
+          let onVertex = false;
+          for (const v of epts) {
+            if (Math.hypot(elocal.x - v.x, elocal.y - v.y) < 10 / snap.zoom) {
+              onVertex = true;
+              break;
+            }
+          }
+          if (!onVertex) {
+            const res = insertPointOnPath(epts, elocal.x, elocal.y, effClosed(loc.node), 10 / snap.zoom);
+            if (res) {
+              engine.dispatch({
+                type: "insertPointOnPath",
+                id: loc.node.id,
+                x: elocal.x,
+                y: elocal.y,
+                maxDist: 10 / snap.zoom,
+              });
+              vecPt.current = res.insertedIndex;
+              setVecEdit(loc.node.id, res.insertedIndex);
+              toast("Point added on path");
+              return;
+            }
+          }
+        }
+      }
       if (!penBranch.current && !draft.length && snap.selection.length === 1) {
         const sel = find(rootForPen, snap.selection[0]);
-        if (sel && sel.kind === "vector" && !sel.locked) {
-          const vn = sel.vectorNetwork ?? pathToVectorNetwork(sel.path, sel.closed);
+        const branchable =
+          sel && !sel.locked && (sel.kind === "vector" ||
+            sel.kind === "rect" || sel.kind === "ellipse" || sel.kind === "poly" ||
+            sel.kind === "star" || sel.kind === "line" || sel.kind === "arrow");
+        if (branchable && sel) {
+          const src = sel.path.length ? sel.path : shapePoly(sel);
+          const vn = sel.vectorNetwork ?? pathToVectorNetwork(src, effClosed(sel));
           for (let i = 0; i < vn.vertices.length; i++) {
             const v = vn.vertices[i];
             if (near(wpt.x, wpt.y, sel.x + v.x, sel.y + v.y)) {
@@ -2855,6 +3846,55 @@ export function Canvas({
     }
     const wpt = toWorld(e.clientX, e.clientY);
     const root = snap.pages[snap.page].root;
+    if (placing && e.button === 0) {
+      placeQueued(wpt);
+      return;
+    }
+    if (cropId && snap.tool === "select" && e.button === 0) {
+      const wp = worldPos(root, cropId);
+      const cn = wp?.node;
+      const dims = cn && cn.visible ? cropImageDims(cn) : null;
+      if (wp && cn && cn.visible && (cn.imageCrop || dims)) {
+        const zc = snap.zoom;
+        const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, cn);
+        const hs = cropHandleRects({ x: wp.x, y: wp.y, w: cn.w, h: cn.h }, 10 / zc);
+        const hitH = hs.find(
+          (h) => local.x >= h.x && local.x <= h.x + 10 / zc && local.y >= h.y && local.y <= h.y + 10 / zc,
+        );
+        const start = cn.imageCrop
+          ? normalizeCropRect(cn.imageCrop)
+          : coverCrop(dims!.iw, dims!.ih, cn.w, cn.h);
+        if (hitH) {
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "crop", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+            id: cropId, cropHandle: hitH.handle, cropStart: start,
+          };
+          return;
+        }
+        if (local.x >= 0 && local.x <= cn.w && local.y >= 0 && local.y <= cn.h) {
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "cropMove", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+            id: cropId, cropLX: local.x, cropLY: local.y, cropStart: start,
+          };
+          return;
+        }
+      }
+      // Outside the crop window: apply and let the click through.
+      setCropId(null);
+    }
+    // Editing one text layer and pressing on another starts editing that one
+    // instead: the blur still to come commits the old copy (re-hug
+    // included), then opens the new editor over the press. No drag starts.
+    if (edit && snap.tool === "select" && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      const hitT = hitTest(root, wpt.x, wpt.y, { deep: true });
+      if (hitT && hitT.kind === "text" && hitT.id !== edit.id && !hitT.locked && hitT.visible) {
+        editSwitch.current = hitT.id;
+        engine.dispatch({ type: "select", ids: [hitT.id] });
+        return;
+      }
+    }
     if (snap.tool === "image") {
       pendingImage.current = { x: wpt.x, y: wpt.y };
       fileRef.current?.click();
@@ -2897,6 +3937,10 @@ export function Canvas({
         for (let i = 0; i < hs.length; i += 2) {
           const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
           if (d >= 6 && d <= 22) {
+            if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
+              toast("Locked · ⇧⌘L to unlock");
+              return;
+            }
             engine.dispatch({ type: "begin" });
             const startAngle = Math.atan2(e.clientY - bcy, e.clientX - bcx);
             drag.current = {
@@ -2916,6 +3960,10 @@ export function Canvas({
         }
         for (let i = 0; i < hs.length; i++) {
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
+            if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
+              toast("Locked · ⇧⌘L to unlock");
+              return;
+            }
             engine.dispatch({ type: "begin" });
             drag.current = {
               mode: "multiResize",
@@ -2951,7 +3999,6 @@ export function Canvas({
           px = wp.node.flipH ? cx - (u.x - cx) : u.x;
           py = wp.node.flipV ? cy - (u.y - cy) : u.y;
         }
-        const ft = wp.node.fillType;
         if (snap.rightTab === "prototype") {
           // Flow starting point badge click
           const flowStartId = snap.pages[snap.page].flowStart;
@@ -3002,19 +4049,20 @@ export function Canvas({
             }
           }
         }
-        if (ft === "linear" || ft === "radial" || ft === "angular" || ft === "diamond") {
-          const ax = sx + (wp.node.fillGX ?? 0.5) * wp.node.w * z;
-          const ay = sy + (wp.node.fillGY ?? 0) * wp.node.h * z;
-          const bx = sx + (wp.node.fillHX ?? 0.5) * wp.node.w * z;
-          const by = sy + (wp.node.fillHY ?? 1) * wp.node.h * z;
+        const gt = gradTarget(wp.node);
+        if (gt) {
+          const ax = sx + gt.gx * wp.node.w * z;
+          const ay = sy + gt.gy * wp.node.h * z;
+          const bx = sx + gt.hx * wp.node.w * z;
+          const by = sy + gt.hy * wp.node.h * z;
           if (Math.hypot(px - ax, py - ay) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "g" };
+            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "g", gindex: gt.index };
             return;
           }
           if (Math.hypot(px - bx, py - by) < 8) {
             engine.dispatch({ type: "begin" });
-            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "h" };
+            drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "h", gindex: gt.index };
             return;
           }
         }
@@ -3228,7 +4276,7 @@ export function Canvas({
           const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
           if (vecSubTool === "paint") {
             const nextFill = wp.node.fillVisible ? (wp.node.fill || "#d9d9d9") : "#10b981";
-            const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path, wp.node.closed);
+            const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path.length ? wp.node.path : shapePoly(wp.node), effClosed(wp.node));
             const updatedVn = fillNetworkRegionAtPoint(vn, local.x, local.y, nextFill);
             engine.dispatch({ type: "patchVectorNetwork", id: wp.node.id, network: updatedVn });
             engine.dispatch({ type: "patch", id: wp.node.id, patch: { fillVisible: true } });
@@ -3248,7 +4296,7 @@ export function Canvas({
           const meta = e.metaKey || e.ctrlKey || e.altKey || vecSubTool === "bend";
           if (meta) {
             const npts = pts.length;
-            const count = wp.node.closed ? npts : npts - 1;
+            const count = effClosed(wp.node) ? npts : npts - 1;
             for (let si = 0; si < count; si++) {
               const p1 = pts[si];
               const p2 = pts[(si + 1) % npts];
@@ -3261,9 +4309,9 @@ export function Canvas({
               }
             }
           } else {
-            const res = insertPointOnPath(pts, local.x, local.y, wp.node.closed, 10 / snap.zoom);
+            const res = insertPointOnPath(pts, local.x, local.y, effClosed(wp.node), 10 / snap.zoom);
             if (res) {
-              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y });
+              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y, maxDist: 10 / snap.zoom });
               vecPt.current = res.insertedIndex;
               setVecEdit(wp.node.id, res.insertedIndex);
               toast("Point added on path");
@@ -3332,6 +4380,10 @@ export function Canvas({
             // plain resize is still allowed, because that is an override.
             if (snap.tool === "scale" && insideInstance(root, wp.node.id)) {
               toast("Not scalable · this layer is inside an instance");
+              return;
+            }
+            if (isEffectivelyLocked(root, wp.node.id)) {
+              toast("Locked · ⇧⌘L to unlock");
               return;
             }
             drag.current = {
@@ -3427,7 +4479,7 @@ export function Canvas({
       if (!vecEdit) {
         engine.dispatch({ type: "select", ids: [] });
       }
-      drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
+      drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, sel0: [...snap.selection] };
     }
   };
 
@@ -3436,7 +4488,7 @@ export function Canvas({
    *  re-render the whole editor. */
   const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
-    if (eyedropArmed() || snap.tool === "eraser") {
+    if (eyedropArmed() || snap.tool === "eraser" || placing) {
       setCursorPos({ x: e.clientX, y: e.clientY });
     } else if (cursorPos) {
       setCursorPos(null);
@@ -3450,20 +4502,41 @@ export function Canvas({
     if (snap.presentFrame) {
       const wpt = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
-      let n: XNode | null = hitTest(root, wpt.x, wpt.y, { deep: true, includeLocked: true });
-      while (n) {
-        const ix = (n.interactions ?? []).find((i) => i.trigger === "onHover");
-        if (ix) {
-          if (hoverIx.current !== n.id) {
-            hoverIx.current = n.id;
-            runInteraction(ix);
+      const n: XNode | null = hitTest(root, wpt.x, wpt.y, { deep: true, includeLocked: true });
+      const id = n ? n.id : "";
+      if (id !== hoverIx.current) {
+        const prev = hoverIx.current;
+        hoverIx.current = id;
+        if (prev) {
+          const leftRan = runTrigger(root, prev, "mouseLeave");
+          // §23 PT-005: an explicit Mouse-leave action wins; otherwise a
+          // pending while-hovering return takes the user back to the origin
+          // frame (Figma) — but only while still sitting on its destination,
+          // so stale pendings never yank the user out of a later screen.
+          const hr = hoverReturn.current;
+          if (leftRan) hoverReturn.current = null;
+          else if (hr && isSelfOrDescendant(root, prev, hr.nodeId)) {
+            hoverReturn.current = null;
+            if (snap.presentFrame === hr.destId && snap.presentFrame !== hr.fromFrame) {
+              runInteraction(
+                { trigger: "mouseLeave", action: "navigate", destination: hr.fromFrame, animation: "instant", delay: 0 },
+                hr.nodeId,
+              );
+            }
           }
-          return;
         }
-        const p = findParent(root, n.id);
-        n = p && p !== root ? p : null;
+        // "While hovering" fires on entry, like before; mouse enter joins it.
+        if (n) {
+          runTrigger(root, n.id, "mouseEnter");
+          runTrigger(root, n.id, "onHover");
+        }
       }
-      hoverIx.current = "";
+      // Drag trigger: fire once per press-drag-release past the threshold.
+      const d = dragIx.current;
+      if (d && !d.fired && d.id && Math.hypot(wpt.x - d.x, wpt.y - d.y) > 8) {
+        d.fired = true;
+        runTrigger(root, d.id, "onDrag");
+      }
       return;
     }
     if (!drag.current && !penDrag.current && !pencil.current && snap.tool === "select") {
@@ -3573,12 +4646,14 @@ export function Canvas({
       // Which point would this click join? Mark it with a circle, and a
       // guess-the-target affordance is how a pen either feels precise or feels
       // like a trap.
+      // Only the start anchor closes the path — ringing any other anchor
+      // promises a join the click cannot keep.
       let hint: number | null = null;
-      for (let i = 0; i < draft.length; i++) {
-        if (Math.hypot(wpt.x - draft[i].x, wpt.y - draft[i].y) < 14 / snap.zoom) {
-          hint = i;
-          break;
-        }
+      if (
+        draft.length >= 2 &&
+        Math.hypot(wpt.x - draft[0].x, wpt.y - draft[0].y) < 14 / snap.zoom
+      ) {
+        hint = 0;
       }
       if (hint !== closeHint) setCloseHint(hint);
     } else if (ghost) setGhost(null);
@@ -3669,7 +4744,7 @@ export function Canvas({
               moved,
               snapTargets.current,
               SNAP_PX / snap.zoom,
-              snap.pages[snap.page].guides,
+              worldGuides(root2, snap.pages[snap.page].guides),
             );
             dx += res.dx;
             dy += res.dy;
@@ -3683,6 +4758,40 @@ export function Canvas({
         engine.dispatch({ type: "move", ids: sel, dx, dy });
         d.sx = e.clientX;
         d.sy = e.clientY;
+      }
+      // The live drop target: the frame under the cursor, and the flow gap the
+      // drop would land in. Read off the same snapshot as the snap targets, so
+      // it trails the pointer by a frame at most; the drop itself re-reads.
+      {
+        const wpt = toWorld(e.clientX, e.clientY);
+        const r3 = snap.pages[snap.page].root;
+        const selNow = engine.snapshot().selection;
+        const frame = dropTargetFrame(r3, wpt.x, wpt.y, new Set(selNow));
+        const fw = frame ? worldPos(r3, frame.id) : null;
+        if (!frame || !fw) {
+          if (dropHint) setDropHint(null);
+        } else {
+          const gap = frame.layout ? flowGapLine(frame, wpt.x - fw.x, wpt.y - fw.y) : null;
+          const line = gap
+            ? gap.horiz
+              ? { horiz: true, at: fw.x + gap.at, from: fw.y + gap.from, to: fw.y + gap.to }
+              : { horiz: false, at: fw.y + gap.at, from: fw.x + gap.from, to: fw.x + gap.to }
+            : null;
+          const same =
+            dropHint &&
+            dropHint.fx === fw.x &&
+            dropHint.fy === fw.y &&
+            dropHint.fw === frame.w &&
+            dropHint.fh === frame.h &&
+            (dropHint.line === null) === (line === null) &&
+            (!line ||
+              !dropHint.line ||
+              (dropHint.line.horiz === line.horiz &&
+                dropHint.line.at === line.at &&
+                dropHint.line.from === line.from &&
+                dropHint.line.to === line.to));
+          if (!same) setDropHint({ fx: fw.x, fy: fw.y, fw: frame.w, fh: frame.h, line });
+        }
       }
     } else if (d.mode === "multiResize" && d.bounds && d.origs && d.corner != null) {
       const b = toWorld(e.clientX, e.clientY);
@@ -3704,6 +4813,7 @@ export function Canvas({
           w: Math.max(1, o.w * sxScale),
           h: Math.max(1, o.h * syScale),
           scaleProps: snap.tool === "scale",
+          ignoreConstraints: e.metaKey || e.ctrlKey,
         });
       }
     } else if (d.mode === "multiRotate" && d.bounds && d.origs) {
@@ -3739,6 +4849,34 @@ export function Canvas({
           type: "patch",
           id: o.id,
           patch: { rotation: Math.round(((o.rotation || 0) + ang) * 10) / 10 },
+        });
+      }
+    } else if ((d.mode === "crop" || d.mode === "cropMove") && d.id && d.cropStart) {
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      const cn = wp?.node;
+      if (!wp || !cn) return;
+      const wpt = toWorld(e.clientX, e.clientY);
+      const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, cn);
+      const start = d.cropStart;
+      if (d.mode === "cropMove" && d.cropLX != null && d.cropLY != null) {
+        // Grab-style: the image follows the pointer, so the window moves
+        // against it.
+        const du = -(((local.x - d.cropLX) / cn.w) * start.w);
+        const dv = -(((local.y - d.cropLY) / cn.h) * start.h);
+        cropDirty.current = true;
+        engine.dispatch({ type: "patch", id: d.id, patch: { imageCrop: moveCrop(start, du, dv) } });
+      } else if (d.mode === "crop" && d.cropHandle) {
+        const { u, v } = layerToImage(start, local.x / cn.w, local.y / cn.h);
+        cropDirty.current = true;
+        engine.dispatch({
+          type: "patch",
+          id: d.id,
+          patch: {
+            imageCrop: dragCropHandle(start, d.cropHandle, u, v, {
+              lockAspect: !e.ctrlKey && !e.metaKey,
+              symmetric: e.altKey,
+            }),
+          },
         });
       }
     } else if (d.mode === "marquee" && d.id === "erase") {
@@ -3786,7 +4924,13 @@ export function Canvas({
           w: next.w,
           h: next.h,
         };
-        const r2 = snapResize(worldBox, d.corner, snapTargets.current, SNAP_PX / snap.zoom);
+        const r2 = snapResize(
+          worldBox,
+          d.corner,
+          snapTargets.current,
+          SNAP_PX / snap.zoom,
+          worldGuides(snap.pages[snap.page].root, snap.pages[snap.page].guides),
+        );
         setGuides(r2.guides);
         const movesLeft = d.corner === 0 || d.corner === 6 || d.corner === 7;
         const movesTop = d.corner === 0 || d.corner === 1 || d.corner === 2;
@@ -3808,6 +4952,8 @@ export function Canvas({
         id: d.id,
         ...next,
         scaleProps: snap.tool === "scale",
+        // ⌘/Ctrl-drag resizes past the children's constraints.
+        ignoreConstraints: e.metaKey || e.ctrlKey,
       });
     } else if (d.mode === "grad" && d.id) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -3816,8 +4962,23 @@ export function Canvas({
         const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
         const lx = local.x / Math.max(1, wp.node.w);
         const ly = local.y / Math.max(1, wp.node.h);
-        if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: lx, fillGY: ly } });
-        else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: lx, fillHY: ly } });
+        const gi = d.gindex ?? -1;
+        if (gi < 0) {
+          if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: lx, fillGY: ly } });
+          else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: lx, fillHY: ly } });
+        } else {
+          // The handles grabbed a stacked fill: write its own geometry. The
+          // first drag also pins down inherited base geometry explicitly, at
+          // the values the handles already showed, so nothing jumps.
+          const fills = [...(wp.node.fills ?? [])];
+          const p = fills[gi];
+          if (!p) return;
+          fills[gi] =
+            d.handle === "g"
+              ? { ...p, gx: lx, gy: ly, hx: p.hx ?? wp.node.fillHX ?? 0.5, hy: p.hy ?? wp.node.fillHY ?? 1 }
+              : { ...p, hx: lx, hy: ly, gx: p.gx ?? wp.node.fillGX ?? 0.5, gy: p.gy ?? wp.node.fillGY ?? 0 };
+          engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
+        }
       }
     } else if (d.mode === "vec" && d.id != null && d.point != null) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -3859,22 +5020,44 @@ export function Canvas({
           }
         } else {
           const movingIndices = snap.vecPoints && snap.vecPoints.includes(d.point) ? snap.vecPoints : [d.point];
-          if (movingIndices.length > 1 && d.origPts) {
-            const origP = d.origPts[d.point];
-            const totalDx = lx - origP.x;
-            const totalDy = ly - origP.y;
-            for (const idx of movingIndices) {
-              if (d.origPts[idx] && pts[idx]) {
-                pts[idx].x = d.origPts[idx].x + totalDx;
-                pts[idx].y = d.origPts[idx].y + totalDy;
-              }
+          const hasHandles =
+            (p.ox || 0) !== 0 || (p.oy || 0) !== 0 || (p.ix || 0) !== 0 || (p.iy || 0) !== 0;
+          if (e.altKey && movingIndices.length === 1 && !hasHandles) {
+            // ⌥-drag a corner anchor pulls a Bézier handle out of it instead
+            // of moving the point; the mirror mode decides whether the other
+            // side follows.
+            p.ox = lx - p.x;
+            p.oy = ly - p.y;
+            if (p.mirrorMode === "angleAndLength") {
+              p.ix = -p.ox;
+              p.iy = -p.oy;
             }
           } else {
-            p.x = lx;
-            p.y = ly;
+            // ⇧ constrains the move to the dominant axis (Figma).
+            let tlx = lx;
+            let tly = ly;
+            if (e.shiftKey && d.origPts && d.origPts[d.point]) {
+              const o = d.origPts[d.point];
+              if (Math.abs(lx - o.x) >= Math.abs(ly - o.y)) tly = o.y;
+              else tlx = o.x;
+            }
+            if (movingIndices.length > 1 && d.origPts) {
+              const origP = d.origPts[d.point];
+              const totalDx = tlx - origP.x;
+              const totalDy = tly - origP.y;
+              for (const idx of movingIndices) {
+                if (d.origPts[idx] && pts[idx]) {
+                  pts[idx].x = d.origPts[idx].x + totalDx;
+                  pts[idx].y = d.origPts[idx].y + totalDy;
+                }
+              }
+            } else {
+              p.x = tlx;
+              p.y = tly;
+            }
           }
         }
-        engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: n.closed });
+        engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: effClosed(n) });
       }
     } else if (d.mode === "bend" && d.id != null && d.segIndex != null) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -4084,6 +5267,15 @@ export function Canvas({
   };
 
   const onUp = (e: React.MouseEvent) => {
+    dragIx.current = null;
+    // §23 PT-004: release completes the press pair on the release-position node.
+    if (snap.presentFrame) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const root = snap.pages[snap.page].root;
+      const n = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
+      if (n) runTrigger(root, n.id, "mouseUp");
+      return;
+    }
     if (penDrag.current) {
       penDrag.current = null;
       return;
@@ -4170,6 +5362,26 @@ export function Canvas({
         });
       }
     }
+    // Pixel-grid settling runs before `end` so it joins the gesture's undo
+    // step: moves land on whole pixels, resizes additionally whole their
+    // sizes. Frames and main components always settle, even with snapping off.
+    if (d.mode === "move" || d.mode === "resize" || d.mode === "multiResize") {
+      const on = snap.pages[snap.page].pixelSnap ?? true;
+      const root = snap.pages[snap.page].root;
+      for (const id of engine.snapshot().selection) {
+        const n = worldPos(root, id)?.node;
+        if (!n || n.locked || !wantsPixelSnap(n, on)) continue;
+        if (d.mode === "move") {
+          const x = Math.round(n.x);
+          const y = Math.round(n.y);
+          if (x !== n.x || y !== n.y) engine.dispatch({ type: "patch", id, patch: { x, y } });
+        } else {
+          const b = roundBox(n);
+          if (b.x !== n.x || b.y !== n.y || b.w !== n.w || b.h !== n.h)
+            engine.dispatch({ type: "patch", id, patch: b });
+        }
+      }
+    }
     if (
       d.mode === "move" ||
       d.mode === "resize" ||
@@ -4180,42 +5392,76 @@ export function Canvas({
       d.mode === "rotOrigin" ||
       d.mode === "autoPad" ||
       d.mode === "autoGap" ||
+      d.mode === "crop" ||
+      d.mode === "cropMove" ||
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
-    if (d.mode === "move" && (snap.pages[snap.page].pixelSnap ?? true)) {
-      const root = snap.pages[snap.page].root;
-      for (const id of engine.snapshot().selection) {
-        const n = worldPos(root, id)?.node;
-        if (n && !n.locked)
-          engine.dispatch({
-            type: "patch",
-            id,
-            patch: { x: Math.round(n.x), y: Math.round(n.y) },
-          });
-      }
-    }
     if (d.mode === "move") {
-      const selection = engine.snapshot().selection;
-      const sel = selection[0];
-      const root = snap.pages[snap.page].root;
-      const wp = sel ? worldPos(root, sel) : null;
-      if (wp) {
-        const cx = wp.x + wp.node.w / 2;
-        const cy = wp.y + wp.node.h / 2;
-        const frame = deepestFrame(root, cx, cy, new Set(selection));
-        if (frame) {
-          const frameWorld = worldPos(root, frame.id);
-          for (const id of selection) {
-            const item = worldPos(root, id);
-            const parent = findParent(root, id);
-            if (!item || item.node.id === frame.id || frame === parent || !frameWorld) continue;
-            engine.dispatch({
-              type: "reparent",
-              ids: [item.node.id],
-              parent: frame.id,
-              x: item.x - frameWorld.x,
-              y: item.y - frameWorld.y,
+      if (dropHint) setDropHint(null);
+      const fresh = engine.snapshot();
+      const selection = fresh.selection;
+      const root = fresh.pages[fresh.page].root;
+      // The drop target is the frame under the cursor, read off a fresh tree -
+      // the mid-drag snapshot is a frame behind and the selection has moved.
+      const pt = toWorld(e.clientX, e.clientY);
+      const frame = dropTargetFrame(root, pt.x, pt.y, new Set(selection));
+      const frameWorld = frame ? worldPos(root, frame.id) : null;
+      if (frame && frameWorld) {
+        // Figma's drop modifiers: ⌘/Ctrl bypasses the oversize refusal, and
+        // Ctrl-drag on the Mac drops the object as absolutely positioned
+        // (out of the flow, where it was let go).
+        const isMac = /mac/i.test(navigator.platform ?? "");
+        const absolute = e.ctrlKey && isMac;
+        const bypass = e.metaKey || (e.ctrlKey && !isMac);
+        const lx = pt.x - frameWorld.x;
+        const ly = pt.y - frameWorld.y;
+        const linear = !!frame.layout && frame.layout.direction !== "grid";
+        const sameParent: string[] = [];
+        const incomers: string[] = [];
+        for (const id of selection) {
+          const item = worldPos(root, id);
+          const parent = findParent(root, id);
+          if (!item || item.node.id === frame.id || !parent || find(item.node, frame.id)) continue;
+          if (absolute) {
+            // Out of the flow, where the move put it; cross-parent drops
+            // reparent below instead.
+            if (parent === frame) engine.dispatch({ type: "patch", id, patch: { absolutePosition: true } });
+            else incomers.push(id);
+          } else if (parent === frame) sameParent.push(id);
+          else incomers.push(id);
+        }
+        // Dragging within the frame reorders to the gap under the cursor;
+        // without a layout there is no order to change.
+        if (sameParent.length && linear) {
+          engine.dispatch({
+            type: "reorder",
+            ids: sameParent,
+            parent: frame.id,
+            index: flowInsertIndex(frame, lx, ly),
+          });
+        }
+        // Newcomers land as a block at the gap under the cursor. Grids place
+        // each object in its own cell instead, and plain frames append.
+        if (incomers.length) {
+          const r2 = engine.snapshot().pages[engine.snapshot().page].root;
+          const dest = find(r2, frame.id);
+          const fw2 = worldPos(r2, frame.id);
+          if (dest && fw2) {
+            const base = linear ? flowInsertIndex(dest, lx, ly) : 0;
+            incomers.forEach((id, i) => {
+              const item = worldPos(r2, id);
+              if (!item) return;
+              engine.dispatch({
+                type: "reparent",
+                ids: [id],
+                parent: frame.id,
+                x: item.x - fw2.x,
+                y: item.y - fw2.y,
+                ...(linear ? { index: base + i } : {}),
+                ...(absolute ? { absolute: true } : {}),
+                ...(bypass ? { bypassSizeGate: true } : {}),
+              });
             });
           }
         }
@@ -4334,6 +5580,12 @@ export function Canvas({
           }
         }
       }
+      // Click-placed top-level frames reuse the last top-level size; nested
+      // clicks stay 100x100.
+      if (clicked && k === "frame" && !host && snap.lastFrameSize) {
+        nodeW = snap.lastFrameSize.w;
+        nodeH = snap.lastFrameSize.h;
+      }
       const extra: Partial<XNode> =
         snap.tool === "section"
           ? { name: "Section", fill: "#00000000", overflow: "visible" }
@@ -4346,14 +5598,24 @@ export function Canvas({
                 strokeVisible: true,
                 strokeWidth: 1,
                 strokeDash: 4,
+                isSlice: true,
               }
           : k === "text"
             ? clicked
               ? { text: "", sizingW: "hug", sizingH: "hug", fontSize: 16 }
-              : { text: "", sizingW: "fixed", sizingH: "hug", fontSize: 16 }
+              : // A dragged box is exact dimensions: Fixed size, like Figma.
+                { text: "", sizingW: "fixed", sizingH: "fixed", fontSize: 16 }
             : k === "line" || k === "arrow"
               ? { rotation: nodeRotation }
               : {};
+      // Placed layers settle on whole pixels, like moved and resized ones.
+      if (wantsPixelSnap({ kind: k, isComponent: false }, snap.pages[snap.page].pixelSnap ?? true)) {
+        const b = roundBox({ x: nodeX, y: nodeY, w: nodeW, h: nodeH });
+        nodeX = b.x;
+        nodeY = b.y;
+        nodeW = b.w;
+        nodeH = b.h;
+      }
       engine.dispatch({
         type: "add",
         kind: k,
@@ -4412,18 +5674,24 @@ export function Canvas({
 
       const ids: string[] = [];
       const deep = e.metaKey || e.ctrlKey;
-      const visit = (n: XNode, px: number, py: number, top: boolean) => {
+      const visit = (n: XNode, px: number, py: number, top: boolean, lockedAbove = false) => {
         const x = px + n.x;
         const y = py + n.y;
-        if (n !== snap.pages[snap.page].root && n.visible && !n.locked) {
+        const effLocked = lockedAbove || n.locked;
+        if (n !== snap.pages[snap.page].root && n.visible && !effLocked) {
           const hit = x + n.w >= x0 && y + n.h >= y0 && x <= x1 && y <= y1;
           if (hit && (deep || top)) ids.push(n.id);
         }
         const nest = deep || n === snap.pages[snap.page].root;
-        if (nest) for (const c of n.children) visit(c, x, y, n === snap.pages[snap.page].root);
+        if (nest) for (const c of n.children) visit(c, x, y, n === snap.pages[snap.page].root, effLocked);
       };
       visit(snap.pages[snap.page].root, 0, 0, false);
-      engine.dispatch({ type: "select", ids });
+      // ⇧-marquee adds to the pre-drag selection instead of replacing it;
+      // plain marquee still replaces.
+      engine.dispatch({
+        type: "select",
+        ids: e.shiftKey ? Array.from(new Set([...(d.sel0 ?? []), ...ids])) : ids,
+      });
     }
   };
 
@@ -4459,7 +5727,16 @@ export function Canvas({
 
   const onDbl = (e: React.MouseEvent) => {
     if ((snap.tool === "pen" || snap.tool === "pencil") && draft.length >= 2) {
-      engine.dispatch({ type: "addPath", points: draft, closed: false });
+      // The double-click's own press lands on the intended last anchor; drop
+      // it when it duplicates the previous point so finishing never leaves a
+      // zero-length end segment.
+      let commit = draft;
+      if (commit.length >= 2) {
+        const a = commit[commit.length - 1];
+        const b = commit[commit.length - 2];
+        if (Math.hypot(a.x - b.x, a.y - b.y) < 1.5) commit = commit.slice(0, -1);
+      }
+      engine.dispatch({ type: "addPath", points: commit, closed: false });
       setDraft([]);
       setCloseHint(null);
       penBranch.current = null;
@@ -4537,10 +5814,10 @@ export function Canvas({
         const my = e.clientY - r.top;
         const z = snap.zoom;
         let hitFrame: XNode | null = null;
-        const walk = (n: XNode, px: number, py: number) => {
+        const walk = (n: XNode, parentIsFrame: boolean, px: number, py: number) => {
           const x = px + n.x;
           const y = py + n.y;
-          if (n.kind === "frame" && n.showName !== false) {
+          if (n.kind === "frame" && n.showName !== false && !parentIsFrame) {
             const sx = snap.panX + x * z;
             const sy = snap.panY + y * z;
             const nameW = Math.max(40, n.name.length * 6.5);
@@ -4548,9 +5825,9 @@ export function Canvas({
               hitFrame = n;
             }
           }
-          for (const c of n.children) walk(c, x, y);
+          for (const c of n.children) walk(c, n.kind === "frame", x, y);
         };
-        for (const ch of root.children) walk(ch, 0, 0);
+        for (const ch of root.children) walk(ch, false, 0, 0);
         frameLabelHit = hitFrame;
       }
     }
@@ -4588,18 +5865,22 @@ export function Canvas({
             pt.ox = 0;
             pt.oy = 0;
           } else {
-            pt.ox = 20;
-            pt.oy = 0;
-            pt.ix = -20;
-            pt.iy = 0;
+            const h = smoothHandlesForPoint(path, best, !!hit.closed);
+            pt.ix = h.ix;
+            pt.iy = h.iy;
+            pt.ox = h.ox;
+            pt.oy = h.oy;
           }
           engine.dispatch({ type: "patchPath", id: hit.id, path, closed: hit.closed });
         }
       }
+    } else if (snap.tool === "select" && hit && hit.fillType === "image") {
+      enterCrop(hit.id);
+      return;
     } else if (
       hit &&
       (hit.kind === "vector" ||
-        hit.kind === "boolean" ||
+        (hit.kind === "boolean" && !hit.children.length) ||
         hit.kind === "rect" ||
         hit.kind === "ellipse" ||
         hit.kind === "poly" ||
@@ -4607,14 +5888,36 @@ export function Canvas({
         hit.kind === "line" ||
         hit.kind === "arrow")
     ) {
+      if (isInstanceMember(snap.pages[snap.page].root, hit.id)) {
+        toast("Edit the main component to change this layer");
+        return;
+      }
       engine.dispatch({ type: "select", ids: [hit.id] });
-      if (hit.kind !== "vector") {
+      // Basic shapes edit in place (first edit converts kind); only a
+      // childless boolean bakes down. Booleans with children fall through to
+      // the drill-into-child branch below, as in Figma.
+      if (hit.kind === "boolean") {
         engine.dispatch({ type: "flatten" });
         const newId = engine.snapshot().selection[0];
         setVecEdit(newId);
       } else {
         setVecEdit(hit.id);
       }
+    } else if (hit && (hit.kind === "frame" || hit.kind === "group" || hit.kind === "boolean") && hit.children.length) {
+      // Double-click drills one level: the child under the cursor if there
+      // is one, else the first visible child, like the Enter key does.
+      const root = snap.pages[snap.page].root;
+      let pick: XNode | null = null;
+      for (const c of hit.children) {
+        if (!c.visible || c.locked) continue;
+        const loc = worldPos(root, c.id);
+        if (loc && wpt.x >= loc.x && wpt.x <= loc.x + c.w && wpt.y >= loc.y && wpt.y <= loc.y + c.h) {
+          pick = c;
+          break;
+        }
+      }
+      const child = pick ?? hit.children.find((c) => c.visible && !c.locked) ?? hit.children[0];
+      engine.dispatch({ type: "select", ids: [child.id] });
     } else if (hit) {
       engine.dispatch({ type: "select", ids: [hit.id] });
     } else if (vecEdit) {
@@ -4673,8 +5976,25 @@ export function Canvas({
     const minY = Math.min(...result.nodes.map((n) => n.y));
     const spanW = Math.max(...result.nodes.map((n) => n.x + Math.max(1, n.w))) - minX;
     const spanH = Math.max(...result.nodes.map((n) => n.y + Math.max(1, n.h))) - minY;
-    const dx = -minX - (opts?.centre ? spanW / 2 : 0);
-    const dy = -minY - (opts?.centre ? spanH / 2 : 0);
+    let dx = -minX - (opts?.centre ? spanW / 2 : 0);
+    let dy = -minY - (opts?.centre ? spanH / 2 : 0);
+    // A drop anchors the artwork's top-left at the cursor and parents it to
+    // whatever frame sits under it. Dropped on that frame's edge - which is
+    // what happens whenever the cursor is over the border itself - the artwork
+    // lands almost entirely outside the frame's clip and only a sliver shows,
+    // so the drop looks like it did nothing. An axis whose visible overlap is
+    // under a pixel is therefore pulled inside, flush to the far edge when the
+    // artwork fits, else flush to the host's origin so at least part shows.
+    if (host && host.overflow !== "visible") {
+      const left = origin.x + dx + minX;
+      const top = origin.y + dy + minY;
+      const fit = (v: number, span: number, size: number) =>
+        span <= size ? Math.min(Math.max(v, 0), size - span) : 0;
+      const shownX = Math.min(left + spanW, host.w) - Math.max(left, 0);
+      const shownY = Math.min(top + spanH, host.h) - Math.max(top, 0);
+      if (shownX < 1) dx += fit(left, spanW, host.w) - left;
+      if (shownY < 1) dy += fit(top, spanH, host.h) - top;
+    }
     engine.dispatch({ type: "begin" });
     // Containers come with their children - a .fig frame arrives holding what
     // was inside it - so the insert walks the tree. A child's coordinates are
@@ -4732,7 +6052,7 @@ export function Canvas({
       });
   };
 
-  const placeFiles = (files: FileList | File[], at?: { x: number; y: number }) => {
+  const placeFiles = (files: FileList | File[], at?: { x: number; y: number }, grid?: boolean) => {
     const all = Array.from(files);
     for (const f of all) {
       if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) placeSvg(f, at);
@@ -4742,49 +6062,188 @@ export function Canvas({
     const list = all.filter(
       (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
     );
-    let ox = at?.x ?? 80;
-    let oy = at?.y ?? 80;
-    list.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const src = String(reader.result);
-        // Written to the asset store now, not at the next save: the document
-        // will only ever hold a reference to it.
-        rememberImage(src);
-        const im = new Image();
-        im.onload = () => {
-          const w = im.naturalWidth;
-          const h = im.naturalHeight;
-          const max = 480;
-          const s = Math.min(1, max / Math.max(w, h));
+    if (!list.length) return;
+    // Sizes first, then one layout pass under a single undo: a drop lands in
+    // aligned rows of ten, a paste cascades from its target.
+    const jobs = list.map(
+      (file) =>
+        new Promise<{ src: string; name: string; w: number; h: number }>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const src = String(reader.result);
+            const im = new Image();
+            im.onload = () => resolve({ src, name: file.name.replace(/\.[^.]+$/, ""), w: im.naturalWidth, h: im.naturalHeight });
+            im.onerror = reject;
+            im.src = src;
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        }),
+    );
+    Promise.allSettled(jobs).then((rs) => {
+      const items = rs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      if (!items.length) return;
+      // Written to the asset store now, not at the next save: the document
+      // will only ever hold a reference to it.
+      for (const it of items) rememberImage(it.src);
+      engine.dispatch({ type: "begin" });
+      try {
+        const origin = at ?? { x: 80, y: 80 };
+        let cx = origin.x;
+        let cy = origin.y;
+        let rowH = 0;
+        items.forEach((it, k) => {
+          const sc = Math.min(1, 480 / Math.max(it.w, it.h));
+          const pw = Math.max(8, it.w * sc);
+          const ph = Math.max(8, it.h * sc);
+          if (grid && k % 10 === 0 && k > 0) {
+            cx = origin.x;
+            cy += rowH + 24;
+            rowH = 0;
+          }
           const current = engine.snapshot();
           const root = current.pages[current.page].root;
-          const host = deepestFrame(root, ox, oy);
-          const local = host ? worldToLocal(root, host.id, ox, oy) : { x: ox, y: oy };
+          const host = deepestFrame(root, cx, cy);
+          const local = host ? worldToLocal(root, host.id, cx, cy) : { x: cx, y: cy };
           engine.dispatch({
             type: "add",
             kind: "rect",
             x: local.x,
             y: local.y,
-            w: Math.max(8, w * s),
-            h: Math.max(8, h * s),
+            w: pw,
+            h: ph,
             parent: host?.id,
             extra: {
-              imageSrc: src,
+              imageSrc: it.src,
               fillType: "image",
               imageFit: "fill",
-              name: file.name.replace(/\.[^.]+$/, ""),
+              name: it.name,
               fill: "#00000000",
               fillVisible: true,
             },
           });
-          ox += 24;
-          oy += 24;
-        };
-        im.src = src;
-      };
-      reader.readAsDataURL(file);
+          if (grid) {
+            cx += pw + 24;
+            rowH = Math.max(rowH, ph);
+          } else {
+            cx += 24;
+            cy += 24;
+          }
+        });
+      } finally {
+        engine.dispatch({ type: "end" });
+      }
     });
+  };
+
+  /** One image at a point: a click on a shape fills the shape, anywhere else
+   *  adds a layer at (capped) natural size. */
+  const placeSingleImage = (img: { src: string; name: string }, wpt: { x: number; y: number }) => {
+    const current = engine.snapshot();
+    const root = current.pages[current.page].root;
+    const hit = hitTest(root, wpt.x, wpt.y, { deep: true });
+    if (hit && hit.kind !== "text" && hit.kind !== "line" && hit.kind !== "arrow" && !hit.locked) {
+      engine.dispatch({ type: "select", ids: [hit.id] });
+      engine.dispatch({
+        type: "patch",
+        id: hit.id,
+        patch: {
+          fillType: "image",
+          imageSrc: img.src,
+          imageFit: "fill",
+          imageTile: 100,
+          imageCrop: undefined,
+          fill: "#00000000",
+          fillVisible: true,
+          name: hit.nameLocked ? hit.name : img.name,
+        },
+      });
+      return;
+    }
+    const el = new Image();
+    el.onload = () => {
+      const w = el.naturalWidth;
+      const h = el.naturalHeight;
+      const sc = Math.min(1, 480 / Math.max(w, h));
+      const now = engine.snapshot();
+      const r2 = now.pages[now.page].root;
+      const host = deepestFrame(r2, wpt.x, wpt.y);
+      const local = host ? worldToLocal(r2, host.id, wpt.x, wpt.y) : wpt;
+      engine.dispatch({
+        type: "add",
+        kind: "rect",
+        x: local.x,
+        y: local.y,
+        w: Math.max(8, w * sc),
+        h: Math.max(8, h * sc),
+        parent: host?.id,
+        extra: {
+          imageSrc: img.src,
+          fillType: "image",
+          imageFit: "fill",
+          name: img.name,
+          fill: "#00000000",
+          fillVisible: true,
+        },
+      });
+    };
+    el.src = img.src;
+  };
+
+  /** Files from the picker become a placement queue: one click per image. */
+  const queueImages = (files: FileList | File[], at?: { x: number; y: number }) => {
+    const list = Array.from(files).filter(
+      (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml" && !/\.svg$/i.test(f.name),
+    );
+    if (!list.length) return;
+    const jobs = list.map(
+      (file) =>
+        new Promise<{ src: string; name: string }>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({ src: String(reader.result), name: file.name.replace(/\.[^.]+$/, "") });
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        }),
+    );
+    Promise.allSettled(jobs).then((rs) => {
+      const srcs = rs.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      if (!srcs.length) return;
+      for (const q of srcs) rememberImage(q.src);
+      // The image tool already took a click: the first lands there, the rest
+      // queue behind it.
+      if (at) {
+        placeSingleImage(srcs[0], at);
+        if (srcs.length === 1) {
+          engine.dispatch({ type: "setTool", tool: "select" });
+          return;
+        }
+        setPlacing({ srcs: srcs.slice(1), i: 0 });
+        toast(`Placing ${srcs.length - 1} more — click to place, Esc to stop`);
+      } else {
+        setPlacing({ srcs, i: 0 });
+        toast(
+          srcs.length === 1
+            ? "Click to place the image · Esc to stop"
+            : `Placing ${srcs.length} images — click to place, Esc to stop`,
+        );
+      }
+    });
+  };
+
+  const placeQueued = (wpt: { x: number; y: number }) => {
+    if (!placing) return;
+    const cur = placing.srcs[placing.i];
+    if (!cur) {
+      setPlacing(null);
+      return;
+    }
+    placeSingleImage(cur, wpt);
+    if (placing.i + 1 >= placing.srcs.length) {
+      setPlacing(null);
+      engine.dispatch({ type: "setTool", tool: "select" });
+    } else {
+      setPlacing({ srcs: placing.srcs, i: placing.i + 1 });
+    }
   };
 
   /* ------------------------------------------------------- system clipboard */
@@ -4922,9 +6381,25 @@ export function Canvas({
       );
     };
     window.addEventListener("x-native-paste", onRequest);
+    // ⇧B in vector-edit mode arms the Paint bucket; the subtool state lives
+    // here, so the chrome shortcut asks through an event.
+    const onSubTool = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === "paint" && engine.snapshot().vecEdit) {
+        setVecSubTool("paint");
+        toast("Paint bucket: fill region / face");
+      }
+    };
+    window.addEventListener("x-native-vec-subtool", onSubTool);
+    // Hovering a Layers-panel row outlines the layer on the canvas.
+    const onPanelHover = (e: Event) => {
+      setPanelHover((e as CustomEvent<string | null>).detail ?? "");
+    };
+    window.addEventListener("x-panel-hover", onPanelHover);
     return () => {
       window.removeEventListener("paste", onPaste);
       window.removeEventListener("x-native-paste", onRequest);
+      window.removeEventListener("x-native-vec-subtool", onSubTool);
+      window.removeEventListener("x-panel-hover", onPanelHover);
     };
   }, []);
 
@@ -4938,7 +6413,7 @@ export function Canvas({
   }, []);
 
   const cursor =
-    snap.tool === "hand" || space.current
+    snap.tool === "hand" || spaceHeld
       ? "grab"
       : snap.tool === "zoom"
         ? zoomOutCursor
@@ -4946,7 +6421,12 @@ export function Canvas({
           : "zoom-in"
       : snap.tool === "scale"
         ? "nwse-resize"
-        : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"
+        : CREATE.includes(snap.tool) ||
+            snap.tool === "pen" ||
+            snap.tool === "pencil" ||
+            snap.tool === "brush" ||
+            snap.tool === "slice" ||
+            snap.tool === "eraser"
           ? "crosshair"
           : snap.tool === "select" && hoverCursor
             ? hoverCursor
@@ -4993,6 +6473,7 @@ export function Canvas({
       // The overlay is a real textarea, so the wrap style is handed to the
       // browser's own text-wrap - the standard editor rule.
       ...((wp.node.textWrap === "balance" || wp.node.textWrap === "pretty") ? { textWrap: wp.node.textWrap } : {}),
+      ...(indentOf(wp.node) ? { textIndent: `${indentOf(wp.node) * snap.zoom}px` } : {}),
       ...(gutter ? { paddingLeft: Math.round(gutter * snap.zoom) } : {}),
     } as CSSProperties;
   })();
@@ -5015,7 +6496,7 @@ export function Canvas({
       onDrop={(e) => {
         e.preventDefault();
         const wpt = toWorld(e.clientX, e.clientY);
-        if (e.dataTransfer.files?.length) placeFiles(e.dataTransfer.files, wpt);
+        if (e.dataTransfer.files?.length) placeFiles(e.dataTransfer.files, wpt, true);
       }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -5028,7 +6509,7 @@ export function Canvas({
         setMenu({ x: e.clientX, y: e.clientY, wx: wpt.x, wy: wpt.y });
       }}
     >
-      <canvas ref={ref} />
+      <canvas ref={ref} role="img" aria-label="Design canvas" />
       {(snap.showComments || snap.tool === "comment") && (
         <Comments
           threads={snap.pages[snap.page].comments}
@@ -5044,6 +6525,7 @@ export function Canvas({
       {snap.showRulers && (
         <Guides
           guides={snap.pages[snap.page].guides}
+          root={snap.pages[snap.page].root}
           engine={engine}
           zoom={snap.zoom}
           panX={snap.panX}
@@ -5090,7 +6572,11 @@ export function Canvas({
             if (n && (n.sizingW === "hug" || n.sizingH === "hug"))
               Object.assign(patch, hugSize(n, edit.text));
             engine.dispatch({ type: "patch", id: edit.id, patch });
-            setEdit(null);
+            const sw = editSwitch.current;
+            editSwitch.current = null;
+            const nn = sw ? worldPos(snap.pages[snap.page].root, sw)?.node : null;
+            if (nn && nn.kind === "text") setEdit({ id: sw as string, text: nn.text });
+            else setEdit(null);
           }}
           onKeyDown={(e) => {
             if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter"))
@@ -5173,9 +6659,17 @@ export function Canvas({
         ref={fileRef}
         type="file"
         accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg,.sketch,.fig,image/*"
+        multiple
         hidden
         onChange={(e) => {
-          if (e.target.files) placeFiles(e.target.files, pendingImage.current ?? undefined);
+          if (e.target.files) {
+            const at = pendingImage.current ?? undefined;
+            queueImages(e.target.files, at);
+            placeFiles(
+              Array.from(e.target.files).filter((f) => !f.type.startsWith("image/") || f.type === "image/svg+xml" || /\.svg$/i.test(f.name)),
+              at,
+            );
+          }
           pendingImage.current = null;
           e.target.value = "";
         }}
@@ -5212,24 +6706,11 @@ export function Canvas({
       )}
       {selectedConn && snap.rightTab === "prototype" && !snap.presentFrame && (
         <div
+          className="canvas-dock conn-chip"
           onClick={(e) => e.stopPropagation()}
           style={{
-            position: "absolute",
             left: snap.panX + selectedConn.midX * snap.zoom,
             top: snap.panY + selectedConn.midY * snap.zoom,
-            transform: "translate(-50%, -50%)",
-            background: "#18181b",
-            color: "#ffffff",
-            padding: "5px 10px",
-            borderRadius: 14,
-            fontSize: 11,
-            fontWeight: 500,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 0 1.5px ${BRAND_ACCENT}`,
-            zIndex: 35,
-            userSelect: "none",
           }}
         >
           <span>{selectedConn.label}</span>
@@ -5244,15 +6725,7 @@ export function Canvas({
               toast("Connection deleted");
             }}
             title="Delete connection (⌫)"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              cursor: "pointer",
-              padding: 0,
-              display: "flex",
-              alignItems: "center",
-            }}
+            className="dock-x"
           >
             <Icon name="close" size={12} />
           </button>
@@ -5300,39 +6773,9 @@ export function Canvas({
           );
         })()}
       {(vecEdit || snap.tool === "pen" || draft.length > 0) && !snap.presentFrame && (
-        <div
-          className="vector-edit-toolbar"
-          style={{
-            position: "absolute",
-            bottom: 32,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#18181b",
-            borderRadius: 24,
-            padding: "4px 8px",
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px #27272a",
-            zIndex: 40,
-            userSelect: "none",
-          }}
-        >
+        <div className="canvas-dock vector-edit-toolbar">
           <button
             className={`tool-btn ${snap.tool === "select" && vecSubTool === "select" ? "on" : ""}`}
-            style={{
-              background: snap.tool === "select" && vecSubTool === "select" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: snap.tool === "select" && vecSubTool === "select" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               if (draft.length >= 2) {
                 engine.dispatch({ type: "addPath", points: draft, closed: false });
@@ -5350,19 +6793,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${snap.tool === "pen" ? "on" : ""}`}
-            style={{
-              background: snap.tool === "pen" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: snap.tool === "pen" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => engine.dispatch({ type: "setTool", tool: "pen" })}
             title="Pen (P)"
           >
@@ -5371,19 +6801,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${vecSubTool === "bend" ? "on" : ""}`}
-            style={{
-              background: vecSubTool === "bend" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: vecSubTool === "bend" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               setVecSubTool((t) => (t === "bend" ? "select" : "bend"));
               toast(vecSubTool === "bend" ? "Select mode" : "Bend tool active (drag segment to curve)");
@@ -5395,19 +6812,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${vecSubTool === "paint" ? "on" : ""}`}
-            style={{
-              background: vecSubTool === "paint" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: vecSubTool === "paint" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               setVecSubTool((t) => (t === "paint" ? "select" : "paint"));
               toast(vecSubTool === "paint" ? "Select mode" : "Paint bucket: fill region / face");
@@ -5419,19 +6823,6 @@ export function Canvas({
           </button>
           <button
             className={`tool-btn ${vecSubTool === "shapeBuilder" ? "on" : ""}`}
-            style={{
-              background: vecSubTool === "shapeBuilder" ? "rgba(255,255,255,0.12)" : "transparent",
-              border: 0,
-              color: vecSubTool === "shapeBuilder" ? "#ffffff" : "rgba(255,255,255,0.7)",
-              padding: "6px 10px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 500,
-            }}
             onClick={() => {
               setVecSubTool((t) => (t === "shapeBuilder" ? "select" : "shapeBuilder"));
               toast(vecSubTool === "shapeBuilder" ? "Select mode" : "Shape Builder: drag to merge regions, ⌥-click to subtract");
@@ -5443,16 +6834,6 @@ export function Canvas({
           </button>
           <button
             className="tool-btn"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              padding: "6px 8px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-            }}
             onClick={() => {
               if (vecEdit) {
                 engine.dispatch({ type: "simplifyPath", id: vecEdit });
@@ -5465,17 +6846,6 @@ export function Canvas({
           </button>
           <button
             className="tool-btn"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              padding: "6px 8px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
             onClick={() => {
               if (vecEdit) {
                 engine.dispatch({ type: "vectorCleanup", id: vecEdit });
@@ -5485,20 +6855,10 @@ export function Canvas({
             title="Clean up vector (sketch to perfect Bézier)"
           >
             <Icon name="visual-search" size={14} />
-            <span style={{ fontSize: 11 }}>Clean up</span>
+            Clean up
           </button>
           <button
             className="tool-btn"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "rgba(255,255,255,0.7)",
-              padding: "6px 8px",
-              borderRadius: 16,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-            }}
             onClick={() => {
               if (draft.length > 0) {
                 setDraft((d) => d.slice(0, -1));
@@ -5517,21 +6877,9 @@ export function Canvas({
           >
             <Icon name="eraser" size={14} />
           </button>
-          <div style={{ width: 1, height: 16, background: "rgba(255,255,255,0.15)", margin: "0 4px" }} />
+          <div className="dock-sep" />
           <button
-            style={{
-              background: "var(--accent)",
-              border: 0,
-              color: "#ffffff",
-              padding: "5px 14px",
-              borderRadius: 14,
-              cursor: "pointer",
-              fontSize: 11,
-              fontWeight: 600,
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}
+            className="dock-done"
             onClick={() => {
               if (draft.length >= 2) {
                 engine.dispatch({ type: "addPath", points: draft, closed: false });
@@ -5550,7 +6898,7 @@ export function Canvas({
             }}
             title="Done (Esc / ↵ / Double-click to finish)"
           >
-            <Icon name="check" size={13} />
+            <Icon name="check" size={14} />
             Done
           </button>
         </div>
@@ -5573,6 +6921,25 @@ export function Canvas({
             // A child of an auto layout frame has a layout to remove too: its
             // parent's, which is what that entry takes away.
             hasLayout(snap),
+            // §22 MN-004: grey out rows that would silently no-op — Detach on
+            // non-instances, Reset with no overrides recorded, vectorize/outline
+            // on layers they cannot touch.
+            (() => {
+              const root = snap.pages[snap.page].root;
+              const nodes = snap.selection
+                .map((id) => worldPos(root, id)?.node)
+                .filter((n): n is NonNullable<typeof n> => !!n);
+              const hasOverrides = (n: { overrides?: object }) =>
+                !!n.overrides && Object.keys(n.overrides).length > 0;
+              return {
+                detach: nodes.some((n) => !!n.componentId && !n.isComponent),
+                reset: nodes.some(hasOverrides),
+                vectorize: nodes[0]?.kind === "text",
+                outline: nodes.some(
+                  (n) => n.kind === "text" || n.kind === "line" || n.kind === "arrow" || n.strokeWidth > 0,
+                ),
+              };
+            })(),
           )}
           onRun={(id) => runMenu(engine, id, { x: menu.wx, y: menu.wy })}
           onClose={() => setMenu(null)}
@@ -5589,13 +6956,18 @@ function paintNoise(
   sw: number,
   sh: number,
   density: number,
+  size = 1,
+  color = "#ffffff",
 ) {
   const d = Math.max(0, Math.min(1, density / 100));
   if (d <= 0 || sw < 1 || sh < 1) return;
+  const { r: cr, g: cg, b: cb, a: ca } = parseHex(color);
+  if (ca <= 0) return;
+  const s = Math.max(1, Math.round(size) || 1);
   ctx.save();
   ctx.clip();
-  ctx.fillStyle = "#ffffff";
-  ctx.globalAlpha = 0.35 * d;
+  ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+  ctx.globalAlpha = 0.35 * d * ca;
   const count = Math.min(4000, Math.floor((sw * sh * d) / 18));
   const seed = Math.floor(sx * 13 + sy * 17);
   for (let i = 0; i < count; i++) {
@@ -5603,7 +6975,7 @@ function paintNoise(
     const r = h - Math.floor(h);
     const h2 = Math.sin(seed * 4.1414 + i * 19.19) * 23421.631;
     const r2 = h2 - Math.floor(h2);
-    ctx.fillRect(sx + r * sw, sy + r2 * sh, 1, 1);
+    ctx.fillRect(sx + r * sw, sy + r2 * sh, s, s);
   }
   ctx.restore();
 }
@@ -6013,7 +7385,10 @@ function paintText(
 ) {
   const textFill = fillStyle(ctx, n, sx, sy, sw, sh);
   const size = Math.max(1, n.fontSize * z);
-  ctx.font = `${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
+  // Small caps rides the font's own small-cap glyphs (with the copy lowered
+  // so every letter takes part), not full-height capitals.
+  const smallCaps = n.textCase === "small-caps";
+  ctx.font = `${smallCaps ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
   ctx.textBaseline = "top";
   ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
   const clipped = n.truncate;
@@ -6028,15 +7403,15 @@ function paintText(
     if (clipped) ctx.restore();
     return;
   }
-  if (n.textCase === "upper" || n.textCase === "small-caps") content = content.toUpperCase();
-  if (n.textCase === "lower") content = content.toLowerCase();
-  if (n.textCase === "title") content = content.replace(/\w\S*/g, (t) => t[0].toUpperCase() + t.slice(1).toLowerCase());
-  const lh = Math.max(size, (n.lineHeight || n.fontSize * 1.2) * z);
+  content = applyTextCase(content, n.textCase);
+  // Tight leading stays tight: the floor is degenerate input, not the font
+  // size, so the painter agrees with the hug box and the field.
+  const lh = Math.max(1, (n.lineHeight || n.fontSize * 1.2) * z);
   const ls = (n.letterSpacing || 0) * z;
   const paraGap = (n.paragraphSpacing || 0) * z;
   const wrap = n.sizingW !== "hug";
   const paras = content.split("\n");
-  const indent = (n.paragraphIndent || 0) * z;
+  const indent = indentOf(n) * z;
   type Row = { line: string; lastInPara: boolean; lead: number; marker: string };
   const rows: Row[] = [];
   const widthOfLine = (line: string) =>
@@ -6063,7 +7438,11 @@ function paintText(
   });
   let lines = rows;
   if (n.truncate) {
-    const limit = Math.max(1, n.maxLines || 1);
+    // Fixed-size layers have no max-lines setting: the box itself decides
+    // how many rows survive, with the ellipsis on the last one that fits.
+    const limit = valignApplies(n)
+      ? fitLineCount(sh / Math.max(1e-6, z), n.lineHeight || n.fontSize * 1.2, n.paragraphSpacing || 0)
+      : Math.max(1, n.maxLines || 1);
     if (lines.length > limit) {
       const clipped = lines.slice(0, limit);
       const last = clipped[clipped.length - 1];
@@ -6083,41 +7462,54 @@ function paintText(
   }
   const blockH = lines.reduce((h, r) => h + lh + (r.lastInPara ? paraGap : 0), 0) - paraGap;
   let y0 = sy;
-  if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
-  if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
-  const drop = (n.effects ?? []).find((e) => e.kind === "drop-shadow" && e.visible);
-  if (drop) {
+  // Hug axes ignore vertical alignment: only a fixed box has spare room to
+  // distribute (and a hug box that exactly fits would centre on zero anyway).
+  if (valignApplies(n)) {
+    if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
+    if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
+  }
+  const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
+  const setDrop = (drop?: Effect) => {
+    if (!drop) {
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+      return;
+    }
     const { r, g, b, a } = parseHex(drop.color);
     ctx.shadowColor = `rgba(${r},${g},${b},${a})`;
     ctx.shadowBlur = Math.max(0, drop.blur) * z;
     ctx.shadowOffsetX = drop.x * z;
     ctx.shadowOffsetY = drop.y * z;
-  }
-  let ty = y0;
+  };
   const fillOn = n.fillVisible !== false && !isNone(n.fill);
   const strokeOn = n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint);
-  const paintLine = (str: string, x: number, y: number, maxW?: number) => {
-    if (fillOn) {
-      ctx.save();
-      ctx.fillStyle = textFill;
-      ctx.globalAlpha *= n.fillOpacity ?? 1;
-      ctx.fillText(str, x, y, maxW);
-      ctx.restore();
-    }
-    if (strokeOn) {
-      ctx.save();
-      ctx.shadowColor = "transparent";
-      ctx.strokeStyle = cssRgba(n.strokePaint);
-      ctx.globalAlpha *= n.strokeOpacity ?? 1;
-      ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
-      ctx.strokeText(str, x, y, maxW);
-      ctx.restore();
-    }
+  const paintFillLine = (str: string, x: number, y: number, maxW?: number) => {
+    if (!fillOn) return;
+    ctx.save();
+    ctx.fillStyle = textFill;
+    ctx.globalAlpha *= n.fillOpacity ?? 1;
+    ctx.fillText(str, x, y, maxW);
+    ctx.restore();
   };
+  const paintStrokeLine = (str: string, x: number, y: number, maxW?: number) => {
+    if (!strokeOn) return;
+    ctx.save();
+    ctx.shadowColor = "transparent";
+    ctx.strokeStyle = cssRgba(n.strokePaint);
+    ctx.globalAlpha *= n.strokeOpacity ?? 1;
+    ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+    ctx.strokeText(str, x, y, maxW);
+    ctx.restore();
+  };
+  const paintRows = (mode: "fill" | "stroke", decorate: boolean) => {
+  let ty = y0;
   lines.forEach((row) => {
     const line = row.line;
     const left = sx + row.lead;
     const innerW = Math.max(0, sw - row.lead);
+    const paintLine = mode === "fill" ? paintFillLine : paintStrokeLine;
     if (row.marker) paintLine(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
     const tx =
       n.textAlign === "center"
@@ -6128,13 +7520,16 @@ function paintText(
     const justify = n.textAlign === "justified" && wrap && !row.lastInPara && line.includes(" ");
     if (justify) {
       const words = line.trim().split(/\s+/);
-      const total = words.reduce((s, w) => s + measureCached(ctx, w), 0);
-      const gap = words.length > 1 ? (innerW - total) / (words.length - 1) : 0;
+      const widths = words.map((w) => measureCached(ctx, w) + ls * Math.max(0, w.length - 1));
+      const total = widths.reduce((s, w) => s + w, 0);
+      // Letter-spacing still applies between the words; the distributed gap
+      // rides on top of it, as word-spacing does in CSS.
+      const gap = words.length > 1 ? (innerW - total - ls * (words.length - 1)) / (words.length - 1) : 0;
       let x = left;
       ctx.textAlign = "left";
-      for (const w of words) {
-        paintLine(w, x, ty);
-        x += measureCached(ctx, w) + gap;
+      for (let wi = 0; wi < words.length; wi++) {
+        paintLine(words[wi], x, ty);
+        x += widths[wi] + ls + gap;
       }
       ctx.textAlign = "left";
     } else if (ls) {
@@ -6150,10 +7545,11 @@ function paintText(
     } else {
       paintLine(line, tx, ty, wrap ? innerW : undefined);
     }
-    if (fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
-      const textWidth = measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
-      const yy = n.textDecoration === "underline" ? ty + size : ty + size / 2;
-      const x0 = n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
+    if (decorate && fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
+      const textWidth = justify ? innerW : measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
+      // Underline hugs the baseline; strikethrough crosses mid x-height.
+      const yy = n.textDecoration === "underline" ? ty + size : ty + size * 0.7;
+      const x0 = justify ? left : n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
       ctx.save();
       ctx.shadowColor = "transparent";
       ctx.globalAlpha *= n.fillOpacity ?? 1;
@@ -6167,10 +7563,18 @@ function paintText(
     }
     ty += lh + (row.lastInPara ? paraGap : 0);
   });
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
+  };
+  // Every visible drop gets its own pass: the glyphs repaint identically, so
+  // N shadows accumulate behind one set of glyphs. Native shadows cannot
+  // blend independently, so text shadows always composite Normal; spread
+  // stays ignored on text, matching Figma's kind gate.
+  const passes = drops.length ? drops : [undefined];
+  for (const d of passes) {
+    setDrop(d);
+    paintRows("fill", false);
+  }
+  setDrop(undefined);
+  paintRows("stroke", true);
 }
 
 function walkInteractions(
@@ -6192,6 +7596,17 @@ function walkInteractions(
   for (const c of n.children) walkInteractions(c, x, y, fn);
 }
 
+/** §23 PT-005: true when `id` is `anc` or nested under it. */
+function isSelfOrDescendant(root: XNode, id: string, anc: string): boolean {
+  if (id === anc) return true;
+  let p = findParent(root, id);
+  while (p) {
+    if (p.id === anc) return true;
+    p = findParent(root, p.id);
+  }
+  return false;
+}
+
 function findClickedNoodle(
   root: XNode,
   wpt: { x: number; y: number },
@@ -6211,7 +7626,18 @@ function findClickedNoodle(
       if (Math.hypot(wpt.x - px, wpt.y - py) <= 12 / zoom) {
         const midX = (noodle.ax + noodle.bx) / 2;
         const midY = (noodle.ay + noodle.by) / 2;
-        const trigLabel = ix.trigger === "onClick" ? "On click" : ix.trigger === "onHover" ? "While hovering" : "On drag";
+        // §23 PT-009: every trigger names itself — After-delay/key/enter rows
+        // used to borrow "On drag" on the connection chip.
+        const trigLabel =
+          ix.trigger === "onClick" ? "On click"
+          : ix.trigger === "onHover" ? "While hovering"
+          : ix.trigger === "afterDelay" ? "After delay"
+          : ix.trigger === "mouseEnter" ? "Mouse enter"
+          : ix.trigger === "mouseLeave" ? "Mouse leave"
+          : ix.trigger === "mouseDown" ? "Mouse down"
+          : ix.trigger === "mouseUp" ? "Mouse up"
+          : ix.trigger === "keyPress" ? `Key (${ix.keyKey || "…"})`
+          : "On drag";
         hit = { srcId: n.id, destId, midX, midY, label: `${trigLabel} → ${dest.node.name}` };
         break;
       }
@@ -6220,7 +7646,15 @@ function findClickedNoodle(
   return hit;
 }
 
-const booleanCanvases = new Map<string, HTMLCanvasElement>();
+/** Boolean raster cache: a boolean's composited mask+fill raster depends only
+ *  on its own fields and its children, never on pan — so identical inputs
+ *  share one offscreen (keyed by a picked-fields signature) instead of
+ *  re-rasterizing every boolean every frame. Byte-bounded with LRU eviction;
+ *  the old id-keyed map thrashed past 64 entries and re-fetched the 2D
+ *  context per paint (7% of the live-edit profile). Strokes and drop-shadows
+ *  stay live paint. */
+const booleanRasters = new Map<string, { c: HTMLCanvasElement; bytes: number }>();
+let booleanRasterBytes = 0;
 
 /** One reused buffer for View > Pixel preview. Frames are resampled one at a
  *  time, so a single scratch canvas is enough. */
@@ -6244,23 +7678,72 @@ function paintBoolean(
   const z = snap.zoom;
   const w = Math.max(1, Math.ceil(n.w * z));
   const h = Math.max(1, Math.ceil(n.h * z));
-  let oc = booleanCanvases.get(n.id);
-  if (!oc) {
-    oc = document.createElement("canvas");
-    booleanCanvases.set(n.id, oc);
-  }
-  if (oc.width !== w || oc.height !== h) {
+  const kids = n.children.filter((c) => c.visible);
+  if (!kids.length) return;
+  // Every input of the raster below: zoom, op, box, the fill family, and the
+  // visible children (positions are boolean-local, so pan-excluded). Only the
+  // fields rasterizeBoolean/fillStyle/shapePoly actually read — a full-node
+  // JSON here cost more than the rasterize it saved. If those readers ever
+  // grow new inputs, this pick must grow with them.
+  const sig = JSON.stringify([
+    z.toFixed(4), n.booleanOp, w, h,
+    n.fill, n.fillB, n.fillVisible, n.fillOpacity, n.fillType,
+    n.fillGX, n.fillGY, n.fillHX, n.fillHY, n.gradientStops, n.fills,
+    kids.map((c) => [c.x, c.y, c.w, c.h, c.rotation, c.flipH, c.flipV, c.visible, c.closed, c.kind,
+      c.path, c.count, c.starRatio, c.cornerRadii, c.cornerIndependent, c.cornerSmoothing]),
+  ]);
+  let hit = booleanRasters.get(sig);
+  if (hit) {
+    booleanRasters.delete(sig);
+    booleanRasters.set(sig, hit);
+  } else if (w <= 2048 && h <= 2048) {
+    const oc = document.createElement("canvas");
     oc.width = w;
     oc.height = h;
+    const o = oc.getContext("2d");
+    if (o) {
+      rasterizeBoolean(o, n, kids, z, w, h);
+      hit = { c: oc, bytes: w * h * 4 };
+      booleanRasters.set(sig, hit);
+      booleanRasterBytes += hit.bytes;
+      while (booleanRasterBytes > 67108864 && booleanRasters.size > 1) {
+        const oldest = booleanRasters.keys().next();
+        if (oldest.done) break;
+        const ev = booleanRasters.get(oldest.value);
+        booleanRasters.delete(oldest.value);
+        if (ev) booleanRasterBytes -= ev.bytes;
+      }
+    }
   }
+  if (hit) {
+    ctx.drawImage(hit.c, snap.panX + px * z, snap.panY + py * z);
+    return;
+  }
+  // Unrasterizable (oversized / no context): live compositing, as before.
+  const oc = document.createElement("canvas");
+  oc.width = w;
+  oc.height = h;
   const o = oc.getContext("2d");
   if (!o) return;
+  rasterizeBoolean(o, n, kids, z, w, h);
+  ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);
+}
+
+/** Composite the children's mask and the boolean's fill into `o`. Pure of
+ *  pan: everything is in boolean-local coordinates. */
+function rasterizeBoolean(
+  o: CanvasRenderingContext2D,
+  n: XNode,
+  kids: XNode[],
+  z: number,
+  w: number,
+  h: number,
+) {
   o.setTransform(1, 0, 0, 1, 0, 0);
   o.globalAlpha = 1;
   o.globalCompositeOperation = "source-over";
   o.filter = "none";
   o.clearRect(0, 0, w, h);
-  const kids = n.children.filter((c) => c.visible);
   const draw = (c: XNode, op: GlobalCompositeOperation) => {
     o.globalCompositeOperation = op;
     o.save();
@@ -6293,9 +7776,4 @@ function paintBoolean(
   o.fillStyle = fillStyle(o, n, 0, 0, w, h);
   o.globalAlpha = n.fillVisible === false ? 0 : n.fillOpacity ?? 1;
   o.fillRect(0, 0, w, h);
-  ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);
-  if (booleanCanvases.size > 64) {
-    const first = booleanCanvases.keys().next().value;
-    if (first) booleanCanvases.delete(first);
-  }
 }

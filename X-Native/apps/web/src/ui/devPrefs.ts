@@ -12,6 +12,11 @@ export type DevFormat =
   | "css"
   | "react"
   | "tailwind"
+  | "html"
+  | "vue"
+  | "svelte"
+  | "uikit"
+  | "xml"
   | "swiftui"
   | "compose"
   | "flutter"
@@ -26,9 +31,14 @@ export const DEV_LANGS: { id: DevFormat; label: string; lang: string }[] = [
   { id: "css", label: "CSS", lang: "css" },
   { id: "react", label: "React (TSX)", lang: "typescript" },
   { id: "tailwind", label: "Tailwind", lang: "html" },
+  { id: "html", label: "HTML + CSS", lang: "html" },
+  { id: "vue", label: "Vue SFC", lang: "html" },
+  { id: "svelte", label: "Svelte", lang: "html" },
   { id: "swiftui", label: "SwiftUI", lang: "swift" },
+  { id: "uikit", label: "UIKit", lang: "swift" },
   { id: "compose", label: "Compose", lang: "kotlin" },
   { id: "flutter", label: "Flutter", lang: "dart" },
+  { id: "xml", label: "Android XML", lang: "xml" },
   { id: "svg", label: "SVG", lang: "xml" },
   { id: "tokens", label: "Design Tokens", lang: "json" },
   { id: "layerJson", label: "Layer Spec", lang: "json" },
@@ -38,15 +48,19 @@ export const devLangLabel = (id: DevFormat): string => DEV_LANGS.find((l) => l.i
 
 const KEY = "x-native-dev-prefs";
 
+/** "layer" = the selected layer alone; "subtree" = the layer plus its children. */
+export type DevScope = "layer" | "subtree";
+
 export interface DevPrefs {
   format: DevFormat;
   unit: DevUnit;
+  scope: DevScope;
 }
 
 const IDS = DEV_LANGS.map((l) => l.id);
 
 function read(): DevPrefs {
-  let prefs: DevPrefs = { format: "css", unit: "px" };
+  let prefs: DevPrefs = { format: "css", unit: "px", scope: "layer" };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) {
@@ -54,6 +68,7 @@ function read(): DevPrefs {
       if (parsed && typeof parsed === "object") {
         if (IDS.includes(parsed.format as DevFormat)) prefs.format = parsed.format as DevFormat;
         if (parsed.unit === "rem" || parsed.unit === "px") prefs.unit = parsed.unit;
+        if (parsed.scope === "subtree" || parsed.scope === "layer") prefs.scope = parsed.scope;
       }
     }
   } catch {
@@ -77,7 +92,7 @@ export function subscribeDevPrefs(fn: () => void): () => void {
 
 export function setDevPrefs(patch: Partial<DevPrefs>): void {
   const next = { ...current, ...patch };
-  if (next.format === current.format && next.unit === current.unit) return;
+  if (next.format === current.format && next.unit === current.unit && next.scope === current.scope) return;
   current = next;
   try {
     localStorage.setItem(KEY, JSON.stringify(current));

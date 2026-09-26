@@ -211,3 +211,38 @@ export function resolveSettings(preset: ExportPreset): ResolvedSettings {
 export function newPreset(format: ExportFormat, scale: number | string = 1): ExportPreset {
   return { format, scale: FORMAT_CAPS[format].oneToOne ? 1 : (scale as number), suffix: "" };
 }
+
+/** Two presets that would write the same file: format, scale, suffix and
+ *  every format setting. The bulk dialog's per-row preset starts life as a
+ *  copy of the layer's first stored preset, and this is how it recognises it. */
+export function samePreset(a: ExportPreset, b: ExportPreset): boolean {
+  return (
+    a.format === b.format &&
+    String(a.scale) === String(b.scale) &&
+    (a.suffix ?? "") === (b.suffix ?? "") &&
+    a.ignoreOverlap === b.ignoreOverlap &&
+    a.boundingBox === b.boundingBox &&
+    a.includeId === b.includeId &&
+    a.outlineText === b.outlineText &&
+    a.simplifyStroke === b.simplifyStroke &&
+    (a.quality ?? "") === (b.quality ?? "") &&
+    (a.resampling ?? "") === (b.resampling ?? "")
+  );
+}
+
+/** A layer's stored presets minus the one the bulk dialog is already running:
+ *  the dialog row defaults to the first stored preset, so exporting it again
+ *  would write the same file twice. Only the first match is dropped - a
+ *  layer that genuinely stores the same preset twice exports it twice. */
+export function extrasOf(stored: ExportPreset[] | undefined, dialog: ExportPreset): ExportPreset[] {
+  const out: ExportPreset[] = [];
+  let dropped = false;
+  for (const p of stored ?? []) {
+    if (!dropped && samePreset(p, dialog)) {
+      dropped = true;
+      continue;
+    }
+    out.push(p);
+  }
+  return out;
+}
