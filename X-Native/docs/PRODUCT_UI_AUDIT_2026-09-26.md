@@ -214,7 +214,7 @@ on-canvas gradient handles, star/poly param handles, frame-tool + badges, smart 
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| FR-U1 | LOCKED selection shows fully editable chrome (ring + handles + badge): `select` accepts any ids and the render loop has no locked branch — but the engine refuses locked drags → dead handles. Fix: locked chrome (grey/dashed ring, suppressed handles or lock badge) | BROKEN (chrome lies) | P1 |
+| FR-U1 | FIXED: locked selection renders a grey dashed ring, no resize handles, and a "Locked" pill (single + all-locked multi; mixed groups keep working handles); dead grab zones toast "Locked · ⇧⌘L to unlock". Patch-based affordances (rotate/gradient/corners) intentionally kept — they work on locked layers | FIXED (P1) | — |
 | FR-U2 | Chrome colors hardcoded in Canvas consts (#10b981 accent ≠ --accent #0e9f6e token; #a855f7, #fff, #ff3b6b) — bypass theme, can't adapt to dark mode; two different "accent" greens | DRIFT (§6) | P2 |
 | FR-U3 | Rotate affordance invisible (zone-only = Figma parity, but zero first-time discoverability) — roadmap: subtle corner affordance on hover | ROADMAP | P2 |
 | FR-U4 | Size/angle badge has no viewport clamp (by = sy+sh+8 can run off-screen at viewport bottom) | PARTIAL (§18 class) | P2 |

@@ -1148,6 +1148,34 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 26. locked selection: grey dashed chrome, no accent -------------------------
+{
+  const p = await page();
+  await rows(p);
+  await drawRect(p);
+  const countNear = (r, g, b, tol) => p.evaluate((r, g, b, tol) => {
+    const c = document.querySelector("canvas");
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i] - r) < tol && Math.abs(d[i + 1] - g) < tol && Math.abs(d[i + 2] - b) < tol && d[i + 3] > 200) n++;
+    }
+    return n;
+  }, r, g, b, tol);
+  const emeraldBefore = await countNear(16, 185, 129, 24);
+  t(`editable selection renders accent chrome (${emeraldBefore}px)`, emeraldBefore > 500);
+  const greyBefore = await countNear(154, 160, 166, 20);
+  await p.keyboard.down("Meta"); await p.keyboard.down("Shift");
+  await p.keyboard.press("l");
+  await p.keyboard.up("Shift"); await p.keyboard.up("Meta");
+  await sleep(500);
+  const emeraldAfter = await countNear(16, 185, 129, 24);
+  const greyAfter = await countNear(154, 160, 166, 20);
+  t(`locked selection drops the accent (${emeraldAfter}px)`, emeraldAfter < 60);
+  t(`locked selection renders grey chrome (+${greyAfter - greyBefore}px)`, greyAfter - greyBefore > 100);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

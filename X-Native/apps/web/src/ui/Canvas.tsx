@@ -97,6 +97,9 @@ const BRAND_ACCENT = "#10b981";
  *  (layer rows); canvas literals can't read CSS vars per-frame, so the two
  *  are kept in step by hand — change both. */
 const COMP_PURPLE = "#a855f7";
+/** Locked-selection chrome: ring, pill and grab guards share one grey so
+ *  "selected but not grabbable" reads instantly against the brand accent. */
+const LOCK_GREY = "#9aa0a6";
 const BRAND_ACCENT_WASH = "rgba(16, 185, 129, 0.14)";
 const BRAND_ACCENT_GLOW = "rgba(16, 185, 129, 0.35)";
 
@@ -2555,6 +2558,7 @@ export function Canvas({
       const sw = nb.w * z;
       const sh = nb.h * z;
       const accent = wp.node.isComponent || wp.node.componentId ? COMP_PURPLE : BRAND_ACCENT;
+      const lockedSel = isEffectivelyLocked(root, wp.node.id);
       // P0-A contextual chrome: frame/section/group vs shape vs vector vs text
       const kind = wp.node.kind;
       const isFrame = kind === "frame" || kind === "component" || kind === "instance";
@@ -2568,9 +2572,14 @@ export function Canvas({
         if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
         ctx.translate(-(sx + sw / 2), -(sy + sh / 2));
       }
-      ctx.strokeStyle = accent;
+      // A locked layer keeps its outline but loses the editable accent: the
+      // grey dashed ring says "selected, not grabbable" (move/resize refuse
+      // it; the resize handles below are suppressed for the same reason).
+      ctx.strokeStyle = lockedSel ? LOCK_GREY : accent;
       ctx.lineWidth = 1;
+      if (lockedSel) ctx.setLineDash([4, 3]);
       ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
+      ctx.setLineDash([]);
       // With several layers picked, each member only gets a thin outline; the
       // handles, rotate stem and size badge belong to the combined box below.
       if (multiSel) {
@@ -2586,6 +2595,7 @@ export function Canvas({
       } else if (isLine) {
         hs = [[sx, sy + sh / 2], [sx + sw, sy + sh / 2]]; // only ends for line
       }
+      if (lockedSel) hs = [];
       for (const [hx, hy] of hs) {
         ctx.fillStyle = "#ffffff";
         ctx.strokeStyle = accent;
@@ -2613,14 +2623,16 @@ export function Canvas({
       const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
       const dim = isRotating
         ? `${Math.round(wp.node.rotation ?? 0)}°`
-        : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
+        : lockedSel
+          ? "Locked"
+          : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
       ctx.font = "500 11px Inter, system-ui";
       const tw = ctx.measureText(dim).width;
       const bw = tw + 16;
       const bh = 20;
       const bx = sx + sw / 2 - bw / 2;
       const by = sy + sh + 8;
-      ctx.fillStyle = accent;
+      ctx.fillStyle = lockedSel && !isRotating ? LOCK_GREY : accent;
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
         ctx.roundRect(bx, by, bw, bh, 4);
@@ -2894,21 +2906,25 @@ export function Canvas({
         const sw = bb.w * z;
         const sh = bb.h * z;
         ctx.save();
-        ctx.strokeStyle = BRAND_ACCENT;
+        const allLocked = snap.selection.every((id) => isEffectivelyLocked(root, id));
+        ctx.strokeStyle = allLocked ? LOCK_GREY : BRAND_ACCENT;
         ctx.lineWidth = 1;
+        if (allLocked) ctx.setLineDash([4, 3]);
         ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
-        for (const [hx, hy] of handles(sx, sy, sw, sh)) {
+        ctx.setLineDash([]);
+        const hsMulti: [number, number][] = allLocked ? [] : handles(sx, sy, sw, sh);
+        for (const [hx, hy] of hsMulti) {
           ctx.fillStyle = "#ffffff";
           ctx.strokeStyle = BRAND_ACCENT;
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
-        const dim = `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
+        const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
         ctx.font = "500 11px Inter, system-ui";
         const bw = ctx.measureText(dim).width + 16;
         const bx = sx + sw / 2 - bw / 2;
         const by = sy + sh + 8;
-        ctx.fillStyle = BRAND_ACCENT;
+        ctx.fillStyle = allLocked ? LOCK_GREY : BRAND_ACCENT;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(bx, by, bw, 20, 4);
@@ -3907,6 +3923,10 @@ export function Canvas({
         for (let i = 0; i < hs.length; i += 2) {
           const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
           if (d >= 6 && d <= 22) {
+            if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
+              toast("Locked · ⇧⌘L to unlock");
+              return;
+            }
             engine.dispatch({ type: "begin" });
             const startAngle = Math.atan2(e.clientY - bcy, e.clientX - bcx);
             drag.current = {
@@ -3926,6 +3946,10 @@ export function Canvas({
         }
         for (let i = 0; i < hs.length; i++) {
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
+            if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
+              toast("Locked · ⇧⌘L to unlock");
+              return;
+            }
             engine.dispatch({ type: "begin" });
             drag.current = {
               mode: "multiResize",
@@ -4342,6 +4366,10 @@ export function Canvas({
             // plain resize is still allowed, because that is an override.
             if (snap.tool === "scale" && insideInstance(root, wp.node.id)) {
               toast("Not scalable · this layer is inside an instance");
+              return;
+            }
+            if (isEffectivelyLocked(root, wp.node.id)) {
+              toast("Locked · ⇧⌘L to unlock");
               return;
             }
             drag.current = {
