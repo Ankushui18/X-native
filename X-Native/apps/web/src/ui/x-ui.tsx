@@ -591,8 +591,9 @@ export function ContextToolbar({
       </span>
       <div className="sep" />
 
-      {/* Auto Layout toggle */}
-      {onAutoLayout && (isFrame || multi) && (
+      {/* Auto Layout toggle: offered for any selection, like ⇧A — a lone
+          rectangle wraps in a frame just as well as a frame takes layout. */}
+      {onAutoLayout && (node || multi) && (
         <button
           className="icon-btn"
           title="Auto Layout (⇧A)"

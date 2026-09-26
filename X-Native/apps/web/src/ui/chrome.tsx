@@ -954,7 +954,17 @@ export function Toolbar({
   const [open, setOpen] = useState<string | null>(null);
   const [boolOpen, setBoolOpen] = useState(false);
   const hold = useRef<number | null>(null);
-  const last = (g: Group) => g.tools.find((t) => t.id === snap.tool)?.id ?? g.tools[0].id;
+  // Each group remembers its last-used tool across switches: pick the ellipse,
+  // draw (which drops back to Move), and the shape group still offers the
+  // ellipse — not the rectangle it defaults to. The live tool always wins
+  // while it sits in the group, so there is no one-frame lag after a switch.
+  const lastUsed = useRef<Record<string, Tool>>({});
+  useEffect(() => {
+    const g = GROUPS.find((gg) => gg.tools.some((t) => t.id === snap.tool));
+    if (g) lastUsed.current[g.id] = snap.tool;
+  }, [snap.tool]);
+  const last = (g: Group) =>
+    g.tools.some((t) => t.id === snap.tool) ? snap.tool : (lastUsed.current[g.id] ?? g.tools[0].id);
 
   return (
     <div className="dock" role="toolbar" aria-label="Tools">
@@ -1642,15 +1652,6 @@ export function bindHotkeys(
     if (meta && (backslash || (period && !e.altKey))) {
       e.preventDefault();
       extra.onHide();
-      return;
-    }
-    // ⇧T — Annotate: Dev Mode on, note field focused, ready to type.
-    if (e.shiftKey && !meta && !e.altKey && e.key.toLowerCase() === "t") {
-      e.preventDefault();
-      if (engine.snapshot().rightTab !== "inspect") {
-        engine.dispatch({ type: "setRightTab", tab: "inspect" });
-      }
-      window.dispatchEvent(new CustomEvent("x-native-annotate"));
       return;
     }
     // ⇧T — Annotate: Dev Mode on, note field focused, ready to type.

@@ -28,7 +28,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 18 | Variables / tokens / styles | ✅ done | VR-001–VR-014 (32 tests) |
 | 19 | Auto Layout UX | ✅ done | AL-001–AL-014 (42 tests) |
 | 20 | Contextual inspector | ✅ done | IN-001–IN-009 (40 tests) |
-| 21 | Context toolbar | … | |
+| 21 | Context toolbar | ✅ done | TB-001–TB-006 (12 tests) |
 | 22 | Popups / popovers / menus | … | |
 | 23 | Prototyping | … | |
 | 24 | Import / export | … | |
@@ -1129,3 +1129,76 @@ speeds).
   raw moves back, same as multi-align); multi paint-stack
   editing beyond SelectionColors; tidy gap readout (“8 · 24”)
   has no X surface.
+
+## §21 — Context toolbar
+
+Evidence: Figma “Access design tools from the toolbar”
+(360041064174, single chunk: Move default + Hand/Scale menu,
+space momentary hand, Region/Shape/Creation menus incl.
+rectangle-default + Place-image-as-fill, pen/pencil, text
+click/drag, comment/annotation/measurement, Actions menu,
+Dev Mode ⇧D, Figma Draw) and “Boolean operations”
+(360039957534, single chunk: union/subtract/intersect/exclude
++ ⌥⇧U/S/I/E, ≥2 supported layers, shapes/vectors/text only —
+never sections or frames, top paint wins except subtract's
+bottom, non-destructive member geometry, ungroup to break up).
+
+### Fixed (shipped in the §21 toolbar commit on this branch)
+
+- TB-001 Each dock group remembers its last-used tool: the
+  main button re-arms it after a switch (was the group's first
+  tool — ellipse, draw, click shape group gave rectangle).
+  The live tool still wins while it sits in the group, so no
+  frame lags the switch.
+- TB-002 ⌘↵/Ctrl↵ exits vector edit (the dock Done button
+  advertises “Esc or ⌘↵”; only Esc was wired). A pending pen
+  draft still commits first, so the chord never eats points.
+- TB-003 The floating toolbar's Auto Layout action shows for
+  any single selection (was frames and multi-selections only);
+  `addAutoLayout` already wraps lone shapes, and instances
+  refuse with the article's way out (detach / edit master).
+- TB-004 The grab cursor flips the moment Space lands (the
+  held flag was ref-only, so the cursor stayed stale until
+  the next render).
+- TB-005 Slice and eraser take crosshair cursors (were the
+  default arrow, unlike every other creation tool).
+- TB-006 Removed a duplicated ⇧T Annotate hotkey branch (dead
+  code — the first identical branch always won).
+
+### Verified parity (traced, no fix needed)
+
+- Tool groups and contents match the article (Move + Hand/
+  Scale, Region, Shape with rectangle default, Creation,
+  Text, Comment); Move is the default tool; X extras (Zoom,
+  brush, eraser, Figma-Draw-adjacent) conflict with nothing.
+- Single-use revert for shapes/frame/text/image, sticky
+  pen/pencil/brush until Esc/Enter/V; slice stays armed for
+  repeat cuts (X choice, no Figma evidence either way).
+- Space momentary hand (pan + grab, tool untouched, typing
+  guarded); full Escape ladder (crop → image-placing →
+  pen draft commit → boolean preview → rotation target →
+  text-edit commit → vector-edit exit → popover → present →
+  guide → nested-up → deselect + tool reset).
+- Tool letters V/H/K/Z/F/A/S/⇧S/R/L/⇧L/O/T/C/P/⇧P/B/I/⇧I/
+  ⇧⌘K with typing and presentation guards; palette rows for
+  the shortcut-less poly/star/eraser.
+- Boolean menu at ≥2 selected with ⌥⇧U/S/I/E; flatten on ⌘E
+  (+ ⌥⇧F alias); engine filters frames (sections are frames),
+  needs two survivors, inherits top paint / subtract bottom.
+- Actions palette (⌘/) spans commands, layers, pages,
+  components, variables and flows — the Resources and Actions
+  dock buttons are two honest doors to one room; Dev Mode
+  toggle + ⇧D; Done buttons consistent (dock exits vector
+  edit, the vector pill commits the draft too, nothing
+  abandons points); Group wraps a single layer.
+
+### Deferred / out of scope
+
+- Floating-toolbar centering assumes a fixed width (offsets
+  -140 vs clamp 380); cannot measure headless, left as is.
+- Annotation/measurement comment tools (Full-seat dev
+  handoff) and Figma Draw mode: absent surfaces, not broken
+  ones; X's brush/pencil cover the drawing behavior.
+- Bare-I image shortcut is undocumented (⇧I/⇧⌘K advertised,
+  both wired to their own place flow); kept, conflicts with
+  nothing.

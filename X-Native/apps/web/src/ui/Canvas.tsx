@@ -295,6 +295,9 @@ export function Canvas({
   const wrap = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
+  // Mirrors the ref so the grab cursor flips the moment Space lands; the ref
+  // alone would leave the cursor stale until the next render.
+  const [spaceHeld, setSpaceHeld] = useState(false);
   const imgs = useRef(new Map<string, HTMLImageElement>());
   /** Resolve an image source to a loaded element, kicking off the load and
    *  repainting on arrival when it is not there yet. */
@@ -676,6 +679,7 @@ export function Canvas({
       }
       if (e.code === "Space") {
         space.current = e.type === "keydown";
+        setSpaceHeld(e.type === "keydown");
         if (e.type === "keydown" && !isTyping)
           e.preventDefault();
       }
@@ -695,6 +699,23 @@ export function Canvas({
       }
       if (e.type === "keydown" && e.key === "Enter" && snap.booleanPreview && !draft.length && !penBranch.current && !edit && !vecEdit) {
         engine.dispatch({ type: "boolean", op: snap.booleanPreview });
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return;
+      }
+      // ⌘↵/Ctrl↵ commits vector editing, as the dock's Done button advertises
+      // ("Esc or ⌘↵"). A pending pen draft still commits first, so the chord
+      // never eats points; the generic Enter branch below must not see it.
+      if (
+        e.type === "keydown" &&
+        e.key === "Enter" &&
+        (e.metaKey || e.ctrlKey) &&
+        vecEdit &&
+        !edit &&
+        !draft.length &&
+        !penBranch.current
+      ) {
+        setVecEdit(null);
         e.stopImmediatePropagation();
         e.preventDefault();
         return;
@@ -6206,7 +6227,7 @@ export function Canvas({
   }, []);
 
   const cursor =
-    snap.tool === "hand" || space.current
+    snap.tool === "hand" || spaceHeld
       ? "grab"
       : snap.tool === "zoom"
         ? zoomOutCursor
@@ -6214,7 +6235,12 @@ export function Canvas({
           : "zoom-in"
       : snap.tool === "scale"
         ? "nwse-resize"
-        : CREATE.includes(snap.tool) || snap.tool === "pen" || snap.tool === "pencil" || snap.tool === "brush"
+        : CREATE.includes(snap.tool) ||
+            snap.tool === "pen" ||
+            snap.tool === "pencil" ||
+            snap.tool === "brush" ||
+            snap.tool === "slice" ||
+            snap.tool === "eraser"
           ? "crosshair"
           : snap.tool === "select" && hoverCursor
             ? hoverCursor
