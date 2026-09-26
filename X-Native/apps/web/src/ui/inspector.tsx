@@ -731,6 +731,14 @@ function Prototype({
     const num = Number(raw);
     return raw !== "" && !isNaN(num) ? num : raw;
   };
+  // §23 PT-019: Scroll-to via the panel targets direct children of scrollable
+  // frames (Figma); the noodle still reaches any object on the canvas.
+  const scrollTargets: { id: string; label: string }[] = [];
+  for (const f of frames) {
+    if (f.overflow === "scrollx" || f.overflow === "scrolly" || f.overflow === "scrollboth") {
+      for (const c of f.children) scrollTargets.push({ id: c.id, label: `${c.name || c.kind} · ${f.name}` });
+    }
+  }
   return (
     <>
       <div className="h-row">
@@ -865,6 +873,8 @@ function Prototype({
                 <option value="afterDelay">After delay</option>
                 <option value="mouseEnter">Mouse enter</option>
                 <option value="mouseLeave">Mouse leave</option>
+                <option value="mouseDown">Mouse down</option>
+                <option value="mouseUp">Mouse up</option>
                 <option value="keyPress">Key / Gamepad press</option>
                 <option value="onDrag">On drag</option>
               </select>
@@ -890,6 +900,21 @@ function Prototype({
               />
             )}
 
+            {/* §23 PT-006: After-delay was unauthorable — every such row fired
+                at 0ms although the runner honors per-row delays. */}
+            {ix.trigger === "afterDelay" && (
+              <input
+                type="number"
+                placeholder="Delay ms"
+                title="Milliseconds on the frame before this interaction fires"
+                value={ix.delay ?? 800}
+                onChange={(e) => {
+                  const d = Math.max(0, parseInt(e.target.value, 10) || 0);
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, delay: d } : x)));
+                }}
+              />
+            )}
+
             <select
               aria-label="Interaction action"
               value={ix.action}
@@ -906,6 +931,7 @@ function Prototype({
               <option value="scrollTo">Scroll to</option>
               <option value="openUrl">Open link</option>
               <option value="setVariable">Set variable</option>
+              <option value="setVariableMode">Set variable mode</option>
               <option value="setVariant">Swap variant</option>
             </select>
 
@@ -941,13 +967,19 @@ function Prototype({
                 }
               >
                 <option value="">Choose target…</option>
-                {frames
-                  .filter((f) => f.id !== n.id)
-                  .map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
+                {ix.action === "scrollTo" && scrollTargets.length > 0
+                  ? scrollTargets.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.label}
+                      </option>
+                    ))
+                  : frames
+                      .filter((f) => f.id !== n.id)
+                      .map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
               </select>
             )}
 
@@ -1040,6 +1072,41 @@ function Prototype({
               />
             )}
 
+            {/* §23 PT-012: Figma's Set-variable-mode action; the engine command
+                already exists, the panel just never offered it. */}
+            {ix.action === "setVariableMode" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                <select
+                  aria-label="Variable collection"
+                  value={ix.variableCollectionId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableCollectionId: e.target.value, variableModeId: "" } : x)))
+                  }
+                >
+                  <option value="">Collection…</option>
+                  {(snap.variableCollections || []).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Variable mode"
+                  value={ix.variableModeId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableModeId: e.target.value } : x)))
+                  }
+                >
+                  <option value="">Mode…</option>
+                  {((snap.variableCollections || []).find((c) => c.id === ix.variableCollectionId)?.modes ?? []).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 4 }}>
               <select
                 aria-label="Animation"
@@ -1068,7 +1135,8 @@ function Prototype({
                 title="Duration in ms"
                 value={ix.duration || 250}
                 onChange={(e) => {
-                  const d = parseInt(e.target.value, 10) || 250;
+                  // §23 PT-013: Figma clamps durations to 1–10000ms.
+                  const d = Math.max(1, Math.min(10000, parseInt(e.target.value, 10) || 250));
                   setIx(interactions.map((x, j) => (j === i ? { ...x, duration: d } : x)));
                 }}
               />

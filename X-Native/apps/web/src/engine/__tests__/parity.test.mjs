@@ -920,7 +920,7 @@ console.log("component instance overrides:");
   console.log("advanced prototyping & presentation (better than Figma):");
   const ep = new MemoryEngine();
   t("default prototype settings present", ep.snapshot().prototypeDevice === "none");
-  t("default prototype hotspots enabled", ep.snapshot().prototypeHotspots === true);
+  t("default prototype hotspots off (§23 PT-008: hints flash on missed clicks)", ep.snapshot().prototypeHotspots === false);
   t("default prototype live inputs enabled", ep.snapshot().prototypeLiveInputs === true);
 
   // Set prototype device

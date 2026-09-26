@@ -30,7 +30,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 20 | Contextual inspector | ✅ done | IN-001–IN-009 (40 tests) |
 | 21 | Context toolbar | ✅ done | TB-001–TB-006 (12 tests) |
 | 22 | Popups / popovers / menus | ✅ done | MN-001–MN-008 (13 tests) |
-| 23 | Prototyping | … | |
+| 23 | Prototyping | ✅ done | PT-001–PT-019 (13 tests) |
 | 24 | Import / export | … | |
 | 25 | Undo / redo (per category) | … | |
 | 26 | Keyboard behavior | … | |
@@ -1272,3 +1272,112 @@ something else.
 - XDialog (x-ui) has no callers — every dialog is bespoke
   but each carries its own Esc/backdrop/close; unifying
   them is refactor churn with no behavior delta.
+
+## §23 — Prototyping
+
+Evidence: Figma "Connect your prototype" (360040315773, two
+chunks: trigger+action model, hotspot/noodle/destination,
+top-level-frame destinations except scroll-to, trigger
+cardinality, multi-action + conditionals, bulk create/edit,
+⌘C/V interaction details, collapse matching noodles, anim
+type/direction/smart-match/easing/duration 1–10000ms +
+preview), "Prototype triggers" (360040035834: click/drag-4way/
+while-hovering-returns/while-pressing-returns/key-combos/
+enter-once/leave-once/down/up/after-delay-ms/video),
+"Prototype actions" (360040035874: navigate/back/set-variable/
+set-mode/conditional/scroll-to-instant-or-eased/open-link-new-
+tab/open/close/swap-overlay-retains-settings-no-history/
+video/change-to-incl-nested), "Create and manage prototype
+flows" (360039823894: auto starting point, one per frame,
+Flow 1/2/3 + rename + rich descriptions, drag to move/
+delete, Flows list, inline preview, share links),
+"Play your prototypes" (360040318013, chunks 0–1: frame-only
+preview, connected-frames-only with connections, inline ⇧Space
++ arrows/R/resize/follow, present ⌘⌥Return + background,
+flows sidebar, bottom arrows + device switcher + R, options
+menu incl. hints-on-click, Z scale, →/Space/N + history- or
+x/y-ordered ←/→), "Prototype animations" (360040522373:
+instant/dissolve-on-top/smart-matching-movers/move-vs-push/
+slide-offset+dissolve).
+
+### Fixed (shipped in the §23 prototype commit on this branch)
+
+- PT-001 — Back with empty history cleared presentFrame,
+  dropping out of present mode; now a no-op stay (Figma).
+- PT-002 — presentGo resolves nested destinations to their
+  top-level frame (Figma); the group/section child-frame
+  rule still wins when it fires, scroll-to never routes here.
+- PT-003 — Swap overlay retains the open overlay's settings
+  and stays out of history; from a plain frame it navigates
+  (Figma "behaves like Navigate to") — in the runner and the
+  player fallback alike.
+- PT-004 — mouseDown/mouseUp were dead types end to end;
+  they fire (press sites + release branch) and the panel
+  offers them, composing Figma's while-pressing by hand.
+- PT-005 — While-hovering navigations return to the origin
+  frame on leave (Figma); an explicit Mouse-leave wins, and
+  stale pendings never yank (destination match required).
+- PT-006 — After-delay finally authors its delay: the panel
+  gains a ms field (rows used to fire at 0ms always).
+- PT-007 — ←/Backspace and the dock Prev walked document
+  order via presentGo (pushing NEW history); history first
+  now (presentBack), doc order only without history, and
+  Prev enables whenever either exists.
+- PT-008 — Hotspot hints default off: they flash on missed
+  clicks (Figma "Show hints on click") instead of glowing
+  permanently; H still forces them on.
+- PT-009 — Connection chips named every non-click/hover/
+  drag trigger "On drag"; all nine label honestly now.
+- PT-010 — Present had no chord: ⌘⌥Return / Ctrl+Alt+Enter
+  added (never mid-present), palette + shortcut sheet list it.
+- PT-011 — Scroll-to always jumped; non-instant animations
+  ease the pan over the authored duration (Figma).
+- PT-012 — New Set-variable-mode action (type + runner +
+  panel collection/mode selects) on the existing engine cmd.
+- PT-013 — Durations clamp to Figma's 1–10000ms.
+- PT-014 — Escape drops a selected connection (it survived);
+  the key listener also subscribes selectedConn (was stale).
+- PT-015 — Player gains Z (cycle fit/100%/fill) and N
+  (next frame), both Figma's.
+- PT-016 — Connections ⌘C/⌘V (rows onto the selected layer,
+  dupes skipped); layer copy/cut broadcasts so the most
+  recent copy wins the next paste.
+- PT-017 — Runner setVariable evaluates =expressions like
+  the fallback always did.
+- PT-018 — Player fallback runner covers scroll/swap/mode
+  (it silently dropped them; live only without onInteraction).
+- PT-019 — Panel scroll-to lists direct children of
+  scrollable frames (Figma), frames as fallback; noodles
+  still reach any object.
+
+### Verified parity (traced, no fix needed)
+
+- Auto flow-starting-point on first connection; trigger
+  bubbling innermost-wins with ALL rows running (X's
+  multi-action: one row per action); conditions gate both
+  paths; key/single-key + drag-threshold + overlay click
+  routing + close-outside all fire; open-link new-tabs with
+  https default; back/overlay Esc ladder; smart matching
+  (explicit/id/component/path/name + kind guard);
+  dissolve/push/slide/instant render paths; reduced-motion
+  collapses to instant; device shells + orientation + scale
+  modes; dock (pager/restart/toggles/fullscreen/exit);
+  restart lands on flowStart; R/H/I/M/F keys; missed-click
+  ripple + pulse; form-field live inputs (X extra).
+
+### Deferred / out of scope
+
+- Multiple named flows + descriptions + Flows list + inline
+  preview + share links: a feature, not a behavior fix; X
+  models one flowStart per page and presents same-tab.
+- Trigger cardinality (one-of-each), key combos (Shift-K),
+  drag direction, backdrop default (unauthorable, always on
+  — no citation for Figma's default), prototype background
+  setting, matching-noodle collapse: noted gaps, each needs
+  model or cited-default work beyond this pass.
+- deleteInteraction keys on destination: reads as deleting
+  the whole same-target bundle, which matches the single
+  rendered noodle — left as is.
+- Video triggers/actions: no video surface in X; Change-to
+  via own-instance swap covers the interactive-component
+  core (nested→parent falls out of instance bubbling).

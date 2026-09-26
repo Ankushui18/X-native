@@ -1310,7 +1310,7 @@ export function Actions({
     { label: "Design", sc: "", run: () => engine.dispatch({ type: "setRightTab", tab: "design" }) },
     {
       label: "Present",
-      sc: "",
+      sc: "⌘⌥↩",
       run: () => {
         if (onPresent) onPresent();
         else engine.dispatch({ type: "presentStart" });
@@ -1567,6 +1567,7 @@ export function bindHotkeys(
     onHide: () => void;
     onMinimize: () => void;
     onNav?: (n: NavId) => void;
+    onPresent?: () => void;
     onPresentExit?: () => void;
     /** Close the topmost modal; returns whether one was open. */
     onEscapeOverlay?: () => boolean;
@@ -1631,6 +1632,13 @@ export function bindHotkeys(
       e.preventDefault();
       engine.dispatch({ type: "pasteProperties" });
       toast("Pasted properties");
+      return;
+    }
+    // §23 PT-010: ⌘⌥Return / Ctrl+Alt+Enter presents (Figma) — Present had
+    // no chord at all. Never while presenting (that would restart the flow).
+    if (meta && e.altKey && e.key === "Enter" && !engine.snapshot().presentFrame) {
+      e.preventDefault();
+      extra.onPresent?.();
       return;
     }
     if (meta && e.key.toLowerCase() === "k") {
@@ -1822,11 +1830,13 @@ export function bindHotkeys(
     if (meta && !e.altKey && e.key.toLowerCase() === "c") {
       e.preventDefault();
       engine.dispatch({ type: "copy" });
+      window.dispatchEvent(new CustomEvent("x-native-layer-copy"));
       return;
     }
     if (meta && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "x") {
       e.preventDefault();
       engine.dispatch({ type: "cut" });
+      window.dispatchEvent(new CustomEvent("x-native-layer-copy"));
       return;
     }
     if (meta && !e.altKey && e.shiftKey && (e.key.toLowerCase() === "x" || e.code === "KeyX")) {
@@ -3477,6 +3487,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "round-pixel", name: "Round to whole pixels", keys: ["⇧", "", "P"] },
       { id: "layout-grids", name: "Layout grids", keys: ["⇧", "G"] },
       { id: "outline", name: "Outline mode", keys: ["⌘", "Y"] },
+      { id: "present", name: "Present", keys: ["⌘", "⌥", "↩"] },
     ],
   },
   {

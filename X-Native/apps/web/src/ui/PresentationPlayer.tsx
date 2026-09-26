@@ -87,7 +87,9 @@ export function PresentationPlayer({
 
   // Device & scale preferences
   const device = snap.prototypeDevice ?? "none";
-  const hotspotsActive = snap.prototypeHotspots ?? true;
+  // §23 PT-008: default off — hints flash on a missed click (Figma), they
+  // are not painted over every hotspot until H says otherwise.
+  const hotspotsActive = snap.prototypeHotspots ?? false;
   const liveInputsActive = snap.prototypeLiveInputs ?? true;
   const soundActive = snap.prototypeSound ?? true;
   const scaleMode = snap.prototypeScale ?? "fit";
@@ -105,6 +107,8 @@ export function PresentationPlayer({
 
   // Current frame index
   const curIndex = allFrames.findIndex((f) => f.id === snap.presentFrame);
+  // §23 PT-007: "back" exists whenever history does, even at pager index 0.
+  const canGoPrev = snap.presentStack.length > 1 || curIndex > 0;
 
   // Collect clickable hotspots inside active frame
   const hotspots = useMemo(() => {
@@ -220,6 +224,34 @@ export function PresentationPlayer({
       });
     } else if (ix.action === "closeOverlay") {
       engine.dispatch({ type: "closeOverlay" });
+    } else if (ix.action === "scrollTo" && ix.destination) {
+      // §23 PT-018: the no-runner fallback now covers every action the panel
+      // can author (scroll/swap/mode were silently dropped here).
+      const s = engine.snapshot();
+      const target = worldPos(s.pages[s.page].root, ix.destination);
+      if (target) {
+        engine.dispatch({
+          type: "setPan",
+          x: -target.x * s.zoom + 120,
+          y: -target.y * s.zoom + 120,
+        });
+      }
+    } else if (ix.action === "swapOverlay" && ix.destination) {
+      const open = engine.snapshot().activeOverlay;
+      if (!open) {
+        engine.dispatch({ type: "presentGo", id: ix.destination });
+      } else {
+        engine.dispatch({
+          type: "openOverlay",
+          id: ix.destination,
+          position: open.position,
+          closeOutside: open.closeOutside,
+          backdrop: open.backdrop,
+          backdropColor: open.backdropColor,
+        });
+      }
+    } else if (ix.action === "setVariableMode" && ix.variableCollectionId && ix.variableModeId) {
+      engine.dispatch({ type: "setActiveMode", collectionId: ix.variableCollectionId, modeId: ix.variableModeId });
     } else if (ix.action === "openUrl" && ix.destination) {
       const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
       window.open(url, "_blank", "noopener,noreferrer");
@@ -260,7 +292,11 @@ export function PresentationPlayer({
           onExit();
         }
       } else if (e.key === "ArrowLeft" || e.key === "Backspace") {
-        if (curIndex > 0) {
+        // §23 PT-007: back walks history first (Figma); doc order only when
+        // there is no history. (Going back used to push a NEW visit.)
+        if (snap.presentStack.length > 1) {
+          engine.dispatch({ type: "presentBack" });
+        } else if (curIndex > 0) {
           const target = allFrames[curIndex - 1];
           if (onInteraction) {
             onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
@@ -290,6 +326,21 @@ export function PresentationPlayer({
           document.documentElement.requestFullscreen().catch(() => {});
         } else {
           document.exitFullscreen().catch(() => {});
+        }
+      } else if (e.key.toLowerCase() === "z") {
+        // §23 PT-015: Z cycles the scale options (Figma).
+        const order = ["fit", "100%", "fill"] as const;
+        const next = order[(order.indexOf(scaleMode) + 1) % order.length];
+        engine.dispatch({ type: "setPrototypeScale", scale: next });
+      } else if (e.key.toLowerCase() === "n") {
+        // §23 PT-015: N advances one frame (Figma).
+        if (curIndex < allFrames.length - 1) {
+          const target = allFrames[curIndex + 1];
+          if (onInteraction) {
+            onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
+          } else {
+            engine.dispatch({ type: "presentGo", id: target.id });
+          }
         }
       }
     };
@@ -522,15 +573,16 @@ export function PresentationPlayer({
         {/* Previous Frame */}
         <button
           onClick={() => {
-            if (curIndex > 0) engine.dispatch({ type: "presentGo", id: allFrames[curIndex - 1].id });
+            if (snap.presentStack.length > 1) engine.dispatch({ type: "presentBack" });
+            else if (curIndex > 0) engine.dispatch({ type: "presentGo", id: allFrames[curIndex - 1].id });
           }}
-          disabled={curIndex <= 0}
+          disabled={!canGoPrev}
           title="Previous frame (←)"
           style={{
             background: "transparent",
             border: 0,
-            color: curIndex <= 0 ? "rgba(255,255,255,0.3)" : "#fff",
-            cursor: curIndex <= 0 ? "default" : "pointer",
+            color: !canGoPrev ? "rgba(255,255,255,0.3)" : "#fff",
+            cursor: !canGoPrev ? "default" : "pointer",
             padding: "4px 6px",
             borderRadius: 6,
             display: "flex",

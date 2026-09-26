@@ -120,6 +120,7 @@ export type ProtoAction =
   | "swapOverlay"
   | "openUrl"
   | "setVariable"
+  | "setVariableMode"
   | "setVariant";
 export type ProtoAnim =
   | "instant"
@@ -248,6 +249,9 @@ export interface Interaction {
   variableId?: string;
   variableOp?: "set" | "increment" | "decrement" | "toggle";
   variableValue?: string | number | boolean;
+  /** §23 PT-012: target of the `setVariableMode` action. */
+  variableCollectionId?: string;
+  variableModeId?: string;
   /**
    * Gate: the interaction only runs when the condition holds, evaluated
    * against variables resolved under the active modes. Absent = always run.

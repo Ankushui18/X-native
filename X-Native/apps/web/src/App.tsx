@@ -477,6 +477,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     () =>
       bindHotkeys(engine, {
         onActions: () => setActions(true),
+        onPresent: present,
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,

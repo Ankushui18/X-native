@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Effect, Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
-import { resolveVariable } from "../engine/variables";
+import { resolveAllForMode, resolveVariable } from "../engine/variables";
+import { evaluateExpression } from "../engine/expressions";
 import { prefersReducedMotion } from "./a11y";
 import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
@@ -449,6 +450,9 @@ export function Canvas({
     }
   }, [snap.vecPoint]);
   const hoverIx = useRef("");
+  /** §23 PT-005: a while-hovering navigation's way home (node, origin frame,
+   *  destination); leaving the hotspot returns unless a Mouse-leave ran. */
+  const hoverReturn = useRef<{ nodeId: string; fromFrame: string; destId: string } | null>(null);
   /** Present-mode drag origin for the onDrag trigger; cleared on pointer-up. */
   const dragIx = useRef<{ x: number; y: number; id: string; fired: boolean } | null>(null);
   /** Cursor implied by whatever selection chrome is under the pointer. */
@@ -499,6 +503,8 @@ export function Canvas({
     midY: number;
     label: string;
   } | null>(null);
+  /** §23 PT-016: copied connection rows (⌘C on a noodle); a layer copy/cut clears it. */
+  const connClipboard = useRef<Interaction[]>([]);
   /** Static snap targets, captured once at drag start so they never shift mid-drag. */
   const snapTargets = useRef<Box[]>([]);
   const { theme } = useTheme();
@@ -517,14 +523,28 @@ export function Canvas({
           const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
           window.open(url, "_blank", "noopener,noreferrer");
         } else if (ix.action === "scrollTo" && ix.destination) {
-          const root = engine.snapshot().pages[engine.snapshot().page].root;
-          const target = worldPos(root, ix.destination);
+          const s = engine.snapshot();
+          const target = worldPos(s.pages[s.page].root, ix.destination);
           if (target) {
-            engine.dispatch({
-              type: "setPan",
-              x: -target.x * engine.snapshot().zoom + 120,
-              y: -target.y * engine.snapshot().zoom + 120,
-            });
+            const toX = -target.x * s.zoom + 120;
+            const toY = -target.y * s.zoom + 120;
+            // §23 PT-011: Scroll-to honors the animation (Figma: instant or
+            // eased) instead of always jumping.
+            if (!ix.animation || ix.animation === "instant") {
+              engine.dispatch({ type: "setPan", x: toX, y: toY });
+            } else {
+              const fromX = s.panX;
+              const fromY = s.panY;
+              const dur = ix.duration || 250;
+              const start = performance.now();
+              const tick = () => {
+                const t = Math.min(1, Math.max(0, (performance.now() - start) / dur));
+                const k = solveEasing(ix.easing || "easeOut", t);
+                engine.dispatch({ type: "setPan", x: fromX + (toX - fromX) * k, y: fromY + (toY - fromY) * k });
+                if (t < 1) requestAnimationFrame(tick);
+              };
+              requestAnimationFrame(tick);
+            }
           }
         } else if (ix.action === "openOverlay" && ix.destination) {
           engine.dispatch({
@@ -536,14 +556,21 @@ export function Canvas({
             backdropColor: ix.overlayBackdropColor,
           });
         } else if (ix.action === "swapOverlay" && ix.destination) {
-          engine.dispatch({
-            type: "openOverlay",
-            id: ix.destination,
-            position: ix.overlayPosition || "center",
-            closeOutside: ix.overlayCloseOutside !== false,
-            backdrop: ix.overlayBackdrop !== false,
-            backdropColor: ix.overlayBackdropColor,
-          });
+          // §23 PT-003: Swap retains the open overlay's settings (Figma) and
+          // never touches history; from a plain frame it navigates instead.
+          const open = engine.snapshot().activeOverlay;
+          if (!open) {
+            engine.dispatch({ type: "presentGo", id: ix.destination });
+          } else {
+            engine.dispatch({
+              type: "openOverlay",
+              id: ix.destination,
+              position: open.position,
+              closeOutside: open.closeOutside,
+              backdrop: open.backdrop,
+              backdropColor: open.backdropColor,
+            });
+          }
         } else if (ix.action === "closeOverlay") {
           engine.dispatch({ type: "closeOverlay" });
         } else if (ix.action === "setVariable" && ix.variableId) {
@@ -552,17 +579,28 @@ export function Canvas({
           const cur = resolveVariable(vars, s.variableCollections ?? [], s.activeModes ?? {}, ix.variableId);
           if (cur && !cur.broken) {
             let nextVal: string | number | boolean = ix.variableValue !== undefined ? ix.variableValue : cur.value;
+            // §23 PT-017: =expressions evaluate here too, like the player's
+            // own fallback path already did.
+            if (typeof nextVal === "string" && nextVal.startsWith("=")) {
+              const res = evaluateExpression(nextVal.slice(1), {
+                vars: resolveAllForMode(vars, s.variableCollections ?? [], s.activeModes ?? {}),
+              });
+              if (!res.error && res.value !== undefined) nextVal = res.value;
+            }
             if (ix.variableOp === "increment" && typeof cur.value === "number") nextVal = cur.value + 1;
             else if (ix.variableOp === "decrement" && typeof cur.value === "number") nextVal = cur.value - 1;
             else if (ix.variableOp === "toggle" && typeof cur.value === "boolean") nextVal = !cur.value;
             engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
           }
+        } else if (ix.action === "setVariableMode" && ix.variableCollectionId && ix.variableModeId) {
+          // §23 PT-012: Figma's Set-variable-mode action.
+          engine.dispatch({ type: "setActiveMode", collectionId: ix.variableCollectionId, modeId: ix.variableModeId });
         } else if (ix.action === "setVariant" && ix.variantName && sourceId) {
           // Interactive components: swap the interaction's own instance.
           engine.dispatch({ type: "setVariant", id: sourceId, name: ix.variantName });
         }
       };
-      if (reduced || ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable" || ix.action === "setVariant") {
+      if (reduced || ix.animation === "instant" || !ix.animation || ix.action === "openUrl" || ix.action === "scrollTo" || ix.action === "setVariable" || ix.action === "setVariableMode" || ix.action === "setVariant") {
         run();
         return;
       }
@@ -622,6 +660,13 @@ export function Canvas({
     (root: XNode, startId: string, trigger: ProtoTrigger) => {
       const hit = triggerInteractions(root, startId, trigger);
       if (!hit) return false;
+      // §23 PT-005: while-hovering navigations remember where they came from
+      // (read before the run below moves presentFrame away).
+      if (trigger === "onHover") {
+        const s = engine.snapshot();
+        const nav = hit.list.find((ix) => ix.action === "navigate" && ix.destination);
+        hoverReturn.current = nav && s.presentFrame ? { nodeId: hit.nodeId, fromFrame: s.presentFrame, destId: nav.destination } : null;
+      }
       for (const ix of hit.list) runInteraction(ix, hit.nodeId);
       return true;
     },
@@ -631,6 +676,16 @@ export function Canvas({
   useEffect(() => {
     if (onRunInteraction) onRunInteraction(runInteraction);
   }, [onRunInteraction, runInteraction]);
+
+  // §23 PT-016: a layer copy/cut invalidates a copied connection, so the most
+  // recent copy always wins the next ⌘V.
+  useEffect(() => {
+    const clear = () => {
+      connClipboard.current = [];
+    };
+    window.addEventListener("x-native-layer-copy", clear);
+    return () => window.removeEventListener("x-native-layer-copy", clear);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -832,6 +887,46 @@ export function Canvas({
         setVecEdit(null);
         e.stopImmediatePropagation();
       }
+      // §23 PT-016: connections copy/paste like Figma — ⌘C on the noodle,
+      // ⌘V onto a selected layer. Plain ⌘C/⌘V only, so shifted/alted layer
+      // and property clipboards keep working.
+      if (e.type === "keydown" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && !edit && !isTyping) {
+        if (e.key.toLowerCase() === "c" && selectedConn) {
+          const src = worldPos(snap.pages[snap.page].root, selectedConn.srcId)?.node;
+          const rows = (src?.interactions ?? []).filter((ix) => ix.destination === selectedConn.destId);
+          if (rows.length) {
+            connClipboard.current = rows.map((r) => ({ ...r }));
+            toast("Connection copied");
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+          }
+        }
+        if (e.key.toLowerCase() === "v" && connClipboard.current.length && snap.selection[0]) {
+          const target = worldPos(snap.pages[snap.page].root, snap.selection[0])?.node;
+          if (target) {
+            const prev = target.interactions ?? [];
+            const fresh = connClipboard.current.filter(
+              (c) => !prev.some((p) => p.trigger === c.trigger && p.action === c.action && p.destination === c.destination),
+            );
+            if (fresh.length) {
+              engine.dispatch({ type: "setInteractions", id: target.id, interactions: [...prev, ...fresh.map((r) => ({ ...r }))] });
+              toast("Interaction pasted");
+            } else {
+              toast("Already has that interaction");
+            }
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+          }
+        }
+      }
+      // §23 PT-014: Escape drops the selected connection (it survived Esc).
+      if (e.type === "keydown" && e.key === "Escape" && selectedConn) {
+        setSelectedConn(null);
+        e.stopImmediatePropagation();
+        return;
+      }
       if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && selectedConn && !edit) {
         engine.dispatch({ type: "deleteInteraction", id: selectedConn.srcId, destId: selectedConn.destId });
         setSelectedConn(null);
@@ -924,7 +1019,7 @@ export function Canvas({
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKey, true);
     };
-  }, [snap, edit, draft, engine, vecEdit, runInteraction]);
+  }, [snap, edit, draft, engine, vecEdit, runInteraction, selectedConn]);
 
   // Escape finishes the path and leaves it open. The finisher is published
   // to ui/penDraft.ts because that is the layer which actually decides Escape.
@@ -3555,6 +3650,8 @@ export function Canvas({
               wpt.y <= oy + overlayNode.h
             ) {
               const n: XNode | null = hitTest(overlayNode, wpt.x - ox + overlayNode.x, wpt.y - oy + overlayNode.y, { includeLocked: true });
+              // §23 PT-004: the press pair fires around the click, overlay or canvas.
+              if (n) runTrigger(overlayNode, n.id, "mouseDown");
               if (n) runTrigger(overlayNode, n.id, "onClick");
               return;
             } else if (snap.activeOverlay.closeOutside !== false) {
@@ -3566,6 +3663,7 @@ export function Canvas({
       }
 
       const n: XNode | null = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
+      if (n) runTrigger(root, n.id, "mouseDown");
       if (n) runTrigger(root, n.id, "onClick");
       return;
     }
@@ -4364,7 +4462,24 @@ export function Canvas({
       if (id !== hoverIx.current) {
         const prev = hoverIx.current;
         hoverIx.current = id;
-        if (prev) runTrigger(root, prev, "mouseLeave");
+        if (prev) {
+          const leftRan = runTrigger(root, prev, "mouseLeave");
+          // §23 PT-005: an explicit Mouse-leave action wins; otherwise a
+          // pending while-hovering return takes the user back to the origin
+          // frame (Figma) — but only while still sitting on its destination,
+          // so stale pendings never yank the user out of a later screen.
+          const hr = hoverReturn.current;
+          if (leftRan) hoverReturn.current = null;
+          else if (hr && isSelfOrDescendant(root, prev, hr.nodeId)) {
+            hoverReturn.current = null;
+            if (snap.presentFrame === hr.destId && snap.presentFrame !== hr.fromFrame) {
+              runInteraction(
+                { trigger: "mouseLeave", action: "navigate", destination: hr.fromFrame, animation: "instant", delay: 0 },
+                hr.nodeId,
+              );
+            }
+          }
+        }
         // "While hovering" fires on entry, like before; mouse enter joins it.
         if (n) {
           runTrigger(root, n.id, "mouseEnter");
@@ -5108,6 +5223,14 @@ export function Canvas({
 
   const onUp = (e: React.MouseEvent) => {
     dragIx.current = null;
+    // §23 PT-004: release completes the press pair on the release-position node.
+    if (snap.presentFrame) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      const root = snap.pages[snap.page].root;
+      const n = hitTest(root, wpt.x, wpt.y, { includeLocked: true });
+      if (n) runTrigger(root, n.id, "mouseUp");
+      return;
+    }
     if (penDrag.current) {
       penDrag.current = null;
       return;
@@ -7556,6 +7679,17 @@ function walkInteractions(
   for (const c of n.children) walkInteractions(c, x, y, fn);
 }
 
+/** §23 PT-005: true when `id` is `anc` or nested under it. */
+function isSelfOrDescendant(root: XNode, id: string, anc: string): boolean {
+  if (id === anc) return true;
+  let p = findParent(root, id);
+  while (p) {
+    if (p.id === anc) return true;
+    p = findParent(root, p.id);
+  }
+  return false;
+}
+
 function findClickedNoodle(
   root: XNode,
   wpt: { x: number; y: number },
@@ -7575,7 +7709,18 @@ function findClickedNoodle(
       if (Math.hypot(wpt.x - px, wpt.y - py) <= 12 / zoom) {
         const midX = (noodle.ax + noodle.bx) / 2;
         const midY = (noodle.ay + noodle.by) / 2;
-        const trigLabel = ix.trigger === "onClick" ? "On click" : ix.trigger === "onHover" ? "While hovering" : "On drag";
+        // §23 PT-009: every trigger names itself — After-delay/key/enter rows
+        // used to borrow "On drag" on the connection chip.
+        const trigLabel =
+          ix.trigger === "onClick" ? "On click"
+          : ix.trigger === "onHover" ? "While hovering"
+          : ix.trigger === "afterDelay" ? "After delay"
+          : ix.trigger === "mouseEnter" ? "Mouse enter"
+          : ix.trigger === "mouseLeave" ? "Mouse leave"
+          : ix.trigger === "mouseDown" ? "Mouse down"
+          : ix.trigger === "mouseUp" ? "Mouse up"
+          : ix.trigger === "keyPress" ? `Key (${ix.keyKey || "…"})`
+          : "On drag";
         hit = { srcId: n.id, destId, midX, midY, label: `${trigLabel} → ${dest.node.name}` };
         break;
       }

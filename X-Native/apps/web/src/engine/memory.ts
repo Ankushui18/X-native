@@ -1188,7 +1188,9 @@ export class MemoryEngine implements Engine {
       prototypeDevice: "none",
       prototypeOrientation: "portrait",
       prototypeScale: "fit",
-      prototypeHotspots: true,
+      // §23 PT-008: hints appear on a missed click (Figma "Show hints on
+      // click"); they are not painted permanently over every hotspot.
+      prototypeHotspots: false,
       prototypeLiveInputs: true,
       prototypeSound: true,
       activeOverlay: null,
@@ -4132,9 +4134,28 @@ export class MemoryEngine implements Engine {
         if (!cmd.id) break;
         let destId = cmd.id;
         const targetNode = find(this.root(), destId);
+        let resolved = false;
         if (targetNode && (targetNode.kind === "group" || targetNode.name.toLowerCase().includes("section"))) {
           const childFrame = targetNode.children.find((c) => c.kind === "frame");
-          if (childFrame) destId = childFrame.id;
+          if (childFrame) {
+            destId = childFrame.id;
+            resolved = true;
+          }
+        }
+        // §23 PT-002: Navigate lands on top-level frames (Figma), so a noodle
+        // dropped on a nested layer resolves to its top-level frame instead
+        // of stranding the player on a rect. The group/section rule above wins
+        // when it fires; scroll-to keeps raw object ids — it never routes
+        // through presentGo.
+        if (!resolved) {
+          const rt = this.root();
+          let top: XNode | null = find(rt, destId);
+          while (top) {
+            const par = findParent(rt, top.id);
+            if (!par || par === rt) break;
+            top = par;
+          }
+          if (top && top.kind === "frame") destId = top.id;
         }
         s.presentStack = [...s.presentStack, destId];
         s.presentFrame = destId;
@@ -4146,10 +4167,9 @@ export class MemoryEngine implements Engine {
           s.presentStack = s.presentStack.slice(0, -1);
           s.presentFrame = s.presentStack[s.presentStack.length - 1];
           focusFrame(s, this.root(), s.presentFrame);
-        } else {
-          s.presentFrame = "";
-          s.presentStack = [];
         }
+        // §23 PT-001: Back with nowhere to go stays put (Figma) — it used
+        // to clear presentFrame, which dropped out of present mode entirely.
         break;
       }
       case "presentStop":
