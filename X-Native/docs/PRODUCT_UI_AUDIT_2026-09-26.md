@@ -193,8 +193,8 @@ viewport clamp, role=tooltip; empty shortcut renders nothing).
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| TY-U1 | ITALIC has zero inspector UI: ⌘I chord + `italic` model exist (KB-002) but "italic" appears nowhere in inspector.tsx — keyboard-only, undiscoverable. Fix: toggle in type row/popover | MISSING UI | P1 |
-| TY-U2 | Align (4) + valign (3) + underline + strike buttons carry NO tooltip/aria/label of any kind — icon-only, undiscoverable, screen-reader invisible; the resize-mode seg directly above HAS Tooltips | MISSING LABELS | P1 |
+| TY-U1 | FIXED: Italic toggle in Type settings popover (patchType fontStyle + rehug, = ⌘I path), new `italic` glyph, Tooltip ⌘I | FIXED (P1) | — |
+| TY-U2 | FIXED: all 9 type buttons wrapped in Tooltip + aria-label/aria-pressed (Underline shows ⌘U) | FIXED (P1) | — |
 | TY-U3 | Multi-select type metrics (size/leading/tracking/¶ + family/weight selects) show FIRST-layer values, no Mixed — IN-U1 sibling (§29) | PARTIAL | P1 |
 | FS-U6 scope+ | RETRACTED with FS-U6: patchType→patch detaches correctly (verified) | — | — |
 | TY-U4 | Round-to-pixels button has BOTH Tooltip wrapper AND native title= → double tooltip | DRIFT | P2 |

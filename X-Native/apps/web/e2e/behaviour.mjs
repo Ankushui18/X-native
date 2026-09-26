@@ -1080,6 +1080,29 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 23. typography: labelled align keys + italic toggle -----------------------
+{
+  const p = await page();
+  const i = (await rows(p)).indexOf("Label");
+  const rs = await p.$$(".panel.left .row");
+  await rs[i].click(); await sleep(500);
+  t("align keys carry labels",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Align center"]')));
+  t("valign keys carry labels",
+    await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Vertical align middle"]')));
+  await p.evaluate(() => document.querySelector('.inspector button.plus[title="Type settings"]').click());
+  await sleep(400);
+  const hasItalic = await p.evaluate(() => !!document.querySelector('.inspector .type-pop button[aria-label="Italic"]'));
+  t("type settings has an Italic toggle", hasItalic);
+  if (hasItalic) {
+    await p.evaluate(() => document.querySelector('.inspector .type-pop button[aria-label="Italic"]').click());
+    await sleep(400);
+    t("italic toggle applies",
+      await p.evaluate(() => document.querySelector('.inspector .type-pop button[aria-label="Italic"]').getAttribute("aria-pressed") === "true"));
+  } else fail++;
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

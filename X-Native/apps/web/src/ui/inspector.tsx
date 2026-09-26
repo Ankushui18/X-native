@@ -3606,26 +3606,32 @@ function Design({
             </div>
             <div className="seg icons">
               {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlign === a ? "on" : ""}
-                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
-                >
-                  <Icon name={`align-text-${a}`} size={14} />
-                </button>
+                <Tooltip key={a} label={`Align ${a}`}>
+                  <button
+                    className={n.textAlign === a ? "on" : ""}
+                    aria-label={`Align ${a}`}
+                    aria-pressed={n.textAlign === a}
+                    onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
+                  >
+                    <Icon name={`align-text-${a}`} size={14} />
+                  </button>
+                </Tooltip>
               ))}
             </div>
             <div className="seg icons">
               {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.textAlignVertical === a ? "on" : ""}
-                  onClick={() =>
-                    engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
-                  }
-                >
-                  <Icon name={`valign-${a}`} size={14} />
-                </button>
+                <Tooltip key={a} label={`Vertical align ${a}`}>
+                  <button
+                    className={n.textAlignVertical === a ? "on" : ""}
+                    aria-label={`Vertical align ${a}`}
+                    aria-pressed={n.textAlignVertical === a}
+                    onClick={() =>
+                      engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
+                    }
+                  >
+                    <Icon name={`valign-${a}`} size={14} />
+                  </button>
+                </Tooltip>
               ))}
             </div>
           </div>
@@ -3634,35 +3640,55 @@ function Design({
               <h4>Type settings</h4>
               <div className="dir-row">
                 <div className="seg icons">
-                  <button
-                    className={n.textDecoration === "underline" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration: n.textDecoration === "underline" ? "none" : "underline",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="underline" />
-                  </button>
-                  <button
-                    className={n.textDecoration === "strikethrough" ? "on" : ""}
-                    onClick={() =>
-                      engine.dispatch({
-                        type: "patch",
-                        id: n.id,
-                        patch: {
-                          textDecoration:
-                            n.textDecoration === "strikethrough" ? "none" : "strikethrough",
-                        },
-                      })
-                    }
-                  >
-                    <Icon name="strike" />
-                  </button>
+                  <Tooltip label="Italic" shortcut="⌘I">
+                    <button
+                      className={n.fontStyle === "italic" ? "on" : ""}
+                      aria-label="Italic"
+                      aria-pressed={n.fontStyle === "italic"}
+                      onClick={() =>
+                        patchType({ fontStyle: n.fontStyle === "italic" ? "normal" : "italic" })
+                      }
+                    >
+                      <Icon name="italic" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Underline" shortcut="⌘U">
+                    <button
+                      className={n.textDecoration === "underline" ? "on" : ""}
+                      aria-label="Underline"
+                      aria-pressed={n.textDecoration === "underline"}
+                      onClick={() =>
+                        engine.dispatch({
+                          type: "patch",
+                          id: n.id,
+                          patch: {
+                            textDecoration: n.textDecoration === "underline" ? "none" : "underline",
+                          },
+                        })
+                      }
+                    >
+                      <Icon name="underline" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Strikethrough">
+                    <button
+                      className={n.textDecoration === "strikethrough" ? "on" : ""}
+                      aria-label="Strikethrough"
+                      aria-pressed={n.textDecoration === "strikethrough"}
+                      onClick={() =>
+                        engine.dispatch({
+                          type: "patch",
+                          id: n.id,
+                          patch: {
+                            textDecoration:
+                              n.textDecoration === "strikethrough" ? "none" : "strikethrough",
+                          },
+                        })
+                      }
+                    >
+                      <Icon name="strike" />
+                    </button>
+                  </Tooltip>
                   <select
                     aria-label="Letter case"
                     value={n.textCase}

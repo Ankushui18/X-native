@@ -129,6 +129,7 @@ export type IconName =
   | "independent"
   | "info"
   | "instance"
+  | "italic"
   | "join-bevel"
   | "join-miter"
   | "join-round"
@@ -699,6 +700,12 @@ export function Icon({
         <svg {...p}>
           <path d="M3 4h10M8 4v8M5.5 12h5" strokeWidth={1.25} />
           <circle cx="12.5" cy="11.5" r="1.5" strokeWidth={1.2} />
+        </svg>
+      );
+    case "italic":
+      return (
+        <svg {...p}>
+          <path d="M12.5 3.5h-6M9.5 12.5h-6M10 3.5L6 12.5" strokeWidth={1.25} />
         </svg>
       );
     case "underline":
