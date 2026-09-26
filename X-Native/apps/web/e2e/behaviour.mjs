@@ -2424,6 +2424,103 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 41. the prototype panel is one set of controls (PT-U2, PT-U3, PT-U7) ------
+{
+  const p = await page();
+  const layerRows = await rows(p);
+  await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]')?.click());
+  await sleep(700);
+  // View Details Button carries the sample file's interaction.
+  await clickRowById(p, "rect_5");
+  await sleep(700);
+
+  const panel = await p.evaluate(() => {
+    const right = document.querySelector(".panel.right");
+    const rowSel = right.querySelector(".proto-row select");
+    const card = right.querySelector(".proto-interaction");
+    const cardSel = card?.querySelector("select");
+    const cs = (el) => (el ? getComputedStyle(el) : null);
+    const shape = (el) => {
+      const c = cs(el);
+      return c ? `${c.height}|${c.borderStyle} ${c.borderWidth}|${c.borderRadius}|${c.fontSize}|${c.backgroundColor}` : null;
+    };
+    return {
+      rowShape: shape(rowSel),
+      cardShape: shape(cardSel),
+      card: card ? { bg: cs(card).backgroundColor, border: cs(card).borderWidth, radius: cs(card).borderRadius, gap: cs(card).gap } : null,
+      // The card's own layout was six inline style objects; only the svg
+      // children may keep theirs (the Icon component's box, the easing curve's
+      // overflow).
+      cardInline: [...(card?.querySelectorAll("[style]") ?? [])]
+        .map((e) => e.getAttribute("style"))
+        .filter((v) => !/^(width: \d+px; height: \d+px; display: block;|overflow: visible;?)$/.test(v || "")),
+      selectInline: [...right.querySelectorAll("select")].filter((s) => s.getAttribute("style")).length,
+      present: (() => {
+        const b = [...right.querySelectorAll("button")].find((x) => /Present Prototype/.test(x.textContent));
+        return b ? { cls: b.className, bg: getComputedStyle(b).backgroundColor } : null;
+      })(),
+      // The sections of the card, including the condition row (added below).
+      layouts: [".proto-top", ".proto-pair", ".proto-anim", ".proto-cond", ".proto-check", ".proto-ease"]
+        .map((sel) => [sel, !!right.querySelector(sel)]),
+    };
+  });
+  // A borderless 24px select in the panel's rows, a bordered 12px default in the
+  // card, one row apart: the same control looked like two different things.
+  t(`panel and card selects share one recipe (${panel.rowShape})`,
+    panel.rowShape === panel.cardShape && panel.rowShape.startsWith("28px|solid 1px|6px|11px"));
+  t(`the interaction is a card (${panel.card?.border}, ${panel.card?.radius}, ${panel.card?.bg})`,
+    panel.card?.border === "1px" && panel.card?.radius === "8px" && panel.card?.gap === "5px");
+  t(`and styles itself from the sheet (${panel.cardInline.length} inline, ${panel.selectInline} on selects)`,
+    panel.cardInline.length === 0 && panel.selectInline === 0);
+  // The condition row only exists once a condition does: switching it on must
+  // give the row its own layout (it used to be an inline 4-column grid).
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".proto-interaction button")].find((x) => /Condition/.test(x.textContent));
+    b?.click();
+  });
+  await sleep(400);
+  const condLayout = await p.evaluate(() => {
+    const cond = document.querySelector(".proto-cond");
+    if (!cond) return null;
+    const c = getComputedStyle(cond);
+    return { cols: c.gridTemplateColumns.split(" ").length, inline: cond.getAttribute("style") };
+  });
+  const layouts = await p.evaluate(() => [".proto-top", ".proto-pair", ".proto-anim", ".proto-check", ".proto-ease"]
+    .every((sel) => !!document.querySelector(sel)));
+  t(`every interaction control has a layout class (${layouts}, condition ${condLayout?.cols} columns)`,
+    panel.layouts.slice(0, 3).every(([, ok]) => ok) && layouts &&
+    condLayout?.cols === 4 && condLayout.inline === null);
+
+  // PT-U2: the button is a primary action, not an export one.
+  const blue = await p.evaluate(() => {
+    const d = document.createElement("div");
+    d.style.color = getComputedStyle(document.documentElement).getPropertyValue("--blue").trim();
+    document.body.appendChild(d);
+    const c = getComputedStyle(d).color;
+    d.remove();
+    return c;
+  });
+  t(`Present Prototype is a primary button (${panel.present?.cls}, ${panel.present?.bg})`,
+    panel.present?.cls === "x-primary" && panel.present?.bg === blue);
+
+  // PT-U7: the chip must name the key that starts a presentation, not the one
+  // that leaves it.
+  const box = await p.evaluate(() => {
+    const b = document.querySelector('.panel.right button[aria-label="Present"]');
+    const r = b.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  await p.mouse.move(box.x, box.y);
+  await sleep(750);
+  const tip = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return { text: tips.map((t) => t.textContent).join(" | "), chip: tips[0]?.querySelector(".tip-sc")?.textContent ?? null };
+  });
+  t(`Present's chip is the start chord (${tip.text})`, tip.chip === "⌘⌥↩" && tip.text.startsWith("Present"));
+  t(`and ${layerRows.length} layer rows were untouched by any of it`, layerRows.length === 23);
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

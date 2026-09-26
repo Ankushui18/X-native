@@ -201,7 +201,10 @@ export function RightPanel({
             <Icon name="dev" />
           </button>
         </Tooltip>
-        <Tooltip label="Present" shortcut="Esc to exit">
+        {/* The chip advertised "Esc to exit" — a sentence in a shortcut slot,
+            and the player's key, not the one that starts a presentation. The
+            chord the palette lists is ⌘⌥↩ (PT-U7). */}
+        <Tooltip label="Present" shortcut="⌘⌥↩">
           <button className="icon-btn" aria-label="Present" onClick={() => onPresent?.()}>
             <Icon name="play" />
           </button>
@@ -784,7 +787,6 @@ function Prototype({
           aria-label="Flow start frame"
           value={start || frames[0]?.id || ""}
           onChange={(e) => engine.dispatch({ type: "patchPage", patch: { flowStart: e.target.value } })}
-          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
           {frames.map((f) => (
             <option key={f.id} value={f.id}>
@@ -804,7 +806,6 @@ function Prototype({
           onChange={(e) =>
             engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })
           }
-          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
           <option value="none">None (borderless)</option>
           {DEVICE_GROUPS.map((g) => (
@@ -826,7 +827,6 @@ function Prototype({
           onChange={(e) =>
             engine.dispatch({ type: "setPrototypeScale", scale: e.target.value as "fit" | "100%" | "fill" })
           }
-          style={{ border: 0, background: "var(--input)", borderRadius: 6, height: 24, padding: "0 6px" }}
         >
           <option value="fit">Zoom to fit</option>
           <option value="100%">Zoom to 100%</option>
@@ -853,7 +853,7 @@ function Prototype({
 
       {/* The mockup preview shows the selected frame inside the real device
           shell, so the choice is visible before pressing Play. */}
-      <div className="proto-preview device" style={{ marginTop: 8 }}>
+      <div className="proto-preview device">
         <DevicePreview
           spec={deviceFor(snap.prototypeDevice)}
           fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : "#fff"}
@@ -888,10 +888,9 @@ function Prototype({
       {!n && <p className="muted">Select a layer to add On click → Navigate.</p>}
       {n &&
         interactions.map((ix, i) => (
-          <div key={i} className="insp-pad" style={{ display: "grid", gap: 5, marginBottom: 8, background: "var(--hover)", borderRadius: 8, padding: 8 }}>
-            <div style={{ display: "flex", gap: 4 }}>
+          <div key={i} className="proto-interaction">
+            <div className="proto-top">
               <select
-                style={{ flex: 1 }}
                 aria-label="Interaction trigger"
                 value={ix.trigger}
                 onChange={(e) => {
@@ -1017,7 +1016,7 @@ function Prototype({
             )}
 
             {(ix.action === "openOverlay" || ix.action === "swapOverlay") && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <div className="proto-pair">
                 <select
                   aria-label="Overlay position"
                   value={ix.overlayPosition || "center"}
@@ -1033,7 +1032,7 @@ function Prototype({
                   <option value="bottom">Bottom sheet</option>
                   <option value="top">Top banner</option>
                 </select>
-                <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "var(--dim)" }}>
+                <label className="proto-check">
                   <input
                     type="checkbox"
                     checked={ix.overlayCloseOutside !== false}
@@ -1061,7 +1060,7 @@ function Prototype({
             )}
 
             {ix.action === "setVariable" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <div className="proto-pair">
                 <select
                   aria-label="Variable"
                   value={ix.variableId || ""}
@@ -1108,7 +1107,7 @@ function Prototype({
             {/* §23 PT-012: Figma's Set-variable-mode action; the engine command
                 already exists, the panel just never offered it. */}
             {ix.action === "setVariableMode" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              <div className="proto-pair">
                 <select
                   aria-label="Variable collection"
                   value={ix.variableCollectionId || ""}
@@ -1140,7 +1139,7 @@ function Prototype({
               </div>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 60px", gap: 4 }}>
+            <div className="proto-anim">
               <select
                 aria-label="Animation"
               value={ix.animation}
@@ -1174,7 +1173,7 @@ function Prototype({
                 }}
               />
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+            <div className="proto-pair">
               <select
                 aria-label="Easing"
               value={ix.easing || "easeOut"}
@@ -1194,18 +1193,7 @@ function Prototype({
                 <option value="spring">Spring (Gentle)</option>
                 <option value="bouncy">Spring (Bouncy)</option>
               </select>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
-                  fontSize: 10,
-                  color: "var(--fg-muted)",
-                  cursor: "pointer",
-                  userSelect: "none",
-                }}
-                title="Match layers by name and interpolate their properties"
-              >
+              <label className="proto-check" title="Match layers by name and interpolate their properties">
                 <input
                   type="checkbox"
                   checked={Boolean(ix.smartMatch || ix.animation === "smart")}
@@ -1221,7 +1209,7 @@ function Prototype({
                 Smart match
               </label>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px", background: "var(--bg-subtle)", borderRadius: 4 }}>
+            <div className="proto-ease">
               <svg width="32" height="18" viewBox="0 0 32 18" style={{ overflow: "visible" }}>
                 {ix.easing === "linear" && <line x1="2" y1="16" x2="30" y2="2" stroke="var(--accent)" strokeWidth="1.5" />}
                 {ix.easing === "easeIn" && <path d="M 2 16 Q 22 16, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
@@ -1230,7 +1218,7 @@ function Prototype({
                 {ix.easing === "spring" && <path d="M 2 16 C 10 0, 16 2, 22 4 C 26 3, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
                 {ix.easing === "bouncy" && <path d="M 2 16 C 8 -4, 14 6, 20 0 C 24 4, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
               </svg>
-              <span style={{ fontSize: 10, color: "var(--dim)" }}>
+              <span className="proto-ease-t">
                 {ix.duration || 250}ms • {ix.easing || "easeOut"}
               </span>
             </div>
@@ -1249,7 +1237,7 @@ function Prototype({
                 + Condition
               </button>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 78px 1fr auto", gap: 4, alignItems: "center" }}>
+              <div className="proto-cond">
                 <select
                   value={ix.condition.variableId}
                   title="Variable to test"
@@ -1334,9 +1322,11 @@ function Prototype({
         ))}
       </Section>
       <div className="insp-pad">
-        <button className="export-run" onClick={() => onPresent?.()}>
-          Present Prototype
-        </button>
+        <Tooltip label="Present" shortcut="⌘⌥↩">
+          <button className="x-primary" onClick={() => onPresent?.()}>
+            Present Prototype
+          </button>
+        </Tooltip>
       </div>
     </>
   );

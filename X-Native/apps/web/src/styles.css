@@ -1343,6 +1343,65 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   font-size: 12px;
 }
 .proto-row span { color: var(--muted); }
+/* Prototype panel: its rows, the interaction card and the controls inside it.
+   Each of these used to be styled inline — the panel's own rows got a
+   borderless 24px select while the card's selects kept the browser's default
+   border, both at 12px type — so the same control looked like two different
+   things one row apart (PT-U3). */
+.proto-row select,
+.proto-interaction select,
+.proto-interaction input {
+  height: 28px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+  color: var(--text);
+  font: var(--t-control);
+  outline: none;
+}
+.proto-row select { max-width: 190px; }
+.proto-interaction select { cursor: pointer; }
+.proto-row select:focus,
+.proto-interaction select:focus,
+.proto-interaction input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--sel);
+}
+/* One interaction is one card, so a stack of them reads as a list. */
+.proto-interaction {
+  display: grid;
+  gap: 5px;
+  margin: 0 12px 8px;
+  padding: 8px;
+  background: var(--hover);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.proto-top { display: flex; gap: 4px; }
+.proto-top select { flex: 1; }
+.proto-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.proto-anim { display: grid; grid-template-columns: 1fr 60px; gap: 4px; }
+.proto-cond { display: grid; grid-template-columns: 1fr 78px 1fr auto; gap: 4px; align-items: center; }
+.proto-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--dim);
+  cursor: pointer;
+  user-select: none;
+}
+.proto-ease {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  background: var(--bg-subtle);
+  border-radius: 4px;
+}
+.proto-ease-t { font-size: 10px; color: var(--dim); }
 .proto-preview {
   margin: 8px 12px 16px;
   height: 160px;
@@ -2151,6 +2210,12 @@ kbd {
   padding: 12px 16px 8px;
   font-size: 13px;
 }
+/* The filled primary action. It was named `export-run` for its first caller
+   (the export sheet's Run button) and every full-width action copied the name —
+   including the prototype panel's Present button, which has nothing to do with
+   exporting (PT-U2). The recipe has a semantic name now; the old one stays as an
+   alias so the remaining callers keep working. */
+.x-primary,
 .export-run {
   height: 32px;
   width: 100%;
@@ -2161,6 +2226,7 @@ kbd {
   font-weight: 500;
   font-size: 11px;
 }
+.x-primary:hover,
 .export-run:hover { background: var(--blue-hover); }
 .export-row {
   display: flex;

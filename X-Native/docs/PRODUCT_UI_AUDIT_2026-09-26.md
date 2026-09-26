@@ -145,12 +145,12 @@ fullscreen/Exit — all functional.
 |---|---|---|---|
 | TB-U3 (upheld) | FIXED with TB-U3 above (distinct flow glyph, not the Present play triangle) | FIXED (P1) | — |
 | PT-U1 | FIXED with IN-U3: the header is a `Section`, so a click now folds the block instead of doing nothing | FIXED (P2) | — |
-| PT-U2 | "Present Prototype" reuses `export-run` class | DRIFT (§29) | P2 |
-| PT-U3 | All proto selects/inputs raw + inline styles; icon-only btns native title= (orientation/plus/minus/condition) | DRIFT + tooltip split | P2 |
+| PT-U2 | FIXED: `.export-run`'s recipe has a semantic name (`.x-primary`) — the class was named for the export sheet's Run button and every full-width action had copied it, Present included. The old name stays as an alias for its remaining callers. | FIXED (P2) | — |
+| PT-U3 | FIXED: the prototype panel is one set of controls — `.proto-row`/`.proto-interaction` selects and inputs share one recipe (28px, 1px `--line`, `--input`, `--t-control`, accent focus), the interaction is a `.proto-interaction` card with layout classes (`.proto-top`/`.proto-pair`/`.proto-anim`/`.proto-cond`/`.proto-check`/`.proto-ease`) instead of six inline grids, and the preview's `marginTop` moved to CSS. Panel rows used to be borderless 24px selects and the card's 12px browser defaults one row apart. | FIXED (P2) | — |
 | PT-U4 | FIXED: the selected-connection chip and the vector tool strip are the same `.canvas-dock` surface the canvas HUD and contextual toolbar use (`--dock`, `--line-2`, `--tool-fg`, elevation tokens). ~10 inline style objects per surface are gone, `#18181b`/`#fff` with them, and both follow the light/dark theme. Fixing it surfaced a second defect: **the chip could not be dismissed with Escape at all** — the canvas's own Escape branch is unreachable for real keypresses because the hotkey layer registers earlier and answers first (the reason `ui/penDraft.ts` exists), so the dismissal is now published (`ui/connSelection.ts`) and answered in the cascade. | FIXED (P2) | — |
 | PT-U5 | FIXED: the player is styled by `.player-dock` (it defines the presentation stage's own palette — a prototype is shown on a dark stage in both themes, so it deliberately does not use the app's `--dock`). 11 inline style objects and their `#18181b`/`#fff`/`rgba(255,255,255,…)` copies are gone, the three toggles carry `aria-pressed` instead of saying "on" through their own inline colour, and labels ride the shared tooltip bridge like every other control. Fixing it surfaced a second defect: **the pager listed frames the player can never present** (see §4o). | FIXED (P2) | — |
 | PT-U6 | "Prototype flows ⇧F" toggle lives in ZoomMenu (view menu inside inspector tab bar) — works, surprising home | IA note | P2 |
-| PT-U7 | Present button Tooltip shows "Esc to exit" but never the start chord ⌘⌥↩ (exists + in palette) | PARTIAL | P2 |
+| PT-U7 | FIXED: the Present chip is the chord that starts a presentation (⌘⌥↩, as the palette lists and `bindHotkeys` implements) instead of the sentence "Esc to exit" in a shortcut slot. | FIXED (P2) | — |
 
 ## §7. Inspector architecture trace (prompts §§10–11, 20, 29) — Design:3061–6222 + Section:8455 + Field:7637
 
@@ -642,6 +642,26 @@ arrow keys, so all three agree.
 
 Suite **253 pass / 0 fail** (11 new checks in §40 — dock chrome, all 13 controls, `aria-pressed`, the
 three steps, idle slide-away, shared tooltip, Exit), unit 1621, tsc and build clean.
+
+## §4p. The prototype panel is one set of controls (PT-U2, PT-U3, PT-U7)
+
+The panel's rows carried a borderless 24px select while the interaction card's selects kept the browser's
+12px default — the same control looked like two different things one row apart — and the whole card was
+built from six inline grids. The controls now share one recipe (`.proto-row` / `.proto-interaction`
+selects and inputs, accent focus ring) and the card has real classes for its sections (`.proto-top`,
+`.proto-pair`, `.proto-anim`, `.proto-cond`, `.proto-check`, `.proto-ease`); the last inline style in the
+whole component is the easing curve's `overflow: visible`. The icon-only buttons in the area (orientation,
+add/remove interaction, add/remove condition) were already riding the shared tooltip bridge, so they were
+left alone rather than given a second label.
+
+"Present Prototype" was `.export-run` — the class is named for the export sheet's Run button, and every
+full-width action had copied the name, Present included. The recipe now has a semantic name (`.x-primary`)
+with `.export-run` kept as an alias for the remaining callers (PT-U2). And the Present chip advertised
+"Esc to exit" — a sentence in a shortcut slot, describing the key that *leaves* a presentation, while the
+chord that starts one (⌘⌥↩, which the palette lists and `bindHotkeys` implements) was never shown
+(PT-U7).
+
+Suite **260 pass / 0 fail** (7 new checks in §41), unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
