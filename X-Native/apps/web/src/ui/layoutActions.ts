@@ -48,9 +48,12 @@ export function addAutoLayout(engine: Engine, snap: Snapshot, only?: string): vo
   const nodes = targets(snap, only);
   if (!nodes.length) return;
   if (nodes.length === 1 && takesLayoutDirectly(nodes[0].kind)) {
-    // An instance's layout belongs to its main component; `publishMaster` in the
-    // engine carries the change there, which is the article's "or update the
-    // main component".
+    // Instance layout belongs to the main component: refused here, with the
+    // article's own way out (detach, or edit the master).
+    if (insideInstance(snap.pages[snap.page].root, nodes[0].id)) {
+      toast("Auto layout can't be added to an instance · detach it, or edit the main component");
+      return;
+    }
     engine.dispatch({ type: "autoLayout", id: nodes[0].id, layout: defaultLayout() });
     return;
   }

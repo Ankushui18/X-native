@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
 import { coerceVariableValue, fallbackForType, isAlias, resolveVariable } from "../engine/variables";
-import { collectColors, find, findParent } from "../engine/memory";
+import { collectColors, find, findParent, isInstanceMember } from "../engine/memory";
 import { shapePoly, shiftPoints } from "../engine/geometry";
 import { alignKey } from "../engine/layout";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
@@ -2374,6 +2374,14 @@ export function bindHotkeys(
       e.preventDefault();
       const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
       const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+      {
+        // Figma refuses position changes inside instances; skipping the
+        // dispatch keeps a no-op off the undo stack. Mixed selections still
+        // dispatch — the engine moves what it may and skips the rest.
+        const ast = engine.snapshot();
+        const aroot = ast.pages[ast.page].root;
+        if (ast.selection.length && ast.selection.every((id) => isInstanceMember(aroot, id))) return;
+      }
       // Inside vector edit with points selected, arrows move the anchors —
       // not the whole layer (Figma). The first nudge on a basic shape
       // converts it, exactly like dragging a point does.
@@ -2470,9 +2478,14 @@ function AssetsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           <div
             key={c.id}
             className="row"
-            onDoubleClick={() =>
-              engine.dispatch({ type: "placeComponent", id: c.id, x: 80, y: 80 })
-            }
+            onDoubleClick={() => {
+              // Figma lands a placed instance where you look: viewport
+              // center, not a fixed corner every instance stacks onto.
+              const z = snap.zoom || 1;
+              const cx = (window.innerWidth / 2 - snap.panX) / z;
+              const cy = (window.innerHeight / 2 - snap.panY) / z;
+              engine.dispatch({ type: "placeComponent", id: c.id, x: Math.round(cx), y: Math.round(cy) });
+            }}
           >
             <Icon name="component" size={14} />
             <span className="name">{c.name}</span>

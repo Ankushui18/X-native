@@ -745,7 +745,7 @@ export interface XNode {
   fillHY: number;
   isMask: boolean;
   maskType: "alpha" | "vector" | "luminance";
-  variant: string;
+  variant?: string;
   componentProperties?: Record<string, string | boolean>;
   /** Frame layout grids (columns, rows, grid) */
   layoutGrids?: LayoutGrid[];

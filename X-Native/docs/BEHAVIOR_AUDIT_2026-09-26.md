@@ -775,3 +775,88 @@ select, inline rename).
 - Mixed-selection lock/hide semantics beyond per-layer toggle (no
   evidence either way).
 - Sort-position / batch-rename plugins territory.
+
+## §17 — Components / instances / variants
+
+Evidence: Figma “Guide to components” (360038662654: main defines
+properties, instances receive updates), Figma “Apply changes to
+instances” (360039150733, fetched verbatim: allowed = text props,
+fill/stroke, effects, guides, nested-instance swap, export settings,
+layer name; refused = layer order, position incl. auto-layout items,
+constraints, text bounds; preservation across variant/swap by matching
+layer NAMES + hierarchy; per-property reset via More actions;
+push-to-main same-file only, never for nested-in-component), plus forum
+30206/13948 corroborating name+hierarchy preservation.
+
+### Fixed (shipped in the §17 components commit on this branch)
+
+- C-001 Member geometry/layout refusal: patches on instance members
+  strip position/size/radii/vector/auto-layout/constraints keys before
+  they reach the node or its override record (`stripMemberPatch`);
+  instance roots still move but take no layout. Member vector edits
+  (patchPath/bend/insert/mirror/corner) are refused outright.
+- C-002 Structural guards: delete/duplicate/nudge/arrange/resize/
+  auto-layout/wrap/ungroup refuse or skip instance members; add/
+  reorder/paste never land children inside an instance (paste falls
+  back to the sibling slot); an instance never ungroups.
+- C-003 Component-from-instance mints a fresh library id (was aliased
+  to the source component).
+- C-004 Master-safe detach: masters refuse detach (was orphaning the
+  library entry); detach clears dead override records but keeps nested
+  instances linked; members refuse detach.
+- C-005 Variant swaps re-id (`reid`) so two instances of one variant
+  never share child ids (was shared ids across instances).
+- C-006 Reset restores the CURRENT variant def (was always default),
+  preserves the variant selection, and keeps the Variant property
+  consistent with it.
+- C-007 Name-based override preservation: sync matches master/instance
+  children by name (positional fallback), so master reorders no longer
+  cross-wire overrides; variant instances sync from their own def.
+- C-008 Library insert places at the viewport center (was fixed 80,80).
+- C-009 Variant-aware publish: editing a variant copy publishes to its
+  own variant def, never to the default node plain instances read.
+- C-010 Master-subtree publish: edits at or under a master (patch,
+  move, nudge, resize, path family, reorder, arrange incl. front/back,
+  add, delete, duplicate, wrap, ungroup, lock, hide, flip, variant
+  props) republish it, so instances receive every update. Members take
+  the master's position (only instance roots keep their own x/y), so
+  master position edits flow.
+- C-011 Override carry: setVariant / variant-property / swap carry
+  same-named overrides (nested-aware) and drop stale size overrides
+  when the new def size differs.
+- C-012 Sync-corruption repair (the deep one): the sync walk re-synced
+  members against the master root (members inherited its name, size,
+  and cloned children on every master edit), because the recursion
+  stamped members with the library link. Only instance roots carry
+  the link now (`isRoot` flag, legacy stamps cleared);
+  `findInstanceRoot` heals residual stamps on read; nested instances
+  keep their own link/content through outer syncs and still follow
+  their own master.
+- C-013 Reset hardening: full reset on a member id redirects to its
+  instance root (was grafting a master-root clone inside the member);
+  per-property reset on a member restores that layer's own master
+  value via name-path lookup with index fallback.
+- Flip on instance roots flips the flag only (recorded as an
+  override); members refuse (consistent with C-001). `XNode.variant`
+  is optional (`types.ts`). UI: canvas drag skips member origins,
+  vector-edit entry on members toasts instead of corrupting, arrow
+  nudges skip members, add-layout refuses instances.
+
+### Verified parity (traced, no fix needed)
+
+- Duplicate-master→instance, instance-dupe→instance, reset whole and
+  per-property ops, swap op + inspector dropdown, AssetsPane inventory,
+  `⌘⌥K` / `⌥⌘B` / `⇧⌘Y` wired, scale/radii/layout-remove refusals,
+  detach keeps nested instances.
+- X's `⌥⌘B` detach binding is X's own (no conflict with `⌘B` bold);
+  a 2023 Medium claim that `⌥⌘K` detaches is wrong — that chord is
+  Create component in Figma and X.
+
+### Deferred / out of scope
+
+- Push-to-main (`pushChanges`): op absent; same-file-only push is new
+  surface, not a parity gap in shipped behavior.
+- `resetOverrides:text/fill` menu handlers are unoffered dead code
+  (per-property reset exists via the op); no phantom.
+- Undo-stack no-op pollution (dispatch pushes even when guards
+  refuse): pre-existing, cross-cutting, left for the history section.

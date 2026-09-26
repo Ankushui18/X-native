@@ -3,7 +3,7 @@ import type { Effect, Engine, Interaction, NodeKind, PathPoint, ProtoAnim, Proto
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveVariable } from "../engine/variables";
 import { prefersReducedMotion } from "./a11y";
-import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
+import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
 import { layersAt } from "./selectSame";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
@@ -232,7 +232,7 @@ function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
   const out: MultiOrigin[] = [];
   for (const id of ids) {
     const wp = worldPos(root, id);
-    if (!wp || isEffectivelyLocked(root, id)) continue;
+    if (!wp || isEffectivelyLocked(root, id) || isInstanceMember(root, id)) continue;
     out.push({
       id,
       x: wp.x,
@@ -778,6 +778,11 @@ export function Canvas({
             n.kind === "line" ||
             n.kind === "arrow")
         ) {
+          if (isInstanceMember(snap.pages[snap.page].root, n.id)) {
+            toast("Edit the main component to change this layer");
+            e.stopImmediatePropagation();
+            return;
+          }
           if (n.kind === "boolean") {
             // Childless booleans still bake down; basic shapes edit in
             // place — entering and leaving without touching a point leaves
@@ -5535,6 +5540,10 @@ export function Canvas({
         hit.kind === "line" ||
         hit.kind === "arrow")
     ) {
+      if (isInstanceMember(snap.pages[snap.page].root, hit.id)) {
+        toast("Edit the main component to change this layer");
+        return;
+      }
       engine.dispatch({ type: "select", ids: [hit.id] });
       // Basic shapes edit in place (first edit converts kind); only a
       // childless boolean bakes down. Booleans with children fall through to

@@ -248,13 +248,105 @@ function isEffectivelyLocked(root: XNode, id: string): boolean {
 function findInstanceRoot(root: XNode, id: string): XNode | null {
   const curr = find(root, id);
   if (!curr) return null;
-  if (curr.componentId && !curr.isComponent) return curr;
+  if (curr.componentId && !curr.isComponent) {
+    // A nested root carries its own link and resolves to itself; a member
+    // stamped with its root's link by an older sync heals to the true root.
+    let q = findParent(root, id);
+    while (q && q !== root) {
+      if (q.componentId && !q.isComponent) {
+        if (q.componentId !== curr.componentId) return curr;
+        curr.componentId = "";
+        return q;
+      }
+      q = findParent(root, q.id);
+    }
+    return curr;
+  }
   let p = findParent(root, id);
   while (p && p !== root) {
     if (p.componentId && !p.isComponent) return p;
     p = findParent(root, p.id);
   }
   return null;
+}
+
+/**
+ * The master-def counterpart of an instance member: descend the def by the
+ * member's name path from its instance root, falling back to the child
+ * index path when a rename broke the name trail.
+ */
+function findDefCounterpart(instRoot: XNode, defNode: XNode, memberId: string): XNode | null {
+  const names: string[] = [];
+  const idxs: number[] = [];
+  let cur: XNode | null = find(instRoot, memberId);
+  if (!cur) return null;
+  while (cur && cur.id !== instRoot.id) {
+    const p = findParent(instRoot, cur.id);
+    if (!p) return null;
+    names.unshift(cur.name);
+    idxs.unshift(p.children.indexOf(cur));
+    cur = p;
+  }
+  let byName: XNode | null = defNode;
+  for (const nm of names) {
+    if (!byName) break;
+    const next: XNode | null = byName.children.find((c) => c.name === nm) ?? null;
+    if (!next) { byName = null; break; }
+    byName = next;
+  }
+  if (byName && byName !== defNode) return byName;
+  let byIdx: XNode | null = defNode;
+  for (const i of idxs) {
+    if (!byIdx.children[i]) return null;
+    byIdx = byIdx.children[i];
+  }
+  return byIdx === defNode ? null : byIdx;
+}
+
+/** Nearest enclosing main component (self counts): master-subtree edits publish through it. */
+function findMasterRoot(root: XNode, id: string): XNode | null {
+  const curr = find(root, id);
+  if (!curr) return null;
+  if (curr.isComponent) return curr;
+  let p = findParent(root, id);
+  while (p && p !== root) {
+    if (p.isComponent) return p;
+    p = findParent(root, p.id);
+  }
+  return null;
+}
+
+/** True when the layer sits strictly inside an instance (the instance root
+ *  itself is editable — it is the members whose geometry belongs to the master). */
+function isInstanceMember(root: XNode, id: string): boolean {
+  const r = findInstanceRoot(root, id);
+  return !!r && r.id !== id;
+}
+
+/**
+ * Patch keys a member inside an instance may not take. Figma refuses order,
+ * position, constraints, and text bounds there (structure belongs to the
+ * main component); X's own policy already refuses radii, aspect lock, and
+ * the Scale tool, so size/rotation/vector/grid/crop/layout/kind refuse here
+ * too. Paint, text, effects, exports, visibility, and names stay overridable.
+ */
+const MEMBER_REFUSED_KEYS = new Set([
+  "x", "y", "w", "h", "rotation",
+  "cornerRadii", "cornerIndependent", "cornerSmoothing",
+  "aspectLocked", "aspectRatio",
+  "constraintH", "constraintV",
+  "path", "closed", "vectorNetwork",
+  "gridCol", "gridRow", "gridPinned",
+  "imageCrop", "kind", "booleanOp",
+]);
+
+/** Strip member-refused keys; null when nothing overridable remains. */
+function stripMemberPatch(patch: Partial<XNode>): Partial<XNode> | null {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(patch)) {
+    if (!MEMBER_REFUSED_KEYS.has(k)) out[k] = (patch as Record<string, unknown>)[k];
+  }
+  return Object.keys(out).length ? (out as Partial<XNode>) : null;
 }
 
 /**
@@ -1358,7 +1450,7 @@ export class MemoryEngine implements Engine {
       .map((id) => find(root, id))
       .filter((n): n is XNode => !!n && !n.locked);
     if (!nodes.length) return;
-    if (nodes.length === 1 && nodes[0].kind === "group") {
+    if (nodes.length === 1 && nodes[0].kind === "group" && !insideInstance(root, nodes[0].id)) {
       nodes[0].kind = "frame";
       nodes[0].name = nodes[0].name === "Group" ? "Frame" : nodes[0].name;
       nodes[0].layout = layout;
@@ -1690,6 +1782,8 @@ export class MemoryEngine implements Engine {
           cmd.extra,
         );
         const into = parent ?? this.root();
+        // Instances take no new children: structure belongs to the master.
+        if (into !== this.root() && (isInstanceMember(this.root(), into.id) || (!!into.componentId && !into.isComponent))) break;
         const spot = this.gridSpotFor(into, cmd.x, cmd.y);
         into.children.splice(spot?.index ?? into.children.length, 0, n);
         // "Place it between the cell objects - in layer order
@@ -1701,6 +1795,7 @@ export class MemoryEngine implements Engine {
           n.gridPinned = true;
         }
         s.selection = [n.id];
+        this.publishIfMasterEdit(n.id);
         if (cmd.kind === "text" || cmd.extra?.imageSrc) s.tool = "select";
         if (cmd.kind === "frame" && into === this.root()) this.lastFrameSize = { w: n.w, h: n.h };
         break;
@@ -1712,20 +1807,21 @@ export class MemoryEngine implements Engine {
         }
         for (const id of cmd.ids) {
           const n = find(this.root(), id);
-          if (n && !n.locked) {
+          if (n && !isEffectivelyLocked(this.root(), id) && !isInstanceMember(this.root(), id)) {
             n.x += cmd.dx;
             n.y += cmd.dy;
             if (snapOn(this.state, s.page)) {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
             }
+            this.publishIfMasterEdit(id);
           }
         }
         break;
       case "nudge":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (!n || isEffectivelyLocked(this.root(), id)) continue;
+          if (!n || isEffectivelyLocked(this.root(), id) || isInstanceMember(this.root(), id)) continue;
           const parent = findParent(this.root(), id);
           if (parent?.layout && !n.absolutePosition) {
             const idx = parent.children.findIndex((c) => c.id === id);
@@ -1745,11 +1841,12 @@ export class MemoryEngine implements Engine {
               n.y = Math.round(n.y);
             }
           }
+          this.publishIfMasterEdit(id);
         }
         break;
       case "resize": {
         const n = find(this.root(), cmd.id);
-        if (n && !n.locked) {
+        if (n && !isEffectivelyLocked(this.root(), cmd.id) && !isInstanceMember(this.root(), cmd.id)) {
           const oldW = n.w;
           const oldH = n.h;
           // What the person asked for, before snapping: an axis counts as
@@ -1808,6 +1905,7 @@ export class MemoryEngine implements Engine {
             applyConstraints(n, oldW, oldH, n.w, n.h);
           }
           this.publishMaster(n);
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
@@ -1842,12 +1940,14 @@ export class MemoryEngine implements Engine {
           const n = find(root, id);
           const wp = worldPos(root, id);
           // Refuse to drop a node into itself or its own subtree.
-          if (!n || isEffectivelyLocked(root, id) || id === dest.id || find(n, dest.id)) continue;
+          if (!n || isEffectivelyLocked(root, id) || isInstanceMember(root, id) || id === dest.id || find(n, dest.id)) continue;
           moving.push({ node: n, wx: wp?.x ?? n.x, wy: wp?.y ?? n.y });
         }
         if (!moving.length) break;
-        // A locked container takes no new children.
+        // A locked container takes no new children, and neither does an
+        // instance: its structure belongs to the main component.
         if (isEffectivelyLocked(root, dest.id)) break;
+        if (dest !== root && (isInstanceMember(root, dest.id) || (!!dest.componentId && !dest.isComponent))) break;
         // Count how many of the moved nodes sit before the target slot in the
         // destination, so the index still points at the intended gap after
         // they are spliced out.
@@ -1856,9 +1956,13 @@ export class MemoryEngine implements Engine {
           const at = dest.children.indexOf(node);
           if (at >= 0 && at < index) index--;
         }
+        const oldParentIds: string[] = [];
         for (const { node } of moving) {
           const p = findParent(root, node.id);
-          if (p) p.children = p.children.filter((c) => c.id !== node.id);
+          if (p) {
+            oldParentIds.push(p.id);
+            p.children = p.children.filter((c) => c.id !== node.id);
+          }
         }
         const destWorld = dest === root ? { x: 0, y: 0 } : worldPos(root, dest.id);
         index = Math.max(0, Math.min(index, dest.children.length));
@@ -1867,13 +1971,19 @@ export class MemoryEngine implements Engine {
           m.node.x = m.wx - (destWorld?.x ?? 0);
           m.node.y = m.wy - (destWorld?.y ?? 0);
         }
+        // Structural master edits republish (moves out count as much as in).
+        this.publishIfMasterEdit(dest.id);
+        for (const pid of oldParentIds) this.publishIfMasterEdit(pid);
         break;
       }
       case "delete": {
         for (const id of s.selection) {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
-          if (p && n && !isEffectivelyLocked(this.root(), id)) p.children = p.children.filter((c) => c.id !== id);
+          if (p && n && !isEffectivelyLocked(this.root(), id) && !isInstanceMember(this.root(), id)) {
+            p.children = p.children.filter((c) => c.id !== id);
+            this.publishIfMasterEdit(p.id);
+          }
         }
         s.selection = s.selection.filter((id) => !!find(this.root(), id));
         // Frame-level guides die with their frame rather than going stale.
@@ -1897,7 +2007,7 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
-          if (!n || isEffectivelyLocked(this.root(), id)) continue;
+          if (!n || isEffectivelyLocked(this.root(), id) || isInstanceMember(this.root(), id)) continue;
           const copy = clone(n);
           const masterId = n.isComponent ? n.componentId || n.id : n.componentId;
           reid(copy);
@@ -1924,6 +2034,7 @@ export class MemoryEngine implements Engine {
           if (at === -1) p.children.push(copy);
           else p.children.splice(at + 1, 0, copy);
           created.push(copy.id);
+          this.publishIfMasterEdit(copy.id);
         }
         s.selection = created;
         this.justDuplicated = true;
@@ -1932,22 +2043,39 @@ export class MemoryEngine implements Engine {
       case "patch": {
         const n = find(this.root(), cmd.id);
         if (n) {
+          // Members inside an instance only override paint/text/effects: the
+          // refused keys never reach the node or its override record.
+          // (A local, not a cmd reassign: reassigning the switch discriminant
+          // invalidates narrowing for every other case in this dispatch.)
+          let incoming = cmd.patch;
+          if (isInstanceMember(this.root(), cmd.id)) {
+            const stripped = stripMemberPatch(incoming);
+            if (!stripped) break;
+            incoming = stripped;
+          }
+          // Layout belongs to the main component even on the instance root.
+          if (incoming.layout !== undefined && findInstanceRoot(this.root(), cmd.id)) {
+            const rest = { ...incoming };
+            delete rest.layout;
+            if (!Object.keys(rest).length) break;
+            incoming = rest;
+          }
           // A hand-typed name pins the layer name; automatic naming stops.
-          if (cmd.patch.name !== undefined) n.nameLocked = true;
+          if (incoming.name !== undefined) n.nameLocked = true;
           // Editing a bound colour by hand detaches it from its style, as in
           // Standard behavior — the alternative is silently diverging from the style, or
           // silently reverting the user's edit. Re-binding is explicit.
-          if (cmd.patch.fill !== undefined && cmd.patch.fillStyle === undefined && n.fillStyle) {
+          if (incoming.fill !== undefined && incoming.fillStyle === undefined && n.fillStyle) {
             delete n.fillStyle;
           }
-          if (cmd.patch.strokePaint !== undefined && cmd.patch.strokeStyle === undefined && n.strokeStyle) {
+          if (incoming.strokePaint !== undefined && incoming.strokeStyle === undefined && n.strokeStyle) {
             delete n.strokeStyle;
           }
           // Same detach rule for variables: editing a bound prop by hand
           // clears that binding, otherwise the next relayout would revert
           // the edit.
           if (n.variableBindings) {
-            for (const k of Object.keys(cmd.patch)) {
+            for (const k of Object.keys(incoming)) {
               if (k in n.variableBindings) delete n.variableBindings[k];
             }
             if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
@@ -1955,7 +2083,7 @@ export class MemoryEngine implements Engine {
           // Text rule: a text layer cannot hold a max height and a max
           // line count at once - setting either clears the other - so the pair
           // is resolved here rather than in whichever panel did the writing.
-          const patch = n.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
+          const patch = n.kind === "text" ? textDimensionRule(incoming) : incoming;
           // Turning the aspect lock on remembers the ratio it was taken at, so
           // a later size that clamps to a pixel cannot leave the box square.
           if (patch.aspectLocked === true && patch.aspectRatio === undefined && n.w > 0 && n.h > 0) {
@@ -1969,26 +2097,26 @@ export class MemoryEngine implements Engine {
             n.name = first ? first.slice(0, 60) : "Text";
           }
           if (n.isComponent && n.componentId) {
-            const lib = s.components.find((c) => c.id === n.componentId);
-            if (lib) {
-              lib.name = n.name;
-              lib.node = clone(n);
-            }
-            syncInstances(s.pages, n);
+            this.publishMaster(n);
           } else if (n.componentId && !n.isComponent) {
-            n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+            n.overrides = { ...(n.overrides || {}), ...incoming };
           } else {
             const inst = findInstanceRoot(this.root(), n.id);
             if (inst && inst !== n) {
-              n.overrides = { ...(n.overrides || {}), ...cmd.patch };
+              n.overrides = { ...(n.overrides || {}), ...incoming };
             }
           }
+          // Content edits anywhere under a master republish it, so every
+          // instance receives the update (master roots publish above).
+          if (!n.isComponent) this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
       case "autoLayout": {
         const n = find(this.root(), cmd.id);
-        if (n) {
+        // Instance layout belongs to the main component: refused on the
+        // instance root as well as its members (masters publish through).
+        if (n && !insideInstance(this.root(), cmd.id)) {
           n.layout = cmd.layout;
           this.publishMaster(n);
         }
@@ -2056,12 +2184,19 @@ export class MemoryEngine implements Engine {
         if (!this.clip.length) break;
         const created: string[] = [];
         const selected = s.selection.length === 1 ? find(this.root(), s.selection[0]) : null;
+        // Instances take no pasted children: with an instance (or member)
+        // selected, the paste lands beside it instead of inside it.
+        const selParent =
+          selected && insideInstance(this.root(), selected.id)
+            ? findParent(this.root(), selected.id) ?? this.root()
+            : null;
         const parent =
-          selected && (selected.kind === "frame" || selected.kind === "group" || selected.kind === "boolean")
+          selParent ??
+          (selected && (selected.kind === "frame" || selected.kind === "group" || selected.kind === "boolean")
             ? selected
             : selected
               ? findParent(this.root(), selected.id) ?? this.root()
-              : this.root();
+              : this.root());
         const parentWorld = parent === this.root() ? { x: 0, y: 0 } : worldPos(this.root(), parent.id) ?? { x: 0, y: 0 };
         const grid = snapOn(this.state, s.page);
         // "Paste here" aims the whole copy at one point, so the group's centre
@@ -2091,6 +2226,7 @@ export class MemoryEngine implements Engine {
           }
           parent.children.push(copy);
           created.push(copy.id);
+          this.publishIfMasterEdit(copy.id);
         }
         s.selection = created;
         break;
@@ -2109,31 +2245,43 @@ export class MemoryEngine implements Engine {
       case "lockSel":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (n) n.locked = !n.locked;
+          if (n) {
+            n.locked = !n.locked;
+            this.publishIfMasterEdit(id);
+          }
         }
         break;
       case "hideSel":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (n) n.visible = !n.visible;
+          if (n) {
+            n.visible = !n.visible;
+            this.publishIfMasterEdit(id);
+          }
         }
         break;
       case "flip":
         for (const id of s.selection) {
           const n = find(this.root(), id);
-          if (!n) continue;
+          if (!n || isEffectivelyLocked(this.root(), id) || isInstanceMember(this.root(), id)) continue;
+          // On an instance root only the flag flips: member positions belong
+          // to the master, and the flag itself is recorded as an override.
+          const inInst = !!findInstanceRoot(this.root(), id);
           if (cmd.axis === "h") {
             n.flipH = !n.flipH;
             const [tl, tr, bl, br] = n.cornerRadii;
             n.cornerRadii = [tr, tl, br, bl];
-            for (const c of n.children) c.x = n.w - c.x - c.w;
+            if (!inInst) for (const c of n.children) c.x = n.w - c.x - c.w;
+            else n.overrides = { ...(n.overrides || {}), flipH: n.flipH, cornerRadii: [...n.cornerRadii] };
           } else {
             n.flipV = !n.flipV;
             const [tl, tr, bl, br] = n.cornerRadii;
             n.cornerRadii = [bl, br, tl, tr];
-            for (const c of n.children) c.y = n.h - c.y - c.h;
+            if (!inInst) for (const c of n.children) c.y = n.h - c.y - c.h;
+            else n.overrides = { ...(n.overrides || {}), flipV: n.flipV, cornerRadii: [...n.cornerRadii] };
           }
-          this.publishMaster(n);
+          if (n.isComponent) this.publishMaster(n);
+          else this.publishIfMasterEdit(id);
         }
         break;
       case "copyCode": {
@@ -2298,6 +2446,9 @@ export class MemoryEngine implements Engine {
           const n = find(rt, id);
           if (!parent || !n || !n.children.length) continue;
           if (isEffectivelyLocked(rt, id)) continue;
+          // Instances detach; they never ungroup — and neither do their
+          // members or masters, whose structure the library owns.
+          if (isInstanceMember(rt, id) || n.isComponent || (!!n.componentId && !n.isComponent)) continue;
           // Preserve world geometry through the unwrap: each child's center
           // rotates about the group's rotation origin, and the rotation is
           // inherited, so an unrotated group behaves exactly as before.
@@ -2321,13 +2472,14 @@ export class MemoryEngine implements Engine {
           const i = parent.children.findIndex((c) => c.id === id);
           parent.children.splice(i, 1, ...kids);
           out.push(...kids.map((k) => k.id));
+          this.publishIfMasterEdit(parent.id);
         }
         if (out.length) s.selection = out;
         break;
       }
       case "arrange": {
         const rt = this.root();
-        const selected = new Set(s.selection.filter((id) => !isEffectivelyLocked(rt, id)));
+        const selected = new Set(s.selection.filter((id) => !isEffectivelyLocked(rt, id) && !isInstanceMember(rt, id)));
         const groups = new Map<XNode, string[]>();
         const collect = (parent: XNode) => {
           const ids = parent.children.filter((c) => selected.has(c.id)).map((c) => c.id);
@@ -2340,6 +2492,7 @@ export class MemoryEngine implements Engine {
             const picked = parent.children.filter((c) => ids.includes(c.id));
             const rest = parent.children.filter((c) => !ids.includes(c.id));
             parent.children = cmd.dir === "front" ? [...rest, ...picked] : [...picked, ...rest];
+            this.publishIfMasterEdit(parent.id);
             continue;
           }
           const next = [...parent.children];
@@ -2357,6 +2510,7 @@ export class MemoryEngine implements Engine {
             }
           }
           parent.children = next;
+          this.publishIfMasterEdit(parent.id);
         }
         break;
       }
@@ -2569,9 +2723,14 @@ export class MemoryEngine implements Engine {
         }
         const n = find(this.root(), s.selection[0]);
         if (!n) break;
-        const cid = n.componentId || uid("comp");
+        // A component from an instance is a NEW master: reusing the old id
+        // would hijack the library entry every sibling syncs from. Only an
+        // existing master republishes under its own id.
+        const cid = n.isComponent && n.componentId ? n.componentId : uid("comp");
         n.isComponent = true;
         n.componentId = cid;
+        n.variant = undefined;
+        n.overrides = undefined;
         if (!n.name || n.name === "Group" || n.name === "Rectangle") n.name = "Component";
         const existing = s.components.find((c) => c.id === cid);
         if (existing) existing.node = clone(n);
@@ -2650,6 +2809,9 @@ export class MemoryEngine implements Engine {
             );
             if (child) this.swapNodeToComponent(child, String(cmd.value));
           }
+          const beforeW = n.w;
+          const beforeH = n.h;
+          const beforeKids = n.children;
           if (propDef.type === "variant") {
             const v = lib?.variants?.find((x) => x.name === String(cmd.value));
             if (v) {
@@ -2657,7 +2819,12 @@ export class MemoryEngine implements Engine {
               const y = n.y;
               const id = n.id;
               const props = clone(n.componentProperties);
-              Object.assign(n, clone(v.node), {
+              // Fresh child ids: without the reid every instance on this
+              // variant would share the library's node ids, and the next
+              // patch would land on whichever instance `find` meets first.
+              const swapped = clone(v.node);
+              reid(swapped);
+              Object.assign(n, swapped, {
                 x,
                 y,
                 id,
@@ -2666,17 +2833,37 @@ export class MemoryEngine implements Engine {
                 variant: String(cmd.value),
                 componentProperties: props,
               });
+              // By-name preservation plus Figma's size rule: a manual size
+              // survives only when the new variant measures the same.
+              carryNestedOverrides(beforeKids, n.children);
+              if (n.overrides && (n.w !== beforeW || n.h !== beforeH)) {
+                delete n.overrides.w;
+                delete n.overrides.h;
+              }
             }
           }
         }
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "detachInstance": {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           if (!n || (!n.componentId && n.kind !== "instance")) continue;
+          // Masters cannot detach: clearing one would orphan the library
+          // entry (and every live instance) behind it.
+          if (n.isComponent || isInstanceMember(this.root(), id)) continue;
           n.isComponent = false;
           n.componentId = "";
+          n.variant = undefined;
+          // Override records are meaningless on plain layers — but nested
+          // instances stay linked (Figma), so their subtrees keep theirs.
+          const clear = (m: XNode) => {
+            if (m !== n && m.componentId && !m.isComponent) return;
+            m.overrides = undefined;
+            for (const c of m.children) clear(c);
+          };
+          clear(n);
         }
         break;
       }
@@ -2733,7 +2920,7 @@ export class MemoryEngine implements Engine {
       }
       case "patchPath": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked) break;
+        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
         n.path = cmd.path;
         if (cmd.closed != null) n.closed = cmd.closed;
         n.kind = "vector";
@@ -2741,6 +2928,7 @@ export class MemoryEngine implements Engine {
         const pb = pathBounds(n.path, n.closed);
         n.w = pb.w;
         n.h = pb.h;
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "patchVectorNetwork": {
@@ -2808,13 +2996,14 @@ export class MemoryEngine implements Engine {
       }
       case "bendSegment": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked) break;
+        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
         // In-place vector edit: a basic shape carries no path until the first
         // edit, so seed from its outline and convert on write, like patchPath.
         const src = n.path.length >= 2 ? n.path : shapePoly(n);
         if (src.length < 2) break;
         const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
         n.path = bendSegment(src, cmd.segIndex, effClosed, cmd.dragX, cmd.dragY);
+        this.publishIfMasterEdit(cmd.id);
         n.closed = effClosed;
         n.kind = "vector";
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
@@ -2825,7 +3014,7 @@ export class MemoryEngine implements Engine {
       }
       case "insertPointOnPath": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked) break;
+        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
         const src = n.path.length >= 2 ? n.path : shapePoly(n);
         if (src.length < 2) break;
         const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
@@ -2835,12 +3024,13 @@ export class MemoryEngine implements Engine {
           n.closed = effClosed;
           n.kind = "vector";
           n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+          this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
       case "setPointMirror": {
         const n = find(this.root(), cmd.id);
-        if (!n || !n.path[cmd.pointIndex]) break;
+        if (!n || !n.path[cmd.pointIndex] || isInstanceMember(this.root(), cmd.id)) break;
         const pt = n.path[cmd.pointIndex];
         pt.mirrorMode = cmd.mode;
         if (cmd.mode === "angleAndLength" && (pt.ox || pt.oy)) {
@@ -2848,13 +3038,15 @@ export class MemoryEngine implements Engine {
           pt.iy = -(pt.oy || 0);
         }
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "setPointCornerRadius": {
         const n = find(this.root(), cmd.id);
-        if (!n || !n.path[cmd.pointIndex]) break;
+        if (!n || !n.path[cmd.pointIndex] || isInstanceMember(this.root(), cmd.id)) break;
         n.path[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "setVecEdit": {
@@ -3211,10 +3403,15 @@ export class MemoryEngine implements Engine {
         const lib = s.components.find((c) => c.id === n.componentId);
         const v = lib?.variants?.find((x) => x.name === cmd.name);
         if (!v) break;
+        const swapped = clone(v.node);
+        reid(swapped);
         const x = n.x;
         const y = n.y;
         const id = n.id;
-        Object.assign(n, clone(v.node), {
+        const oldKids = n.children;
+        const oldW = n.w;
+        const oldH = n.h;
+        Object.assign(n, swapped, {
           x,
           y,
           id,
@@ -3222,20 +3419,55 @@ export class MemoryEngine implements Engine {
           componentId: n.componentId,
           variant: cmd.name,
         });
+        carryNestedOverrides(oldKids, n.children);
+        if (n.overrides && (n.w !== oldW || n.h !== oldH)) {
+          delete n.overrides.w;
+          delete n.overrides.h;
+        }
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "resetOverrides": {
         const ids = cmd.id ? [cmd.id] : s.selection;
         for (const id of ids) {
-          const n = find(this.root(), id);
-          if (!n) continue;
+          const target = find(this.root(), id);
+          if (!target) continue;
+          // Per-property reset on a member restores that layer's own master
+          // value (looked up in the CURRENT variant def), not the root's.
+          if (cmd.property && isInstanceMember(this.root(), id)) {
+            const ir = findInstanceRoot(this.root(), id);
+            const rlib = ir ? s.components.find((c) => c.id === ir.componentId) : undefined;
+            const rdef = rlib
+              ? ((ir!.variant && rlib.variants?.find((v) => v.name === ir!.variant)?.node) || rlib.node)
+              : null;
+            const counter = rdef ? findDefCounterpart(ir!, rdef, id) : null;
+            if (target.overrides) delete target.overrides[cmd.property];
+            const masterVal = counter
+              ? (counter as unknown as Record<string, unknown>)[cmd.property]
+              : undefined;
+            if (masterVal !== undefined) {
+              (target as unknown as Record<string, unknown>)[cmd.property] = clone(masterVal);
+            }
+            continue;
+          }
+          // A member resets through its instance root, never in place:
+          // replacing a member with the master root would graft a whole
+          // component inside it.
+          let n = target;
+          if (isInstanceMember(this.root(), id)) {
+            const ir = findInstanceRoot(this.root(), id);
+            if (!ir) continue;
+            n = ir;
+          }
           const cid = n.componentId;
           if (!cid && n.kind !== "instance") continue;
           const lib = s.components.find((c) => c.id === cid || c.node.id === cid);
           if (!lib) continue;
+          // Reset restores the CURRENT variant, not the default master.
+          const def = (n.variant && lib.variants?.find((v) => v.name === n.variant)?.node) || lib.node;
           if (cmd.property) {
             if (n.overrides) delete n.overrides[cmd.property];
-            const masterVal = (lib.node as unknown as Record<string, unknown>)[cmd.property];
+            const masterVal = (def as unknown as Record<string, unknown>)[cmd.property];
             if (masterVal !== undefined) {
               (n as unknown as Record<string, unknown>)[cmd.property] = clone(masterVal);
             }
@@ -3243,13 +3475,17 @@ export class MemoryEngine implements Engine {
           }
           const x = n.x;
           const y = n.y;
-          const copy = clone(lib.node);
+          const copy = clone(def);
           reid(copy);
           copy.x = x;
           copy.y = y;
           copy.id = n.id;
           copy.isComponent = false;
           copy.componentId = cid;
+          copy.variant = n.variant;
+          if (copy.componentProperties && n.variant !== undefined && "Variant" in copy.componentProperties) {
+            copy.componentProperties = { ...copy.componentProperties, Variant: n.variant };
+          }
           copy.overrides = undefined;
           walk(copy, (c) => { c.overrides = undefined; });
           Object.assign(n, copy);
@@ -3547,6 +3783,9 @@ export class MemoryEngine implements Engine {
     reid(fresh);
     const props: Record<string, string | boolean> = {};
     for (const p of lib.properties ?? []) props[p.name] = keepProps[p.name] ?? p.defaultValue;
+    const oldKids = n.children;
+    const oldW = n.w;
+    const oldH = n.h;
     Object.assign(n, fresh, {
       x: n.x,
       y: n.y,
@@ -3557,16 +3796,37 @@ export class MemoryEngine implements Engine {
       variant: undefined,
       componentProperties: props,
     });
+    carryNestedOverrides(oldKids, n.children);
+    if (n.overrides && (n.w !== oldW || n.h !== oldH)) {
+      delete n.overrides.w;
+      delete n.overrides.h;
+    }
   }
 
   private publishMaster(n: XNode) {
     if (!n.isComponent || !n.componentId) return;
     const lib = this.state.components.find((c) => c.id === n.componentId);
     if (lib) {
-      lib.name = n.name;
-      lib.node = clone(n);
+      // A variant copy publishes to its own variant def — never to the
+      // default node every plain instance reads.
+      if (n.variant) {
+        const v = lib.variants?.find((x) => x.name === n.variant);
+        if (v) v.node = clone(n);
+        else lib.variants?.push({ name: n.variant, node: clone(n) });
+      } else {
+        lib.name = n.name;
+        lib.node = clone(n);
+      }
     }
-    syncInstances(this.state.pages, n);
+    syncInstances(this.state.pages, n, lib?.node ?? n, lib?.variants);
+  }
+
+  /** Content edits at or under a master republish it, so every instance
+   *  receives the update; outside a master this is a no-op. Parent anchors
+   *  (delete, arrange, reorder) legitimately pass the master id itself. */
+  private publishIfMasterEdit(id: string) {
+    const m = findMasterRoot(this.root(), id);
+    if (m) this.publishMaster(m);
   }
 
   private wrapSel(name: string, extra: Partial<XNode>) {
@@ -3588,6 +3848,11 @@ export class MemoryEngine implements Engine {
       for (const b of nodes) {
         if (a !== b && find(a, b.id)) return;
       }
+    }
+    // Instance members cannot be grouped away: that would rewrite structure
+    // the main component owns. (Grouping the instance itself is fine.)
+    for (const n of nodes) {
+      if (isInstanceMember(rt, n.id)) return;
     }
     // Figma groups across parents: everything is measured in world coords and
     // the group lands in the first selection's parent, preserving visuals.
@@ -3613,6 +3878,7 @@ export class MemoryEngine implements Engine {
       return c;
     });
     const selSet = new Set(ids);
+    const oldPids = nodes.map((n) => findParent(rt, n.id)?.id).filter((x): x is string => !!x);
     const firstIndex = parent.children.findIndex((c) => selSet.has(c.id));
     const detach = (p: XNode) => {
       p.children = p.children.filter((c) => !selSet.has(c.id));
@@ -3622,6 +3888,8 @@ export class MemoryEngine implements Engine {
     parent.children.splice(Math.max(0, firstIndex < 0 ? parent.children.length : Math.min(firstIndex, parent.children.length)), 0, g);
     if (g.kind === "frame" && parent === this.root()) this.lastFrameSize = { w: g.w, h: g.h };
     s.selection = [g.id];
+    this.publishIfMasterEdit(g.id);
+    for (const pid of oldPids) this.publishIfMasterEdit(pid);
   }
 }
 
@@ -3654,13 +3922,34 @@ function framesOf(root: XNode): XNode[] {
   return out;
 }
 
-function syncInstances(pages: Page[], master: XNode) {
-  const cid = master.componentId;
+/** Figma preserves by-name overrides across variant switches and swaps:
+ *  each fresh child inherits the override record of its same-named predecessor. */
+function carryNestedOverrides(oldKids: XNode[], newKids: XNode[]) {
+  for (const c of newKids) {
+    const prev = oldKids.find((o) => o.name === c.name);
+    if (prev?.overrides && Object.keys(prev.overrides).length) {
+      c.overrides = { ...prev.overrides };
+      Object.assign(c, clone(prev.overrides));
+    }
+  }
+}
+
+function syncInstances(pages: Page[], edited: XNode, defaultDef: XNode, variants?: { name: string; node: XNode }[]) {
+  const cid = edited.componentId;
   if (!cid) return;
 
-  function syncNode(instNode: XNode, masterDef: XNode) {
-    const x = instNode.x;
-    const y = instNode.y;
+  function syncNode(instNode: XNode, masterDef: XNode, isRoot: boolean) {
+    // A nested instance keeps its own library link and content: the outer
+    // sync refreshes its shell (geometry follows the outer master) while
+    // its children stay owned by its own master.
+    const nestedLink =
+      !instNode.isComponent && instNode.componentId && instNode.componentId !== cid
+        ? instNode.componentId
+        : null;
+    // Only the instance root keeps its own position: members take the
+    // master's geometry, so master position edits flow to every instance.
+    const x = isRoot ? instNode.x : masterDef.x;
+    const y = isRoot ? instNode.y : masterDef.y;
     const id = instNode.id;
     const interactions = instNode.interactions;
     const localOverrides = instNode.overrides ? { ...instNode.overrides } : {};
@@ -3669,11 +3958,41 @@ function syncInstances(pages: Page[], master: XNode) {
     const instKids = instNode.children ?? [];
     const syncedKids: XNode[] = [];
 
-    for (let i = 0; i < masterKids.length; i++) {
-      const mk = masterKids[i];
-      if (i < instKids.length) {
-        const ik = instKids[i];
-        syncNode(ik, mk);
+    // Figma preserves overrides by layer name: each master child syncs the
+    // same-named instance child, so a master reorder never cross-wires two
+    // layers' masters. A positional fallback keeps plain renames alive when
+    // nothing structural changed; instance children with no master
+    // counterpart are dropped, and new master children are appended fresh.
+    const matchFor = new Array<number>(masterKids.length).fill(-1);
+    const used = new Set<number>();
+    const byName = new Map<string, number[]>();
+    masterKids.forEach((mk, i) => {
+      const list = byName.get(mk.name) ?? [];
+      list.push(i);
+      byName.set(mk.name, list);
+    });
+    instKids.forEach((ik, j) => {
+      const list = byName.get(ik.name) ?? [];
+      const mi = list.find((i) => matchFor[i] < 0);
+      if (mi !== undefined && mi >= 0) {
+        matchFor[mi] = j;
+        used.add(j);
+      }
+    });
+    const freeInst = instKids.map((_, j) => j).filter((j) => !used.has(j));
+    let fi = 0;
+    for (let mi = 0; mi < masterKids.length; mi++) {
+      if (matchFor[mi] < 0 && fi < freeInst.length) {
+        matchFor[mi] = freeInst[fi++];
+      }
+    }
+    const kidCount = nestedLink ? 0 : masterKids.length;
+    for (let mi = 0; mi < kidCount; mi++) {
+      const mk = masterKids[mi];
+      const j = matchFor[mi];
+      if (j >= 0) {
+        const ik = instKids[j];
+        syncNode(ik, mk, false);
         syncedKids.push(ik);
       } else {
         const newKid = clone(mk);
@@ -3692,8 +4011,12 @@ function syncInstances(pages: Page[], master: XNode) {
       id,
       interactions,
       isComponent: false,
-      componentId: cid,
-      children: syncedKids,
+      // Only the instance root carries the library link: stamping members
+      // would make every member look like a root (breaking member guards
+      // and re-syncing members against the master root). This also clears
+      // stamps left by older syncs.
+      componentId: nestedLink ?? (isRoot ? cid : ""),
+      children: nestedLink ? instNode.children : syncedKids,
       overrides: localOverrides,
       ...localOverrides,
     });
@@ -3701,9 +4024,17 @@ function syncInstances(pages: Page[], master: XNode) {
 
   for (const page of pages) {
     walk(page.root, (n) => {
-      if (n === master) return;
+      if (n === edited) return;
       if (n.componentId !== cid || n.isComponent) return;
-      syncNode(n, master);
+      // Members sync through their root's recursion, never directly: a
+      // member stamped with the link would otherwise be re-synced against
+      // the master root and inherit its name, size, and children.
+      const ir = findInstanceRoot(page.root, n.id);
+      if (!ir || ir.id !== n.id) return;
+      // Variant instances sync from their own variant def: a master edit
+      // must never silently reset them to the default variant.
+      const def = (n.variant && variants?.find((v) => v.name === n.variant)?.node) || defaultDef;
+      syncNode(n, def, true);
     });
   }
 }
@@ -4149,7 +4480,7 @@ export function deepestFrame(root: XNode, wx: number, wy: number, skip?: Set<str
   return hit;
 }
 
-export { find, findParent, framesOf, isEffectivelyLocked };
+export { find, findParent, framesOf, isEffectivelyLocked, isInstanceMember, findInstanceRoot };
 
 export function collectColors(root: XNode): string[] {
   const out: string[] = [];
