@@ -407,6 +407,9 @@ export interface Paint {
   color: string;
   opacity: number;
   visible: boolean;
+  /** "Show in exports" for this stacked fill: false hides it from every
+   *  export while the canvas keeps showing it. Absent means shown. */
+  exportVisible?: boolean;
   blend?: string;
   /** Gradient geometry, normalised 0..1 within the node box. */
   gx?: number;
@@ -586,6 +589,14 @@ export interface XNode {
   fill: string;
   fillOpacity: number;
   fillVisible: boolean;
+  /** "Show in exports", per Figma's fill-level toggle: false hides the base
+   *  fill from every export (SVG, raster, PDF) while the canvas keeps showing
+   *  it. Absent means shown. */
+  fillExportVisible?: boolean;
+  /** True for Slice-tool rects: a crop region, not artwork. The canvas keeps
+   *  painting the dashed outline, but exports render the region's content
+   *  (see `exportSvg`) instead of the rectangle itself. */
+  isSlice?: boolean;
   fillType: FillType;
   fillB: string;
   /**

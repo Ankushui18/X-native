@@ -798,6 +798,10 @@ console.log("component instance overrides:");
   const frame = e.snapshot().selection[0];
   const nodeIn = (id) => find(e.snapshot().pages[0].root, id);
   const out = (id) => exportSvg(nodeIn(id), { format: "SVG", scale: 1, suffix: "" });
+  // The legacy construction, with both simplifying settings off: what the
+  // stroke-alignment tests below assert.
+  const outPlain = (id) =>
+    exportSvg(nodeIn(id), { format: "SVG", scale: 1, suffix: "", simplifyStroke: false, outlineText: false });
 
   t("a plain rectangle exports as a path with its fill", /<path d="M 0 0 .*" fill="#[0-9a-f]{6}"/.test(out(frame)));
 
@@ -840,7 +844,8 @@ console.log("component instance overrides:");
   t("a three-stop ramp exports three stops", (rampSvg.match(/<stop /g) || []).length === 3);
   t("the middle colour survives", rampSvg.includes('stop-color="#00ff00"') && rampSvg.includes('offset="50%"'));
 
-  // 3. Stroke alignment: SVG has none, so it is clipped or masked.
+  // 3. Stroke alignment: SVG has none, so with "simplify strokes" off the
+  // stroke is doubled and clipped or masked into place.
   e.dispatch({ type: "add", kind: "rect", x: 260, y: 20, w: 100, h: 80, parent: frame, extra: { name: "Stroked" } });
   const stroked = e.snapshot().selection[0];
   e.dispatch({
@@ -848,14 +853,14 @@ console.log("component instance overrides:");
     id: stroked,
     patch: { strokeVisible: true, strokePaint: "#000000", strokeWidth: 8, strokeAlign: "inside" },
   });
-  const insideSvg = out(stroked);
+  const insideSvg = outPlain(stroked);
   t("an inside stroke is clipped to the shape", insideSvg.includes("<clipPath") && insideSvg.includes("stroke-width=\"16\""));
   e.dispatch({ type: "patch", id: stroked, patch: { strokeAlign: "outside" } });
-  const outsideSvg = out(stroked);
+  const outsideSvg = outPlain(stroked);
   t("an outside stroke is masked out of the shape", outsideSvg.includes("<mask") && outsideSvg.includes('mask="url(#mask_'));
   t("an outside stroke is doubled too", outsideSvg.includes("stroke-width=\"16\""));
   e.dispatch({ type: "patch", id: stroked, patch: { strokeAlign: "center" } });
-  t("a centre stroke needs neither", !out(stroked).includes("<mask") && out(stroked).includes("stroke-width=\"8\""));
+  t("a centre stroke needs neither", !outPlain(stroked).includes("<mask") && outPlain(stroked).includes("stroke-width=\"8\""));
 
   // 4. A vector network: every loop, not just the first one.
   e.dispatch({ type: "add", kind: "rect", x: 20, y: 140, w: 100, h: 80, parent: frame, extra: { name: "Donut" } });

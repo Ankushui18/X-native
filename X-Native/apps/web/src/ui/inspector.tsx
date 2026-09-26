@@ -81,7 +81,7 @@ import {
   unionBox,
   type ScaleAnchor,
 } from "./scaleModel";
-import { vectorNetworkToSvgPath, smoothPath } from "../engine/geometry";
+import { smoothPath } from "../engine/geometry";
 import {
   SPACING_MODES,
   alignKey,
@@ -104,7 +104,7 @@ import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { buildPdf } from "../engine/pdf";
-import { exportSvg } from "../engine/svgExport";
+import { contentBox, exportClipSvg, exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
 import { armPopover } from "./popoverGuard";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
@@ -114,6 +114,7 @@ import {
   FORMATS,
   SCALE_PRESETS,
   exportSize,
+  extrasOf,
   formatScale,
   newPreset,
   qualityValue,
@@ -269,21 +270,22 @@ function ExportAssetsDialog({
   onPresent?: () => void;
 }) {
   const root = snap.pages[snap.page].root;
+  const selected = new Set(snap.selection);
   const candidates = useMemo(() => {
     const out: XNode[] = [];
     const walk = (n: XNode) => {
       for (const ch of n.children) {
         if (ch.visible === false) continue;
-        // Frames and slices are the export units; anything else only shows up
-        // when the layer already carries its own export settings.
-        if (ch.kind === "frame" || (ch.exports?.length ?? 0) > 0) out.push(ch);
+        // Frames and slices are the export units; anything else shows up when
+        // the layer already carries its own export settings or is selected,
+        // so a selected slice or vector is never missing from the list.
+        if (ch.kind === "frame" || ch.isSlice === true || (ch.exports?.length ?? 0) > 0 || selected.has(ch.id)) out.push(ch);
         else walk(ch);
       }
     };
     walk(root);
     return out;
   }, [root]);
-  const selected = new Set(snap.selection);
   const withConfig = (n: XNode) => (n.exports?.length ?? 0) > 0;
   const presetFor = (n: XNode): ExportPreset =>
     n.exports?.[0] ?? { format: "PNG", scale: 1, suffix: "" };
@@ -309,23 +311,30 @@ function ExportAssetsDialog({
   // the sheet is being filtered or ticked; it follows the document instead.
   const thumbs = useMemo(() => {
     const out: Record<string, string> = {};
-    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "" });
+    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "" }, { root });
     return out;
   }, [candidates]);
   const chosen = candidates.filter((n) => checked[n.id]);
-  const total = chosen.reduce((acc, n) => acc + Math.max(1, (n.exports?.length ?? 0) || 1), 0);
+  const filesFor = (n: XNode): ExportPreset[] => {
+    const dialog = configs[n.id] ?? presetFor(n);
+    return [dialog, ...extrasOf(n.exports, dialog)];
+  };
+  const total = chosen.reduce((acc, n) => acc + filesFor(n).length, 0);
 
   const run = () => {
     if (!chosen.length) {
       toast("Nothing checked to export");
       return;
     }
-    // Browsers throttle simultaneous downloads, so each file gets its own turn.
-    chosen.forEach((n, i) => {
-      const p = configs[n.id] ?? presetFor(n);
-      window.setTimeout(() => runExport(n, p), i * 220);
+    // Each checked layer writes its dialog row plus any further stored
+    // presets; browsers throttle simultaneous downloads, so each file gets
+    // its own turn.
+    const jobs: { n: XNode; p: ExportPreset }[] = [];
+    for (const n of chosen) for (const p of filesFor(n)) jobs.push({ n, p });
+    jobs.forEach(({ n, p }, i) => {
+      window.setTimeout(() => runExport(n, p, { root }), i * 220);
     });
-    toast(`Exporting ${plural(chosen.length, "asset")} from "${snap.pages[snap.page].name}"`);
+    toast(`Exporting ${plural(jobs.length, "asset")} from "${snap.pages[snap.page].name}"`);
     onClose();
   };
 
@@ -356,6 +365,9 @@ function ExportAssetsDialog({
             const p = configs[n.id] ?? presetFor(n);
             const set = (patch: Partial<ExportPreset>) =>
               setConfigs((v) => ({ ...v, [n.id]: { ...p, ...patch } }));
+            // The size of the file this row writes, not the layer's design
+            // size: a 2x PNG of a 100px frame reads 200 × 200.
+            const size = exportSize(n, p);
             return (
               <label className={`xrow${checked[n.id] ? " on" : ""}`} key={n.id}>
                 <input
@@ -375,18 +387,23 @@ function ExportAssetsDialog({
                     onClose();
                   }}
                 />
-                <span className="xrow-name">{n.name}</span>
+                <span className="xrow-name" title={`${n.name}${p.suffix}.${p.format.toLowerCase()}`}>{n.name}</span>
                 <span className="xrow-size">
-                  {Math.round(n.w)} × {Math.round(n.h)}
+                  {size.width} × {size.height}
                 </span>
-                <select aria-label="Export format" value={p.format} onChange={(e) => set({ format: e.target.value as ExportFormat })}>
+                <select aria-label="Export format" value={p.format} onChange={(e) => {
+                  const format = e.target.value as ExportFormat;
+                  // Vector formats are pinned at 1x, as in the sidebar: a
+                  // stale 2x would otherwise write a double-sized SVG.
+                  set({ format, scale: FORMAT_CAPS[format].oneToOne ? 1 : p.scale });
+                }}>
                   {FORMATS.map((f) => (
                     <option key={f} value={f}>
                       {f}
                     </option>
                   ))}
                 </select>
-                <select aria-label="Export scale" value={String(p.scale)} onChange={(e) => set({ scale: Number(e.target.value) })}>
+                <select aria-label="Export scale" value={String(p.scale)} disabled={FORMAT_CAPS[p.format].oneToOne} title={FORMAT_CAPS[p.format].oneToOne ? "Vector formats export at 1x" : "Export scale"} onChange={(e) => set({ scale: Number(e.target.value) })}>
                   {SCALES.map((x) => (
                     <option key={x} value={String(x)}>
                       {x}×
@@ -701,7 +718,7 @@ function PageDesign({ engine, tool }: { engine: Engine; tool: string }) {
         />
       </div>
       <div className="hr" />
-      <ExportBlock n={root} engine={engine} />
+      <ExportBlock n={root} engine={engine} root={root} ids={[root.id]} page />
     </>
   );
 }
@@ -1627,26 +1644,11 @@ function generateFlutter(n: XNode): string {
 )`;
 }
 
+/** Copy-as-SVG and the inspect panel's SVG tab: the real exporter, so children,
+ *  gradients, effects, text and rotation survive the trip. This used to be a
+ *  lossy single-path emitter that dropped everything but the outline. */
 function generateSvg(n: XNode): string {
-  let pathD = "";
-  if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
-    pathD = vectorNetworkToSvgPath(n.vectorNetwork);
-  } else if (n.path.length > 0) {
-    pathD = n.path
-      .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
-      .join(" ") + (n.closed ? " Z" : "");
-  }
-  const w = Math.round(Math.max(1, n.w));
-  const h = Math.round(Math.max(1, n.h));
-
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path
-    d="${pathD || `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`}"
-    fill="${n.fillVisible && !isNone(n.fill) ? n.fill : "none"}"
-    stroke="${n.strokeVisible && !isNone(n.strokePaint) ? n.strokePaint : "none"}"
-    stroke-width="${n.strokeWidth}"
-  />
-</svg>`;
+  return exportSvg(n, { format: "SVG", scale: 1, suffix: "" });
 }
 
 function generateLayerJson(n: XNode): string {
@@ -2206,6 +2208,9 @@ const TREE_FORMATS: Partial<Record<DevFormat, TreeFormat>> = {
  * depth 0 — one element, same code path, no second implementation.
  */
 function renderDevCodeScoped(n: XNode, format: DevFormat, unit: DevUnit, scope: DevScope, snap: Snapshot): string {
+  // A slice's SVG is its region's content, like the export's.
+  if (format === "svg" && n.isSlice === true)
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "" }, { root: snap.pages[snap.page].root });
   const tree = TREE_FORMATS[format];
   if (!tree) return renderDevCode(n, format, unit);
   if (scope === "subtree" && n.children?.length) {
@@ -5640,6 +5645,7 @@ function Design({
               value={p.color}
               opacity={Math.round((p.opacity ?? 1) * 100)}
               visible={p.visible}
+              exportVisible={p.exportVisible !== false}
               type={p.type}
               stops={p.stops}
               gx={p.gx}
@@ -5664,6 +5670,7 @@ function Design({
               onChange={(color) => setPaint({ color, visible: true })}
               onOpacity={(v) => setPaint({ opacity: v / 100 })}
               onVisible={(v) => setPaint({ visible: v })}
+              onExportVisible={(v) => setPaint({ exportVisible: v })}
               onRemove={() =>
                 engine.dispatch({
                   type: "patch",
@@ -5723,6 +5730,7 @@ function Design({
             value={n.fill}
             opacity={Math.round((n.fillOpacity ?? 1) * 100)}
             visible={n.fillVisible}
+            exportVisible={n.fillExportVisible !== false}
             type={n.fillType}
             second={n.fillB}
             blend={n.fillBlend}
@@ -5751,6 +5759,7 @@ function Design({
               engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
             }
             onVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })}
+            onExportVisible={(v) => engine.dispatch({ type: "patch", id: n.id, patch: { fillExportVisible: v } })}
             onRemove={() =>
               // Minus removes the base fill outright (same none+hidden pair
               // the stroke row uses), leaving the section empty; Fill "+"
@@ -6193,7 +6202,12 @@ function Design({
         engine={engine}
         snap={snap}
       />
-      <ExportBlock n={n} engine={engine} />
+      <ExportBlock
+        n={n}
+        engine={engine}
+        root={snap.pages[snap.page].root}
+        ids={snap.selection}
+      />
     </>
   );
 }
@@ -7932,6 +7946,18 @@ function ExportSettings({
           Include &ldquo;id&rdquo; attribute
         </label>
       )}
+      {caps.outlineText && (
+        <label className="check" title="Convert text to vector outlines so the file needs no fonts">
+          <input type="checkbox" checked={settings.outlineText} onChange={() => flip("outlineText")} />
+          Outline text
+        </label>
+      )}
+      {caps.simplifyStroke && (
+        <label className="check" title="Draw strokes as filled outlines instead of clipped strokes">
+          <input type="checkbox" checked={settings.simplifyStroke} onChange={() => flip("simplifyStroke")} />
+          Simplify strokes
+        </label>
+      )}
       {caps.resampling && (
         <button className="set-row" onClick={() => pick("resampling", ["detailed", "basic"])}>
           Image resampling
@@ -8010,21 +8036,59 @@ function ScaleField({
   );
 }
 
-function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
+function ExportBlock({
+  n,
+  engine,
+  root,
+  ids,
+  page,
+}: {
+  n: XNode;
+  engine: Engine;
+  root: XNode;
+  /** The whole selection: with several layers every edit applies to all of
+   *  them, and the listed presets are the first layer's. */
+  ids?: string[];
+  /** True for the page-level block, which exports the content box. */
+  page?: boolean;
+}) {
   const presets = n.exports ?? [];
   const [preview, setPreview] = useState<Record<number, boolean>>({});
   const [settingsOpen, setSettingsOpen] = useState<number | null>(null);
+  const multi = (ids ?? [n.id]).length > 1;
+  const targets = (): XNode[] => {
+    const list = (ids ?? [n.id])
+      .map((id) => (id === n.id ? n : find(root, id)))
+      .filter((t): t is XNode => !!t);
+    return list.length ? list : [n];
+  };
+  const scope = { root, page };
   const add = () => {
     openSection("export");
-    engine.dispatch({
-      type: "patch",
-      id: n.id,
-      patch: { exports: [...presets, newPreset("PNG")] },
-    });
+    engine.dispatch({ type: "begin" });
+    for (const t of targets())
+      engine.dispatch({ type: "patch", id: t.id, patch: { exports: [...(t.exports ?? []), newPreset("PNG")] } });
+    engine.dispatch({ type: "end" });
   };
   const set = (i: number, p: ExportPreset) => {
-    const next = presets.map((e, j) => (j === i ? p : e));
-    engine.dispatch({ type: "patch", id: n.id, patch: { exports: next } });
+    engine.dispatch({ type: "begin" });
+    for (const t of targets()) {
+      const cur = t.exports ?? [];
+      // A layer with fewer presets than the first one gains the setting
+      // rather than silently dropping the edit.
+      const next = i < cur.length ? cur.map((e, j) => (j === i ? p : e)) : [...cur, p];
+      engine.dispatch({ type: "patch", id: t.id, patch: { exports: next } });
+    }
+    engine.dispatch({ type: "end" });
+  };
+  const remove = (i: number) => {
+    engine.dispatch({ type: "begin" });
+    for (const t of targets()) {
+      const cur = t.exports ?? [];
+      if (i < cur.length)
+        engine.dispatch({ type: "patch", id: t.id, patch: { exports: cur.filter((_, j) => j !== i) } });
+    }
+    engine.dispatch({ type: "end" });
   };
   return (
     <>
@@ -8059,14 +8123,19 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
             <div className="export-row">
               {/* Preview the export before download — the thumbnail
                   is the real render (SVG source, so it scales with the preset). */}
+              {/* No per-row preview for a multi-selection: the row shows the
+                  first layer's preset, and a thumbnail of one layer would
+                  read as the whole selection. */}
+              {!multi && (
               <button
                 className={`export-thumb${preview[i] ? " on" : ""}`}
                 title={preview[i] ? "Hide preview" : "Preview"}
                 aria-pressed={!!preview[i]}
                 onClick={() => setPreview((v) => ({ ...v, [i]: !v[i] }))}
               >
-                {preview[i] ? <img src={previewUrl(n, p)} alt="" /> : <Icon name="image" size={12} />}
+                {preview[i] ? <img src={previewUrl(n, p, scope)} alt="" /> : <Icon name="image" size={12} />}
               </button>
+              )}
               <button
                 className="fmt"
                 title="Format"
@@ -8116,32 +8185,35 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
               >
                 <Icon name="more" size={14} />
               </button>
-              <button
-                className="mini minus"
-                title="Remove"
-                onClick={() =>
-                  engine.dispatch({
-                    type: "patch",
-                    id: n.id,
-                    patch: { exports: presets.filter((_, j) => j !== i) },
-                  })
-                }
-              >
+              <button className="mini minus" title="Remove" onClick={() => remove(i)}>
                 <Icon name="minus" size={14} />
               </button>
             </div>
             {settingsOpen === i && <ExportSettings preset={p} onChange={(next) => set(i, next)} />}
-            {preview[i] && (
+            {!multi && preview[i] && (
               <div className="export-checker">
-                <img src={previewUrl(n, p)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
+                <img src={previewUrl(n, p, scope)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
               </div>
             )}
           </div>
         ))}
         {!!presets.length && (
           <div className="insp-pad">
-            <button className="export-run" onClick={() => presets.forEach((p) => runExport(n, p))}>
-              Export
+            <button
+              className="export-run"
+              onClick={() => {
+                const jobs: { t: XNode; p: ExportPreset }[] = [];
+                for (const t of targets()) for (const p of t.exports ?? []) jobs.push({ t, p });
+                if (!jobs.length) {
+                  toast("No export settings on the selected layers");
+                  return;
+                }
+                // Browsers throttle simultaneous downloads, so each file gets
+                // its own turn.
+                jobs.forEach(({ t, p }, i) => window.setTimeout(() => runExport(t, p, scope), i * 220));
+              }}
+            >
+              Export{multi ? ` ${targets().length}` : ""}
             </button>
           </div>
         )}
@@ -8161,8 +8233,8 @@ function ExportBlock({ n, engine }: { n: XNode; engine: Engine }) {
 }
 
 /** A data URL of the exact SVG this preset would write, used by the preview. */
-function previewUrl(n: XNode, p: ExportPreset) {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, p))}`;
+function previewUrl(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, p, scope))}`;
 }
 
 function downloadBlob(blob: Blob, name: string) {
@@ -8173,13 +8245,15 @@ function downloadBlob(blob: Blob, name: string) {
   window.setTimeout(() => URL.revokeObjectURL(a.href), 0);
 }
 
-function runExport(n: XNode, p: ExportPreset) {
-  const { width, height } = exportSize(n, p);
+function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
+  // A page sizes from its content box, not from the root's canvas-sized frame.
+  const box = scope?.page ? contentBox(n) : null;
+  const { width, height } = exportSize(box ?? n, p);
   const settings = resolveSettings(p);
   // The suffix is appended straight onto the layer's name, with no separator:
   // the article's own example is "HomePage" + "draft" -> "HomePagedraft.png".
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
-  const svg = exportSvg(n, p);
+  const svg = exportSvg(n, p, scope);
   if (p.format === "SVG") {
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
@@ -8226,25 +8300,34 @@ function runExport(n: XNode, p: ExportPreset) {
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+/** The inspect-panel code for one layer, without touching the clipboard, so a
+ *  multi-selection can join several blocks into a single copy. */
+export function layerCode(n: XNode, format?: DevFormat, snap?: Snapshot): string {
+  const prefs = getDevPrefs();
+  const fmt = format ?? prefs.format;
+  const scope = prefs.scope ?? "layer";
+  // Copy-as-SVG of a slice renders the region's content, like the export does.
+  if (fmt === "svg" && n.isSlice === true && snap)
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "" }, { root: snap.pages[snap.page].root });
+  return snap
+    ? renderDevCodeScoped(n, fmt, fmt === "css" || scope === "subtree" ? prefs.unit : "px", scope, snap)
+    : renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
+}
+
 /** Copy the layer's snippet in the given language — the very renderer the panel
  *  uses, so a copied answer and a shown answer cannot disagree. Omit `format`
  *  to take the developer's current preference. */
 export function copyLayerCode(n: XNode, format?: DevFormat, snap?: Snapshot): void {
   const prefs = getDevPrefs();
   const fmt = format ?? prefs.format;
-  const scope = prefs.scope ?? "layer";
-  const code = snap
-    ? renderDevCodeScoped(n, fmt, fmt === "css" || scope === "subtree" ? prefs.unit : "px", scope, snap)
-    : renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
-  copyText(code);
+  copyText(layerCode(n, format, snap));
   toast(`Copied ${devLangLabel(fmt)} \u00b7 ${n.name}`);
 }
 
-/** Put a PNG of the layer on the clipboard. It reuses the export renderer, so
- *  what lands in Slack is what the downloaded file would have contained. */
-export function copyPng(n: XNode) {
-  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "" };
-  const { width, height } = exportSize(n, preset);
+/** Rasterise an SVG string and put the PNG on the clipboard. A clipboard that
+ *  will not take images (older Safari, denied permission) still gets the user
+ *  the pixels, just as a file. Shared by single- and multi-layer copy. */
+function rasterizeSvgToClipboard(svg: string, width: number, height: number, label: string) {
   const image = new Image();
   image.onload = () => {
     const c = document.createElement("canvas");
@@ -8258,22 +8341,54 @@ export function copyPng(n: XNode) {
     ctx.drawImage(image, 0, 0, width, height);
     c.toBlob(async (blob) => {
       if (!blob) {
-        toast(`Could not render ${n.name} for copying`);
+        toast(`Could not render ${label} for copying`);
         return;
       }
       try {
         await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-        toast(`Copied ${n.name} as PNG`);
+        toast(`Copied ${label} as PNG`);
       } catch {
-        // A clipboard that will not take images (older Safari, denied
-        // permission) still gets the user the pixels, just as a file.
-        downloadBlob(blob, `${n.name}.png`);
+        downloadBlob(blob, `${label}.png`);
         toast("Clipboard cannot take images · downloaded the PNG instead");
       }
     }, "image/png");
   };
-  image.onerror = () => toast(`Could not render ${n.name} for copying`);
-  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, preset))}`;
+  image.onerror = () => toast(`Could not render ${label} for copying`);
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** Put a PNG of the layer on the clipboard. It reuses the export renderer, so
+ *  what lands in Slack is what the downloaded file would have contained. */
+export function copyPng(n: XNode, root?: XNode) {
+  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "" };
+  const { width, height } = exportSize(n, preset);
+  rasterizeSvgToClipboard(
+    exportSvg(n, preset, root ? { root } : undefined),
+    width,
+    height,
+    n.name,
+  );
+}
+
+/** Put a PNG of several layers on the clipboard, at their relative positions.
+ *  The nodes must already carry export coordinates in x/y (see `worldClones`:
+ *  nested layers arrive frame-local and would collapse onto the origin). */
+export function copyPngNodes(nodes: XNode[]) {
+  if (!nodes.length) return;
+  if (nodes.length === 1) {
+    copyPng(nodes[0]);
+    return;
+  }
+  const minX = Math.min(...nodes.map((n) => n.x));
+  const minY = Math.min(...nodes.map((n) => n.y));
+  const w = Math.max(1, Math.max(...nodes.map((n) => n.x + Math.max(1, n.w))) - minX);
+  const h = Math.max(1, Math.max(...nodes.map((n) => n.y + Math.max(1, n.h))) - minY);
+  rasterizeSvgToClipboard(
+    exportClipSvg(nodes),
+    Math.max(1, Math.round(w * 2)),
+    Math.max(1, Math.round(h * 2)),
+    `${nodes.length} layers`,
+  );
 }
 
 function fillValuePatch(v: FillValue): Partial<XNode> {
@@ -8448,6 +8563,7 @@ function ColorRow({
   value,
   opacity = 100,
   visible = true,
+  exportVisible = true,
   type = "solid",
   second = "#ffffff",
   blend = "Normal",
@@ -8475,6 +8591,7 @@ function ColorRow({
   onChange,
   onOpacity,
   onVisible,
+  onExportVisible,
   onRemove,
   onMeta,
   onValueChange,
@@ -8484,6 +8601,9 @@ function ColorRow({
   value: string;
   opacity?: number;
   visible?: boolean;
+  /** "Show in exports": the toggle only renders when `onExportVisible` is
+   *  passed, so stroke rows never grow one. */
+  exportVisible?: boolean;
   type?: FillValue["type"];
   second?: string;
   blend?: string;
@@ -8514,6 +8634,7 @@ function ColorRow({
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
   onVisible?: (v: boolean) => void;
+  onExportVisible?: (v: boolean) => void;
   onRemove?: () => void;
   onMeta?: (p: Partial<XNode>) => void;
   onValueChange?: (v: FillValue) => void;
@@ -8591,6 +8712,17 @@ function ColorRow({
       >
         <Icon name={hidden ? "eye-off" : "eye"} size={14} />
       </button>
+      {onExportVisible && (
+        <button
+          className="mini"
+          style={exportVisible ? undefined : { opacity: 0.35 }}
+          title={exportVisible ? "Show in exports" : "Hidden from exports"}
+          aria-pressed={exportVisible}
+          onClick={() => onExportVisible(!exportVisible)}
+        >
+          <Icon name="export" size={14} />
+        </button>
+      )}
       {onRemove && (
         <button className="mini minus" title="Remove" onClick={onRemove}>
           <Icon name="minus" size={14} />

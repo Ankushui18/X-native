@@ -32,7 +32,7 @@ import {
 import { clipPlainText, copyText, nativeClipHtml, writeClipboard } from "./clipboard";
 import { dehydrateNode } from "./assets";
 import { computeMasterHash } from "./codegen";
-import { exportClipSvg } from "./svgExport";
+import { exportClipSvg, exportSvg } from "./svgExport";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
 import {
@@ -1092,7 +1092,12 @@ function clipBounds(nodes: XNode[]): { minX: number; minY: number; cx: number; c
  * headless test run — leaves the in-app copy untouched, so paste still works
  * here; nothing throws and no rejection escapes.
  */
-function publishClip(nodes: XNode[], fileName: string): void {
+function publishClip(
+  nodes: XNode[],
+  fileName: string,
+  world?: { x: number; y: number }[],
+  root?: XNode,
+): void {
   if (!nodes.length || typeof document === "undefined") return;
   const portable = nodes.map((n) => {
     try {
@@ -1103,7 +1108,19 @@ function publishClip(nodes: XNode[], fileName: string): void {
   });
   let svg = "";
   try {
-    svg = exportClipSvg(nodes);
+    // The SVG flavour lays roots out by x/y, which for nested layers is the
+    // frame-local position: reposition the copies at their world coordinates
+    // so a multi-select from inside frames keeps its arrangement. The native
+    // payload keeps local coordinates, which is what paste expects.
+    const positioned =
+      world && world.length === nodes.length
+        ? nodes.map((n, i) => ({ ...n, x: world[i].x, y: world[i].y }))
+        : nodes;
+    // A lone copied slice pastes as its region's content, like the export's.
+    svg =
+      nodes.length === 1 && nodes[0].isSlice === true && root
+        ? exportSvg(nodes[0], { format: "SVG", scale: 1, suffix: "" }, { root })
+        : exportClipSvg(positioned);
   } catch {
     /* The vector flavour is a convenience for other apps; our own payload still
      * carries the layers in full. */
@@ -2519,11 +2536,19 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "copy": {
-        this.clip = s.selection
-          .map((id) => find(this.root(), id))
-          .filter((n): n is XNode => !!n)
-          .map(clone);
-        publishClip(this.clip, this.state.fileName);
+        const items = s.selection
+          .map((id) => {
+            const wp = worldPos(this.root(), id);
+            return wp ? { node: clone(wp.node), x: wp.x, y: wp.y } : null;
+          })
+          .filter((w): w is NonNullable<typeof w> => !!w);
+        this.clip = items.map((w) => w.node);
+        publishClip(
+          this.clip,
+          this.state.fileName,
+          items.map((w) => ({ x: w.x, y: w.y })),
+          this.root(),
+        );
         break;
       }
       case "cut":

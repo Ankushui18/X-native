@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { MemoryEngine } from "./engine/memory";
 import { Canvas } from "./ui/Canvas";
-import { copyText } from "./engine/clipboard";
+import { copyText, worldClones } from "./engine/clipboard";
 import { worldPos } from "./engine/memory";
 import { zoomTo } from "./ui/zoom";
+import { devLangLabel, getDevPrefs, type DevFormat } from "./ui/devPrefs";
 import {
   Actions,
   FindReplaceBar,
@@ -17,7 +18,7 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { Icon } from "./ui/icons";
-import { RightPanel, copyLayerCode, copyPng } from "./ui/inspector";
+import { RightPanel, copyLayerCode, copyPng, copyPngNodes, layerCode } from "./ui/inspector";
 import { installDesignApi } from "./engine/designApi";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
@@ -339,11 +340,6 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return () => window.clearTimeout(timer);
   }, [engine]);
   useEffect(() => {
-    const selected = () => {
-      const s = engine.snapshot();
-      const id = s.selection[0];
-      return id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
-    };
     const flash = (msg: string) => {
       setToast(msg);
       window.setTimeout(() => setToast(""), 1800);
@@ -358,19 +354,40 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
     const onCopyCode = (e: Event) => {
       const s = engine.snapshot();
-      const id = s.selection[0];
-      const node = id ? worldPos(s.pages[s.page].root, id)?.node ?? null : null;
-      if (!node) {
-        flash("Select one layer to copy its code");
+      const root = s.pages[s.page].root;
+      const nodes = s.selection
+        .map((id) => worldPos(root, id)?.node ?? null)
+        .filter((n): n is NonNullable<typeof n> => !!n);
+      if (!nodes.length) {
+        flash("Select a layer to copy its code");
         return;
       }
       const detail = (e as CustomEvent<{ format?: string | null }>).detail;
-      copyLayerCode(node, (detail?.format ?? undefined) as never, s);
+      const format = (detail?.format ?? undefined) as DevFormat | undefined;
+      if (nodes.length === 1) {
+        copyLayerCode(nodes[0], format, s);
+        return;
+      }
+      // A multi-selection copies one labelled block per layer, joined into a
+      // single clipboard write.
+      copyText(nodes.map((n) => `/* ${n.name} */\n${layerCode(n, format, s)}`).join("\n\n"));
+      flash(`Copied ${nodes.length} layers as ${devLangLabel(format ?? getDevPrefs().format)}`);
     };
     const onCopyPng = () => {
-      const node = selected();
-      if (!node) flash("Select a layer to copy it as a PNG");
-      else copyPng(node);
+      const s = engine.snapshot();
+      const root = s.pages[s.page].root;
+      const items = s.selection
+        .map((id) => worldPos(root, id))
+        .filter((w): w is NonNullable<typeof w> => !!w);
+      if (!items.length) {
+        flash("Select a layer to copy it as a PNG");
+        return;
+      }
+      if (items.length === 1) {
+        copyPng(items[0].node, root);
+        return;
+      }
+      copyPngNodes(worldClones(items));
     };
     window.addEventListener("x-native-copy-link", onCopyLink);
     window.addEventListener("x-native-copy-png", onCopyPng);

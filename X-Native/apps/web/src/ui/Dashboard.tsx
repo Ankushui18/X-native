@@ -17,6 +17,7 @@ import {
   trashFile,
   patchFile,
   docFromImport,
+  isDocSeedLike,
   TEMPLATES,
   type FileMeta,
   type TemplateId,
@@ -186,11 +187,30 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
 
-  /* importing: drop a .fig / .sketch / .svg anywhere on the dashboard */
+  /* importing: drop a .fig / .sketch / .svg / .x.json anywhere on the dashboard */
   const importFiles = async (files: File[]) => {
     for (const f of files) {
       setBusy(`Importing ${f.name}…`);
       try {
+        // Our own document export, written by the file menu's Export action:
+        // it reopens as a new file rather than going through an importer.
+        if (/\.x\.json$/i.test(f.name)) {
+          const doc = JSON.parse(await f.text());
+          if (!isDocSeedLike(doc)) {
+            setBusy("");
+            toast(`${f.name} is not an X document export`);
+            continue;
+          }
+          const meta = createFile({
+            name: f.name.replace(/\.x\.json$/i, "") || doc.fileName || "Untitled",
+            template: "blank",
+            doc,
+          });
+          setBusy("");
+          refresh();
+          onOpen(meta.id);
+          return;
+        }
         let result;
         if (/\.svg$/i.test(f.name) || f.type === "image/svg+xml") {
           result = await importSvg(await f.text());
@@ -200,7 +220,7 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           result = await importFig(await f.arrayBuffer());
         } else {
           setBusy("");
-          toast(`${f.name} is not a .fig, .sketch or .svg file`);
+          toast(`${f.name} is not a .fig, .sketch, .svg or .x.json file`);
           continue;
         }
         const name = f.name.replace(/\.[a-z0-9]+$/i, "");

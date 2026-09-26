@@ -5553,6 +5553,7 @@ export function Canvas({
                 strokeVisible: true,
                 strokeWidth: 1,
                 strokeDash: 4,
+                isSlice: true,
               }
           : k === "text"
             ? clicked
