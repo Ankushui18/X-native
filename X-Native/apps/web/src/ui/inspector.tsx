@@ -50,6 +50,7 @@ import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from 
 import { evalField, hasExpression } from "./fieldExpr";
 import {
   SIDES,
+  isBranchingNetwork,
   normalizeWidthProfile,
   parseDashPattern,
   sampleVariableWidth,
@@ -5472,6 +5473,7 @@ function Design({
           )}
           <ColorRow
             title="Stroke"
+            stroke
             value={n.strokePaint}
             opacity={Math.round((n.strokeOpacity ?? 1) * 100)}
             visible={n.strokeVisible}
@@ -5511,8 +5513,12 @@ function Design({
                 <button
                   key={a}
                   className={n.strokeAlign === a ? "on" : ""}
-                  title={a}
+                  title={`${a} (hover to preview)`}
                   onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { strokeAlign: a } })}
+                  onMouseEnter={() => engine.dispatch({ type: "previewStroke", id: n.id, align: a })}
+                  onMouseLeave={() => engine.dispatch({ type: "previewStroke", id: null })}
+                  onFocus={() => engine.dispatch({ type: "previewStroke", id: n.id, align: a })}
+                  onBlur={() => engine.dispatch({ type: "previewStroke", id: null })}
                 >
                   <Icon name={`stroke-${a}`} size={14} />
                 </button>
@@ -5592,8 +5598,8 @@ function Design({
               </button>
             ))}
           </div>
-          {(n.kind !== "line" && n.kind !== "arrow") && (
-          <div className="seg icons">
+          {(n.kind !== "line") && (
+          <div className="seg icons" title="Join">
             {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
               <button
                 key={j}
@@ -5617,7 +5623,7 @@ function Design({
           </button>
           </div>
           {((n.kind === "line" || n.kind === "arrow" || n.kind === "vector") && !n.closed) && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 6, marginTop: 4, alignItems: "end" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, color: "var(--dim)" }}>Start point</span>
                 <select
@@ -5641,8 +5647,20 @@ function Design({
                   <option value="triangle">Triangle arrow</option>
                   <option value="reverse-triangle">Reverse triangle</option>
                   <option value="diamond">Diamond arrow</option>
+                  <option value="circle">Circle tip</option>
                 </select>
               </div>
+              <button
+                className="icon-btn"
+                title="Swap start and end points"
+                aria-label="Swap start and end points"
+                style={{ marginBottom: 1 }}
+                onClick={() =>
+                  patch({ strokeCapStart: n.strokeCapEnd ?? "none", strokeCapEnd: n.strokeCapStart ?? "none" })
+                }
+              >
+                <Icon name="flip-h" size={14} />
+              </button>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <span style={{ fontSize: 9, color: "var(--dim)" }}>End point</span>
                 <select
@@ -5669,13 +5687,14 @@ function Design({
                   <option value="triangle">Triangle arrow</option>
                   <option value="reverse-triangle">Reverse triangle</option>
                   <option value="diamond">Diamond arrow</option>
+                  <option value="circle">Circle tip</option>
                 </select>
               </div>
             </div>
           )}
-          {(n.kind === "vector" || n.kind === "line" || n.kind === "arrow") && n.strokeWidth > 0 && (
-            <WidthProfileEditor node={n} patch={patch} />
-          )}
+          {(n.kind === "vector" || n.kind === "line" || n.kind === "arrow") &&
+            n.strokeWidth > 0 &&
+            !isBranchingNetwork(n.vectorNetwork) && <WidthProfileEditor node={n} patch={patch} />}
           {strokeMore && (
             <div className="adv-stroke">
               <div className="grid2">
@@ -5724,6 +5743,7 @@ function Design({
           <div className="insp-pad" key={i} style={{ display: "grid", gap: 4 }}>
             <ColorRow
               title="Stroke"
+              stroke
               value={sk.color}
               opacity={Math.round((sk.opacity ?? 1) * 100)}
               visible={sk.visible}
@@ -7943,6 +7963,7 @@ function ColorRow({
   background,
   largeText,
   noImage,
+  stroke,
   onChange,
   onOpacity,
   onVisible,
@@ -7977,6 +7998,8 @@ function ColorRow({
   background?: string;
   largeText?: boolean;
   noImage?: boolean;
+  /** Stroke paint: solid only, no blend — gradient/image/blend strokes are unimplemented. */
+  stroke?: boolean;
   onChange: (v: string) => void;
   onOpacity?: (v: number) => void;
   onVisible?: (v: boolean) => void;
@@ -8092,6 +8115,7 @@ function ColorRow({
           background={background}
           largeText={largeText}
           noImage={noImage}
+          stroke={stroke}
           onChange={(v) => {
             if (onValueChange) {
               onValueChange(v);

@@ -1,6 +1,6 @@
 import type { GradientStop, XNode } from "./types";
 import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
-import { dashArray, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
+import { dashArray, dashOffset, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
 /** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB).
  *  Exported so the gradient editor inserts new stops in the same colour the
@@ -616,6 +616,7 @@ export function paintExtraStrokes(
     const dash = s.dash ?? 0;
     const dashes = dashArray(s.pattern, dash, s.gap ?? 0, z);
     ctx.setLineDash(dashes);
+    ctx.lineDashOffset = dashOffset(dashes);
     // A second stroke carries its own per-side settings, the way stroke
     // rows each own their weight, alignment and dashes.
     const widths = sideWidths(s.sides, s.sideW, s.width);

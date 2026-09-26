@@ -27,7 +27,7 @@ import {
   outlineVariableStroke,
   widthProfileStations,
 } from "../engine/geometry";
-import { dashArray, miterLimitFromAngle, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
+import { dashArray, dashOffset, miterLimitFromAngle, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   roundBox,
@@ -1222,9 +1222,12 @@ export function Canvas({
         const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
         // Dashes carry their own cap: a dotted line is a 1px dash
         // with round caps, and only the segments take the rounding.
-        ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? ctx.lineCap : ctx.lineCap;
+        // Unset means butt — a dashed line with round end caps still
+        // draws square dashes until the dash cap says otherwise.
+        ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? "butt" : ctx.lineCap;
         if (dashes.length) ctx.setLineDash(dashes);
         else ctx.setLineDash([]);
+        ctx.lineDashOffset = dashOffset(dashes);
         // Individual strokes: the outline is stroked once per side, each pass
         // clipped to a 45° cone from the centre, which is how CSS mitres a
         // border and keeps a rounded corner split evenly between its sides.
@@ -1240,7 +1243,15 @@ export function Canvas({
           }
           // Lines are always centre-stroked: clipping an open two-point path
           // to "inside" would clip to a zero-area region and erase the shaft.
-          const align = n.kind === "line" || n.kind === "arrow" ? "center" : n.strokeAlign;
+          // A hover preview from the inspector temporarily wins over the
+          // stored position; lines never preview (no position control).
+          const preview = snap.previewStroke;
+          const align =
+            preview && preview.id === n.id
+              ? preview.align
+              : n.kind === "line" || n.kind === "arrow"
+                ? "center"
+                : n.strokeAlign;
           if (align === "inside") {
             ctx.save();
             ctx.clip();

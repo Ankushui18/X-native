@@ -797,6 +797,8 @@ export interface Snapshot {
   page: number;
   selection: string[];
   selectedGuide: string | null;
+  /** Hover preview of a stroke position; render-only, never persisted. */
+  previewStroke: { id: string; align: StrokeAlign } | null;
   /** Bumped on every dispatch except pure viewport moves (pan/zoom), so panels
    *  showing document state can skip re-rendering viewport-only snapshots even
    *  though tree edits mutate nodes in place (which defeats reference
@@ -987,6 +989,7 @@ export type Command =
   | { type: "moveGuide"; id: string; at: number }
   | { type: "setGuideFrame"; id: string; frameId: string | null }
   | { type: "selectGuide"; id: string | null }
+  | { type: "previewStroke"; id: string | null; align?: StrokeAlign }
   | { type: "removeGuide"; id: string }
   | { type: "makeComponent" }
   | { type: "detachInstance" }

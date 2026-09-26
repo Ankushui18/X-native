@@ -12,6 +12,7 @@ import type {
   Snapshot,
   Tool,
   XNode,
+  StrokeAlign,
   BooleanOp,
   VariableItem,
   VariableCollection,
@@ -66,7 +67,7 @@ import {
   samplePathPoints,
   outlineVariableStroke,
 } from "./geometry";
-import { maxWidthMultiplier, usesVariableWidth } from "./strokeModel";
+import { maxWidthMultiplier, strokeSpill, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
 import {
   type Transaction,
@@ -741,6 +742,8 @@ interface Internal {
   booleanPreview: BooleanOp | null;
   /** Selected ruler guide; mutually exclusive with the layer selection. */
   selectedGuide: string | null;
+  /** Hover preview of a stroke position (inspector → canvas). */
+  previewStroke: { id: string; align: StrokeAlign } | null;
 }
 
 /** Cap the undo stack. Each entry is a full document clone, so an unbounded
@@ -948,6 +951,7 @@ export class MemoryEngine implements Engine {
       vecPoints: [],
       booleanPreview: null,
       selectedGuide: null,
+      previewStroke: null,
     };
     this.relayout();
     this.snapCache = this.build();
@@ -1249,6 +1253,8 @@ export class MemoryEngine implements Engine {
       "setGuideFrame",
       // Guide selection, like layer selection, is not a document edit.
       "selectGuide",
+      // Stroke-position hover preview; render-only by design.
+      "previewStroke",
     ].includes(cmd.type);
     if (hist && !this.grouping) {
       // Coalesce a burst of identical commands (arrow-key nudges, repeated
@@ -1387,6 +1393,7 @@ export class MemoryEngine implements Engine {
       page: this.state.page,
       selection: this.state.selection,
       selectedGuide: this.state.selectedGuide,
+      previewStroke: this.state.previewStroke,
       treeRev: this.state.treeRev,
       tool: this.state.tool,
       zoom: this.state.zoom,
@@ -1438,6 +1445,7 @@ export class MemoryEngine implements Engine {
         s.selection = cmd.ids;
         s.booleanPreview = null;
         s.selectedGuide = null;
+        s.previewStroke = null;
         this.justDuplicated = false;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
@@ -1447,6 +1455,9 @@ export class MemoryEngine implements Engine {
         break;
       case "selectGuide":
         s.selectedGuide = cmd.id;
+        break;
+      case "previewStroke":
+        s.previewStroke = cmd.id && cmd.align ? { id: cmd.id, align: cmd.align } : null;
         break;
       case "setTool":
         s.tool = cmd.tool;
@@ -3820,7 +3831,7 @@ function segmentDistance(px: number, py: number, ax: number, ay: number, bx: num
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-function nodeShapeHit(n: XNode, px: number, py: number): boolean {
+function nodeShapeHit(n: XNode, px: number, py: number, pad = 0): boolean {
   if (n.kind === "ellipse") {
     const dx = (px - n.w / 2) / Math.max(1, n.w / 2);
     const dy = (py - n.h / 2) / Math.max(1, n.h / 2);
@@ -3873,7 +3884,7 @@ function nodeShapeHit(n: XNode, px: number, py: number): boolean {
     }
     return false;
   }
-  return px >= 0 && py >= 0 && px <= n.w && py <= n.h;
+  return px >= -pad && py >= -pad && px <= n.w + pad && py <= n.h + pad;
 }
 
 export function hitTest(
@@ -3887,13 +3898,16 @@ export function hitTest(
     if (!n.visible || (n.locked && !opts?.includeLocked)) return;
     const world = n === root ? parentWorld : multiply(parentWorld, nodeMatrix(n));
     const local = n === root ? { x: wx, y: wy } : applyMatrix(inverse(world) ?? IDENTITY, wx, wy);
+    // A visible outside/centre stroke spills painted pixels past the box and
+    // they stay clickable; the shape test gets the same pad so the two agree.
+    const pad = n === root ? 0 : strokeSpill(n);
     const inside =
       n === root ||
-      (local.x >= 0 && local.y >= 0 && local.x <= n.w && local.y <= n.h);
+      (local.x >= -pad && local.y >= -pad && local.x <= n.w + pad && local.y <= n.h + pad);
     if (n === root || n.overflow === "visible" || inside) {
       for (let i = n.children.length - 1; i >= 0; i--) visit(n.children[i], world);
     }
-    if (n === root || !inside || !nodeShapeHit(n, local.x, local.y) || hit) return;
+    if (n === root || !inside || !nodeShapeHit(n, local.x, local.y, pad) || hit) return;
     hit = n;
   };
   visit(root, IDENTITY);

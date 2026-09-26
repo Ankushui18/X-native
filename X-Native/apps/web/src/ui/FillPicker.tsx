@@ -77,6 +77,7 @@ export function FillPicker({
   background,
   largeText,
   noImage,
+  stroke,
   onChange,
   onClose,
 }: {
@@ -87,6 +88,9 @@ export function FillPicker({
   /** Stacked fills cannot hold images yet (§13 owns that), so the type menu
    *  offers no dead Image option for them. */
   noImage?: boolean;
+  /** Stroke paint: gradient/image/blend strokes are unimplemented, so the
+   *  picker offers Solid only and hides the dead blend menu. */
+  stroke?: boolean;
   /** What the colour is painted over, resolved from the layer's own ancestry so
    *  the check means something on the canvas rather than only against white. */
   background?: string;
@@ -430,7 +434,7 @@ export function FillPicker({
         </button>
         {typeOpen && (
           <div className="type-menu">
-            {FILL_TYPES.filter((t) => !noImage || t.id !== "image").map((t) => (
+            {FILL_TYPES.filter((t) => (stroke ? t.id === "solid" : !noImage || t.id !== "image")).map((t) => (
               <button
                 key={t.id}
                 className={value.type === t.id ? "on" : ""}
@@ -706,6 +710,8 @@ export function FillPicker({
         </div>
       )}
 
+      {!stroke && (
+      <>
       <button className="blend-row" onClick={() => setBlendOpen((v) => !v)}>
         Apply blend mode
         <span>
@@ -729,6 +735,8 @@ export function FillPicker({
             </button>
           ))}
         </div>
+      )}
+      </>
       )}
     </div>,
     document.body,

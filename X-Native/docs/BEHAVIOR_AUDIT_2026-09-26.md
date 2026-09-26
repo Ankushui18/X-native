@@ -18,7 +18,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 8 | Canvas navigation (pan/zoom/guides/minimap) | ✅ done | N-001–N-002 (6 tests) |
 | 9 | Grid / guides / rulers | ✅ done | G-000–G-007 (19 tests) |
 | 10 | Fill / color / gradient | ✅ done | P-001–P-010 (19 tests) |
-| 11 | Strokes (+ variable) | … | |
+| 11 | Strokes (+ variable) | ✅ done | K-001–K-009 (55 tests) |
 | 12 | Effects / shadows / blur | … | |
 | 13 | Images (place/crop/mask/export) | … | |
 | 14 | Typography (+ phantom controls) | … | |
@@ -329,3 +329,64 @@ identity, not Figma grey).
 - Gradient CSS/SVG export: §25 (import/export); codegen has no gradient path.
 - Angular default origin kept south: no Figma evidence for south vs east;
   the handle-tracking fix is what the audit could prove.
+
+## §11 Strokes — evidence & fixes (2026-09-26)
+
+Figma refs: "Apply and adjust stroke properties" (all 3 chunks: position/
+weight/width-profile/individual/caps/tips/joins/miter/dash/dot/custom/brush/
+dynamic/support matrix/scale/outline), outline-shortcut tutorials (⌥⌘O),
+arrow tutorial (default = line arrow). After: full suite green
+(934 + 64 + 46 + 63 + 49 + 92 + 19 + 19 + 55 new stroke checks).
+
+### Fixed (shipped in the §11 strokes commit on this branch)
+
+- K-001 — Dashed lines started with a full dash; Figma starts (and joins)
+  with a half dash. Fix: `lineDashOffset` of half the first dash, base and
+  extras, via a shared `dashOffset` helper.
+- K-002 — Unset dash cap inherited the end-point cap, so a dashed line with
+  round caps drew round dashes. Figma defaults to None. Fix: butt unless set.
+- K-003 — Hovering a stroke position gave no canvas preview. Fix: engine
+  `previewStroke` (render-only, non-history, cleared on select) with
+  hover/focus preview on the position seg, Figma's micro-interaction.
+- K-004 — Width profiles applied to branching networks, where the single
+  centerline outline swallowed the branches' strokes. Fix: `usesVariableWidth`
+  gates on `isBranchingNetwork` (max vertex degree > 2); editor hidden there.
+- K-005 — Outside/centre stroke spill past the box was unclickable (hit gate
+  clipped to bounds). Fix: `strokeSpill` pad (base + extras, profile-aware)
+  in the hit gate and shape test.
+- K-006 — Join control hidden for arrows; Figma's matrix supports joins on
+  arrows (polylines). Fix: shown for arrows, still hidden for plain lines.
+- K-007 — Stroke picker offered gradient/image types and a blend menu it
+  could not apply (edits silently dropped to solid colour). Fix: strokes get
+  a solid-only picker with no blend menu until those render.
+- K-008 — Circle tip missing from the start/end selects (only on the caps
+  seg). Fix: added to both; plus a start/end swap button, Figma-style.
+- K-009 — Main menu labelled Outline stroke ⇧⌘O while the context menu (and
+  Figma) say ⌥⌘O. Fix: label corrected (binding already accepted both).
+
+### Verified parity (traced, no fix needed)
+
+Add-stroke flow + empty state; weight field excluded from dims; inside/
+outside/center incl. line/arrow center-forcing and defaults (shapes inside,
+lines center, round line caps, line-arrow default head); individual strokes
+on rect/frame/component/instance with custom 4-field + 0-removes-side; start/
+end selects on open paths, whole-layer caps seg, all 7 tips + bonus circle;
+fixed 3× arrowhead scale; dash/gap/dash-cap/dotted recipe/custom `dash, gap…`
+syntax with refusal snap-back; miter/bevel/round + miter-angle threshold math
+(bevel iff join sharper); variable-width editor (add/drag/delete, reset,
+single-undo) with uniform fallback, centre-only, dash-ignoring; extras with
+independent geometry + full align + scale-aware; scale tool scales every
+stroke length; outline stroke via menu + context menu + shortcut; eyedropper
+and recolor paths untouched; selection outline excludes stroke weight.
+
+### Deferred / out of scope
+
+- Brush and Dynamic stroke types: no X-Native equivalent — OUT OF SCOPE.
+- Gradient, image, and blend stroke fills: model + render absent; dead picker
+  UI hidden (K-007) — OUT OF SCOPE.
+- Per-point stroke props in vector edit mode: §15 (vectors/pen).
+- Stroke color styles: §19 (only color styles apply to strokes in Figma).
+- Miter-angle default 0 (never bevel): left; no Figma evidence for its default.
+- Remove-stroke `/` and remove-fill `⌥/`: §26 (keyboard) to adjudicate.
+- Outlined dashes: engine outlines the path; whether Figma dices dashes into
+  shapes on outline is unverified — left as is.

@@ -1207,7 +1207,7 @@ export function Actions({
     { label: "Intersect", sc: "⌥⇧I", run: () => engine.dispatch({ type: "boolean", op: "intersect" }) },
     { label: "Exclude", sc: "⌥⇧E", run: () => engine.dispatch({ type: "boolean", op: "exclude" }) },
     { label: "Flatten", sc: "⌘E", run: () => engine.dispatch({ type: "flatten" }) },
-    { label: "Outline stroke", sc: "⇧⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
+    { label: "Outline stroke", sc: "⌥⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
     { label: "Wrap in section", sc: "", run: () => engine.dispatch({ type: "wrapSection" }) },
     { label: "Use as mask", sc: "⌘⌥M", run: () => runMenu(engine, "useAsMask") },
     { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },

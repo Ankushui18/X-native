@@ -1,4 +1,4 @@
-import type { StrokeSides, VariableWidthPoint, VariableWidthProfile, XNode } from "./types";
+import type { StrokeSides, VariableWidthPoint, VariableWidthProfile, VectorNetwork, XNode } from "./types";
 
 /**
  * The stroke and effect rules that need no canvas, kept apart from the painter
@@ -100,6 +100,11 @@ export function dashArray(
   return [];
 }
 
+/** Figma starts (and joins) every dashed line with a half-length dash. */
+export function dashOffset(dashes: readonly number[]): number {
+  return dashes.length ? dashes[0] / 2 : 0;
+}
+
 /**
  * "Miter angle": any join sharper than the angle is bevelled. The
  * canvas asks for the ratio between the miter's length and the stroke width,
@@ -186,13 +191,51 @@ export function widthAt(n: XNode, t: number): number {
   return Math.max(0, n.strokeWidth) * sampleVariableWidth(n.strokeWidthProfile, t);
 }
 
+/** A network branches when a vertex joins three or more segments; chains and
+ *  loops (max degree 2) take width profiles, branching networks do not. */
+export function isBranchingNetwork(net: VectorNetwork | undefined): boolean {
+  if (!net || net.segments.length < 2) return false;
+  const deg = new Map<number, number>();
+  for (const s of net.segments) {
+    deg.set(s.start, (deg.get(s.start) ?? 0) + 1);
+    deg.set(s.end, (deg.get(s.end) ?? 0) + 1);
+  }
+  for (const d of deg.values()) if (d > 2) return true;
+  return false;
+}
+
 /** Whether `n` paints its base stroke through the variable-width outline. */
 export function usesVariableWidth(n: XNode): boolean {
   if (n.kind !== "vector" && n.kind !== "line" && n.kind !== "arrow") return false;
   if (!(n.strokeWidth > 0) || !n.strokeVisible || !n.strokePaint || isNonePaint(n.strokePaint)) return false;
+  // A profiled outline follows one centerline; on a branching network it
+  // would swallow the branches' strokes, so branching stays uniform.
+  if (isBranchingNetwork(n.vectorNetwork)) return false;
   return hasVariableWidth(n.strokeWidthProfile);
 }
 
 function isNonePaint(paint: string): boolean {
   return !paint || paint === "none" || paint === "#00000000";
+}
+
+/**
+ * How far a node's visible strokes spill past its box: outside strokes by
+ * their full weight, centre strokes by half — painted pixels stay clickable.
+ * Inside strokes never leave the box. Variable-width centerlines spill by
+ * their hottest point.
+ */
+export function strokeSpill(n: XNode): number {
+  const spill = (w: number, align: string | undefined) =>
+    align === "outside" ? Math.max(0, w) : align === "center" ? Math.max(0, w) / 2 : 0;
+  const forced = n.kind === "line" || n.kind === "arrow" ? "center" : undefined;
+  let pad = 0;
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint && !isNonePaint(n.strokePaint)) {
+    const w = usesVariableWidth(n) ? n.strokeWidth * maxWidthMultiplier(n.strokeWidthProfile) : n.strokeWidth;
+    pad = Math.max(pad, spill(w, forced ?? n.strokeAlign));
+  }
+  for (const s of n.strokes ?? []) {
+    if (s.visible === false || !(s.width > 0) || !s.color || isNonePaint(s.color)) continue;
+    pad = Math.max(pad, spill(s.width, forced ?? s.align));
+  }
+  return pad;
 }
