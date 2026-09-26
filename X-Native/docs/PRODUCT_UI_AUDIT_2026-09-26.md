@@ -171,7 +171,7 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 | IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
 | IN-U5 | FIXED: "Edit vector" → **"Edit points"**, and it now enters vector edit mode (the inspector twin of double-clicking a layer; booleans still bake first, because their points only exist once the group is applied). The button reads "Editing points" while the editor is open. It previously dispatched `flatten` — the exact action of the button beside it — so the label promised editing and delivered a bake. "Flatten" stays a distinct bake. Seg buttons are still unclassed (x-ui adoption family). | FIXED (label+action) / DRIFT (styling) | P2 |
 | IN-U6 | Flip buttons + assorted icon-only buttons use native title= amid Tooltip siblings | PARTIAL (§2.3) | P2 |
-| IN-U7 | Design/Prototype/Inspect tabs are raw buttons, not XTabs; no arrow-key nav (§19 evidence) | DRIFT | P2 |
+| IN-U7 | FIXED with PM-U5: `XTabs` now carries `role=tablist`/`tab`/`aria-selected` + roving `tabindex` + arrows/Home/End, keeps `aria-current` so the underline styling and the e2e checks that read it still work, and the zoom menu shares a `.tabs-row` so the divider still spans the strip. | FIXED (P2) | — |
 
 ## §8. Fill/Stroke/Effects + variables/styles trace (prompts §§13, 15, 18)
 
@@ -258,7 +258,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U2 | Actions palette has no outside-click close (no veil/backdrop; Esc/run/close only) | PARTIAL | P2 |
 | PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
 | PM-U4 | NudgeDialog wears help-pop/help-card styles (a prefs dialog in help clothing) | DRIFT (§29) | P2 |
-| PM-U5 | FOUR tab/seg systems: left NavRail, inspector raw tabs (IN-U7), vars/styles bespoke seg w/ inline styles, qo-filters — XTabs unused. Fix: one tab/seg primitive; migrate inspector + vars/styles | DRIFT (§29) | P2 |
+| PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
 | PM-U6 | ExportAssetsDialog has no initial focus (no autoFocus) — keyboard users start from top | PARTIAL | P2 |
 
 ## §12. Left panel + states trace (prompts §§20, 23–25) — NavRail + LeftPanel + App screens
@@ -558,6 +558,26 @@ cascade rather than by adding another owner.
 
 Suite **212 pass / 0 fail** (§35: distinct actions, edit mode entered, Esc keeps the layer, flatten still
 converts), unit 1621, tsc and build clean.
+
+## §4k. One tab primitive, three call sites (PM-U5, IN-U7)
+
+The shared layer had a segmented control nobody used: `XSegmentedControl` had **zero** call sites while the app
+hand-wrote `.seg` markup in 22 places, and the Variables/Styles switch was two buttons with identical inline
+styles that drifted from every other switch. Three strips now share one primitive and one keyboard model
+(`tablistKeys`: roving focus, arrows, Home/End, activating as they move):
+
+- inspector head tabs → `XTabs` (`role=tablist`/`tab`/`aria-selected` added; `aria-current` kept so the
+  underline styling and the checks that read it still pass; the zoom menu sits in a `.tabs-row` so the
+  divider still spans the strip),
+- the Variables/Styles switch → `XSegmentedControl` with the pane variant, which keeps the selection token
+  the hand-rolled pair had,
+- both Dev Mode switches (Inspect view, Code scope) → the same component with the compact `.dev-seg` size,
+  and in-card segs deliberately keep the plain elevated active state so the migration stays chrome-neutral
+  (the first cut tinted them green; caught in the screenshot pass and scoped to `.pane`).
+
+Suite **222 pass / 0 fail** (10 new checks in §36: roles and selection state on all three strips, roving
+focus, arrows switching the inspector tab and the pane — with the panel actually following — Home, no inline
+styles left on the pane switch). Unit 1621, tsc and build clean.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

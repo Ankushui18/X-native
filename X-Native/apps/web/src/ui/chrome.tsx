@@ -40,6 +40,7 @@ import { clearDoc } from "../engine/persist";
 import { copyText, notePasteModifiers, pasteEventMissing } from "../engine/clipboard";
 import { armEyedrop, isNone } from "./color";
 import { getEngineInfo } from "../engine/wasmBridge";
+import { XSegmentedControl } from "./x-ui";
 
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
@@ -3222,37 +3223,19 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
 
   return (
     <>
-      <div className="dir-row" style={{ padding: "8px 12px", gap: 4 }}>
-        <button
-          className={subTab === "vars" ? "on" : ""}
-          style={{
-            flex: 1,
-            height: 26,
-            fontSize: 11,
-            borderRadius: 6,
-            border: 0,
-            background: subTab === "vars" ? "var(--sel)" : "var(--hover)",
-            cursor: "pointer",
-          }}
-          onClick={() => setSubTab("vars")}
-        >
-          Variables
-        </button>
-        <button
-          className={subTab === "styles" ? "on" : ""}
-          style={{
-            flex: 1,
-            height: 26,
-            fontSize: 11,
-            borderRadius: 6,
-            border: 0,
-            background: subTab === "styles" ? "var(--sel)" : "var(--hover)",
-            cursor: "pointer",
-          }}
-          onClick={() => setSubTab("styles")}
-        >
-          Styles
-        </button>
+      {/* One segmented control, shared: the hand-rolled pair here had its own
+          inline styling (PM-U5) and no keyboard path between the two panes. */}
+      <div className="insp-pad" style={{ paddingTop: 8 }}>
+        <XSegmentedControl
+          className="pane"
+          ariaLabel="Variables or styles"
+          value={subTab}
+          options={[
+            { value: "vars", label: "Variables" },
+            { value: "styles", label: "Styles" },
+          ]}
+          onChange={(v) => setSubTab(v as typeof subTab)}
+        />
       </div>
 
       {subTab === "vars" && (

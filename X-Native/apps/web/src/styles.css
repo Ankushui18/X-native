@@ -766,6 +766,58 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   padding: 0 8px;
   gap: 2px;
 }
+/* Pane variant: a tab strip filling a side panel (Variables / Styles) rather
+   than the inspector head, so the same primitive serves both. */
+.tabs.pane {
+  height: 32px;
+  border-bottom: 0;
+  padding: 0;
+  gap: 4px;
+}
+.tabs.pane button.tab {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  background: var(--input);
+}
+.tabs.pane button.tab:hover {
+  background: var(--hover);
+}
+.tabs.pane button.tab[aria-current="true"] {
+  background: var(--elevated);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.tabs.pane button.tab[aria-current="true"]::after {
+  /* The underline belongs to the head strip; a filled pill reads better in a
+     panel where there is no dividing line to sit on. */
+  content: none;
+}
+/* The head strip and its zoom menu share a row; the row owns the divider so it
+   spans the zoom menu too, exactly as the strip used to. */
+.tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+.tabs-row .tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-bottom: 0;
+}
+/* The side-panel switch shows the selection token, so the chosen pane reads at
+   a glance the way the hand-rolled Variables/Styles pair did. Compact in-card
+   segs (the Dev Mode Code/List and Layer/Subtree switches) keep the plain
+   elevated active state they already had — this migration is chrome-neutral. */
+.seg.pane button.on {
+  background: var(--sel);
+  font-weight: 600;
+}
+/* Equal halves: a two- or three-way switch should not resize with its labels. */
+.seg.pane button {
+  flex: 1 1 0;
+  min-width: 0;
+}
 .tabs button.tab {
   height: 30px;
   border: 0;

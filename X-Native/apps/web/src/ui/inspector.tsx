@@ -122,7 +122,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
-import { XPopover } from "./x-ui";
+import { XPopover, XSegmentedControl, XTabs } from "./x-ui";
 
 /** "Round to Pixel" is only shown when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -175,6 +175,10 @@ export function RightPanel({
     { id: "design", label: "Design" },
     { id: "prototype", label: "Prototype" },
   ];
+  const INSPECT_TABS: { id: string; label: string }[] = [
+    { id: "inspect", label: "Inspect" },
+    { id: "design", label: "Design" },
+  ];
   const root = snap.pages[snap.page].root;
   const id = snap.selection[0];
   const wp = id ? worldPos(root, id) : null;
@@ -208,32 +212,19 @@ export function RightPanel({
           </button>
         </Tooltip>
       </div>
-      <div className="tabs">
-        {inspect ? (
-          <>
-            <button className="tab" aria-current="true">
-              Inspect
-            </button>
-            <button
-              className="tab"
-              onClick={() => engine.dispatch({ type: "setRightTab", tab: "design" })}
-              style={{ color: "var(--dim)", cursor: "pointer" }}
-            >
-              Design
-            </button>
-          </>
-        ) : (
-          tabs.map((t) => (
-            <button
-              key={t.id}
-              className="tab"
-              aria-current={snap.rightTab === t.id}
-              onClick={() => engine.dispatch({ type: "setRightTab", tab: t.id })}
-            >
-              {t.label}
-            </button>
-          ))
-        )}
+      <div className="tabs-row">
+        {/* Deeper in Dev Mode the strip reads "Inspect · Design": Inspect is the
+            mode you are in, so it has no target of its own. */}
+        <XTabs
+          ariaLabel="Inspector view"
+          variant="head"
+          active={inspect ? "inspect" : snap.rightTab}
+          tabs={inspect ? INSPECT_TABS : tabs}
+          onChange={(id) => {
+            if (id === "inspect") return;
+            engine.dispatch({ type: "setRightTab", tab: id as RightTab });
+          }}
+        />
         <ZoomMenu engine={engine} snap={snap} />
       </div>
       <div className="inspector">
@@ -1895,24 +1886,16 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
       </div>
       <div className="h-row dev-head">
         <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} /> Inspect</h3>
-        <div className="seg dev-seg" role="tablist" aria-label="Inspect view">
-          <button
-            role="tab"
-            aria-selected={mode === "code"}
-            className={mode === "code" ? "on" : ""}
-            onClick={() => setMode("code")}
-          >
-            Code
-          </button>
-          <button
-            role="tab"
-            aria-selected={mode === "list"}
-            className={mode === "list" ? "on" : ""}
-            onClick={() => setMode("list")}
-          >
-            List
-          </button>
-        </div>
+        <XSegmentedControl
+          className="dev-seg"
+          ariaLabel="Inspect view"
+          value={mode}
+          options={[
+            { value: "code", label: "Code" },
+            { value: "list", label: "List" },
+          ]}
+          onChange={(v) => setMode(v as typeof mode)}
+        />
       </div>
       <div className="insp-pad dev-preview">
         {n.kind === "text" ? <TypeSpecimen n={n} /> : <BoxModelDiagram n={n} />}
@@ -1928,24 +1911,16 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
               showUnits={format === "css" || scope === "subtree"}
             />
             {treeCapable && (
-              <div className="seg dev-seg" role="tablist" aria-label="Code scope">
-                <button
-                  role="tab"
-                  aria-selected={scope === "layer"}
-                  className={scope === "layer" ? "on" : ""}
-                  onClick={() => setScope("layer")}
-                >
-                  Layer
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={scope === "subtree"}
-                  className={scope === "subtree" ? "on" : ""}
-                  onClick={() => setScope("subtree")}
-                >
-                  Subtree
-                </button>
-              </div>
+              <XSegmentedControl
+                className="dev-seg"
+                ariaLabel="Code scope"
+                value={scope}
+                options={[
+                  { value: "layer", label: "Layer" },
+                  { value: "subtree", label: "Subtree" },
+                ]}
+                onChange={(v) => setScope(v as typeof scope)}
+              />
             )}
             <Tooltip label="Copy the snippet">
               <button

@@ -2011,6 +2011,69 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 36. one tab primitive: three strips, one behaviour (PM-U5, IN-U7) ---------
+{
+  const p = await page();
+  await rows(p);
+  const strip = (sel) => p.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return null;
+    return {
+      role: el.getAttribute("role"),
+      label: el.getAttribute("aria-label"),
+      buttons: [...el.querySelectorAll("button")].map((b) => ({
+        text: b.textContent.trim(),
+        selected: b.getAttribute("aria-selected"),
+        roving: b.getAttribute("tabindex"),
+      })),
+    };
+  }, sel);
+
+  // The inspector head strip: role/aria-selected/roving focus, and the
+  // underline look it always had (driven by aria-current).
+  const head = await strip(".panel.right .tabs-row .tabs");
+  t(`the inspector tabs are a real tab list (${head?.buttons.map((b) => b.text).join("/")})`,
+    head?.role === "tablist" && head.buttons.length === 2 && head.buttons.every((b) => b.selected !== null));
+  t("only the active tab is tabbable",
+    head.buttons.filter((b) => b.roving === "0").length === 1 && head.buttons.filter((b) => b.roving === "-1").length === 1);
+  t("the zoom menu still shares the row",
+    await p.evaluate(() => !!document.querySelector(".panel.right .tabs-row .zoom, .panel.right .tabs-row .tabs ~ .zoom")));
+
+  await p.evaluate(() => document.querySelector('.panel.right .tabs-row .tabs button[aria-selected="true"]')?.focus());
+  await p.keyboard.press("ArrowRight");
+  await sleep(350);
+  const moved = await strip(".panel.right .tabs-row .tabs");
+  t(`arrows switch the inspector tab (${moved.buttons.find((b) => b.selected === "true")?.text})`,
+    moved.buttons.find((b) => b.selected === "true")?.text === "Prototype" &&
+    (await p.evaluate(() => document.activeElement?.textContent?.trim())) === "Prototype");
+  t("and the prototype panel followed", await p.evaluate(() => !!document.querySelector(".inspector .proto-row")));
+  await p.keyboard.press("Home");
+  await sleep(300);
+  const home = await strip(".panel.right .tabs-row .tabs");
+  t(`Home returns to the first tab (${home.buttons.find((b) => b.selected === "true")?.text})`,
+    home.buttons.find((b) => b.selected === "true")?.text === "Design");
+
+  // The Variables/Styles switch was four inline-styled buttons with no keyboard
+  // path; it is now the shared segmented control.
+  await p.keyboard.down("Alt"); await p.keyboard.press("3"); await p.keyboard.up("Alt");
+  await sleep(500);
+  const pane = await strip(".panel.left .seg.pane");
+  t(`the variables pane switch is a tab list (${pane?.buttons.map((b) => b.text).join("/")})`,
+    pane?.role === "tablist" && pane.buttons.length === 2);
+  t("its active pane is selected, not just coloured",
+    pane.buttons.find((b) => b.text === "Variables")?.selected === "true");
+  t("and it carries no styling of its own",
+    await p.evaluate(() => ![...document.querySelectorAll(".panel.left .seg.pane button")].some((b) => b.getAttribute("style"))));
+  await p.evaluate(() => document.querySelector(".panel.left .seg.pane button")?.focus());
+  await p.keyboard.press("ArrowRight");
+  await sleep(450);
+  const after = await strip(".panel.left .seg.pane");
+  t(`arrows switch to the styles pane (${after.buttons.find((b) => b.selected === "true")?.text})`,
+    after.buttons.find((b) => b.selected === "true")?.text === "Styles" &&
+    (await p.evaluate(() => !!document.querySelector(".panel.left .color-row"))));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();
