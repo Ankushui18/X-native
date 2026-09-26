@@ -1381,6 +1381,7 @@ export function Actions({
   onHide,
   onMinimize,
   onInspectFig,
+  onNewFile,
 }: {
   engine: Engine;
   onPresent?: () => void;
@@ -1388,6 +1389,9 @@ export function Actions({
   onHide: () => void;
   onMinimize?: () => void;
   onInspectFig?: () => void;
+  /** Handed to the "New file…" command once it is confirmed. The editor owns
+   *  the file's stored copy, so replacing it belongs there, not in the panel. */
+  onNewFile?: () => void;
 }) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | SearchKind>("all");
@@ -1453,6 +1457,10 @@ export function Actions({
           danger: true,
         });
         if (!ok) return;
+        if (onNewFile) {
+          onNewFile();
+          return;
+        }
         clearDoc();
         window.location.reload();
       },

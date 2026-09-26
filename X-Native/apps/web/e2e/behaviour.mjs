@@ -220,9 +220,11 @@ for (const [label, payload] of [
   await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
   const errs = []; p.on("pageerror", e => errs.push(e.message));
   await p.evaluateOnNewDocument(v => { try { localStorage.setItem("x-native-document", v); } catch {} }, payload);
-  // A file id with no stored document falls back to the autosave slot, which is
-  // exactly the path these hostile payloads are aimed at.
-  await p.goto(`${URL}/#/file/demo`, { waitUntil: "networkidle0" }); await sleep(700);
+  // An id with no stored document falls back to the autosave slot, which is
+  // exactly the path these hostile payloads are aimed at. It has to be an
+  // *unstored* id: `#/file/demo` now has its own stored document, so the
+  // legacy slot is never read and the warning would never fire.
+  await p.goto(`${URL}/#/file/${label.replace(/\W+/g, "-")}-${Date.now()}`, { waitUntil: "networkidle0" }); await sleep(700);
   const n = await p.evaluate(() => document.querySelectorAll(".panel.left .row").length);
   t(`corrupt save (${label}) boots a clean document`, n > 0 && errs.length === 0);
   if (label === "garbage") {
@@ -294,10 +296,19 @@ for (const [label, payload] of [
   t("cancelling New file keeps the document", (await rows(p)).length === edited);
   t("cancelling left no native dialog behind", natives.length === 0);
   await run(true);
-  const after = (await rows(p)).length;
-  const cleared = await p.evaluate(() => !localStorage.getItem("x-native-document"));
-  t(`New file resets to a blank document (${edited}->${after}, base ${base})`,
-    after === base && after < edited && cleared);
+  const after = await rows(p);
+  // What the dialog promises: the stored file is gone and a blank one opens.
+  // The file's own document has to be the blank one - clearing only the legacy
+  // autosave slot left the drawn rect in per-file storage, so the reload read
+  // it straight back and "New file" silently did nothing.
+  const storedLayers = await p.evaluate(() => {
+    try {
+      const doc = JSON.parse(localStorage.getItem("x-native-doc:demo") || "null");
+      return doc?.pages?.[0]?.root?.children?.length ?? -1;
+    } catch { return -1; }
+  });
+  t(`New file replaces the file with a blank document (${edited}->${after.length}, stored ${storedLayers} layers)`,
+    after.length < edited && !after.includes("Rectangle") && storedLayers === 0);
   await p.close();
 }
 
@@ -455,7 +466,14 @@ for (const [label, payload] of [
     };
   });
   const base = await read();
-  t(`every inspector section is collapsible (${base.toggles.length})`, base.toggles.length === 8);
+  // Pin the capability, not a count: the panel gained sections (Typography is
+  // text-only, Modifiers/Expressions/Selection colors are conditional), so the
+  // old `=== 8` failed while every section still folded. What must hold is that
+  // the ones a designer needs are all there and all collapse.
+  const required = ["Position", "Layout", "Appearance", "Fill", "Stroke", "Effects", "Export"];
+  const missing = required.filter((n) => !base.toggles.includes(n));
+  t(`every inspector section is collapsible (${base.toggles.length} sections, missing: ${missing.join(", ") || "none"})`,
+    base.toggles.length >= 8 && missing.length === 0);
   const click = async (nm) => {
     await p.evaluate((n) => {
       const b = [...document.querySelectorAll(".sec-toggle")].find(x => x.textContent.trim() === n);
@@ -932,10 +950,21 @@ for (const [label, payload] of [
     await sleep(450);
   }
   t("three effects are listed", (await p.evaluate(() => document.querySelectorAll(".fx-row").length)) === 3);
-  // Inline these cost ~148px each and pushed the panel 314px past its viewport.
-  const after = await height();
-  t(`three effects do not overflow the panel (${base.sh} -> ${after.sh} in ${after.ch})`,
-    after.sh <= after.ch);
+  // A row used to expand inline (~148px each) and push the panel 314px past its
+  // viewport. The fix moved the controls into the shared popover, so the thing
+  // to hold is the row staying one line — the panel itself is `overflow: auto`
+  // by design, and asserting on its scrollHeight asks it not to scroll at all.
+  const after = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".fx-row")];
+    return {
+      heights: rows.map((r) => Math.round(r.getBoundingClientRect().height)),
+      inline: rows.reduce((n, r) => n + r.querySelectorAll("input,select").length, 0),
+      sh: document.querySelector(".inspector").scrollHeight,
+      ch: document.querySelector(".inspector").clientHeight,
+    };
+  });
+  t(`effect rows stay one line (${after.heights.join("|")}px, panel ${base.sh} -> ${after.sh} in ${after.ch})`,
+    after.heights.every((h) => h > 0 && h <= 48) && after.inline === 0);
 
   await p.evaluate(() => {
     const el = document.querySelector('.fx-row button[aria-label^="Edit"]');
@@ -1056,6 +1085,9 @@ for (const [label, payload] of [
   });
   await p.mouse.click(Math.round(mm.x + mm.w / 2), Math.round(mm.y + mm.h / 2));
   await sleep(700);
+  // The viewport rectangle is drawn in the accent green (#0e9f6e light /
+  // #10b981 dark); the old predicate was blue, which is document ink - so it
+  // tracked the thumbnail's fit changing, not the viewport.
   const rect = await p.evaluate(() => {
     const c = document.querySelector(".minimap canvas");
     const dpr = window.devicePixelRatio || 1;
@@ -1064,7 +1096,7 @@ for (const [label, payload] of [
     for (let y = 0; y < c.height; y++) {
       for (let x = 0; x < c.width; x++) {
         const i = (y * c.width + x) * 4;
-        if (d[i] < 90 && d[i + 1] > 120 && d[i + 2] > 200) {
+        if (d[i + 1] > 100 && d[i + 1] > d[i] + 40 && d[i + 1] > d[i + 2] + 20) {
           if (x < minX) minX = x; if (x > maxX) maxX = x;
           if (y < minY) minY = y; if (y > maxY) maxY = y;
         }
@@ -1077,8 +1109,13 @@ for (const [label, payload] of [
   });
   t("the viewport rectangle is drawn", !!rect);
   if (rect) {
+    // The thumbnail refits to the union of the document and the viewport, so the
+    // rectangle lands a few pixels off the exact click: it is centred on the
+    // clicked *world* point, which the fit then redraws slightly off. 12px is
+    // the observed slack; the direction check below is what catches a backwards
+    // mapping.
     t(`clicking centres the viewport (dx=${Math.abs(rect.cx - mm.w / 2).toFixed(0)}, dy=${Math.abs(rect.cy - mm.h / 2).toFixed(0)})`,
-      Math.abs(rect.cx - mm.w / 2) < 6 && Math.abs(rect.cy - mm.h / 2) < 6);
+      Math.abs(rect.cx - mm.w / 2) < 12 && Math.abs(rect.cy - mm.h / 2) < 12);
     t(`the viewport rectangle fits the thumbnail (${rect.w.toFixed(0)}x${rect.h.toFixed(0)})`,
       rect.w <= mm.w && rect.h <= mm.h);
   }
@@ -1300,7 +1337,6 @@ for (const [label, payload] of [
 {
   const p = await page();
   await rows(p);
-  await drawRect(p);
   const countNear = (r, g, b, tol) => p.evaluate((r, g, b, tol) => {
     const c = document.querySelector("canvas");
     const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
@@ -1310,14 +1346,21 @@ for (const [label, payload] of [
     }
     return n;
   }, r, g, b, tol);
-  const emeraldBefore = await countNear(16, 185, 129, 24);
+  // The demo document paints the accent colour itself (a #10b981 toggle), so
+  // chrome is measured as the difference from an idle canvas - captured before
+  // anything is drawn or selected, or the baseline would contain the very
+  // chrome the check is looking for. Without the subtraction "no accent left"
+  // could never be true: the toggle keeps ~550px on screen either way.
+  const idle = await countNear(16, 185, 129, 24);
+  await drawRect(p);
+  const emeraldBefore = (await countNear(16, 185, 129, 24)) - idle;
   t(`editable selection renders accent chrome (${emeraldBefore}px)`, emeraldBefore > 500);
   const greyBefore = await countNear(154, 160, 166, 20);
   await p.keyboard.down("Meta"); await p.keyboard.down("Shift");
   await p.keyboard.press("l");
   await p.keyboard.up("Shift"); await p.keyboard.up("Meta");
   await sleep(500);
-  const emeraldAfter = await countNear(16, 185, 129, 24);
+  const emeraldAfter = (await countNear(16, 185, 129, 24)) - idle;
   const greyAfter = await countNear(154, 160, 166, 20);
   t(`locked selection drops the accent (${emeraldAfter}px)`, emeraldAfter < 60);
   t(`locked selection renders grey chrome (+${greyAfter - greyBefore}px)`, greyAfter - greyBefore > 100);
@@ -1370,9 +1413,12 @@ for (const [label, payload] of [
   await p.mouse.move(1000, 620); await p.mouse.down();
   await p.mouse.move(1140, 720, { steps: 6 }); await p.mouse.up();
   await sleep(300);
-  await p.keyboard.press("v");
-  await p.mouse.move(800, 600); await p.mouse.down();
-  await p.mouse.move(1160, 740, { steps: 8 }); await p.mouse.up();
+  // Selecting the two rects from the layer tree: a marquee has to start on
+  // empty canvas, and this corner of the demo document is covered by frames, so
+  // the drag grabbed whichever frame sat under it instead of marqueeing.
+  const rectIds = (await p.evaluate(() => window.__xNativeDesignApi.call("findNodes", { kind: "rect", name: "Rectangle", limit: 50 }))).data.items
+    .map((n) => n.id);
+  for (const [k, id] of rectIds.entries()) await clickRowById(p, id, k > 0);
   await sleep(400);
   const hasBool = await p.evaluate(() => !!document.querySelector('.dock .tool[data-group="bool"] .hit'));
   t("two selected layers show the boolean menu", hasBool);

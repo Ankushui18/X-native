@@ -25,9 +25,9 @@ import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { ZenHUD } from "./ui/ZenHUD";
 import { RadialMenu } from "./ui/RadialMenu";
 import { subscribeToast, toast as toastMsg } from "./ui/toast";
-import { saveDoc } from "./engine/persist";
+import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
-import { DEMO_ID, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import { DEMO_ID, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
 import { preloadGeo } from "./engine/geoBridge";
 
@@ -175,6 +175,18 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   // defeat its comparator and re-render every row on every dispatch.
   const toggleMinUi = useCallback(() => setMinUi((v) => !v), []);
   const openActions = useCallback(() => setActions(true), []);
+
+  /** "New file…" (Actions): the stored copy of this file is replaced by a blank
+   *  document, so the reload opens an empty canvas instead of the file the user
+   *  just confirmed deleting. Clearing only the legacy autosave slot left the
+   *  per-file copy behind, which the next boot read straight back. */
+  const startBlankFile = useCallback(() => {
+    const blank = docFromTemplate("blank");
+    const name = getFile(fileId)?.name;
+    saveFile(fileId, (name ? { ...blank, fileName: name } : blank) as never);
+    clearDoc(); // the legacy autosave slot and its IndexedDB row
+    window.location.reload();
+  }, [fileId]);
   const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
   const runnerRef = useRef<((ix: any, sourceId?: string) => void) | null>(null);
@@ -194,6 +206,9 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     let timer = 0;
     let warned = false;
     const write = () => {
+      // "New file…" has already replaced this file's stored copy; the flush on
+      // the way to the reload must not put the discarded document back.
+      if (saveSuppressed()) return;
       // Stored form: image bytes live in the asset store, so this JSON is a few
       // kilobytes per image instead of its full data URL - which is what made a
       // 50-photo file take a fifth of a second to save.
@@ -615,6 +630,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
           <Actions
             engine={engine}
             onPresent={present}
+            onNewFile={startBlankFile}
             onClose={() => setActions(false)}
             onHide={() => {
               setHideUi((v) => !v);
