@@ -2715,7 +2715,9 @@ export class MemoryEngine implements Engine {
       case "addVectorBranch": {
         const n = find(this.root(), cmd.id);
         if (!n || n.locked) break;
-        const currentVn = n.vectorNetwork || pathToVectorNetwork(n.path, n.closed);
+        const branchSrc = n.path.length ? n.path : shapePoly(n);
+        const branchClosed = n.path.length ? n.closed : n.kind !== "line" && n.kind !== "arrow";
+        const currentVn = n.vectorNetwork || pathToVectorNetwork(branchSrc, branchClosed);
         const updated = addVectorBranch(
           currentVn,
           cmd.fromVertexIndex,
@@ -2759,8 +2761,15 @@ export class MemoryEngine implements Engine {
       }
       case "bendSegment": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked || n.path.length < 2) break;
-        n.path = bendSegment(n.path, cmd.segIndex, n.closed, cmd.dragX, cmd.dragY);
+        if (!n || n.locked) break;
+        // In-place vector edit: a basic shape carries no path until the first
+        // edit, so seed from its outline and convert on write, like patchPath.
+        const src = n.path.length >= 2 ? n.path : shapePoly(n);
+        if (src.length < 2) break;
+        const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+        n.path = bendSegment(src, cmd.segIndex, effClosed, cmd.dragX, cmd.dragY);
+        n.closed = effClosed;
+        n.kind = "vector";
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         const pb = pathBounds(n.path, n.closed);
         n.w = pb.w;
@@ -2769,10 +2778,15 @@ export class MemoryEngine implements Engine {
       }
       case "insertPointOnPath": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked || n.path.length < 2) break;
-        const res = insertPointOnPath(n.path, cmd.x, cmd.y, n.closed);
+        if (!n || n.locked) break;
+        const src = n.path.length >= 2 ? n.path : shapePoly(n);
+        if (src.length < 2) break;
+        const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+        const res = insertPointOnPath(src, cmd.x, cmd.y, effClosed, cmd.maxDist ?? 12);
         if (res) {
           n.path = res.newPath;
+          n.closed = effClosed;
+          n.kind = "vector";
           n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         }
         break;

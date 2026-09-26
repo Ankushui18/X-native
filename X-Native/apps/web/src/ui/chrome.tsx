@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from
 import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
 import { coerceVariableValue, fallbackForType, isAlias, resolveVariable } from "../engine/variables";
 import { collectColors, find, findParent } from "../engine/memory";
+import { shapePoly, shiftPoints } from "../engine/geometry";
 import { alignKey } from "../engine/layout";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize, type IconName } from "./icons";
@@ -2282,10 +2283,34 @@ export function bindHotkeys(
     const step = e.shiftKey ? prefs.big : prefs.small;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
-      if (e.key === "ArrowLeft") engine.dispatch({ type: "nudge", dx: -step, dy: 0 });
-      if (e.key === "ArrowRight") engine.dispatch({ type: "nudge", dx: step, dy: 0 });
-      if (e.key === "ArrowUp") engine.dispatch({ type: "nudge", dx: 0, dy: -step });
-      if (e.key === "ArrowDown") engine.dispatch({ type: "nudge", dx: 0, dy: step });
+      const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+      const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+      // Inside vector edit with points selected, arrows move the anchors —
+      // not the whole layer (Figma). The first nudge on a basic shape
+      // converts it, exactly like dragging a point does.
+      const vst = engine.snapshot();
+      const vIdx =
+        vst.vecEdit && vst.vecPoints && vst.vecPoints.length > 0
+          ? vst.vecPoints
+          : vst.vecEdit && vst.vecPoint != null && vst.vecPoint >= 0
+            ? [vst.vecPoint]
+            : [];
+      if (vst.vecEdit && vIdx.length) {
+        const vn = find(vst.pages[vst.page].root, vst.vecEdit);
+        if (vn && !vn.locked) {
+          const base = vn.path.length ? vn.path : shapePoly(vn);
+          if (vIdx.every((i) => i >= 0 && i < base.length)) {
+            engine.dispatch({
+              type: "patchPath",
+              id: vn.id,
+              path: shiftPoints(base, vIdx, dx, dy),
+              closed: vn.path.length ? !!vn.closed : (vn.kind !== "line" && vn.kind !== "arrow"),
+            });
+            return;
+          }
+        }
+      }
+      engine.dispatch({ type: "nudge", dx, dy });
     }
   };
   window.addEventListener("keydown", onKey, true);

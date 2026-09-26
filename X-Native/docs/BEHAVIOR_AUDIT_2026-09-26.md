@@ -22,7 +22,7 @@ mock contexts, `npm test`). Pointer/keyboard bindings are verified by tracing ha
 | 12 | Effects / shadows / blur | ✅ done | L-001–L-010 (51 tests) |
 | 13 | Images (place/crop/mask/export) | ✅ done | M-001–M-010 + export peek (52 tests) |
 | 14 | Typography (+ phantom controls) | ✅ done | Y-001–Y-015 (39 tests) |
-| 15 | Vector / pen (object vs edit mode) | … | |
+| 15 | Vector / pen (object vs edit mode) | ✅ done | V-001–V-010 (28 tests) |
 | 16 | Layers / structure | … | |
 | 17 | Components | … | |
 | 18 | Variables / tokens / styles | … | |
@@ -656,3 +656,72 @@ system fonts; glyph fills + per-character strokes.
   beyond the native overlay; missing-font alert.
 - Type chords while the editor has focus (the typing guard stands).
 - SVG export wrapping + paragraph gaps (§24 owns export).
+
+## §15 — Vector / pen (object vs edit mode)
+
+Evidence: Figma “Vector networks” + “Edit vector layers” (pen click/drag,
+close-on-start, Esc/Enter/dblclick-to-finish, mirror modes, per-point caps +
+corner radius, paint toggle, eraser, multi-point bbox, corner smooth toggle).
+
+### Fixed (shipped in the §15 vector commit on this branch)
+
+- V-001 Enter/double-click on a basic shape no longer flattens it up front:
+  shapes edit in place (overlay already used a `shapePoly` fallback), so
+  enter-and-exit-with-no-changes leaves the node untouched and the first
+  real edit converts `kind` via the existing `patchPath` path. Engine
+  `insertPointOnPath` / `bendSegment` / `addVectorBranch` seed from
+  `shapePoly` with an effective-closed flag (shapes closed, lines/arrows
+  open); pen branch-anchoring accepts shape vertices. Double-click on a
+  boolean *with children* now drills into the child (Figma) instead of
+  baking the boolean — previously the drill branch was dead code for
+  booleans.
+- V-002 Delete/Backspace in vector edit with no point selected no longer
+  eats the last anchor; it is a no-op (the keystroke is still swallowed so
+  the layer survives). ⇧Delete heal kept.
+- V-003 The pen close-ring now appears only on the start anchor (the only
+  click that closes); previously every draft anchor within 14/zoom was
+  ringed while clicking one just stacked a duplicate point.
+- V-004 Pen click on the edited path inside vector edit inserts an anchor
+  (Figma) instead of starting a second draft; vertex clicks still start
+  branch-drawing, clicks elsewhere still draft.
+- V-005 Arrow keys in vector edit with points selected nudge the anchors
+  (via `shiftPoints` + `patchPath`, first nudge converts a shape) instead
+  of the whole layer; ⇧ keeps the 10px step.
+- V-006 ⇧-drag of vector points constrains to the dominant axis (single
+  and multi-point moves).
+- V-007 Point insertion on a curved segment now splits the cubic (closest-t
+  sampling + De Casteljau) so the anchor lands on the curve and the arc
+  keeps its shape; straight segments keep the old chord midpoint.
+- V-008 Double-click corner→smooth derives the tangent from the
+  neighbouring anchors (length = third of the shorter edge) instead of a
+  fixed 20px horizontal kink.
+- V-009 ⌥-drag on a handle-less anchor pulls a Bézier handle out of it
+  (mirror mode decides whether the far side follows) instead of moving.
+- V-010 Double-click-to-finish drops the press point when it coincides
+  with the previous anchor (< 1.5 units), so finishing on the spot never
+  leaves a zero-length end segment.
+
+### Verified parity (traced, no fix needed)
+
+- Pen: click = corner, drag = symmetric handles, ⇧ 45° snap, Esc/Enter
+  commit, Backspace pops draft points, rubber-band + ghost preview,
+  network branching on vertices; pencil thin + `smoothPath` on release.
+- Edit loop: Enter/dblclick entry, Esc exit, blur/⌘Enter text interplay,
+  marquee point select (+⇧), multi-point move/delete, mirror buttons +
+  1/2/3/4 keys, per-point corner radius, per-end caps (8 styles) with
+  arrowheads, dblclick corner/smooth toggle, per-region Paint with
+  same-fill toggle, Shape Builder merge/subtract, Bend via modifier or
+  subtool, Simplify/Clean up, partial erasure (`erasePath`) incl.
+  shape-outline splitting.
+- Whole path commits as one undo step; `normalizeVectorNode` on exit is a
+  no-op for untouched shapes.
+
+### Deferred / out of scope
+
+- Multi-point transform bbox (resize/rotate/Space-reposition) — new UI,
+  no existing affordance; moves already work.
+- Lasso (Q), Cut (X), Variable-width subtool — absent tools, not broken
+  ones (`vecSubTool` `"eraser"`/`"lasso"` union members are dead type-only
+  values; the main eraser tool exists separately).
+- Per-point caps inside edit mode beyond the node's start/end pair (same
+  thing for every 2-endpoint path).

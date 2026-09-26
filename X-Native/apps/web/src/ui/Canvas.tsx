@@ -23,6 +23,7 @@ import {
   hasCornerSmoothing,
   roundRectRadii,
   pathBounds,
+  smoothHandlesForPoint,
   fillNetworkRegionAtPoint,
   outlineVariableStroke,
   widthProfileStations,
@@ -76,6 +77,16 @@ import { align } from "./inspector";
 const SNAP_PX = 6;
 /** Eraser brush radius, in screen pixels. */
 const ERASER_PX = 10;
+
+/**
+ * Effective closed flag for vector editing. Basic shapes carry no path (and
+ * closed:false) until the first edit, but a rect/ellipse/poly/star is
+ * semantically a loop — only lines and arrows are open.
+ */
+function effClosed(n: { path: unknown[]; closed?: boolean; kind?: string }): boolean {
+  if (n.path.length) return !!n.closed;
+  return n.kind !== "line" && n.kind !== "arrow";
+}
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
 
@@ -767,7 +778,10 @@ export function Canvas({
             n.kind === "line" ||
             n.kind === "arrow")
         ) {
-          if (n.kind !== "vector") {
+          if (n.kind === "boolean") {
+            // Childless booleans still bake down; basic shapes edit in
+            // place — entering and leaving without touching a point leaves
+            // the node untouched, and the first real edit converts kind.
             engine.dispatch({ type: "flatten" });
             const newId = engine.snapshot().selection[0];
             setVecEdit(newId);
@@ -792,20 +806,28 @@ export function Canvas({
       }
       if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && vecEdit && !edit) {
         const n = worldPos(snap.pages[snap.page].root, vecEdit)?.node;
-        if (n?.path.length) {
-          const selectedSet = new Set<number>(
+        const base = n ? (n.path.length ? n.path : shapePoly(n)) : [];
+        if (n && base.length) {
+          // No point selected deletes nothing (Figma): the old fallback ate
+          // the last anchor on every stray Backspace.
+          const selList =
             snap.vecPoints && snap.vecPoints.length > 0
               ? snap.vecPoints
               : vecPt.current >= 0
                 ? [vecPt.current]
-                : [n.path.length - 1],
-          );
+                : [];
+          if (!selList.length) {
+            e.stopImmediatePropagation();
+            return;
+          }
+          const selectedSet = new Set<number>(selList);
           const isHeal = e.shiftKey;
-          let path = [...n.path];
+          const closed = effClosed(n);
+          let path = [...base];
           if (isHeal && path.length >= 3 && selectedSet.size === 1) {
             const i = Array.from(selectedSet)[0];
-            const prevIdx = i > 0 ? i - 1 : (n.closed ? path.length - 1 : null);
-            const nextIdx = i < path.length - 1 ? i + 1 : (n.closed ? 0 : null);
+            const prevIdx = i > 0 ? i - 1 : (closed ? path.length - 1 : null);
+            const nextIdx = i < path.length - 1 ? i + 1 : (closed ? 0 : null);
             if (prevIdx !== null && nextIdx !== null) {
               const p0 = path[prevIdx];
               const p1 = path[nextIdx];
@@ -822,7 +844,7 @@ export function Canvas({
             toast("Point deleted & healed");
           }
           path = path.filter((_, j) => !selectedSet.has(j));
-          engine.dispatch({ type: "patchPath", id: n.id, path, closed: n.closed });
+          engine.dispatch({ type: "patchPath", id: n.id, path, closed });
           const firstSel = Math.min(...Array.from(selectedSet));
           const nextPt = path.length ? Math.max(0, Math.min(path.length - 1, firstSel)) : -1;
           vecPt.current = nextPt;
@@ -2935,7 +2957,7 @@ export function Canvas({
         if (cursorPos && !drag.current) {
           const local = nodeLocalPoint(cursorPos.x, cursorPos.y, wp.x, wp.y, wp.node);
           const npts = pts.length;
-          const count = wp.node.closed ? npts : npts - 1;
+          const count = effClosed(wp.node) ? npts : npts - 1;
           for (let si = 0; si < count; si++) {
             const p1 = pts[si];
             const p2 = pts[(si + 1) % npts];
@@ -3463,10 +3485,48 @@ export function Canvas({
       const near = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by) < 8 / snap.zoom;
       // A branch is anchored on a vertex of the selected vector, so the pen can
       // keep drawing in that shape instead of starting a second one.
+      // In vector edit, a pen click on the edited path inserts an anchor
+      // (Figma) instead of starting a second path — vertices still fall
+      // through to branch-drawing below.
+      if (vecEdit && !penBranch.current && !draft.length) {
+        const loc = worldPos(rootForPen, vecEdit);
+        if (loc && !loc.node.locked) {
+          const epts = loc.node.path.length ? loc.node.path : shapePoly(loc.node);
+          const elocal = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, loc.node);
+          let onVertex = false;
+          for (const v of epts) {
+            if (Math.hypot(elocal.x - v.x, elocal.y - v.y) < 10 / snap.zoom) {
+              onVertex = true;
+              break;
+            }
+          }
+          if (!onVertex) {
+            const res = insertPointOnPath(epts, elocal.x, elocal.y, effClosed(loc.node), 10 / snap.zoom);
+            if (res) {
+              engine.dispatch({
+                type: "insertPointOnPath",
+                id: loc.node.id,
+                x: elocal.x,
+                y: elocal.y,
+                maxDist: 10 / snap.zoom,
+              });
+              vecPt.current = res.insertedIndex;
+              setVecEdit(loc.node.id, res.insertedIndex);
+              toast("Point added on path");
+              return;
+            }
+          }
+        }
+      }
       if (!penBranch.current && !draft.length && snap.selection.length === 1) {
         const sel = find(rootForPen, snap.selection[0]);
-        if (sel && sel.kind === "vector" && !sel.locked) {
-          const vn = sel.vectorNetwork ?? pathToVectorNetwork(sel.path, sel.closed);
+        const branchable =
+          sel && !sel.locked && (sel.kind === "vector" ||
+            sel.kind === "rect" || sel.kind === "ellipse" || sel.kind === "poly" ||
+            sel.kind === "star" || sel.kind === "line" || sel.kind === "arrow");
+        if (branchable && sel) {
+          const src = sel.path.length ? sel.path : shapePoly(sel);
+          const vn = sel.vectorNetwork ?? pathToVectorNetwork(src, effClosed(sel));
           for (let i = 0; i < vn.vertices.length; i++) {
             const v = vn.vertices[i];
             if (near(wpt.x, wpt.y, sel.x + v.x, sel.y + v.y)) {
@@ -3971,7 +4031,7 @@ export function Canvas({
           const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
           if (vecSubTool === "paint") {
             const nextFill = wp.node.fillVisible ? (wp.node.fill || "#d9d9d9") : "#10b981";
-            const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path, wp.node.closed);
+            const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path.length ? wp.node.path : shapePoly(wp.node), effClosed(wp.node));
             const updatedVn = fillNetworkRegionAtPoint(vn, local.x, local.y, nextFill);
             engine.dispatch({ type: "patchVectorNetwork", id: wp.node.id, network: updatedVn });
             engine.dispatch({ type: "patch", id: wp.node.id, patch: { fillVisible: true } });
@@ -3991,7 +4051,7 @@ export function Canvas({
           const meta = e.metaKey || e.ctrlKey || e.altKey || vecSubTool === "bend";
           if (meta) {
             const npts = pts.length;
-            const count = wp.node.closed ? npts : npts - 1;
+            const count = effClosed(wp.node) ? npts : npts - 1;
             for (let si = 0; si < count; si++) {
               const p1 = pts[si];
               const p2 = pts[(si + 1) % npts];
@@ -4004,9 +4064,9 @@ export function Canvas({
               }
             }
           } else {
-            const res = insertPointOnPath(pts, local.x, local.y, wp.node.closed, 10 / snap.zoom);
+            const res = insertPointOnPath(pts, local.x, local.y, effClosed(wp.node), 10 / snap.zoom);
             if (res) {
-              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y });
+              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y, maxDist: 10 / snap.zoom });
               vecPt.current = res.insertedIndex;
               setVecEdit(wp.node.id, res.insertedIndex);
               toast("Point added on path");
@@ -4320,12 +4380,14 @@ export function Canvas({
       // Which point would this click join? Mark it with a circle, and a
       // guess-the-target affordance is how a pen either feels precise or feels
       // like a trap.
+      // Only the start anchor closes the path — ringing any other anchor
+      // promises a join the click cannot keep.
       let hint: number | null = null;
-      for (let i = 0; i < draft.length; i++) {
-        if (Math.hypot(wpt.x - draft[i].x, wpt.y - draft[i].y) < 14 / snap.zoom) {
-          hint = i;
-          break;
-        }
+      if (
+        draft.length >= 2 &&
+        Math.hypot(wpt.x - draft[0].x, wpt.y - draft[0].y) < 14 / snap.zoom
+      ) {
+        hint = 0;
       }
       if (hint !== closeHint) setCloseHint(hint);
     } else if (ghost) setGhost(null);
@@ -4658,22 +4720,44 @@ export function Canvas({
           }
         } else {
           const movingIndices = snap.vecPoints && snap.vecPoints.includes(d.point) ? snap.vecPoints : [d.point];
-          if (movingIndices.length > 1 && d.origPts) {
-            const origP = d.origPts[d.point];
-            const totalDx = lx - origP.x;
-            const totalDy = ly - origP.y;
-            for (const idx of movingIndices) {
-              if (d.origPts[idx] && pts[idx]) {
-                pts[idx].x = d.origPts[idx].x + totalDx;
-                pts[idx].y = d.origPts[idx].y + totalDy;
-              }
+          const hasHandles =
+            (p.ox || 0) !== 0 || (p.oy || 0) !== 0 || (p.ix || 0) !== 0 || (p.iy || 0) !== 0;
+          if (e.altKey && movingIndices.length === 1 && !hasHandles) {
+            // ⌥-drag a corner anchor pulls a Bézier handle out of it instead
+            // of moving the point; the mirror mode decides whether the other
+            // side follows.
+            p.ox = lx - p.x;
+            p.oy = ly - p.y;
+            if (p.mirrorMode === "angleAndLength") {
+              p.ix = -p.ox;
+              p.iy = -p.oy;
             }
           } else {
-            p.x = lx;
-            p.y = ly;
+            // ⇧ constrains the move to the dominant axis (Figma).
+            let tlx = lx;
+            let tly = ly;
+            if (e.shiftKey && d.origPts && d.origPts[d.point]) {
+              const o = d.origPts[d.point];
+              if (Math.abs(lx - o.x) >= Math.abs(ly - o.y)) tly = o.y;
+              else tlx = o.x;
+            }
+            if (movingIndices.length > 1 && d.origPts) {
+              const origP = d.origPts[d.point];
+              const totalDx = tlx - origP.x;
+              const totalDy = tly - origP.y;
+              for (const idx of movingIndices) {
+                if (d.origPts[idx] && pts[idx]) {
+                  pts[idx].x = d.origPts[idx].x + totalDx;
+                  pts[idx].y = d.origPts[idx].y + totalDy;
+                }
+              }
+            } else {
+              p.x = tlx;
+              p.y = tly;
+            }
           }
         }
-        engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: n.closed });
+        engine.dispatch({ type: "patchPath", id: n.id, path: pts, closed: effClosed(n) });
       }
     } else if (d.mode === "bend" && d.id != null && d.segIndex != null) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -5289,7 +5373,16 @@ export function Canvas({
 
   const onDbl = (e: React.MouseEvent) => {
     if ((snap.tool === "pen" || snap.tool === "pencil") && draft.length >= 2) {
-      engine.dispatch({ type: "addPath", points: draft, closed: false });
+      // The double-click's own press lands on the intended last anchor; drop
+      // it when it duplicates the previous point so finishing never leaves a
+      // zero-length end segment.
+      let commit = draft;
+      if (commit.length >= 2) {
+        const a = commit[commit.length - 1];
+        const b = commit[commit.length - 2];
+        if (Math.hypot(a.x - b.x, a.y - b.y) < 1.5) commit = commit.slice(0, -1);
+      }
+      engine.dispatch({ type: "addPath", points: commit, closed: false });
       setDraft([]);
       setCloseHint(null);
       penBranch.current = null;
@@ -5418,10 +5511,11 @@ export function Canvas({
             pt.ox = 0;
             pt.oy = 0;
           } else {
-            pt.ox = 20;
-            pt.oy = 0;
-            pt.ix = -20;
-            pt.iy = 0;
+            const h = smoothHandlesForPoint(path, best, !!hit.closed);
+            pt.ix = h.ix;
+            pt.iy = h.iy;
+            pt.ox = h.ox;
+            pt.oy = h.oy;
           }
           engine.dispatch({ type: "patchPath", id: hit.id, path, closed: hit.closed });
         }
@@ -5432,7 +5526,7 @@ export function Canvas({
     } else if (
       hit &&
       (hit.kind === "vector" ||
-        hit.kind === "boolean" ||
+        (hit.kind === "boolean" && !hit.children.length) ||
         hit.kind === "rect" ||
         hit.kind === "ellipse" ||
         hit.kind === "poly" ||
@@ -5441,7 +5535,10 @@ export function Canvas({
         hit.kind === "arrow")
     ) {
       engine.dispatch({ type: "select", ids: [hit.id] });
-      if (hit.kind !== "vector") {
+      // Basic shapes edit in place (first edit converts kind); only a
+      // childless boolean bakes down. Booleans with children fall through to
+      // the drill-into-child branch below, as in Figma.
+      if (hit.kind === "boolean") {
         engine.dispatch({ type: "flatten" });
         const newId = engine.snapshot().selection[0];
         setVecEdit(newId);

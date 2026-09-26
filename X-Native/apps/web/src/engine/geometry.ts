@@ -1175,10 +1175,124 @@ export function insertPointOnPath(
 
   if (bestIdx === -1) return null;
 
+  // Curve-aware split: when the segment carries Bézier handles, the click
+  // projects onto the chord but the new anchor must land ON the curve, and
+  // the curve must keep its shape (De Casteljau subdivision). Inserting a
+  // bare corner on the chord would visibly flatten the arc — Figma splits
+  // the curve instead.
+  const p0 = pts[bestIdx];
+  const p1 = pts[(bestIdx + 1) % n];
+  const c1 = { x: p0.x + (p0.ox || 0), y: p0.y + (p0.oy || 0) };
+  const c2 = { x: p1.x + (p1.ix || 0), y: p1.y + (p1.iy || 0) };
+  const curved =
+    (p0.ox || 0) !== 0 || (p0.oy || 0) !== 0 || (p1.ix || 0) !== 0 || (p1.iy || 0) !== 0;
+  if (curved) {
+    // Walk the cubic for the parameter closest to the click.
+    let bt = 0.5;
+    let bd = Infinity;
+    const SAMPLES = 24;
+    for (let k = 0; k <= SAMPLES; k++) {
+      const t = k / SAMPLES;
+      const mt = 1 - t;
+      const x =
+        mt * mt * mt * p0.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p1.x;
+      const y =
+        mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p1.y;
+      const d = Math.hypot(px - x, py - y);
+      if (d < bd) {
+        bd = d;
+        bt = t;
+      }
+    }
+    const t = Math.min(0.95, Math.max(0.05, bt));
+    if (bd <= maxDist * 1.5) {
+      // De Casteljau at t: L0=p0, L1, L2, M | M, R1, R2, R3=p1.
+      const lerp = (a: number, b: number) => a + (b - a) * t;
+      const l1 = { x: lerp(p0.x, c1.x), y: lerp(p0.y, c1.y) };
+      const m1 = { x: lerp(c1.x, c2.x), y: lerp(c1.y, c2.y) };
+      const r2 = { x: lerp(c2.x, p1.x), y: lerp(c2.y, p1.y) };
+      const l2 = { x: lerp(l1.x, m1.x), y: lerp(l1.y, m1.y) };
+      const r1 = { x: lerp(m1.x, r2.x), y: lerp(m1.y, r2.y) };
+      const m = { x: lerp(l2.x, r1.x), y: lerp(l2.y, r1.y) };
+      const newPath = pts.map((q) => ({ ...q }));
+      const q0 = newPath[bestIdx];
+      const q1 = newPath[(bestIdx + 1) % n];
+      q0.ox = l1.x - p0.x;
+      q0.oy = l1.y - p0.y;
+      q1.ix = r2.x - p1.x;
+      q1.iy = r2.y - p1.y;
+      const newPt: PathPoint = {
+        x: m.x,
+        y: m.y,
+        ix: l2.x - m.x,
+        iy: l2.y - m.y,
+        ox: r1.x - m.x,
+        oy: r1.y - m.y,
+      };
+      // Splice position differs for the wrapped closing segment.
+      const at = (bestIdx + 1) % n === 0 && closed ? n : bestIdx + 1;
+      newPath.splice(at, 0, newPt);
+      return { newPath, insertedIndex: at };
+    }
+  }
+
   const newPt: PathPoint = { x: bestProj.x, y: bestProj.y };
   const newPath = [...pts];
   newPath.splice(bestIdx + 1, 0, newPt);
   return { newPath, insertedIndex: bestIdx + 1 };
+}
+
+/**
+ * Auto handles for corner→smooth conversion (double-click a point): the
+ * tangent follows the neighbouring anchors and the length is a third of the
+ * shorter adjacent edge, so the curve continues the path instead of kinking
+ * off along a fixed axis.
+ */
+export function smoothHandlesForPoint(
+  pts: PathPoint[],
+  idx: number,
+  closed: boolean,
+): { ix: number; iy: number; ox: number; oy: number } {
+  const n = pts.length;
+  const p = pts[idx];
+  const prev = closed || idx > 0 ? pts[(idx - 1 + n) % n] : null;
+  const next = closed || idx < n - 1 ? pts[(idx + 1) % n] : null;
+  let dx = 1;
+  let dy = 0;
+  let len = 20;
+  if (prev && next) {
+    dx = next.x - prev.x;
+    dy = next.y - prev.y;
+    len =
+      Math.min(Math.hypot(p.x - prev.x, p.y - prev.y), Math.hypot(next.x - p.x, next.y - p.y)) / 3;
+  } else if (next) {
+    dx = next.x - p.x;
+    dy = next.y - p.y;
+    len = Math.hypot(dx, dy) / 3;
+  } else if (prev) {
+    dx = p.x - prev.x;
+    dy = p.y - prev.y;
+    len = Math.hypot(dx, dy) / 3;
+  }
+  const m = Math.hypot(dx, dy) || 1;
+  len = Math.min(120, Math.max(1, len));
+  const ux = (dx / m) * len;
+  const uy = (dy / m) * len;
+  return { ix: -ux, iy: -uy, ox: ux, oy: uy };
+}
+
+/**
+ * Translate a subset of anchors (arrow-key nudge inside vector edit).
+ * Returns a fresh path; the caller commits it via patchPath.
+ */
+export function shiftPoints(
+  pts: PathPoint[],
+  indices: number[],
+  dx: number,
+  dy: number,
+): PathPoint[] {
+  const set = new Set(indices);
+  return pts.map((p, i) => (set.has(i) ? { ...p, x: p.x + dx, y: p.y + dy } : { ...p }));
 }
 
 /**
