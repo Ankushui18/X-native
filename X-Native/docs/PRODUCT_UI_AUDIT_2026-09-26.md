@@ -416,6 +416,38 @@ frame edge. The `.fig` fills and the style checks were *not* this bug and are un
 - "every inspector section is collapsible" asserts **8** sections; the panel now has **10** (Typography, Position, Layout, Appearance, Fill, Stroke, Effects, Modifiers, Expressions, Selection colors, Export — 11 on a text layer). Every one of them collapses and re-expands when clicked (verified in the browser). The number is stale, not the behaviour.
 - "three effects do not overflow the panel" asserts `scrollHeight <= clientHeight` for `.inspector`, which is `overflow: auto` by design (styles.css) — a scrolling panel is the intended shape, so the check asks for something the app deliberately does not do. The meaningful version of it is "the effect *rows* stay one line", which already passes.
 
+## §4e. The e2e backlog, closed out (final round)
+
+**One real bug, found by the suite and fixed in the product.** "New file…" promised to delete the stored
+file and start a new one, but it only called `clearDoc()`, which clears the legacy autosave slot
+(`x-native-document`). The editor also writes a per-file copy (`x-native-doc:<id>`, `engine/files.ts`) on
+every autosave, and boot prefers it — so the reload restored the document the user had just confirmed
+deleting, and the `pagehide` flush rewrote the legacy slot on the way out. Measured: 24 layers before the
+command, 24 after. The editor now replaces the file's stored document with a blank one (name kept) and the
+autosave flush respects the suppression; the same probe reads 24 → 1, stored document 0 layers. Locked with
+`src/engine/__tests__/files.test.mjs` (blank replaces the drawn doc, name survives, suppression holds).
+
+**Four checks were asserting things the UI no longer does**, and one was measuring the wrong pixels:
+
+- *corrupt save warns the user*: `#/file/demo` now has its own stored document, so the legacy slot is never
+  read and `restoreFailed` cannot fire. The hostile payloads are aimed at the fallback path, so the check
+  boots an **unstored** id — where the toast appears, with zero page errors.
+- *locked selection drops the accent*: the demo document paints `#10b981` itself, so "accent pixels < 60"
+  could never be true without subtracting a baseline, and the baseline was captured *after* the selection
+  existed. With an idle-canvas baseline: 1300 px of accent chrome while selected, 0 px once locked, grey
+  chrome +1075 px.
+- *clicking centres the viewport*: the predicate matched blue document ink rather than the accent-green
+  viewport rectangle the minimap draws. Measured on the right rectangle, a click at 25 %/50 %/75 % moves
+  the view to −10.5 / −5.5 / −0.5 px of centre — the thumbnail refits to the union of document and
+  viewport, so a few pixels of slack are expected; tolerance is 12 px. (`Minimap.tsx` maps the click
+  correctly.)
+- *boolean menu / inspector sections / effect overflow*: selection now comes from `findNodes` + layer rows
+  (a marquee must start on empty canvas, and that corner of the demo is covered by frames); the section and
+  effect checks pin the capability rather than the counts.
+
+**Suite: 187 pass / 0 fail** (was 166/16 at §4c, 178/7 before this round). Unit tests 1621 + 6 new, tsc and
+build clean. Pushed as `d2140b7`.
+
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
    causes. 3. `X_NATIVE_DESIGN_SYSTEM.md` from verified tokens + x-ui (+ gaps closed). 4. Incremental
