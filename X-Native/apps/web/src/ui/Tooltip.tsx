@@ -15,6 +15,32 @@ const DELAY = 380;
 const CHAIN_MS = 500;
 let lastShown = 0;
 
+/** How long a tooltip waits before appearing. Skipped (0) right after another
+ *  tooltip was shown, so tracking along a toolbar does not re-wait each time.
+ *  Shared with the `title` bridge so both paths keep one rhythm. */
+export function showDelay(immediate = false): number {
+  return immediate || Date.now() - lastShown < CHAIN_MS ? 0 : DELAY;
+}
+
+/** Called when a tooltip closes so the next one along the same row is instant. */
+export function markShown(): void {
+  lastShown = Date.now();
+}
+
+/** Split a control's label into the text and the shortcut chip the pill shows
+ *  beside it: "Delete connection (⌫)" → "Delete connection" + "⌫". Only a
+ *  trailing parenthesised *key token* splits; bracketed prose stays part of the
+ *  label ("Clean up vector (sketch to perfect Bézier)"). */
+export function splitShortcutLabel(text: string): { label: string; shortcut?: string } {
+  const trimmed = text.trim();
+  const m = /^(.*?)\s*\(([^()]{1,18})\)$/.exec(trimmed);
+  if (!m || !m[1]) return { label: trimmed };
+  const key = m[2].trim();
+  const isKey =
+    /[⌘⇧⌥⌃⌫↵⇥⎋]/.test(key) || /^[A-Za-z0-9]{1,3}(\s*[/+]\s*[A-Za-z0-9]{1,3})*$/.test(key);
+  return isKey ? { label: m[1].trim(), shortcut: key } : { label: trimmed };
+}
+
 export function Tooltip({
   label,
   shortcut,
@@ -39,17 +65,16 @@ export function Tooltip({
 
   useEffect(() => () => cancel(), []);
 
-  const show = () => {
+  const show = (immediate = false) => {
     cancel();
-    const wait = Date.now() - lastShown < CHAIN_MS ? 0 : DELAY;
     timer.current = window.setTimeout(() => {
       setPos(null);
       setOpen(true);
-    }, wait);
+    }, showDelay(immediate));
   };
   const hide = () => {
     cancel();
-    if (open) lastShown = Date.now();
+    if (open) markShown();
     setOpen(false);
   };
 
@@ -79,9 +104,16 @@ export function Tooltip({
       <span
         ref={host}
         className="tip-host"
-        onPointerEnter={show}
+        onPointerEnter={() => show()}
         onPointerLeave={hide}
         onPointerDown={hide}
+        // Keyboard users get the same label as pointer users (TY-U6): focus
+        // shows it at once, and only for keyboard focus, so clicking a button
+        // does not leave a tooltip hanging over the thing just pressed.
+        onFocus={(e) => {
+          if ((e.target as HTMLElement).matches?.(":focus-visible")) show(true);
+        }}
+        onBlur={hide}
       >
         {children}
       </span>

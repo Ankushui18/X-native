@@ -2384,6 +2384,12 @@ button,
 html[data-theme="dark"] .tip { background: #383838; }
 .tip-sc { color: rgba(255, 255, 255, 0.55); }
 
+/* The bridge's pill is created as it appears rather than mounted-and-hidden, and
+   a tooltip that only shows after the shared delay has nothing to gain from a
+   90ms fade: Chromium can leave the fade's composited opacity parked partway
+   (measured ~50%), which rendered the pill washed out over the panel. */
+.tip[data-static] { animation: none; }
+
 /* Empty state for the right panel with nothing selected. */
 .empty-state {
   display: flex;

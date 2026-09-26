@@ -368,14 +368,14 @@ for (const [label, payload] of [
     if (b && b.getAttribute("aria-expanded") === "false") b.click();
   });
   await sleep(350);
-  await p.evaluate(() => document.querySelector('button.plus[title="Add export"]').click());
+  await p.evaluate(() => document.querySelector('button.plus[title="Add export"], button.plus[data-tip="Add export"]').click());
   await sleep(450);
   for (let i = 0; i < 3; i++) {
-    await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').click());
+    await p.evaluate(() => document.querySelector('button.fmt[title="Format"], button.fmt[data-tip="Format"]').click());
     await sleep(200);
   }
   t("export format cycles to PDF",
-    (await p.evaluate(() => document.querySelector('button.fmt[title="Format"]').textContent.trim())) === "PDF");
+    (await p.evaluate(() => document.querySelector('button.fmt[title="Format"], button.fmt[data-tip="Format"]').textContent.trim())) === "PDF");
   await p.evaluate(() => document.querySelector("button.export-run").click());
   await sleep(2500);
   const dl = (await p.evaluate(() => window.__dl))[0] || {};
@@ -402,7 +402,7 @@ for (const [label, payload] of [
     await sleep(400);
   };
   await openVars();
-  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
+  await (await p.$('.panel.left button.plus[title*="Copy"], .panel.left button.plus[data-tip*="Copy"]')).click();
   await sleep(800);
   t("Vars + with no selection explains itself",
     /select a layer/i.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
@@ -415,7 +415,7 @@ for (const [label, payload] of [
   const rs = await p.$$(".panel.left .row");
   await rs[6].click(); await sleep(400);
   await openVars();
-  await (await p.$('.panel.left button.plus[title*="Copy"]')).click();
+  await (await p.$('.panel.left button.plus[title*="Copy"], .panel.left button.plus[data-tip*="Copy"]')).click();
   await sleep(900);
   t("Vars + copies the selected layer's colour",
     /^Copied #/.test(await p.evaluate(() => document.querySelector(".toast")?.textContent || "")));
@@ -776,7 +776,7 @@ for (const [label, payload] of [
 
   await openStroke();
   await p.evaluate(() => {
-    const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add stroke");
+    const el = [...document.querySelectorAll(".inspector button.plus")].find(b => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Add stroke");
     el && el.click();
   });
   await sleep(800);
@@ -788,7 +788,7 @@ for (const [label, payload] of [
   await p.keyboard.type("4"); await p.keyboard.press("Enter");
   await sleep(600);
   await p.evaluate(() => {
-    const bs = [...document.querySelectorAll('.inspector button[title="outside"]')];
+    const bs = [...document.querySelectorAll('.inspector button[title="outside"], .inspector button[data-tip="outside"]')];
     bs[bs.length - 1]?.click();
   });
   await sleep(600);
@@ -869,7 +869,7 @@ for (const [label, payload] of [
   await openVars();
   await p.evaluate(() => {
     const el = [...document.querySelectorAll(".panel.left button.plus")]
-      .find(b => b.getAttribute("title") === "Create style from selection");
+      .find(b => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Create style from selection");
     el && el.click();
   });
   await sleep(700);
@@ -939,7 +939,7 @@ for (const [label, payload] of [
   await sleep(400);
   for (let k = 0; k < 3; k++) {
     await p.evaluate(() => {
-      const el = [...document.querySelectorAll(".inspector button.plus")].find(b => b.getAttribute("title") === "Add effect");
+      const el = [...document.querySelectorAll(".inspector button.plus")].find(b => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Add effect");
       el && el.click();
     });
     await sleep(350);
@@ -1152,7 +1152,7 @@ for (const [label, payload] of [
   await sleep(400);
   await p.evaluate(() => {
     const el = [...document.querySelectorAll(".panel.left button.plus")]
-      .find((x) => x.getAttribute("title") === "Create style from selection");
+      .find((x) => (x.getAttribute("title") ?? x.getAttribute("data-tip")) === "Create style from selection");
     el && el.click();
   });
   await sleep(700);
@@ -1275,7 +1275,7 @@ for (const [label, payload] of [
     await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Align center"]')));
   t("valign keys carry labels",
     await p.evaluate(() => !!document.querySelector('.inspector button[aria-label="Vertical align middle"]')));
-  await p.evaluate(() => document.querySelector('.inspector button.plus[title="Type settings"]').click());
+  await p.evaluate(() => document.querySelector('.inspector button.plus[title="Type settings"], .inspector button.plus[data-tip="Type settings"]').click());
   await sleep(400);
   const hasItalic = await p.evaluate(() => !!document.querySelector('.inspector .type-pop button[aria-label="Italic"]'));
   t("type settings has an Italic toggle", hasItalic);
@@ -1553,7 +1553,7 @@ for (const [label, payload] of [
     await sleep(400);
   };
   const addVar = async (name, type, value) => {
-    await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"]').click());
+    await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"], .panel.left button.plus[data-tip="Add Variable"]').click());
     await sleep(300);
     await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Variable name"]'); el.focus(); el.select(); });
     await p.keyboard.type(name);
@@ -1642,12 +1642,12 @@ for (const [label, payload] of [
     await sleep(400);
   };
   const varNames = () => p.evaluate(() =>
-    [...document.querySelectorAll(".panel.left span[title='Double-click to rename']")].map((s) => s.textContent));
+    [...document.querySelectorAll(".panel.left span[title='Double-click to rename'], .panel.left span[data-tip='Double-click to rename']")].map((s) => s.textContent));
   // By name: the sample document already ships variables (spacing-sm, radius-md
   // …), so "the first row" would rename one of those instead.
   const openRename = async (name) => {
     await p.evaluate((n) => {
-      const spans = [...document.querySelectorAll(".panel.left span[title='Double-click to rename']")];
+      const spans = [...document.querySelectorAll(".panel.left span[title='Double-click to rename'], .panel.left span[data-tip='Double-click to rename']")];
       (spans.find((x) => x.textContent.trim() === n) ?? spans[0])
         ?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     }, name);
@@ -1656,7 +1656,7 @@ for (const [label, payload] of [
 
   await tab("vars");
   // one variable to rename
-  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"]').click());
+  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Add Variable"], .panel.left button.plus[data-tip="Add Variable"]').click());
   await sleep(300);
   await p.evaluate(() => { const el = document.querySelector('.panel.left input[placeholder="Variable name"]'); el.focus(); el.select(); });
   await p.keyboard.type("dlg-token");
@@ -1699,7 +1699,7 @@ for (const [label, payload] of [
   t("still no native dialogs", (await nativeCalls()).length === 0);
 
   // ── confirm: deleting a collection is explicit and named ──────────────────
-  await p.evaluate(() => document.querySelector('.panel.left button[title="Add collection"]').click());
+  await p.evaluate(() => document.querySelector('.panel.left button[title="Add collection"], .panel.left button[data-tip="Add collection"]').click());
   await sleep(350);
   const newCol = await dlg(p);
   t(`creating a collection asks in-app (${newCol?.title})`, newCol?.title === "New collection");
@@ -1709,7 +1709,7 @@ for (const [label, payload] of [
   const chips = () => p.evaluate(() => [...document.querySelectorAll(".panel.left button")].map((b) => b.textContent.trim()));
   t("the collection is created", (await chips()).includes("QA"));
 
-  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"]').click());
+  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"], .panel.left button[data-tip^="Delete collection"]').click());
   await sleep(350);
   const del = await dlg(p);
   t(`deleting a collection confirms in-app (${del?.title})`, del?.title === 'Delete collection "QA"');
@@ -1719,7 +1719,7 @@ for (const [label, payload] of [
   await p.keyboard.press("Escape");
   await sleep(350);
   t("cancelling the confirm keeps the collection", (await chips()).includes("QA"));
-  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"]').click());
+  await p.evaluate(() => document.querySelector('.panel.left button[title^="Delete collection"], .panel.left button[data-tip^="Delete collection"]').click());
   await sleep(350);
   await clickDlg(p, "Delete collection");
   t("confirming deletes the collection", !(await chips()).includes("QA"));
@@ -1730,14 +1730,14 @@ for (const [label, payload] of [
   await drawRect(p);
   const id = (await api("getSelection", {})).data.ids[0];
   await p.evaluate(() => [...document.querySelectorAll(".inspector button.plus")]
-    .find((b) => b.getAttribute("title") === "Add stroke")?.click());
+    .find((b) => (b.getAttribute("title") ?? b.getAttribute("data-tip")) === "Add stroke")?.click());
   await sleep(400);
   const strokePaint = (await full(id)).strokePaint;
   await tab("vars");
   await p.evaluate(() => [...document.querySelectorAll(".panel.left button")]
     .find((b) => b.textContent.trim() === "Styles")?.click());
   await sleep(300);
-  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Create style from selection"]').click());
+  await p.evaluate(() => document.querySelector('.panel.left button.plus[title="Create style from selection"], .panel.left button.plus[data-tip="Create style from selection"]').click());
   await sleep(350);
   const choose = await dlg(p);
   t(`a two-way style choice is a real choice (${choose?.title})`, choose?.title === "Create style from");
@@ -1772,7 +1772,7 @@ for (const [label, payload] of [
   await p.goto(`${URL}/#/`, { waitUntil: "networkidle0" });
   await sleep(500);
   await spy();
-  await p.evaluate(() => document.querySelector('button[title="New project"]').click());
+  await p.evaluate(() => document.querySelector('button[title="New project"], button[data-tip="New project"]').click());
   await sleep(350);
   const project = await dlg(p);
   t(`new project asks in-app (${project?.title})`, project?.title === "New project");
@@ -1788,6 +1788,83 @@ for (const [label, payload] of [
     await p.evaluate(() => (document.querySelector(".toast")?.textContent ?? "").includes("E2E project")));
   t("the dashboard used no native prompt", (await nativeCalls()).length === 0);
 
+  await p.close();
+}
+
+// 32. one tooltip system: native titles adopt the shared pill ----------------
+{
+  const p = await page();
+  await rows(p);
+  // Controls that only have the native attribute are named before anyone
+  // interacts with them, so assistive tech and tests can find them.
+  const named = await p.evaluate(() => {
+    const el = document.querySelector('.panel.left button.mini[title^="Lock layer"]');
+    if (!el) return null;
+    el.dataset.probeTip = "1";
+    return { title: el.getAttribute("title"), name: el.getAttribute("aria-label") };
+  });
+  t(`a title-only control is named up front (${named?.name})`, named?.name === "Lock layer");
+
+  const visibleTips = () => p.evaluate(() =>
+    [...document.querySelectorAll(".tip")].filter((el) => getComputedStyle(el).display !== "none").length);
+
+  // Hover: the browser's own box is taken out of the way and the shared pill
+  // renders instead, with the shortcut split into its own chip.
+  const box = await p.evaluate(() => {
+    const el = document.querySelector('[data-probe-tip="1"]');
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top };
+  });
+  await p.mouse.move(box.x, box.y);
+  await sleep(650);
+  const hovered = await p.evaluate(() => {
+    const el = document.querySelector('[data-probe-tip="1"]');
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return {
+      pills: tips.length,
+      text: tips.map((t) => t.textContent).join(" | "),
+      title: el.getAttribute("title"),
+      dataTip: el.dataset.tip,
+      chip: tips[0]?.querySelector(".tip-sc")?.textContent ?? null,
+      above: tips[0] ? Math.round(tips[0].getBoundingClientRect().bottom) <= Math.round(el.getBoundingClientRect().top) : null,
+    };
+  });
+  t(`hover shows the shared pill (${hovered.text})`, hovered.pills === 1 && hovered.text.startsWith("Lock layer"));
+  t(`the shortcut is its own chip (${hovered.chip})`, hovered.chip === "⇧⌘L");
+  t("the native attribute is out of the way while the pill shows",
+    hovered.title === null && hovered.dataTip === "Lock layer (⇧⌘L)");
+  t("the pill sits above its control, not over it", hovered.above === true);
+
+  // Leaving puts the attribute back: the bridge is presentation, not the owner.
+  await p.mouse.move(box.x + 300, box.y + 260);
+  await sleep(400);
+  const left = await p.evaluate(() => {
+    const el = document.querySelector('[data-probe-tip="1"]');
+    return { title: el.getAttribute("title"), dataTip: el.dataset.tip ?? null };
+  });
+  t(`the attribute returns on leave (${left.title})`,
+    left.title === "Lock layer (⇧⌘L)" && left.dataTip === null && (await visibleTips()) === 0);
+
+  // Keyboard: the same label, for both kinds of control. A tool flyout button
+  // is wrapped in the shared component; the lock button only has the attribute.
+  await p.mouse.move(box.x + 300, box.y + 260);
+  await p.keyboard.press("Tab");
+  await p.evaluate(() => document.querySelector('.dock .tool[data-group="move"] .hit').focus());
+  await sleep(500);
+  const kbComponent = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return { pills: tips.length, text: tips.map((t) => t.textContent).join(" | ") };
+  });
+  t(`keyboard focus shows a wrapped control's label (${kbComponent.text})`,
+    kbComponent.pills === 1 && kbComponent.text.includes("Move"));
+  await p.evaluate(() => document.querySelector('[data-probe-tip="1"]').focus());
+  await sleep(500);
+  const kbAttr = await p.evaluate(() => {
+    const tips = [...document.querySelectorAll(".tip")].filter((t) => getComputedStyle(t).display !== "none");
+    return { pills: tips.length, text: tips.map((t) => t.textContent).join(" | ") };
+  });
+  t(`keyboard focus shows a title-only control's label (${kbAttr.text})`,
+    kbAttr.pills === 1 && kbAttr.text.startsWith("Lock layer"));
   await p.close();
 }
 

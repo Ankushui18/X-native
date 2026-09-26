@@ -71,10 +71,29 @@ engine comments). Dead Ends from prior phases retained: no browser/Rust; E2E unw
 - styles.css already defines surface/text/accent/input/elevation/type tokens for light (+ dark theme
   to verify). Next: audit for hardcoded colors/geometry bypassing tokens (grep `#` hex + `px` in tsx).
 
-### §2.3 FINDING: two tooltip systems (§21) — P1
-- `Tooltip.tsx` imported by Dashboard/chrome/inspector, but native `title=` still dominates: chrome 40,
-  inspector 205, Canvas 10. Native titles lack shortcut display + consistent design. Direction: single
-  Tooltip system with action + shortcut; migrate incrementally.
+### §2.3 FINDING: two tooltip systems (§21) — FIXED (P1)
+- `Tooltip.tsx` imported by Dashboard/chrome/inspector, but native `title=` still dominated: chrome 40,
+  inspector 205, Canvas 10. Native titles lack shortcut display + consistent design.
+- **FIXED — one surface, no call-site churn.** The mapping is now single: the shared pill (dark `#1e1e1e`
+  / `#383838` dark theme, 26px, 11px type, chip for the shortcut) renders for a control whether it was
+  written `<Tooltip>` or `title=`. `ui/tooltipBridge.ts` adopts native labels at the moment of use: it
+  moves `title` → `data-tip` while the pill shows (so the browser's unstyled box never appears), names any
+  control that had no accessible name (that was all the native tooltip was standing in for), and puts the
+  attribute back on leave — the bridge is presentation, not the owner of the label.
+- **Keyboard users get labels too (TY-U6, also closed).** The shared component shows its pill on
+  `:focus-visible` at zero delay; the bridge does the same for title-only controls. Pointer paths keep the
+  380ms delay, and the chain rule (next tooltip along a row is instant) is shared by both via `showDelay`.
+- **Split rule:** `splitShortcutLabel` pulls a trailing bracketed *key token* into the chip —
+  `Lock layer (⇧⌘L)` → `Lock layer` + `⇧⌘L` — while prose stays in the label
+  (`Clean up vector (sketch to perfect Bézier)`), so no existing text is mangled.
+- **One trap worth recording:** the pill must be created as it appears rather than mounted-and-hidden.
+  Toggling `display` on a node whose pop-in animation had already run left Chromium's composited opacity
+  parked partway, and the pill rendered washed out (~20-50% over the panel) while `getComputedStyle`
+  reported `opacity: 1` — a pixel-level check, not a style check, is what caught it. The bridge's pill is
+  created per showing and carries `data-static` (no fade), because a tooltip that already waited 380ms has
+  nothing to gain from one.
+- Migration direction stands for the P2 drift items below: new code uses `<Tooltip>`; existing `title=`
+  sites now *behave* like it.
 
 ### §2.4 Next traces (per-surface tables in following turns)
 Toolbar buttons → handlers → commands → engine → undo (§9) · Inspector rows §10–11 · Fill/stroke/type/
@@ -285,7 +304,7 @@ palette (max-width/max-height/scroll).
   two different weights; the vector card's `<strong>` header is a third.
 - DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wastes its density on
   7 shortcut-less buttons (LP-U5).
-- CONSISTENCY: four tab systems (PM-U5), two tooltip systems (§2.3), two Esc owners (PM-U3),
+- CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), two Esc owners (PM-U3),
   `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens (FR-U2).
 - DISCOVERABILITY: prototype tab (TB-U3), italic (TY-U1), property-first binding (FS-U1), ⇧E/⌘⌥↩ chords
   (TB-U6/PT-U7), rotate zone (FR-U3), and the entire product for first-run users (LP-U4) are
@@ -297,9 +316,11 @@ palette (max-width/max-height/scroll).
 - ERROR PREVENTION: guard toasts on binding (good); destructive mode/collection delete now names what is lost
   and uses a red confirm instead of a native OK/Cancel (PM-U1 FIXED);
   corrupt→toast + fresh doc (honest, minimal).
-- ACCESSIBILITY: align/valign/decoration buttons have no accessible name at all (TY-U2); tooltips are
-  pointer-only (TY-U6); tool flyouts/menu-less popovers lack keyboard paths (TB-U2); dialogs lack initial
-  focus (PM-U6); canvas chrome is color-only for lock state (would-be FR-U1 fix must not be color-only).
+- ACCESSIBILITY: align/valign/decoration buttons have no accessible name at all (TY-U2 FIXED); tooltips
+  are pointer-only (TY-U6 FIXED — both the shared component and the `title` bridge now show labels on
+  `:focus-visible`, and the bridge names controls that had no accessible name); tool flyouts/menu-less
+  popovers lack keyboard paths (TB-U2 FIXED); dialogs lack initial focus (PM-U6 FIXED); canvas chrome is
+  color-only for lock state (FR-U1 FIXED with a dashed ring + "Locked" pill).
 - KEYBOARD WORKFLOW: palette/tree/menus have arrows; flyouts, tabs, orientation segs, and the dock have
   none; shortcuts exist but are advertised inconsistently (⌘/ claimed twice, ⇧E/⇧F hidden).
 - CANVAS/INSPECTOR/TOOLBAR/POPUP/MODAL: canvas chrome is the strongest surface (type-aware, culled,
@@ -447,6 +468,30 @@ autosave flush respects the suppression; the same probe reads 24 → 1, stored d
 
 **Suite: 187 pass / 0 fail** (was 166/16 at §4c, 178/7 before this round). Unit tests 1621 + 6 new, tsc and
 build clean. Pushed as `d2140b7`.
+
+## §4f. P2 round 1 — the tooltip/a11y split (was §2.3 + TY-U6, both P1)
+
+The largest remaining P1 item was the tooltip split: 328 native `title=` sites against 29 `<Tooltip>`
+usages, which is why the same control could show a plain 1.5s browser box in the inspector and a styled
+pill with a shortcut chip in the toolbar. Sweeping 328 call sites is a wide, mechanical change that would
+have churned every file; the bridge closes the split at the source of truth instead — one pill, one delay,
+one shortcut rule, one accessible name, for both kinds of control (details in §2.3).
+
+Verification: 13 new headless checks on the split rule + `showDelay` chain (`tooltip.test.mjs`), 8 new
+browser checks in e2e §32 (name up front, hover shows the pill with a chip, native attribute parked while
+it shows, placed above the control, attribute restored on leave, keyboard focus for both kinds of control).
+Suite **195 pass / 0 fail**; unit 1621 + 19; tsc and build clean. The suite's own `title=` selectors now
+read `title` *or* `data-tip` (5 sites, inline) so a resting pointer cannot hide a control from a check.
+
+**P2 backlog after this round: 34 rows, three families.** Ordered by leverage:
+1. **`x-ui` adoption drift (~14 rows: PT-U3/4/5, IN-U3/4/6/7, TB-U4/5, FS-U4, TY-U4, PM-U2/4, LP-U5)** —
+   raw selects/inputs/inline styles where the design system already has the component (the shared layer
+   exists and is documented; the surfaces just do not use it). Highest value-per-change: each is a
+   mechanical swap to XButton/XSelect/XSection/XTabs with no behaviour change.
+2. **Two dead affordances (PT-U1 no-op handler, TY-U5 dead UI, LP-U2 dead state)** — cheap, visible.
+3. **IA / missing UI (PT-U6 view menu inside the inspector tab bar, LP-U3/LP-U4 first-run and empty
+   states, FR-U3 rotate zone, RW-U1/RW-U2 unverified visual states)** — needs a design decision, not a
+   sweep.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete
