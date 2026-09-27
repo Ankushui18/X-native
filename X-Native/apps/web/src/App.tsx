@@ -4,6 +4,7 @@ import { Canvas } from "./ui/Canvas";
 import { copyText, worldClones } from "./engine/clipboard";
 import { worldPos } from "./engine/memory";
 import { zoomTo } from "./ui/zoom";
+import { useEscape } from "./ui/escape";
 import { devLangLabel, getDevPrefs, type DevFormat } from "./ui/devPrefs";
 import {
   Actions,
@@ -311,13 +312,17 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
 
   // The zoom menu offers "Hide UI", which is this component's state, so it asks
   // through an event rather than threading another prop through the inspector.
-  // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, because
-  // Escape has to be resolved by the central hotkey handler: listeners a modal
-  // attaches itself are starved by the app's own capture-phase handler.
+  // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, and each
+  // overlay joins the one Escape cascade while it is open (PM-U3): the sheet
+  // opened last is the one Escape closes first, whoever owns the state.
   const [exportOpen, setExportOpen] = useState(false);
   const [nudgeOpen, setNudgeOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
-  const overlayRef = useRef({ exportOpen, nudgeOpen, actions, figInspector, findOpen });
+  useEscape(findOpen ? "find" : null, () => setFindOpen(false));
+  useEscape(nudgeOpen ? "nudge" : null, () => setNudgeOpen(false));
+  useEscape(exportOpen ? "export" : null, () => setExportOpen(false));
+  useEscape(actions ? "actions" : null, () => setActions(false));
+  useEscape(figInspector ? "fig-inspector" : null, () => setFigInspector(false));
   // Handoff plumbing that needs the live document: land on the layer a shared
   //  link points at, then answer the two copy commands the menu asks for.
   useEffect(() => {
@@ -414,17 +419,6 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, [engine, fileId]);
 
-  overlayRef.current = { exportOpen, nudgeOpen, actions, figInspector, findOpen };
-  const closeOverlay = () => {
-    const o = overlayRef.current;
-    if (o.findOpen) setFindOpen(false);
-    else if (o.nudgeOpen) setNudgeOpen(false);
-    else if (o.exportOpen) setExportOpen(false);
-    else if (o.actions) setActions(false);
-    else if (o.figInspector) setFigInspector(false);
-    else return false;
-    return true;
-  };
   useEffect(() => {
     let mousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     const trackMouse = (e: MouseEvent) => {
@@ -513,7 +507,6 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,
-        onEscapeOverlay: closeOverlay,
         onPresentExit: () => {
           const s = engine.snapshot();
           if (s.presentFrame) {

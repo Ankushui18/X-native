@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { XButton, XDialog } from "./x-ui";
+import { useEscape } from "./escape";
 import {
   currentDialog,
   resolveDialog,
@@ -40,20 +41,12 @@ function DialogView({ req }: { req: DialogRequest }) {
   const closeRef = useRef(close);
   closeRef.current = close;
 
-  // Escape belongs to the dialog, and is handled in the capture phase so it
+  // Escape belongs to the dialog, and the one cascade consumes the press, so it
   // cannot also reach the editor's global Escape (clear selection, exit Zen,
-  // cancel a crop). Handlers registered on window in the same phase by canvas
-  // modes earlier in the session still see it; nothing else does.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeRef.current(null);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  // cancel a crop). This used to be its own capture listener, which lost to the
+  // App's sheet cascade whenever both were open: one press closed the sheet
+  // *behind* the dialog and left the dialog on screen.
+  useEscape("dialog", () => closeRef.current(null));
 
   return (
     <XDialog

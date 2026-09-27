@@ -295,3 +295,79 @@ jobs:
             X-Native/apps/x-designer/screenshots
             X-Native/screenshots
           if-no-files-found: warn
+
+  # The product UI is `apps/web` (see its README: the GPU native window was
+  # removed and nothing in the app calls into the Rust crates), yet until this
+  # job existed no CI step ran a single one of its checks — 1,610 of them, across
+  # the engine, the headless DOM tier and the chrome-drift ratchet. "The gate is
+  # green" therefore said nothing about the surface a user actually touches, and
+  # docs/KNOWN_DEBT.md §12 had to carry that caveat. It does not have to any
+  # more.
+  #
+  # The browser tier is still not here: `e2e/behaviour.mjs` needs a Chromium and
+  # a running dev server, and a check nobody has watched run is a red CI waiting
+  # to happen. It is the next step for this job, not this one.
+  web:
+    name: Web chrome (npm test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: X-Native/apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: X-Native/apps/web/package-lock.json
+
+      # `npm ci`, not `npm install`: the lockfile is committed, and a job that
+      # quietly re-resolved it would test a dependency tree nobody reviewed.
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # The suite prints one `N passed, M failed` line per file and exits non-zero
+      # on any failure; the log goes to a file so the failure step below can put
+      # the tail of it in the PR comment (raw step logs are served from blob
+      # storage, which some tooling cannot reach — the same reason the two Rust
+      # jobs do this).
+      - name: Tests (engine + headless DOM + drift ratchet)
+        run: |
+          set +e
+          npm test > /tmp/web-test.log 2>&1
+          status=$?
+          tail -c 6000 /tmp/web-test.log || true
+          exit $status
+
+      # `tsc -b && vite build`: the type check is part of the build script, so a
+      # panel that compiles only in the test runner still fails here.
+      - name: Build
+        run: |
+          set +e
+          npm run build > /tmp/web-build.log 2>&1
+          status=$?
+          tail -c 4000 /tmp/web-build.log || true
+          exit $status
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ]; then
+            {
+              echo "Web job failed on \`${GITHUB_SHA:0:7}\`. The failing checks:"
+              echo
+              echo '~~~'
+              grep -aE '^(FAIL|not ok)|error TS|passed, [1-9][0-9]* failed' \
+                /tmp/web-test.log /tmp/web-build.log 2>/dev/null | head -60
+              echo '~~~'
+            } > /tmp/web-comment.md
+            gh pr comment "$number" --body-file /tmp/web-comment.md || true
+          fi
+          exit 0

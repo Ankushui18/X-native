@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useEscape } from "./escape";
 import type { Engine } from "../engine/types";
 
 export interface RadialSlice {
@@ -47,6 +48,9 @@ export function RadialMenu({
   onClose: () => void;
 }) {
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  // PM-U3: the radial joins the one Escape cascade instead of listening for
+  // itself in the bubble phase, where the app's capture handler could starve it.
+  useEscape("radial", onClose);
   const radius = 100;
   const innerRadius = 38;
   const numSlices = SLICES.length;
@@ -81,17 +85,11 @@ export function RadialMenu({
       onClose();
     };
 
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp, { capture: true });
-    window.addEventListener("keydown", handleKey);
     return () => {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp, { capture: true });
-      window.removeEventListener("keydown", handleKey);
     };
   }, [x, y, activeIdx, engine, onClose, sliceAngle, numSlices]);
 

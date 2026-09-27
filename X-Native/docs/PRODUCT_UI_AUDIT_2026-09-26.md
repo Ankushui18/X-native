@@ -67,9 +67,18 @@ engine comments). Dead Ends from prior phases retained: no browser/Rust; E2E unw
 - Direction: migrate surfaces to x-ui incrementally (highest-traffic first: toolbar, inspector rows,
   menus, pickers); do NOT restyle everything at once.
 
-### §2.2 FINDING: token foundation exists — document & enforce (§6/§28) — P2
-- styles.css already defines surface/text/accent/input/elevation/type tokens for light (+ dark theme
-  to verify). Next: audit for hardcoded colors/geometry bypassing tokens (grep `#` hex + `px` in tsx).
+### §2.2 FINDING: token foundation exists — document & enforce (§6/§28) — ENFORCED (P2, §4q)
+- styles.css already defines surface/text/accent/input/elevation/type tokens for light and dark.
+- **Enforced now, not "next".** `src/ui/__tests__/drift.test.mjs` is the audit the bullet asked for,
+  run on every `npm test`: per-file ceilings for inline `style={{`, quoted `#rrggbb`, native `title=`,
+  raw `<button` and raw `<select` (workspace 414 / 195 / 340 / 363 / 49, measured 2026-09-26), pinned
+  in a table that a new surface has to join and a fix has to lower. Same instrument as
+  `DEAD_CODE_CEILING`; see `docs/KNOWN_DEBT.md` §12 for what it costs and what it does not gate.
+- Dark theme: token-driven and checked in the browser suite for the dock (§4n), the player (§4o) and
+  the vector card + Done button (§42 — written, not run in the sandbox that produced it). The canvas
+  was the exception (FR-U2: chrome constants no token reached); since §4r it reads a `--cv-*` role
+  family that both themes declare, and §43b checks a dark-booted app against the dark tokens. What
+  the dark column does not yet do is *differ* for most canvas roles — that is FR-U2b, a design call.
 
 ### §2.3 FINDING: two tooltip systems (§21) — FIXED (P1)
 - `Tooltip.tsx` imported by Dashboard/chrome/inspector, but native `title=` still dominated: chrome 40,
@@ -120,7 +129,7 @@ token EXISTS (alias of --line) — divider renders; cleared.
 | TB-U2 tool flyouts | FIXED: full menu pattern on tool + boolean flyouts (arrows/Home/End/Esc/Tab, focus-in on keyboard open, focus return, blur-close); open flyouts arm the shared popover guard so global Esc yields | FIXED (P1) | — |
 | TB-U3 Prototype entry | FIXED: toolbar Prototype toggle (flow glyph, mirrors DevMode toggle + ⇧E both-ways); palette rows show ⇧E | FIXED (P1) | — |
 | TB-U4 | FIXED: the toolbar caret dropped its native `title` (it sits inside the tool's Tooltip) and gained an `aria-label` instead. The bridge now also refuses to adopt a label inside a `.tip-host`, so a re-added title cannot double up. | FIXED (P2) | — |
-| TB-U5 boolean flyout styles | inline styles (width/divider/label) bypass tokens | DRIFT (§29) | P2 |
+| TB-U5 boolean flyout styles | FIXED: the boolean tool is the dock's own split-tool recipe (`tool split` + `.caret` gutter + the plain `.fly`, so it takes the 220px min-width every other menu has instead of an inline 180px), the separator is `.fly-div`, and the two remaining inline objects in the Toolbar — the multi-select `.toolset` and its count label — became `.toolset.multi` / `.sel-count`. The vector-edit **Done** button next door carried an inline accent with a hardcoded `#fff`; it is `.hit.vec-done` on `--accent`/`--on-accent`, so it survives the dark theme (where the accent's ink is `#0a0e13`, not white). The dock now has zero inline styles outside `Icon`'s own svg box. §4q | FIXED (P2) | — |
 | TB-U6 palette Prototype/Design rows | FIXED: both rows show ⇧E | FIXED (P2) | — |
 
 Fix directions: U1 → Resources opens left Assets pane (or palette w/ resources filter), not the same
@@ -168,7 +177,7 @@ simplify/offset) · PageDesign no-selection state. All traced controls dispatch 
 | IN-U1 | FIXED: shared patchMany/mixedProp/manyVals/patchNumMany helpers; Mixed display + apply-to-all for opacity/blend/corners(+toggles)/stroke weight/base fill+stroke rows (incl gradient/image/meta/remove/visibility) and Fill/Stroke/Effect Add; ColorRow gains a mixed swatch+hex. REMAINING (follow-up): fill/stroke/effect stack ROW edits, effect row ops, visibility-toggle display states (all: first-layer display kept, Export-precedent documented) | FIXED (P1) | — |
 | IN-U2 | FIXED: seg entry shows only when the vector card is absent (exactly one entry always); both use id+toast+⇧⌘O title; card refuses the stroke-less no-op with a teaching toast; labels unified | FIXED (P1) | — |
 | IN-U3 | FIXED: every ad-hoc header is now a `Section` — Component/Instance (its action buttons moved into the section's action slot), Boolean, Star/Polygon, and on the page/prototype surfaces Frame Presets, Background, Local styles, Pixel grid, Flow starting point, Prototype settings, Interactions, Annotations. `h-row h3` and `.sec-toggle h2` were already the same 11px/500/muted style, so the chrome reads identically while every block gained fold + persistence + the scroll-to hook. Left bespoke on purpose: `Design health` (score + issues button) and the Dev Mode `Inspect` header (dot + view tabs) — both carry live, bespoke chrome a plain title would lose. Note: the audit's "10 sections" observation was itself approximate — the count varies by selection (screen 4 / layer 11 / text 12) and now includes these blocks. | FIXED (P2) | — |
-| IN-U4 | Vector card bespoke: `<strong>` header, `export-run` buttons, inline styles, hardcoded #fff, native titles | DRIFT | P2 |
+| IN-U4 | FIXED: the card is the shared primitives — `Section id="vector"` for the header (fold + persistence + the scroll-to hook, chip and edit button in its action slot), `Field` for the vertex numbers, `XSegmentedControl` for mirroring and the offset join, `XButton` for the header and quick actions, `.x-btn-primary` for Apply. Its six point-alignment actions are the panel's own `.align > .g` idiom behind `Tooltip` (not tabs: a one-shot action has no selected panel to claim, and a `value=""` tablist would have left the row out of the tab order). All inline style objects and both `#fff`/`#ffffff` literals are gone; the geometry lives in `.vec-card`/`.vec-row`/`.vec-align`/`.vec-vertex`/`.vec-pair`/`.vec-slider`/`.vec-actions`/`.vec-sub`. Vertex fields are named `Vertex X` / `Vertex Y` / `Vertex corner radius` so they cannot collide with the layer's own `X` / `Y` / `Corner radius`, which the e2e `field()` helper and assistive tech address by aria-label. §4q | FIXED (P2) | — |
 | IN-U5 | FIXED: "Edit vector" → **"Edit points"**, and it now enters vector edit mode (the inspector twin of double-clicking a layer; booleans still bake first, because their points only exist once the group is applied). The button reads "Editing points" while the editor is open. It previously dispatched `flatten` — the exact action of the button beside it — so the label promised editing and delivered a bake. "Flatten" stays a distinct bake. Seg buttons are still unclassed (x-ui adoption family). | FIXED (label+action) / DRIFT (styling) | P2 |
 | IN-U6 | Flip buttons + assorted icon-only buttons use native title= amid Tooltip siblings | PARTIAL (§2.3) | P2 |
 | IN-U7 | FIXED with PM-U5: `XTabs` now carries `role=tablist`/`tab`/`aria-selected` + roving `tabindex` + arrows/Home/End, keeps `aria-current` so the underline styling and the e2e checks that read it still work, and the zoom menu shares a `.tabs-row` so the divider still spans the strip. | FIXED (P2) | — |
@@ -234,9 +243,10 @@ on-canvas gradient handles, star/poly param handles, frame-tool + badges, smart 
 | # | Finding | Status | Pri |
 |---|---|---|---|
 | FR-U1 | FIXED: locked selection renders a grey dashed ring, no resize handles, and a "Locked" pill (single + all-locked multi; mixed groups keep working handles); dead grab zones toast "Locked · ⇧⌘L to unlock". Patch-based affordances (rotate/gradient/corners) intentionally kept — they work on locked layers | FIXED (P1) | — |
-| FR-U2 | Chrome colors hardcoded in Canvas consts (#10b981 accent ≠ --accent #0e9f6e token; #a855f7, #fff, #ff3b6b) — bypass theme, can't adapt to dark mode; two different "accent" greens | DRIFT (§6) | P2 |
+| FR-U2 | FIXED: canvas chrome is a token family now. `styles.css` declares 15 `--cv-*` roles in **both** themes (selection ink / wash / glow, chrome ink, lock, guide, target, mask, on-canvas card + hairline + text, scrim, well, line, dim) and `ui/canvasChrome.ts` reads all 22 of them — the 15 plus the seven the canvases already read ad hoc (`--panel --canvas --grid --canvas-label --comp --accent --accent-wash`) — once per paint: `readCanvasChrome(get)` is pure and testable, `canvasChrome()` does the style read for the minimap and rulers, and `withAlpha()` thins a role so the five incidental `rgba(16,185,129,…)` alphas do not have to be literals either. `COMP_PURPLE`'s "kept in step by hand — change both" comment is gone because the canvas now reads `--comp` itself. The two greens are answered by naming them: `--accent` is the control accent (#0e9f6e light / #10b981 dark, contrast-tuned for panel surfaces) and `--cv-sel` is selection ink on the document canvas (#10b981 in both themes today, i.e. the same pixels as before — retuning it per theme is FR-U2b and needs eyes). What stays literal is **document ink**, named `DOC_*` where it is a constant: a new slice's stroke, paint-bucket defaults, a glass effect's tint, `#00000000` creation fills, the noise renderer's black, a boolean mask's white — values written into saved files and their SVG exports, which must not move with the viewer's appearance. Canvas.tsx 68 → 13 colour literals, Minimap.tsx 4 → 0, Rulers.tsx 5 → 0 (workspace colour drift 195 → 131, ceiling lowered in the same commit). `canvasChrome.test.mjs` (50 checks) is the ratchet: fallbacks ≡ the sheet's light column key-for-key, the dark block declares every role, no chrome literal may come back, and every emerald left in Canvas.tsx is a `DOC_*`. §4r | FIXED (P2) | — |
+| FR-U2b | The dark theme now *can* retune canvas chrome — it does not yet. `--cv-sel`, `--cv-ink`, `--cv-guide`, `--cv-target`, `--cv-mask`, `--cv-chip*` and `--cv-scrim` carry the same value in both columns, because changing them is a visible design decision on the one surface this sandbox cannot look at. Only `--cv-well` / `--cv-line` / `--cv-dim` differ (they were already theme-split as literals). One sheet edit each, with eyes, closes this | OPEN (needs eyes) | P3 |
 | FR-U3 | Rotate affordance invisible (zone-only = Figma parity, but zero first-time discoverability) — roadmap: subtle corner affordance on hover | ROADMAP | P2 |
-| FR-U4 | Size/angle badge has no viewport clamp (by = sy+sh+8 can run off-screen at viewport bottom) | PARTIAL (§18 class) | P2 |
+| FR-U4 | FIXED: `clampBadge(rect, view, { pad, flipY })` in `ui/zoom.ts` is the only place a painted badge may sit, and both badge sites (single selection and multi-selection) go through it. Below the box when it fits; flipped above it when below is off-canvas; clamped inside the view when neither side fits (a selection taller than the canvas has nowhere to hang), never negative, with the flip rejected if the flip target is itself off-screen — trading one invisible badge for another is not a fix. Nine arithmetic checks on the pure function plus two band-comparison checks in §46. | FIXED (P2) | — |
 
 ## §11. Popovers/Modals/Tabs trace (prompts §§17–19, 21–22)
 
@@ -259,7 +269,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
 | PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
-| PM-U6 | ExportAssetsDialog has no initial focus (no autoFocus) — keyboard users start from top | PARTIAL | P2 |
+| PM-U6 | FIXED: the sheet focuses its filter field on open, which is both the first control in the sheet and the first thing worth doing in it — every other modal input in the app (shortcuts, find-in-page, the palette) already did. The dialog also says `aria-modal="true"`, which it did not, so a screen reader was not told the document behind the veil is inert. §46 types into it with no click first and watches the list filter. Focus *restore* on close is still the App's (the sheet is closed by the global overlay owner, PM-U3), so the caret returns to `<body>` rather than to the command that opened it. | FIXED (P2) | — |
 
 ## §12. Left panel + states trace (prompts §§20, 23–25) — NavRail + LeftPanel + App screens
 
@@ -274,10 +284,10 @@ palette empties, Dashboard busy + failure toasts, font/PDF/export failure toasts
 |---|---|---|---|
 | LP-U1 | FIXED: RightPanel/PageDesign take onOpenVariables from App (setNav("variables")); legacy setLeftTab kept as fallback only. FS-U1 pass: DesignHealth's variable-issue jump + Design's empty-picker CTA threaded the same way (same fallback) | FIXED (P1) | — |
 | LP-U2 | FIXED: `leftTab` deleted outright (type, snapshot field, command, engine state, undo list) and all 8 writers re-pointed at the App nav the panel actually reads. ⌥1..3 now switch panes, ⌘R opens the layers pane before dispatching rename, and the palette's variable row opens the Variables pane (it dispatched into dead state before, so the row did nothing). Inspector entry points without the callback toast where to look instead of dispatching into the void. ⚠️ Worth noting: this dual truth is exactly what produced the LP-U1 P1 bug, so removing it is the fix, not cleanup. | FIXED (P2) | — |
-| LP-U3 | Empty page = blank tree, no teaching empty state (assets HAS one; layers doesn't) | MISSING UI | P2 |
-| LP-U4 | Zero first-run onboarding anywhere (no welcome/empty-canvas guidance) — §25 steps 1–3 fail cold. Fix: minimal dismissible empty-canvas hints | MISSING UI | P2 |
-| LP-U5 | ToolsPane: no disabled states/shortcuts; "Plugins" label with no plugins | PARTIAL | P2 |
-| LP-U6 | AgentPane: unmatched input silently ignored (chat appended, nothing happens); hardcoded geometry (390×844 frame at 120,80…). Fix: scope feedback | PARTIAL | P2 |
+| LP-U3 | FIXED: the layers tree now has the two sentences it was missing. An empty page renders the inspector's own `.empty-state` recipe inside `.tree` — icon, "No layers on this page", what a row will let you do (name, group, hide, lock, reorder) and the real chords (`F` frame · `R` rectangle · `T` text, `⌘K` for every command) — and a search with no hits renders `.empty` with the term quoted ("No layer matches “q”. Clear the search to see the whole page."), which is the palette's `.actions-empty` sentence in the panel that filters. The two are told apart by the panel asking `matchesLayer`, the same predicate each row uses to hide itself, so the tree and its rows cannot disagree. No new CSS recipe and no new control: 25 checks in `leftpanel.dom.test.mjs` (jsdom, mounted `LeftPanel` on an emptied document) plus §44 in the browser. §4s | FIXED (P2) | — |
+| LP-U4 | FIXED, at the scope the finding asked for ("minimal dismissible empty-canvas hints"): one card over an empty canvas — "Draw your first layer", the three chords as `<kbd>`, and what the Layers list will do with the result — that retires the moment the page holds a layer and is dismissed for good by its own `XButton` ("Don't show this again"), persisted by `ui/firstRun.ts` under `x-native-hint-empty-canvas`. The card takes `pointer-events: none` with only its button opted back in, so it cannot eat the drag it is describing (the `.cm-layer`/`.cm-pin` recipe); it is seeded from the persisted dismissal before first paint, so it never flashes for someone who has already closed it; and every localStorage access is guarded and injectable, because it throws in private mode and does not exist in node. No entrance animation — that is MOTION-U1's round, with eyes. 24 checks in `firstRun.test.mjs` (hostile stores, the key's namespace, the source contract) plus §44's draw-through-it, dismiss, reload, empty-again sequence. §4s | FIXED (P2) | — |
+| LP-U5 | FIXED: the pane stopped claiming plugins ("Actions on this file — every row is a palette command, with its chord") and became a command list: seven rows, each wearing the palette's own chord in the `.sc` chip every menu uses (`⇧I ⌘D ⌘G ⌘Z ⇧⌘Z ⇧0 ⌘K`), and each command that cannot run is `disabled` — Duplicate/Group without a selection, Undo/Redo without history — instead of swallowing the click. The reason is a line of text at the bottom of the pane naming what is missing, not a tooltip: a dead control cannot receive the pointer that would show one, and `title=` is at its ratchet ceiling in this file. `LeftPanel`'s memo comparator gained `canUndo`/`canRedo`, because a history-only change moves no document field it compared. §4t | FIXED (P2) | — |
+| LP-U6 | FIXED, at the scope the finding named ("scope feedback"): every ask now gets an answer. A matched one reports what it created from the same values it dispatched ("Added a frame — iPhone 16 Pro, 393 × 852 — centred in your view and selected."); an unmatched one says nothing matched, repeats the three things the pane can do, and states that it changed nothing. Placement is derived, not guessed: `viewportCentreWorld(snap)` in `ui/zoom.ts` puts the layer at the world point under the middle of the visible canvas (cascaded 24px per ask so two frames do not stack), and sizes come from the inspector's own `PRESET_GROUPS`, now exported and shared — the invented 390×844 matched no preset the inspector would recognise. The transcript keeps both voices (`data-who`), wraps instead of ellipsising, and the greeting no longer promises colour, which the pane cannot do. §4t | FIXED (P2) | — |
 
 ## §13. Import/export + responsive + icons/motion sweep (prompts §§12, 24, 31)
 
@@ -292,7 +302,7 @@ palette (max-width/max-height/scroll).
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| RW-U1 | Bottom toolbar dock has NO narrow-width protection (fixed content row, no max-width/scroll/wrap) → tools clip off-screen on narrow windows while minUi saves only the panels. Fix: max-width + scroll or overflow flyout | PARTIAL | P2 |
+| RW-U1 | FIXED: the dock is bounded by the column it hangs in (`max-width: calc(100% - 24px)`) and wraps into a second row instead of running off the screen — `.toolset` wraps too, with `min-width: 0`, so a tool row wider than the stage folds rather than overflows. Wrapping rather than the scroll the finding suggested, because a scroll container clips the tool flyouts as well: `overflow-x: auto` computes `overflow-y` to `auto`, and those menus escape 40px above a 44px strip. That is what the ≤860px override did, so on a phone the boolean menu was opening into a clipped box; the override is gone and the dock's computed `overflow` is `visible` at every width. §4u | FIXED (P2) | — |
 | RW-U2 | All window-size behavior code-verified ONLY (1280/1440/1920/2560 + narrow/wide need a browser) | NOT VERIFIED visually | P2 |
 
 ## §14. Senior designer critique (prompt §26) — evidence-linked, no subjective language
@@ -302,24 +312,27 @@ palette (max-width/max-height/scroll).
   the inspector tab bar (PT-U6), so canvas-display toggles are found by accident, not by structure.
 - VISUAL HIERARCHY: inspector `Section` vs ad-hoc `h-row` headers (IN-U3) give identical-rank content
   two different weights; the vector card's `<strong>` header is a third.
-- DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wastes its density on
-  7 shortcut-less buttons (LP-U5).
+- DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wasted its density on
+  7 shortcut-less buttons until §4t (LP-U5) — each row now carries its chord and its disabled state.
 - CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), two Esc owners (PM-U3),
-  `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens (FR-U2).
+  `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens — since §4r two
+  *named roles* (`--accent` for controls, `--cv-sel` for selection ink on the canvas) rather than one
+  literal and one token that happened to disagree (FR-U2).
 - DISCOVERABILITY: prototype tab (TB-U3), italic (TY-U1), property-first binding (FS-U1), ⇧E/⌘⌥↩ chords
-  (TB-U6/PT-U7), rotate zone (FR-U3), and the entire product for first-run users (LP-U4) are
-  unreachable without prior knowledge.
+  (TB-U6/PT-U7) and the rotate zone (FR-U3) are unreachable without prior knowledge; the empty canvas
+  and the empty layers tree taught nothing at all until §4s (LP-U3/LP-U4).
 - AFFORDANCE: locked selections show editable handles that refuse (FR-U1); "Edit vector" flattens
   (IN-U5); Resources opens the command palette (TB-U1); duplicate Outline-stroke buttons diverge (IN-U2).
-- FEEDBACK: bound-value edits vanish without notice (FS-U6); AgentPane swallows unmatched input (LP-U6);
-  multi-select shows first-layer values as shared (IN-U1/TY-U3).
+- FEEDBACK: bound-value edits vanish without notice (FS-U6); the AgentPane swallowed unmatched input
+  until §4t (LP-U6); multi-select shows first-layer values as shared (IN-U1/TY-U3).
 - ERROR PREVENTION: guard toasts on binding (good); destructive mode/collection delete now names what is lost
   and uses a red confirm instead of a native OK/Cancel (PM-U1 FIXED);
   corrupt→toast + fresh doc (honest, minimal).
 - ACCESSIBILITY: align/valign/decoration buttons have no accessible name at all (TY-U2 FIXED); tooltips
   are pointer-only (TY-U6 FIXED — both the shared component and the `title` bridge now show labels on
   `:focus-visible`, and the bridge names controls that had no accessible name); tool flyouts/menu-less
-  popovers lack keyboard paths (TB-U2 FIXED); dialogs lack initial focus (PM-U6 FIXED); canvas chrome is
+  popovers lack keyboard paths (TB-U2 FIXED); dialogs lack initial focus (PM-U1's dialogs FIXED, the export
+  sheet in §4u); canvas chrome is
   color-only for lock state (FR-U1 FIXED with a dashed ring + "Locked" pill).
 - KEYBOARD WORKFLOW: palette/tree/menus have arrows; flyouts, tabs, orientation segs, and the dock have
   none; shortcuts exist but are advertised inconsistently (⌘/ claimed twice, ⇧E/⇧F hidden).
@@ -489,9 +502,9 @@ read `title` *or* `data-tip` (5 sites, inline) so a resting pointer cannot hide 
    exists and is documented; the surfaces just do not use it). Highest value-per-change: each is a
    mechanical swap to XButton/XSelect/XSection/XTabs with no behaviour change.
 2. **Two dead affordances (PT-U1 no-op handler, TY-U5 dead UI, LP-U2 dead state)** — cheap, visible.
-3. **IA / missing UI (PT-U6 view menu inside the inspector tab bar, LP-U3/LP-U4 first-run and empty
-   states, FR-U3 rotate zone, RW-U1/RW-U2 unverified visual states)** — needs a design decision, not a
-   sweep.
+3. **IA / missing UI (PT-U6 view menu inside the inspector tab bar, ~~LP-U3/LP-U4 first-run and empty
+   states~~ — done in §4s, FR-U3 rotate zone, ~~RW-U1~~ done in §4u, RW-U2 unverified visual states)** — needs a design
+   decision, not a sweep.
 
 ## §4g. P2 round 2 — one inspector header chrome (IN-U3, PT-U1)
 
@@ -662,6 +675,480 @@ chord that starts one (⌘⌥↩, which the palette lists and `bindHotkeys` impl
 (PT-U7).
 
 Suite **260 pass / 0 fail** (7 new checks in §41), unit 1621, tsc and build clean.
+
+## §4q. P2 round 4 — the last bespoke card, and the dock's last inline paint (IN-U4, TB-U5)
+
+Two surfaces were left that styled themselves instead of reading the sheet: the inspector's vector
+card and the dock's boolean flyout. Both are now composed from the primitives the rest of the product
+uses, and — the part that matters for the next round — both are now *verifiable in this sandbox*.
+
+**The vector card (IN-U4).** It was the one block in the panel that no shared component reached: a
+`<strong style={{fontSize:11}}>` header, four `export-run` buttons resized by inline padding (a class
+named for the export sheet's Run button, doing double duty as a small pill), a hand-written row of six
+24px icon buttons, raw `<input type="number">`s with no accessible name, and `#fff`/`#ffffff` typed
+onto two accent buttons so the accent's own ink never reached them. It is a `Section id="vector"` now
+— so it folds, persists and answers the `openSection` bus like the eleven blocks around it — with
+`Field` for the vertex numbers (which brings arithmetic, label-scrub and a name for free: `100/4` and
+`+5` now work on an anchor point), `XSegmentedControl` for mirroring and the offset join, `XButton`
+for the header and the four actions, `.x-btn-primary` for Apply, and the panel's own `.align > .g`
+idiom behind `Tooltip` for the six alignment actions. Geometry moved to `.vec-*` classes.
+
+One decision worth recording, because it is the kind of thing a component library quietly gets wrong:
+the alignment row is **not** a segmented control. Those six are one-shot actions on the selected
+points, and `role="tab"` claims a panel is being shown — a selection the points do not have. It also
+would have broken the keyboard: `XSegmentedControl` derives its roving tabindex from `value`, and an
+action row has no value, so `tabIndexFor` returns −1 for every tab and the row leaves the tab order
+altogether. The layer-alignment row two sections above already had the right shape, so the card takes
+it — and names its buttons for what they move (`Align points left`, not `Align left`), because ⌥A and
+friends belong to the layer row and `vectorAlign` has no chord to advertise.
+
+The vertex fields are named `Vertex X` / `Vertex Y` / `Vertex corner radius` for the same reason the
+e2e suite addresses fields by aria-label rather than position: the panel already has an `X`, a `Y` and
+a `Corner radius`, and a second field with the same name makes `field(p, "Corner radius")` — and a
+screen reader — read the wrong one.
+
+**The dock (TB-U5).** The boolean tool was the only menu in the dock that laid itself out inline:
+`style={{width: 180, left: 0}}` on the `.fly` (narrower than the recipe's own 220px min-width, so it
+was the one menu clipping its chord chips), `style={{width:"auto", padding:"0 6px", gap:3}}` on its
+trigger, and an inline hairline separator. Every tool group already had the recipe it now uses:
+`tool split`, a `.caret` gutter, a plain `.fly`. The other two inline objects in the Toolbar (the
+multi-select `.toolset` and its count label) became `.toolset.multi` / `.sel-count`, and the
+vector-edit **Done** button — an inline accent with a hardcoded `#fff` — became `.hit.vec-done` on
+`--accent`/`--on-accent`, which is the fix that actually matters: the dark theme's accent ink is
+`#0a0e13`, so white-on-accent was illegible there. The dock now carries no inline style outside
+`Icon`'s own svg box. A `.h-act` class also replaces the Component section's inline action row, the
+last leftover of IN-U3.
+
+**Verification — a new tier, because this sandbox has no browser.** Chromium cannot be fetched here
+(`googlechromelabs.github.io` and `storage.googleapis.com` are unreachable; the `@sparticuz/chromium`
+binary unpacks but its `libnss3`/`libnspr4` are absent and no apt mirror is reachable either), so the
+browser suite could not be run. Rather than ship the round as "code-traced, NOT VERIFIED" — the
+caveat every previous round carried — `src/ui/__tests__/domEnv.mjs` adds a headless DOM tier: jsdom
+globals installed *before* react-dom is imported (import it first and React falls back to its legacy
+IE value-change polyfill and throws `activeElement.detachEvent is not a function` on every
+keystroke), then `RightPanel` / `Toolbar` mounted on a real `MemoryEngine` document the way `App.tsx`
+mounts them (snapshot from the store, so a dispatch re-renders). That is enough to read the markup the
+components actually produce, click it, type into it and watch the engine answer.
+
+- `vectorcard.dom.test.mjs` — **45 checks**: the card renders for a vector and not for a rectangle;
+  the header is a `Section` among the others; zero stray inline styles; alignment clicks move the
+  points (`vectorAlign`), mirroring writes `mirrorMode`, typing into `Vertex X` writes the point and
+  reads `100/4` as 25 and `+5` as relative; the corner-radius Field and its slider share one name;
+  Simplify…/Offset Path… open their forms, read as pressed while open, apply through
+  `simplifyPath`/`offsetPath` and close; Outline stroke refuses a stroke-less path without touching
+  it; Smooth rewrites the handles; Edit points/Done drive `vecEdit`; the section folds and unfolds;
+  one undo returns a typed vertex.
+- `dock.dom.test.mjs` — **21 checks**: the dock is inline-free; the count is `.sel-count`; the boolean
+  tool is `tool split` with a `.caret` and `aria-haspopup`/`aria-expanded`; opening it shows the five
+  operations with their chords and a `.fly-div` separator; Intersect makes a boolean and closes the
+  menu; the Done button appears only in vector edit and leaves it.
+- `vectorcard.test.mjs` — **53 checks** on the source contract, so a future edit cannot quietly
+  reintroduce the drift: the card composes the four primitives, carries no inline `style={{`, no
+  literal colour, no `export-run`, no `<strong>`; every class it names exists in `styles.css`; the
+  engine commands are all still dispatched; the boolean tool keeps the split recipe. This one is a
+  ratchet and was mutation-checked (adding `style={{color:"#fff"}}` back fails two checks).
+
+Measuring the two surfaces turned up the reason they survived four rounds: the drift was never
+counted. `src/ui/__tests__/drift.test.mjs` now counts it — **22 checks**, one per surface plus a
+census of the table itself — and pins a ceiling per file for the five things the design system's rules
+name: inline `style={{` objects, quoted `#rrggbb` literals, native `title=`, raw `<button`, raw
+`<select`. The workspace stands at **414 / 195 / 340 / 363 / 49**, with `inspector.tsx`
+(179/44/221/192/41) and `FigInspectorModal.tsx` (113 inline objects for a dev modal) the two piles
+that matter. It is the same instrument as `DEAD_CODE_CEILING` in `scripts/check.sh`: it does not claim
+the pile is good, it claims the pile is known and cannot grow without someone editing the table and
+saying so. It was mutation-checked (an added `style={{color:"#fff"}}` in `Comments.tsx` fails with
+`OVER: inline 3→4, colour 0→1`), and a row that *falls* prints `(lower the ceiling: …)` so a fix and
+its ratchet cannot be committed apart. Recorded as `docs/KNOWN_DEBT.md` §12, with the caveat that
+belongs there: nothing in CI runs the web suite, so this ratchet only bites where `npm test` runs.
+
+**A defect the build warning turned up (CSS-U1, fixed).** `vite build` has been printing
+`▲ [WARNING] Unexpected "@media" [css-syntax-error]` at `styles.css:2522`, and the cause is a dangling
+selector list: `.fill-pop, .ctx, .menu, .type-menu, .palette,` with no declaration block, immediately
+followed by the reduced-motion `@media`. The `@media` was being parsed as the next *selector* in that
+list, so the block never reached the minified sheet — the copy at the end of the file is the one that
+has been applying the preference (so reduced motion did work, by luck of duplication), and `.palette`
+names a class nothing in `src/` renders. The list is deleted, the duplicate block with it, and the
+build is warning-free. It was the shared entrance animation for those four popover surfaces —
+`.dash-menu`, `.xmodal` and the command palette each carry `animation: x-pop-in 110ms cubic-bezier(0.2,
+0, 0.13, 1)` while `.fill-pop` / `.ctx` / `.menu` / `.type-menu` carry none. **Completing it is
+deliberately not done here:** it is a visible motion change on four surfaces, and this sandbox has no
+browser to look at it with. The rule to add is written down in the stylesheet comment where the list
+used to be; it is the whole of the remaining motion-parity gap (MOTION-U1, open).
+
+Unit suite **1610 checks, 0 failed** (1469 → 1610, so 141 new), `tsc -b` clean, `vite build` clean and
+— for the first time in this file's recorded runs — **warning-free**.
+
+Browser suite: **§42 added (15 checks), NOT RUN here** — it covers exactly the half jsdom cannot:
+computed geometry read *against the panel's own recipes* (the card's align buttons measured against
+the layer align row, its fields against the Position fields, the boolean `.fly` against a tool group's
+`.fly`, so a scale change moves both sides and the claim survives), the Apply button's background
+against the `--accent` token, the dark-theme card well against `--hover` and the Done button's ink
+against `--on-accent`, and the inline-style census of the dock. It is syntax-checked and written to
+the file's conventions; it needs `npm run test:e2e` with a Chromium to be believed.
+
+**Still open after this round:** MOTION-U1 (the four popover surfaces with no entrance animation, rule
+written down above — needs eyes on it), FR-U2 (the canvas chrome constants — `BRAND_ACCENT #10b981` vs
+the `--accent` token `#0e9f6e`, `#a855f7`, `#ff3b6b`, `#18181b` — the largest remaining token gap, and
+it needs the same token-feeding the canvas already does for `--canvas`/`--grid`/`--canvas-label`;
+**closed in §4r**), IN-U6/FS-U4 (native `title=` on the flip and ColorRow buttons: behaviourally equivalent since §2.3's
+bridge, stylistically split, and frozen by the drift ratchet rather than fixed), PM-U3 (two Escape
+ownership patterns), ~~PM-U6 (export sheet's initial focus)~~, LP-U3–U6, ~~RW-U1~~ (both §4u), FR-U3/U4 — and the
+`inspector.tsx` / `FigInspectorModal.tsx` rows of the drift table, which are where the next rounds'
+numbers come from.
+
+## §4r. P2 round 5 — the canvas stops keeping its own palette (FR-U2)
+
+**What the census found.** The finding named five constants; the file had more. `BRAND_ACCENT` was
+used 40 times, `COMP_PURPLE` 5, `LOCK_GREY` 5, the wash and glow 2 each — and around them, inline
+where nobody had bothered to name them: `#ff3b6b` ×6 (smart guides and the equal-spacing badges),
+`#0d99ff` ×3 (drop target, crop handles), `#00c853` (mask outline), `#f8fafc`, three near-identical
+dark card backings (`rgba(15,23,42,.95)` for the spec note, `rgba(15,23,42,.90)` for the hex pill,
+`rgba(13,20,38,.92)` for the cursor tooltip), a crop scrim, five incidental `rgba(16,185,129,α)`
+alphas (0.08/0.14/0.25/0.4/0.75) for the boolean preview, bézier tangents, branching vertices and
+the padding ghosts, and 36 chrome whites. `Minimap.tsx` told the same story in four `dark ? … : …`
+pairs and `Rulers.tsx` in four more: **77 colour literals across the three 2D surfaces**, none of
+them reachable from the sheet, with a comment on `COMP_PURPLE` asking a human to keep it in step
+with `--comp` "by hand — change both".
+
+**The decision the finding was really asking for: two greens, or one?** Two *roles*, named. `--accent`
+is the control accent (#0e9f6e light / #10b981 dark), contrast-tuned for panel surfaces; `--cv-sel` is
+selection ink on the document canvas. Two reasons to keep them apart rather than collapse them: the
+sibling Rust workspace made the same call (`REFINEMENT_V1_PLAN` P0-7 derives `C_SEL` from a
+`selection` role, distinct from `accent`/`focus_ring`), and the ring sits on `--canvas`, not on
+`--panel`, so its contrast budget is a different problem. There is also an honest constraint, recorded
+so it is not mistaken for a preference: light-mode selection ink stays `#10b981`, which is what the
+browser suite's §26 counts (pixels near rgb(16,185,129) ± 24). Repainting the ring with `--accent`
+would have moved every light-mode selection pixel to #0e9f6e — a visible identity change that no one
+in this sandbox can look at, verified by a suite that cannot be run here. So the round moves *where
+the value lives*, not the value: the same pixels, one door, and a dark column that a designer can now
+retune in the sheet. That retune is **FR-U2b**, and it is the only part of this finding left open.
+
+**The boundary that makes the rest safe: chrome vs document ink.** `Canvas.tsx` keeps 13 colour
+literals and every one is triaged. Three are named `DOC_*` constants — a new slice's dashed stroke,
+and the paint bucket's two defaults — because they are written into the file on creation. The rest
+are a glass effect's default tint, five `#00000000` creation fills, the loupe's sampled-colour
+default, the noise renderer's black, a boolean mask's white, and an `Icon` default prop. None of them
+may answer the theme, or a saved document — and its SVG export — would change colour with the
+viewer's appearance setting. `canvasChrome.test.mjs` holds the line: the only emerald literals
+allowed in `Canvas.tsx` are the ones on a `const DOC_*` line, and the chrome record may only contain
+`--cv-*` roles plus an allowlist of the seven surface/identity tokens the canvases already read, so
+nobody smuggles a panel or document value into the canvas palette later.
+
+**What the family buys.** One read per paint — `readCanvasChrome((token) => css.getPropertyValue(token))`
+extends the `--canvas`/`--grid`/`--canvas-label` resolution that was already happening, so a frame
+still costs one style resolution for all 22 roles; `withAlpha(role, α)` thins a role instead of
+hardcoding another emerald rgba; the minimap and rulers read the same record and keep `theme` in
+their paint deps, which is what makes them re-read on a flip. Two deliberate unifications, with the
+numbers so nobody has to guess what moved: the three dark on-canvas card backings are now one
+`--cv-chip` at .95, and the minimap viewport fill (.20 dark / .16 light) plus the rulers' selection
+range (.22 / .16) are now `--accent-wash` (.16 / .14) — a 2–4% alpha change on two small translucent
+rectangles, four spellings of one idea reduced to one. **Everything else is byte-identical to the
+literal it replaced**, so this round is NOT VERIFIED visually in the same sense the others are: there
+is nothing new to see, by construction, and the two alpha unifications are the whole of the visible
+delta.
+
+**The contracts.** `canvasChrome.test.mjs`, 50 checks, needing neither a DOM nor a canvas: the
+fallback record equals the sheet's light column key-for-key (parsed out of `styles.css` with comments
+stripped first — the sheet's own prose mentions `--accent:` and a naive declaration scan reads it as
+a value, which is precisely how the first run of this test failed); the dark block declares all 22;
+`readCanvasChrome` trims, falls back per key, survives a lookup returning `undefined`, and never hands
+back the fallback object itself; `withAlpha` handles 3/6/8-digit hex and `rgb()`/`rgba()`, clamps its
+alpha, and returns anything unparseable untouched so a mis-shaped sheet degrades instead of throwing
+mid-paint; `canvasChrome()` survives having no document; and no chrome literal may reappear in any of
+the three sources. The drift ratchet was lowered in the same commit: **Canvas.tsx 68 → 13 colour,
+Minimap.tsx 4 → 0, Rulers.tsx 5 → 0; workspace colour drift 195 → 131.** (The literals that remain
+elsewhere are a different pile: `devices.tsx` 35 are device bezels, `ZenHUD.tsx` 14 and
+`RadialMenu.tsx` 6 are DOM surfaces that want classes, not canvas tokens.)
+
+**Browser suite §43 + §43b — written, NOT RUN here** (no Chromium in this sandbox), 11 checks. The one
+that could not have passed before this round: set `--cv-sel` to `#ff8800` on the running app, nudge
+the selection to force a paint, and the chrome has to turn orange while the demo document's own
+emerald toggle stays within ±150px of the idle baseline — the difference between reading the sheet and
+remembering a literal, measured. Then remove the override and it has to come back. §43b boots dark
+through the app's own path (the `x-native-theme` key that `page()` deliberately spares, so
+`ThemeProvider` resolves it before first paint and React's `theme` lands in the paint deps — setting
+the attribute alone restyles the DOM and leaves the canvases painting stale tokens), re-measures the
+chrome against the dark tokens, rethemes again in dark, and checks the minimap viewport wears the dark
+`--accent` and not the light one (tolerance 16, since the two values sit 26 apart in the green
+channel). §20's minimap predicate needed no change: it was already green-ish rather than a literal.
+
+**Also fixed in passing:** the on-canvas frame-rename field, which carried `background: "#ffffff"` and
+`color: "#0f172a"` inline — white-on-white in the dark theme — and now uses `var(--elevated)`,
+`var(--text)`, `var(--accent)` and `var(--elev-floating)`.
+
+**Numbers.** Unit suite **2016 checks, 0 failed** across 28 suites (+50 this round). The counting rule
+is written down because earlier rounds in this file quoted lower figures that summed only the suites
+printing the `N passed, M failed` form:
+`npm test 2>&1 | grep -o "[0-9]* passed" | awk '{s+=$1} END {print s}'`. `tsc -b` clean; `vite build`
+clean and warning-free, the sheet at 96.88 kB (17.86 kB gzip) with the new tokens.
+
+**Still open after this round:** FR-U2b (the dark column exists for every canvas role and retunes
+three of them — the rest is a design call that needs eyes), MOTION-U1, IN-U6/FS-U4, PM-U3, PM-U6,
+LP-U3–U6, RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows. (LP-U3 and
+LP-U4 closed in §4s; LP-U5/U6 in §4t; PM-U6, RW-U1 and FR-U4 in §4u.)
+
+## §4s. P2 round 6 — the empty page says something (LP-U3, LP-U4)
+
+**Two blanks, not one.** LP-U3 was filed as a single line — "empty page = blank tree, no teaching empty
+state (assets HAS one; layers doesn't)" — but the layers tree has two different blanks and they are not
+the same sentence. A page with nothing on it renders `<div class="tree">` with no children; a search
+with no hits renders the *same* empty div, because each `LayerRow` returns `null` when it does not
+match. So "you have nothing yet" and "you found nothing" were one indistinguishable screen, and the
+second is the worse of the two: a filter that looks like data loss.
+
+**Nothing new was invented for it.** The sheet already had three empty-state recipes and the panel now
+uses two of them. The empty page gets the inspector's `.empty-state` verbatim — icon, `.empty-title`,
+`.empty-body`, `.empty-hint` with `<kbd>` chips — so the left and right panels teach in one voice and
+one recipe; a visitor with nothing selected sees "Nothing selected" on the right and "No layers on this
+page" on the left, laid out identically. The search's blank gets `.empty` (the Assets pane's recipe)
+carrying the command palette's sentence: *No layer matches “q”. Clear the search to see the whole
+page.* No new CSS class, no new control, no new copy voice.
+
+**Telling them apart honestly.** The panel derives `emptyPage` and `noMatch` from the document and the
+query — and for the query it calls `matchesLayer`, the very predicate each row uses to hide itself,
+rather than counting rendered rows. Counting rows is the easy version and it drifts the first time a
+row hides for any other reason (a folded parent, a future filter); asking the predicate means the tree
+and its rows cannot disagree about whether anything matched. The two states are mutually exclusive by
+construction (`noMatch` requires `!emptyPage`).
+
+**LP-U4, at the scope it was filed at.** The finding asked for "minimal dismissible empty-canvas
+hints", and §25's steps 1–3 did fail cold: an empty canvas renders a dock, two panels and an inspector,
+and not one of them says what to do. So: one card, three chords, one button. The decisions worth
+recording are the ones a reviewer would otherwise have to guess at.
+
+- It is **DOM, not canvas paint** — real text, a real button in the tab order, the theme for free, and
+  a dismissal that does not need a repaint.
+- The card is `pointer-events: none` and **only its button gets them back**, because the card is
+  describing a drag and must not eat one. That is the `.cm-layer` / `.cm-pin` recipe the comment pins
+  already use, and §44 proves it by dragging a rectangle out *through* the card.
+- It **retires by itself** the moment the page holds a layer, and stays out of the way while presenting
+  or mid-pen-stroke (`!snap.presentFrame && !draft.length`).
+- The dismissal is **read before first paint** (`useState(() => !emptyCanvasHintDismissed())`), so it
+  never flashes for someone who has already closed it.
+- `ui/firstRun.ts` is its own module because `localStorage` throws in private mode, is absent in node
+  and absent in SSR: the guard belongs in one place, not inside a 7,000-line canvas component. It takes
+  an injected store, which is why 24 checks cover hostile stores, a simulated next session and the
+  key's namespace without a browser.
+- The key is `x-native-`namespaced on purpose — the e2e's `page()` wipes every `x-native` key except the
+  theme, so §44 always starts as a first-time visitor.
+- What it deliberately is **not**: a tour, a checklist, a modal, or a per-tool hint framework. If the
+  product ever wants onboarding proper, that is a new finding with a new design, not an extension of
+  this card.
+
+**Verification.** jsdom, mounted for real: `leftpanel.dom.test.mjs` (25) renders `LeftPanel` on an
+emptied document and asserts both states, their copy, their `<kbd>` chords, that drawing a rectangle
+retires the teaching state and puts a row in its place, and that the search's sentence quotes the term
+and clears with it. Two harness fixes were needed and are worth naming because they unblock every
+future row-mounting test: `mountSurface` learned the `left` surface (and that its pane prop is
+`nav: "file"`, not `"layers"` — `NavId` has no layers member), and `installDom` now stubs
+`scrollIntoView`/`scrollTo`, since a selected layer row scrolls itself into view and jsdom has no layout
+to scroll; without the stub the row's effect threw on mount. `domEnv` also gained an `empty` fixture
+that empties a page the way a visitor does (select all → delete), because a fresh `MemoryEngine` seeds a
+starter page rather than an empty one. `firstRun.test.mjs` (24) covers the persistence and the card's
+source contract: rendered from classes, dismissed through `XButton`, click-through in the sheet, painted
+with tokens and no literals, and its `kbd` chips sharing the empty-state rule rather than starting a
+second one.
+
+**Browser suite §44 — written, NOT RUN here** (16 checks, 295 total): both empty states and their
+computed layout (flex, centred, 28px top padding, no stray inline styles), the inspector showing the
+same recipe at the same moment, the card's `pointer-events` pair and its centring over the canvas, the
+drag through the card producing exactly one row, the no-match sentence and its recovery, and the full
+dismissal sequence — click, `localStorage` reads `"1"`, reload, empty the page again, card stays gone
+while the layers panel still teaches, because that one is a state and not a nudge.
+
+**Numbers.** Unit suite **2065 checks, 0 failed** (2016 → 2065: +25 jsdom, +24 contract). `tsc -b`
+clean; `vite build` clean and warning-free, the sheet at 97.42 kB (17.93 kB gzip). The drift ratchet is
+**unchanged at 414 / 131 / 340 / 363 / 49** — a round that added two new surfaces of UI and moved no
+number added no inline style, no colour literal, no `title=` and no raw `<button>` (the dismiss control
+is `XButton`), which is the ratchet earning its keep: the new UI had to arrive through the primitives.
+
+**Still open after this round:** LP-U5 (ToolsPane: no disabled states or shortcuts, and a "Plugins"
+label with no plugins) and LP-U6 (AgentPane silently ignores input it cannot match, and hardcodes a
+390×844 frame at 120,80) — both closed in §4t — plus MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6,
+RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows.
+
+## §4t. P2 round 7 — the two panes that were placeholders (LP-U5, LP-U6)
+
+The last two rows of the LP family were the two panes nobody had finished. Both rendered, both were
+reachable from the rail, and both said something the product could not back up.
+
+**LP-U5: a command list has to say which command, and whether it can run.** The Tools pane called
+itself "Plugins and actions for this file" — there are no plugins, and the nav rail already calls it
+*Tools* — and then listed seven bare labels with no chords and no disabled states. Clicking
+**Duplicate** with nothing selected, or **Undo** with no history, dispatched a command the engine
+correctly ignored: the pane gave the click away and returned nothing. It is now what it looked like it
+was: seven rows in the `.presets` recipe the inspector's preset grid already uses, each wearing its
+chord in a `.sc` chip (the declaration every other menu container in the sheet makes for itself:
+`.menu .sc`, `.fly .sc`, `.ctx .sc`, now `.presets .sc`), and each command that cannot run is
+`disabled` — Duplicate and Group without a selection, Undo and Redo without history — with a `.muted`
+line at the bottom naming what is missing ("Duplicate needs a selection · Group needs a selection ·
+Nothing to undo yet · Nothing to redo"). The reasons are text rather than tooltips on purpose: a
+disabled control cannot receive the pointer that would show a tooltip, and `title=` in `chrome.tsx` is
+at its ratchet ceiling (40/40), so the honest option was also the only one the ratchet allowed. The
+chords are not typed twice — `toolsagent.dom.test.mjs` reads every `label: … sc: …` pair in
+`chrome.tsx` and fails if the pane and the palette disagree about one, and §45 opens the palette in a
+browser and compares them again. One plumbing fix came with it: `LeftPanel`'s memo comparator did not
+compare `canUndo`/`canRedo`, so a history-only change would have left the pane's Undo row stale.
+
+**LP-U6: an agent that cannot help has to say so.** The pane appended whatever you typed to a
+transcript and then, unless the text mentioned a frame, text or a box, dispatched nothing — the message
+sat there with no answer and no change, which reads as a broken product rather than a limited one. Its
+placements were also guessed document coordinates (a 390×844 frame at 120,80; text at 140,120), so what
+it "added" was routinely off-screen, and 390×844 matched no preset the inspector would recognise.
+Every ask now gets an answer, and the answer is written from the same values that were dispatched, so
+it cannot overclaim: *"Added a frame — iPhone 16 Pro, 393 × 852 — centred in your view and selected."*
+or *"Nothing in “…” matched what I can do. I can add a frame, text or a rectangle — and I changed
+nothing."* Placement is derived: `ui/zoom.ts` gained `viewportCentreWorld(snap)`, the world point under
+the middle of the visible canvas, using the same canvas-local pan reasoning as `zoomTo`, and successive
+asks cascade 24px so two frames do not stack exactly. Sizes come from the inspector's own preset list,
+now exported and shared (`PRESET_GROUPS`), which is why the reply can name a preset instead of a
+number nobody chose. The transcript keeps both voices (`data-who="you|agent"`, the agent's muted),
+wraps instead of ellipsising a sentence into a 32px layer-name row, and its greeting no longer promises
+colour — the pane has no colour branch, and a promise it cannot keep is the same defect as a control
+that does nothing.
+
+**Verification.** `toolsagent.dom.test.mjs` (35 checks) mounts both panes for real in jsdom and drives
+them: the row set and chords, the pane's copy, disabled/enabled transitions across a select → duplicate
+→ undo sequence, a live row's click actually dispatching (zoom becomes 1), no inline layout; then five
+agent asks — an unmatched one that must answer and change nothing, a frame whose name and size come
+from the preset list and which is selected as claimed, a second frame that must land exactly
+`200/zoom + 24` world pixels from the first after a `setPan` of 200 (the arithmetic that proves
+placement follows the view rather than a constant), a text ask carrying the message, and "box" reaching
+the rectangle branch. Two harness notes worth keeping: a **static** import of a `.tsx` surface at the
+top of a DOM test loads react-dom before jsdom is installed, after which every input event throws
+`activeElement.detachEvent is not a function` and React's updates land a render late — so the preset
+list is imported dynamically, after the first mount; and `domEnv` learned `press(el, key)`, because a
+surface that acts on Enter has no button to click.
+
+**Browser suite §45 — written, NOT RUN here** (18 checks, 313 total): the chords compared against the
+palette opened with ⌘K rather than against a number in the test; disabled rows computed against `--dim`
+and live rows against `--text`; no row explaining itself with a native `title`; clicking a dimmed row
+leaving the layer count alone; a selection re-enabling Duplicate and Group; the agent's frame painted
+*on screen* after a hand-tool pan far from the document origin (measured as selection chrome near
+`--cv-sel`, the §43 technique — a fixed document coordinate would not survive that pan); the inspector
+agreeing the layer is the 393×852 preset; the reply wrapping and wearing `--muted` against the
+visitor's own voice; and an unmatched ask answering while the layer count stays put.
+
+**Numbers.** Unit suite **2100 checks, 0 failed** (2065 → 2100: +35). `tsc -b` clean; `vite build`
+clean and warning-free, the sheet at 97.83 kB (18.01 kB gzip). Drift moved **down**: `chrome.tsx`
+inline 51 → 50 (the agent pane's `style={{ marginLeft: 0 }}` became `.share.left`), workspace inline
+414 → 413, with no new raw `<button>`, no new `title=` and no new colour literal across two rebuilt
+panes — the rows stayed the recipe they were already in.
+
+**Still open after this round:** MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6, RW-U1, FR-U3/U4, and the
+`inspector.tsx` / `FigInspectorModal.tsx` drift rows. The LP family (LP-U1 … LP-U6) is now closed end to
+end. (PM-U6, RW-U1 and FR-U4 closed in §4u.)
+
+## §4u. P2 round 8 — nothing off the edge, nothing out of reach (RW-U1, FR-U4, PM-U6)
+
+Three findings from three different sections of this audit — §13 (responsive), §11 (canvas/frame) and
+§17 (modals) — with one shape: chrome the product puts on screen without asking whether the screen has
+room for it, or whether the keyboard can get to it.
+
+**RW-U1: the dock was bounded by nothing.** `.dock` is absolutely centred in `.canvas-col`
+(`left: 50%; transform: translateX(-50%); bottom: 18px`) at a fixed `height: 44px`, and the column is
+narrower than the window whenever a panel is docked — at 900px the stage can be ~300px wide while the
+tool row, a multi-selection cluster and the right-hand cluster (Assets, Prototype, Dev Mode, Actions)
+add up to ~500px. The strip had no width limit at all, so its tail simply left the screen, and the only
+escape was `minUi` — which "solves" *the tools do not fit* by *closing your panels*. The one override
+that did exist, under `@media (max-width: 860px)`, made the dock a scroll container, which is worse
+than it sounds: `overflow-x: auto` computes `overflow-y` to `auto` as well, and `.tool .fly` escapes
+40px above a 44px strip — so on a phone the boolean menu opened into a clipped box. The dock is bounded
+by its own column now (`max-width: calc(100% - 24px)`, which is the right reference at every width
+rather than the `100vw` the override guessed), keeps `min-height: 44px` so it grows upward from its
+`bottom: 18px` anchor, and **wraps** — `flex-wrap: wrap` with `justify-content: center` on the dock and
+on `.toolset` (plus `min-width: 0`, without which a flex item refuses to shrink below its content). No
+`overflow` anywhere on it, so the flyouts escape at every width and the phone override is deleted.
+A wrapped dock is a two-row pill, and what that looks like is exactly the kind of call this sandbox
+cannot make — **NOT VERIFIED visually**; §46 measures the rects instead of trusting the shape.
+
+**FR-U4: the one readout of "how big is this" could leave the screen.** Both badge sites — the single
+selection and the multi-selection box — computed `by = sy + sh + 8` and painted unconditionally, so a
+selection whose bottom edge was at the canvas bottom lost its size/angle badge: most often mid-resize
+of something tall, which is precisely when the number is wanted. `ui/zoom.ts` gained
+`clampBadge(rect, view, { pad, flipY })`, and both sites go through it: below the box when below fits;
+flipped above it when below does not; clamped inside the view when neither side does (a selection
+taller than the canvas has nowhere to hang), never negative. One subtlety the first draft got wrong and
+a test caught: the flip has to be *rejected* when the flip target is itself off-screen, which happens
+whenever the whole box is below the fold — trading one invisible badge for another is not a fix. It is
+pure arithmetic on canvas-local pixels, so the paint loop stays the only code that knows about a `ctx`
+and the behaviour is testable without a browser.
+
+**PM-U6: the export sheet left the keyboard outside.** `Export assets…` (⇧⌘E, the palette, or the
+inspector's Export button, all through the `x-native-export-dialog` seam) opened a sheet with
+`role="dialog"` but no `aria-modal` and no initial focus, so focus stayed on whatever launched it and a
+keyboard user tabbed in from the top of the document *behind* the veil. The filter field is now the
+first stop, which is both the first control in the sheet and the first thing worth doing in it — and
+every other modal input in the app (shortcuts, find-in-page, the palette) already focused itself, so
+this was the outlier rather than a new convention. The dialog also says `aria-modal="true"` now, since
+a modal that does not announce itself leaves the document behind it sounding live. What is *not* fixed
+here: focus **restore** on close. The sheet is closed by the App's global overlay owner, so the caret
+returns to `<body>` rather than to the command that opened it — that is PM-U3's two-Escapes question,
+and answering it in one place is worth more than patching this sheet.
+
+**Verification.** `edgefit.test.mjs` (26 checks) covers all three at the level each can be checked at:
+nine arithmetic cases on `clampBadge` (fits, exactly-fits-the-pad boundary, one pixel over flips, flip
+target off-screen falls through to the clamp, no flip target, badge taller than the view, both x edges,
+`pad` as a parameter, a view smaller than the badge); the sheet read as text for the dock, because jsdom
+has no layout engine and the stylesheet is what the browser will actually apply (bounded, wraps,
+`min-height` not `height`, centred, `.toolset` folds too, and **no rule anywhere makes the dock a
+scroll container** — the assertion that keeps the flyout bug from coming back); both badge sites in
+`Canvas.tsx` call the helper with a flip target and neither keeps the old formula; and the export sheet
+mounted for real, where React's commit-time focus is observable — `document.activeElement` is the
+filter, it is the first focusable in the sheet, the sheet lists rows, and unmounting removes it.
+
+**Browser suite §46 — written, NOT RUN here** (9 checks, 322 total). The badge is measured as two band
+comparisons rather than one absolute count, because the badge is painted in `--cv-sel`, the same ink as
+the selection outline that crosses both bands: pan until below no longer fits and there must be more
+accent above the box than below, pan further and the reverse, which is the clamp. The dock is measured
+at 1600/1100/900/700 with a select-all multi cluster and again at 430 — every `button.hit` inside both
+the column and the viewport, `scrollWidth <= clientWidth`, computed `overflow-x: visible` — and at 430
+the boolean menu is proven *painted*, not merely present, with `elementFromPoint` at its centre,
+because clipping is visual and not geometric: an element inside a scroll container still reports its
+full rect. The export sheet is opened through the palette and typed into with no click first, then
+closed with Escape.
+
+**Numbers.** Unit suite **2126 checks, 0 failed** (2100 → 2126: +26). `tsc -b` clean; `vite build`
+clean and warning-free, the sheet at 97.84 kB (18.01 kB gzip). The drift table did not move —
+413 inline / 131 colour / 340 `title=` / 363 raw `<button>` / 49 `<select>`, `chrome.tsx` still
+50/4/40/64/2 — because this round added almost no markup: four declarations, one function call at two
+sites, and one attribute.
+
+**Still open after this round:** MOTION-U1 and FR-U2b (both need eyes), IN-U6/FS-U4, PM-U3 (which now
+also owns the export sheet's focus restore), RW-U2, FR-U3, and the `inspector.tsx` /
+`FigInspectorModal.tsx` drift rows.
+
+## §4v. P1 round 9 — one Escape, one owner (PM-U3)
+
+The app had a modal dismissal race. Escape was answered by an App-level overlay
+cascade, a capture-phase dialog listener, bubble listeners on XDialog/XPopover,
+menus, color pickers, the radial menu and inspector controls, and the canvas
+hotkey cascade. A `popoverGuard` counter prevented selection loss but did not
+close the popover. Because listeners were ordered by registration phase rather
+than visual stacking order, Escape could close a sheet behind a dialog, leave
+the dialog open, or be answered twice by presentation mode (the central handler
+and PresentationPlayer both dispatched its back/exit branch).
+
+`src/ui/escape.ts` is now the single owner. Open surfaces register an id and a
+live close callback; the newest registration is the top of the stack; one
+Escape pops exactly one entry and is consumed before the typing guard or canvas
+cascade. App overlays (Find, Nudge, Export, Actions and Fig Inspector), dock
+flyouts, XDialog/XPopover, DialogHost, context menu, fill picker, radial menu,
+zoom menu, language/property menus and the shortcuts sheet all use the registry.
+The old `popoverGuard.ts` and every `armPopover`/`popoverArmed` call are deleted.
+PresentationPlayer no longer handles Escape independently; App's presentation
+branch is reached only after the overlay stack is empty, preventing a double
+back. Focused fields still close their topmost overlay because Escape is handled
+before the typing guard.
+
+`escape.test.mjs` adds 33 headless checks: stack arithmetic and release safety,
+one-press consumption, a real mounted zoom menu with selection preservation,
+the presentation single-answer path, registration coverage, and source checks
+that reject a second popover mechanism or App-local overlay cascade. Unit suite
+**2159 checks, 0 failed** (2126 → 2159); `tsc -b` clean. Browser §46 remains
+**322 checks, NOT RUN** in this environment. Visual stacking and focus restoration
+remain NOT VERIFIED here; the registry is the PM-U3 ownership foundation for
+those follow-ups.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

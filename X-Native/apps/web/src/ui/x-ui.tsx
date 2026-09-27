@@ -21,7 +21,7 @@
 import { ReactNode, forwardRef, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
-import { armPopover } from "./popoverGuard";
+import { useEscape } from "./escape";
 import { evalField } from "./fieldExpr";
 import type { XNode } from "../engine/types";
 
@@ -453,21 +453,18 @@ export function XPopover({
     setPos({ left, top });
   }, [anchor, width]);
 
+  // PM-U3: the popover joins the one Escape cascade rather than listening for
+  // itself, where the app's capture-phase handler could starve it and the
+  // counter it armed protected the selection without closing anything.
+  useEscape("popover", onClose);
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
       if (!t.closest(".x-popover") && !t.closest(".color-row") && !t.closest(".fill-pop")) onClose();
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
     window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    const disarm = armPopover();
     return () => {
       window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      disarm();
     };
   }, [onClose]);
 
@@ -582,13 +579,10 @@ export function XDialog({
   footer?: ReactNode;
   width?: number;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // PM-U3: one Escape owner. This bubble listener used to be starved outright
+  // whenever an App sheet was open, and a dialog on top of one is exactly when
+  // a press has to reach the dialog.
+  useEscape("dialog", onClose);
 
   return createPortal(
     <div

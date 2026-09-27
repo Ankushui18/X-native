@@ -293,15 +293,14 @@ export function PresentationPlayer({
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
-      if (e.key === "Escape") {
-        if (snap.activeOverlay) {
-          engine.dispatch({ type: "closeOverlay" });
-        } else if (snap.presentStack.length > 1) {
-          engine.dispatch({ type: "presentBack" });
-        } else {
-          onExit();
-        }
-      } else if (e.key === "ArrowLeft" || e.key === "Backspace") {
+      // PM-U3: Escape belongs to the one cascade, which already runs this exact
+      // three-way branch (activeOverlay → presentBack → exit) through App's
+      // onPresentExit and now consumes the press. Answering it here as well is
+      // what made a single Escape walk back two frames: this listener is in the
+      // bubble phase, so it ran after the capture-phase one with the same stale
+      // snapshot and dispatched presentBack a second time.
+      if (e.key === "Escape") return;
+      if (e.key === "ArrowLeft" || e.key === "Backspace") {
         // §23 PT-007: back walks history first (Figma); doc order only when
         // there is no history. (Going back used to push a NEW visit.)
         if (snap.presentStack.length > 1) {

@@ -7,7 +7,7 @@ import { Icon, caretSize, kindIcon, type IconName } from "./icons";
 import { SAME_KINDS, selectInverse, selectMatching, selectSame } from "./selectSame";
 import { DEV_LANGS, type DevFormat } from "./devPrefs";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
-import { armPopover } from "./popoverGuard";
+import { useEscape } from "./escape";
 import { askPrompt } from "./dialog";
 
 export type MenuItem =
@@ -29,21 +29,18 @@ export function ContextMenu({
   onClose: () => void;
 }) {
   const [openSub, setOpenSub] = useState<number | null>(null);
-  // §26 KB-017: an open menu is a popover — Escape closes it (below) instead
-  // of clearing the canvas selection behind it.
-  useEffect(() => armPopover(), []);
+  // §26 KB-017: an open menu is a popover — Escape closes it instead of
+  // clearing the canvas selection behind it. PM-U3: it says so to the one
+  // cascade, which consumes the press, rather than arming a counter and hoping
+  // its own bubble listener was not starved by the app's capture handler.
+  useEscape("context-menu", onClose);
   useEffect(() => {
     const on = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest(".ctx")) onClose();
     };
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
     window.addEventListener("mousedown", on);
-    window.addEventListener("keydown", key);
     return () => {
       window.removeEventListener("mousedown", on);
-      window.removeEventListener("keydown", key);
     };
   }, [onClose]);
 

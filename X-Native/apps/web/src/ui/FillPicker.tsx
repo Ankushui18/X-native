@@ -34,7 +34,7 @@ import {
 } from "./color";
 import { rememberImage } from "../engine/assets";
 import { mixHex } from "../engine/paint";
-import { armPopover } from "./popoverGuard";
+import { useEscape } from "./escape";
 
 export interface FillValue {
   color: string;
@@ -129,6 +129,9 @@ export function FillPicker({
     setCss(toCss(next.r, next.g, next.b, value.opacity / 100));
   }, [value.color, value.opacity]);
 
+  // Escape closes the picker and must not also drop the selection behind it:
+  // the one cascade consumes the press, so the canvas's deselect never sees it.
+  useEscape("fill-picker", onClose);
   useEffect(() => {
     const on = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
@@ -138,7 +141,6 @@ export function FillPicker({
     const key = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       const typing = tag === "INPUT" || tag === "TEXTAREA";
-      if (e.key === "Escape") onClose();
       if (e.key === "Tab" && !typing) {
         e.preventDefault();
         setModel((m) => nextColorModel(m));
@@ -175,12 +177,9 @@ export function FillPicker({
     };
     window.addEventListener("mousedown", on);
     window.addEventListener("keydown", key);
-    // Escape closes the picker; it should not also drop the selection behind it.
-    const disarm = armPopover();
     return () => {
       window.removeEventListener("mousedown", on);
       window.removeEventListener("keydown", key);
-      disarm();
     };
   }, [onClose, value, stopIdx]);
 

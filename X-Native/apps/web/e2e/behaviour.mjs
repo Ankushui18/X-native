@@ -1085,9 +1085,11 @@ for (const [label, payload] of [
   });
   await p.mouse.click(Math.round(mm.x + mm.w / 2), Math.round(mm.y + mm.h / 2));
   await sleep(700);
-  // The viewport rectangle is drawn in the accent green (#0e9f6e light /
-  // #10b981 dark); the old predicate was blue, which is document ink - so it
-  // tracked the thumbnail's fit changing, not the viewport.
+  // The viewport rectangle is drawn in the accent green: Minimap.tsx reads
+  // `--accent` per paint (FR-U2), so it is #0e9f6e light and #10b981 dark and
+  // this predicate stays green-ish rather than pinning either value. The old
+  // predicate was blue, which is document ink - so it tracked the thumbnail's
+  // fit changing, not the viewport.
   const rect = await p.evaluate(() => {
     const c = document.querySelector(".minimap canvas");
     const dpr = window.devicePixelRatio || 1;
@@ -2518,6 +2520,828 @@ for (const [label, payload] of [
   });
   t(`Present's chip is the start chord (${tip.text})`, tip.chip === "⌘⌥↩" && tip.text.startsWith("Present"));
   t(`and ${layerRows.length} layer rows were untouched by any of it`, layerRows.length === 23);
+  await p.close();
+}
+
+// 42. the vector card and the boolean menu are sheet chrome (IN-U4, TB-U5) ---
+{
+  const p = await page();
+  await rows(p);
+  await drawRect(p);
+  // A rectangle has no path, so the card stays hidden until the shape is baked
+  // into a vector — the same route §35 takes.
+  await p.evaluate(() => [...document.querySelectorAll(".inspector .seg button")]
+    .find((b) => b.textContent.trim() === "Flatten")?.click());
+  await sleep(500);
+
+  // The card's geometry is read *against the panel's own recipes* rather than
+  // against numbers written here: the claim is "one recipe", so the layer align
+  // row and the Position fields are the reference. If the sheet's scale moves,
+  // both sides move and this stays true; a bespoke copy would not.
+  const card = await p.evaluate(() => {
+    const c = document.querySelector(".vec-card");
+    const cs = c ? getComputedStyle(c) : null;
+    const size = (el) => { const r = getComputedStyle(el); return `${r.width}x${r.height}`; };
+    return {
+      present: !!c,
+      headers: [...document.querySelectorAll(".h-row .sec-toggle h2")].map((h) => h.textContent.trim()),
+      chip: document.querySelector(".h-act .vec-chip")?.textContent.trim() ?? null,
+      // Icon sizes its svg and Field marks its label scrubbable; anything else
+      // inline is bespoke layout the sheet cannot reach.
+      inline: [...(c?.querySelectorAll("[style]") ?? [])].map((e) => e.getAttribute("style"))
+        .filter((v) => !/^(width: \d+px; height: \d+px; display: block;|cursor: ew-resize;( display: inline-flex;)?$)/.test(v || "")),
+      hex: (c?.innerHTML.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []),
+      exportRun: document.querySelectorAll(".vec-card .export-run").length,
+      strong: document.querySelectorAll(".vec-card strong").length,
+      cardBg: cs?.backgroundColor,
+      alignSizes: [...document.querySelectorAll(".vec-align .g button")].map(size),
+      layerAlignSizes: [...document.querySelectorAll(".align:not(.vec-align) .g button")].map(size),
+      fieldHeights: [...document.querySelectorAll(".vec-card .field")].map((f) => getComputedStyle(f).height),
+      positionFieldHeights: [...document.querySelectorAll(".inspector .field")]
+        .filter((f) => !f.closest(".vec-card")).map((f) => getComputedStyle(f).height),
+      actionHeights: [...document.querySelectorAll(".vec-actions button")].map((b) => getComputedStyle(b).height),
+      mirrorTabs: [...document.querySelectorAll('.seg[aria-label="Handle mirroring"] button[role="tab"]')]
+        .map((b) => `${b.textContent.trim()}=${b.getAttribute("aria-selected")}`),
+      alignRoles: [...document.querySelectorAll(".vec-align button")].map((b) => b.getAttribute("role")),
+    };
+  });
+  t(`the card is a section among the others (${card.headers.join(" / ")})`,
+    card.present && card.headers.includes("Vector") && card.chip === "Native Graph");
+  t(`the card styles itself from the sheet (${card.inline.length} stray inline, ${card.hex.length} literal colours, ${card.exportRun} export-run, ${card.strong} <strong>)`,
+    card.inline.length === 0 && card.hex.length === 0 && card.exportRun === 0 && card.strong === 0);
+  t(`its align row is the layer align row's recipe (${card.alignSizes.join(" ")} vs ${card.layerAlignSizes.slice(0, 3).join(" ")})`,
+    card.alignSizes.length === 6 && card.layerAlignSizes.length > 0 &&
+    card.alignSizes.every((s) => s === card.layerAlignSizes[0]));
+  t(`its numbers are the panel's fields (${[...new Set(card.fieldHeights)].join(",")} vs ${[...new Set(card.positionFieldHeights)].join(",")})`,
+    card.fieldHeights.length >= 3 && card.positionFieldHeights.length > 0 &&
+    card.fieldHeights.every((h) => h === card.positionFieldHeights[0]));
+  t(`its four actions share one height (${[...new Set(card.actionHeights)].join(",")})`,
+    card.actionHeights.length === 4 && new Set(card.actionHeights).size === 1);
+  // Six one-shot actions must not claim a selection: a tab says "this panel is
+  // showing", which an align button never is. The mirroring switch does select,
+  // so it keeps the tab semantics and shows the point's current mode.
+  t(`alignment claims no tab (${card.alignRoles.filter(Boolean).length} roles)`, card.alignRoles.every((r) => r === null));
+  t(`mirroring selects exactly one tab (${card.mirrorTabs.join(" ")})`,
+    card.mirrorTabs.length === 3 && card.mirrorTabs.filter((m) => m.endsWith("=true")).length === 1);
+
+  // The form's Apply is the accent from the token, not a colour typed onto it.
+  await p.evaluate(() => [...document.querySelectorAll(".vec-actions button")]
+    .find((b) => /Simplify/.test(b.textContent))?.click());
+  await sleep(350);
+  const apply = await p.evaluate(() => {
+    const token = document.createElement("div");
+    token.style.color = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+    document.body.appendChild(token);
+    const want = getComputedStyle(token).color;
+    token.remove();
+    const el = document.querySelector(".vec-sub .x-btn-primary");
+    const b = [...document.querySelectorAll(".vec-actions button")].find((x) => /Simplify/.test(x.textContent));
+    return { want, got: el ? getComputedStyle(el).backgroundColor : null, cls: el?.className ?? null,
+             toggle: b?.className ?? null, toggleBg: b ? getComputedStyle(b).backgroundColor : null };
+  });
+  t(`Apply simplify is the accent token (${apply.cls}, ${apply.got})`,
+    apply.got === apply.want && /x-btn-primary/.test(apply.cls || ""));
+  t(`and its toggle reads as pressed while the form is open (${apply.toggle})`,
+    / on/.test(apply.toggle || "") && apply.toggleBg !== apply.want);
+
+  // Entering point edit puts the dock's one commit button on screen: it wears
+  // the accent, and its ink has to be the accent's own — the `#fff` it used to
+  // hardcode is unreadable on the dark theme's accent ink (`#0a0e13`).
+  await p.evaluate(() => [...document.querySelectorAll(".h-act button")]
+    .find((b) => /Edit points/.test(b.textContent))?.click());
+  await sleep(400);
+  const dark = await p.evaluate(() => {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const token = (name) => {
+      const d = document.createElement("div");
+      d.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      document.body.appendChild(d);
+      const c = getComputedStyle(d).color;
+      d.remove();
+      return c;
+    };
+    const done = document.querySelector(".hit.vec-done");
+    const card = document.querySelector(".vec-card");
+    const out = {
+      hover: token("--hover"), onAccent: token("--on-accent"), accent: token("--accent"),
+      cardBg: card ? getComputedStyle(card).backgroundColor : null,
+      doneBg: done ? getComputedStyle(done).backgroundColor : null,
+      doneFg: done ? getComputedStyle(done).color : null,
+      doneInline: done?.getAttribute("style") ?? null,
+      doneTitle: done?.getAttribute("title") ?? null,
+    };
+    document.documentElement.removeAttribute("data-theme");
+    return out;
+  });
+  t(`the card follows the theme in dark (${dark.cardBg} vs --hover ${dark.hover})`, dark.cardBg === dark.hover);
+  t(`and the dock's Done wears the accent and its ink (${dark.doneBg}, ${dark.doneFg} vs ${dark.onAccent})`,
+    dark.doneBg === dark.accent && dark.doneFg === dark.onAccent && dark.doneInline === null &&
+    (dark.doneTitle || "").startsWith("Done editing path"));
+
+  // TB-U5: the boolean menu only exists once two layers are selected, and its
+  // width is measured against a tool group's `.fly` rather than a number — the
+  // finding was that this one menu did not use the recipe the others do.
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await sleep(500);
+  const dock = await p.evaluate(() => {
+    const bool = document.querySelector('.tool[data-group="bool"] .fly');
+    const shape = document.querySelector('.tool[data-group="shape"] .fly');
+    const m = (el) => { const r = getComputedStyle(el); return { min: r.minWidth, radius: r.borderRadius, pad: r.padding }; };
+    const div = bool?.querySelector(".fly-div");
+    return {
+      bool: bool ? m(bool) : null, shape: shape ? m(shape) : null,
+      boolInline: bool?.getAttribute("style") ?? null,
+      split: document.querySelector('.tool[data-group="bool"]')?.className ?? null,
+      hitInline: document.querySelector('.tool[data-group="bool"] .hit')?.getAttribute("style") ?? null,
+      caret: document.querySelector('.tool[data-group="bool"] i.caret')?.getAttribute("aria-label") ?? null,
+      rows: [...(bool?.querySelectorAll('button[role="menuitem"]') ?? [])].map((b) => b.textContent.trim()),
+      divH: div ? getComputedStyle(div).height : null,
+      divInline: div?.getAttribute("style") ?? null,
+      dockStrays: [...document.querySelectorAll(".dock [style]")].map((e) => e.getAttribute("style"))
+        .filter((v) => !/^width: \d+px; height: \d+px; display: block;$/.test(v || "")),
+    };
+  });
+  t(`the boolean menu is the tool groups' menu (${JSON.stringify(dock.bool)} vs ${JSON.stringify(dock.shape)})`,
+    !!dock.bool && !!dock.shape && dock.bool.min === dock.shape.min &&
+    dock.bool.radius === dock.shape.radius && dock.bool.pad === dock.shape.pad &&
+    dock.boolInline === null && dock.rows.length === 5);
+  t(`its trigger is the dock's split tool (${dock.split}, caret ${dock.caret})`,
+    /tool split/.test(dock.split || "") && dock.hitInline === null && !!dock.caret);
+  t(`its separator is a hairline from the sheet (${dock.divH})`, dock.divH === "1px" && dock.divInline === null);
+  t(`and the whole dock is inline-free (${dock.dockStrays.length} stray: ${dock.dockStrays.join(" ") || "none"})`,
+    dock.dockStrays.length === 0);
+  await p.close();
+}
+
+// 43. FR-U2: canvas chrome is the sheet's, and document ink is not -----------
+{
+  const p = await page();
+  await rows(p);
+
+  /** A custom property as the browser resolves it, as [r, g, b]. The canvases
+   *  paint whatever the sheet says, so the check has to ask the sheet too: a
+   *  literal here would be exactly the drift it is looking for. */
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw; // normalises any colour the sheet used to #rrggbb
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+
+  /** Opaque pixels of the main canvas within `tol` of a colour. */
+  const countNear = (rgb, tol) =>
+    p.evaluate((r, g, b, t2) => {
+      const c = document.querySelector("canvas");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol);
+
+  const nudge = async () => { await p.keyboard.press("ArrowRight"); await sleep(350); };
+
+  const sel = await tokenRgb("--cv-sel");
+  const lock = await tokenRgb("--cv-lock");
+  t(`the sheet declares the canvas chrome roles (--cv-sel ${JSON.stringify(sel)}, --cv-lock ${JSON.stringify(lock)})`,
+    Array.isArray(sel) && Array.isArray(lock));
+
+  // The demo document paints the accent itself (a #10b981 toggle), so chrome is
+  // measured as the difference from an idle canvas, as §26 does.
+  const idle = await countNear(sel, 24);
+  await drawRect(p);
+  const chrome = (await countNear(sel, 24)) - idle;
+  t(`selection chrome paints --cv-sel (+${chrome}px over an idle ${idle}px)`, chrome > 500);
+
+  // The part that could not pass before FR-U2: retheme the role under the
+  // running app and the chrome has to follow, while the document's own emerald
+  // stays put. The ring used to be `const BRAND_ACCENT = "#10b981"`, so the
+  // sheet had nothing to say about it.
+  await p.evaluate(() => document.documentElement.style.setProperty("--cv-sel", "#ff8800"));
+  await nudge();
+  const moved = await countNear([255, 136, 0], 24);
+  const stayed = await countNear(sel, 24);
+  t(`rethemeing --cv-sel repaints the chrome (${moved}px of orange)`, moved > 500);
+  t(`and the document's own emerald does not follow it (${stayed}px, idle was ${idle}px)`, Math.abs(stayed - idle) < 150);
+
+  await p.evaluate(() => document.documentElement.style.removeProperty("--cv-sel"));
+  await nudge();
+  const back = (await countNear(sel, 24)) - idle;
+  t(`removing the override paints the token again (+${back}px)`, back > 500);
+
+  // The lock role, measured the same way §26 measures it - but against the
+  // token, so a retuned --cv-lock cannot quietly desync from the canvas.
+  const lockBefore = await countNear(lock, 20);
+  await p.keyboard.down("Meta"); await p.keyboard.down("Shift");
+  await p.keyboard.press("l");
+  await p.keyboard.up("Shift"); await p.keyboard.up("Meta");
+  await sleep(500);
+  const lockAfter = await countNear(lock, 20);
+  const selAfterLock = (await countNear(sel, 24)) - idle;
+  t(`locked chrome paints --cv-lock (+${lockAfter - lockBefore}px)`, lockAfter - lockBefore > 100);
+  t(`and drops the selection role (${selAfterLock}px)`, selAfterLock < 60);
+  await p.close();
+}
+
+// 43b. the same contract in the dark theme -----------------------------------
+{
+  // Boot dark through the app's own path (ThemeProvider reads this key before
+  // first paint, and page() deliberately spares it) rather than by setting the
+  // attribute: only the real thing puts React's `theme` in the paint deps, and
+  // the canvases re-read their tokens on that paint.
+  const seed = await page();
+  await seed.evaluate(() => localStorage.setItem("x-native-theme", "dark"));
+  await seed.close();
+
+  const p = await page();
+  await rows(p);
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+  const countNear = (rgb, tol, scope = "canvas") =>
+    p.evaluate((r, g, b, t2, s) => {
+      const c = document.querySelector(s);
+      if (!c) return -1;
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol, scope);
+
+  const theme = await p.evaluate(() => document.documentElement.dataset.theme);
+  const accent = await tokenRgb("--accent");
+  const sel = await tokenRgb("--cv-sel");
+  t(`the app booted dark (data-theme=${theme}, --accent ${JSON.stringify(accent)})`, theme === "dark" && Array.isArray(accent));
+
+  const idle = await countNear(sel, 24);
+  await drawRect(p);
+  const chrome = (await countNear(sel, 24)) - idle;
+  t(`dark selection chrome paints the dark --cv-sel (+${chrome}px)`, chrome > 500);
+
+  await p.evaluate(() => document.documentElement.style.setProperty("--cv-sel", "#ff8800"));
+  await p.keyboard.press("ArrowRight"); await sleep(350);
+  const moved = await countNear([255, 136, 0], 24);
+  t(`and follows a retheme in dark too (${moved}px of orange)`, moved > 500);
+  await p.evaluate(() => document.documentElement.style.removeProperty("--cv-sel"));
+
+  // The minimap viewport wears --accent, the one chrome colour whose two theme
+  // values genuinely differ (#0e9f6e light / #10b981 dark), so this is the pixel
+  // a visitor can see answer the theme. Tolerance 16 keeps the two apart (their
+  // green channels are 26 apart) while the document's own #10b981 toggle still
+  // shows up in the thumbnail - hence no "zero emerald" assertion in light.
+  await p.keyboard.down("Shift"); await p.keyboard.press("M"); await p.keyboard.up("Shift");
+  await sleep(600);
+  const darkAccent = await countNear(accent, 16, ".minimap canvas");
+  const lightAccent = await countNear([14, 159, 110], 16, ".minimap canvas");
+  t(`the minimap viewport wears the dark accent (${darkAccent}px) and not the light one (${lightAccent}px)`,
+    darkAccent > 30 && lightAccent < 25);
+
+  await p.evaluate(() => localStorage.setItem("x-native-theme", "light"));
+  await p.close();
+}
+
+// 44. LP-U3 + LP-U4: an empty page teaches, and only until you dismiss it -----
+{
+  const p = await page();
+  await rows(p);
+  // Empty the sample document the way a visitor would: select everything, delete.
+  const emptyIt = async () => {
+    await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+    await sleep(300);
+    await p.keyboard.press("Delete");
+    await sleep(500);
+  };
+  await emptyIt();
+
+  // LP-U3: the layers tree used to render an empty <div class="tree"> here.
+  const taught = await p.evaluate(() => {
+    const tree = document.querySelector(".panel.left .tree");
+    const state = tree?.querySelector(".empty-state") ?? null;
+    const cs = state ? getComputedStyle(state) : null;
+    return {
+      rows: tree ? tree.querySelectorAll("[data-row-id]").length : -1,
+      title: state?.querySelector(".empty-title")?.textContent.trim() ?? null,
+      body: (state?.querySelector(".empty-body")?.textContent || "").trim(),
+      kbds: [...(state?.querySelectorAll(".empty-hint kbd") ?? [])].map((k) => k.textContent.trim()),
+      icon: !!state?.querySelector("svg"),
+      strays: [...(state?.querySelectorAll("[style]") ?? [])]
+        .map((e) => e.getAttribute("style"))
+        .filter((v) => !/^(width|height): \d+px/.test(v || "")),
+      display: cs?.display ?? null,
+      align: cs?.textAlign ?? null,
+      padTop: cs?.paddingTop ?? null,
+      // the inspector's own empty state, for the "one recipe" claim
+      inspectorUsesSameRecipe: !!document.querySelector(".inspector .empty-state, .panel.right .empty-state"),
+    };
+  });
+  t(`an empty page teaches in the layers tree (${taught.title})`,
+    taught.rows === 0 && taught.title === "No layers on this page" && taught.icon && taught.body.length > 40);
+  t(`with the chords it names (${taught.kbds.join(" ")})`,
+    ["F", "R", "T", "⌘", "K"].every((k) => taught.kbds.includes(k)));
+  t(`laid out by the sheet, not inline (${taught.display}/${taught.align}, ${taught.strays.length} stray)`,
+    taught.display === "flex" && taught.align === "center" && taught.strays.length === 0 && taught.padTop !== "0px");
+  // With nothing selected the inspector shows its own `.empty-state` at the same
+  // moment, so the two panels are visibly one recipe rather than two lookalikes.
+  t("and the inspector is showing the same recipe at the same time", taught.inspectorUsesSameRecipe);
+
+  // LP-U4: the card over the empty canvas.
+  const hint = await p.evaluate(() => {
+    const c = document.querySelector(".canvas-hint");
+    const wrap = document.querySelector(".canvas-wrap");
+    if (!c || !wrap) return null;
+    const r = c.getBoundingClientRect();
+    const w = wrap.getBoundingClientRect();
+    const btn = c.querySelector("button");
+    return {
+      title: c.querySelector(".canvas-hint-title")?.textContent.trim() ?? null,
+      kbds: [...c.querySelectorAll("kbd")].map((k) => k.textContent.trim()),
+      label: btn?.textContent.trim() ?? null,
+      pe: getComputedStyle(c).pointerEvents,
+      btnPe: btn ? getComputedStyle(btn).pointerEvents : null,
+      bg: getComputedStyle(c).backgroundColor,
+      centred: Math.abs((r.x + r.width / 2) - (w.x + w.width / 2)),
+      box: { x: r.x, y: r.y, w: r.width, h: r.height },
+    };
+  });
+  t(`the empty canvas carries the first-run card (${hint?.title})`,
+    !!hint && hint.title === "Draw your first layer" && ["F", "R", "T"].every((k) => hint.kbds.includes(k)));
+  t(`click-through card, live button (${hint?.pe}/${hint?.btnPe})`,
+    hint?.pe === "none" && hint?.btnPe === "auto");
+  t(`its control says what it does (${hint?.label})`, (hint?.label || "").includes("show this again"));
+  t(`and it sits centred over the canvas (${Math.round(hint?.centred ?? -1)}px off)`, (hint?.centred ?? 99) < 4);
+
+  // The card describes a drag, so a drag through it has to work.
+  const hx = hint.box.x + hint.box.w / 2;
+  const hy = hint.box.y + hint.box.h / 2;
+  await p.keyboard.press("r");
+  await p.mouse.move(hx - 70, hy - 45); await p.mouse.down();
+  await p.mouse.move(hx + 70, hy + 45, { steps: 6 }); await p.mouse.up();
+  await sleep(500);
+  const drawn = await p.evaluate(() => ({
+    rows: document.querySelectorAll(".panel.left .tree [data-row-id]").length,
+    hint: !!document.querySelector(".canvas-hint"),
+    taught: !!document.querySelector(".panel.left .tree .empty-state"),
+  }));
+  t(`a drag straight through the card draws (${drawn.rows} row)`, drawn.rows === 1);
+  t("and one layer retires both empty states", !drawn.hint && !drawn.taught);
+
+  // The layer search's own blank is a different sentence (LP-U3's second half).
+  const search = await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left .search input")]
+      .find((i) => i.getAttribute("aria-label") === "Find layers");
+    if (!el) return null;
+    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    set.call(el, "zzz-no-such-layer");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  });
+  await sleep(400);
+  const noMatch = await p.evaluate(() => ({
+    rows: document.querySelectorAll(".panel.left .tree [data-row-id]").length,
+    msg: document.querySelector(".panel.left .tree .empty")?.textContent.trim() ?? null,
+    taught: !!document.querySelector(".panel.left .tree .empty-state"),
+  }));
+  t(`a search nothing answers says so instead of going blank (${noMatch.msg})`,
+    !!search && noMatch.rows === 0 && (noMatch.msg || "").includes("No layer matches") &&
+    (noMatch.msg || "").includes("zzz-no-such-layer") && !noMatch.taught);
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left .search input")]
+      .find((i) => i.getAttribute("aria-label") === "Find layers");
+    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    set.call(el, "");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(400);
+  t("and clearing it brings the page back",
+    (await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length)) === 1);
+
+  // Dismissal is permanent: empty the page again, dismiss, reload, empty again.
+  await emptyIt();
+  const back = await p.evaluate(() => !!document.querySelector(".canvas-hint"));
+  t("the card is back while the page is empty and it has not been dismissed", back);
+  await p.evaluate(() => document.querySelector(".canvas-hint button")?.click());
+  await sleep(400);
+  const dismissed = await p.evaluate(() => ({
+    hint: !!document.querySelector(".canvas-hint"),
+    key: localStorage.getItem("x-native-hint-empty-canvas"),
+  }));
+  t(`dismissing hides it and records it (${dismissed.key})`, !dismissed.hint && dismissed.key === "1");
+  await p.reload({ waitUntil: "networkidle0" });
+  await sleep(500);
+  await rows(p);
+  await emptyIt();
+  const afterReload = await p.evaluate(() => ({
+    hint: !!document.querySelector(".canvas-hint"),
+    taught: !!document.querySelector(".panel.left .tree .empty-state"),
+  }));
+  t("the dismissal outlives the reload", !afterReload.hint);
+  t("but the layers panel still teaches — it is a state, not a nudge", afterReload.taught);
+  await p.close();
+}
+
+// 45. LP-U5 + LP-U6: the Tools pane tells the truth, the agent answers --------
+{
+  const p = await page();
+  await rows(p);
+  const navTo = async (label) => {
+    await p.evaluate((l) => {
+      const b = [...document.querySelectorAll(".rail .nav")].find((x) => x.textContent.trim() === l);
+      b?.click();
+    }, label);
+    await sleep(400);
+  };
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+  const cssColor = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      return c.fillStyle;
+    }, name);
+  const countNear = (rgb, tol) =>
+    p.evaluate((r, g, b, t2) => {
+      const c = document.querySelector("canvas");
+      const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol);
+
+  /* ── the Tools pane ── */
+  await navTo("Tools");
+  const pane = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".panel.left .presets button")];
+    return {
+      rows: rows.map((b) => {
+        const sc = b.querySelector(".sc");
+        const cs = getComputedStyle(b);
+        return {
+          label: (b.textContent || "").replace(sc?.textContent || "", "").trim(),
+          sc: sc?.textContent.trim() ?? null,
+          disabled: b.disabled,
+          color: cs.color,
+          cursor: cs.cursor,
+          hoverBg: cs.backgroundColor,
+          title: b.getAttribute("title"),
+        };
+      }),
+      muted: [...document.querySelectorAll(".panel.left .muted")].map((e) => e.textContent.trim()),
+      strays: [...document.querySelectorAll(".panel.left .presets [style]")].map((e) => e.getAttribute("style")),
+    };
+  });
+  t(`the Tools pane lists its commands with a chord each (${pane.rows.length} rows)`,
+    pane.rows.length === 7 && pane.rows.every((r) => !!r.sc && !!r.label));
+  t(`it does not advertise plugins (${pane.muted[0]})`,
+    !/plugin/i.test(pane.muted.join(" ")) && /palette|chord/i.test(pane.muted[0]));
+  t(`and no row carries an inline style (${pane.strays.length} stray)`, pane.strays.length === 0);
+
+  // The chords are the palette's own: open it and compare, rather than trusting
+  // either surface to keep a number straight.
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(500);
+  const palette = await p.evaluate(() => {
+    const rows = [...document.querySelectorAll(".actions button, .palette button, [role=\"dialog\"] button")];
+    return rows
+      .map((b) => {
+        const sc = b.querySelector(".sc");
+        return { label: (b.textContent || "").replace(sc?.textContent || "", "").trim(), sc: sc?.textContent.trim() ?? "" };
+      })
+      .filter((r) => r.label);
+  });
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const mismatched = pane.rows
+    .map((r) => {
+      const said = palette.find((x) => x.label === r.label);
+      return said && said.sc !== r.sc ? `${r.label}: pane ${r.sc} vs palette ${said.sc}` : null;
+    })
+    .filter(Boolean);
+  t(`every chord matches the palette's (${mismatched.join("; ") || `${pane.rows.length} agree`})`,
+    mismatched.length === 0 && palette.length > 20);
+
+  // Disabled means dimmed, cursor-less and explained - and the explanation is
+  // text on the page, not a tooltip on a control that cannot receive the pointer.
+  const dim = await cssColor("--dim");
+  const ink = await cssColor("--text");
+  const disabled = pane.rows.filter((r) => r.disabled);
+  const enabled = pane.rows.filter((r) => !r.disabled);
+  t(`disabled rows are dimmed (${disabled.length} disabled, ${dim})`,
+    disabled.length > 0 && disabled.every((r) => r.color === dim && r.cursor === "default"));
+  t(`live rows are not (${enabled.length} enabled)`,
+    enabled.length > 0 && enabled.every((r) => r.color === ink));
+  t("none of them explains itself with a native title", pane.rows.every((r) => r.title === null));
+  const why = pane.muted.at(-1) || "";
+  t(`and the pane says why, in words (${why})`,
+    disabled.every((r) => why.includes(r.label)) && enabled.every((r) => !why.includes(r.label)));
+
+  // A dead row stays dead: clicking it changes nothing.
+  const rowsBefore = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  await navTo("File");
+  const dupBtn = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Duplicate"));
+    return b ? { disabled: b.disabled } : null;
+  });
+  await p.evaluate(() => {
+    [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Duplicate"))?.click();
+  });
+  await sleep(400);
+  const rowsAfter = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  t(`clicking a dimmed row does nothing (${rowsBefore} → ${rowsAfter} layers, disabled=${dupBtn?.disabled})`,
+    dupBtn?.disabled === true && rowsAfter === rowsBefore);
+
+  // Pick a layer and the selection-bound rows come back to life.
+  await p.evaluate(() => document.querySelector(".panel.left .tree [data-row-id]")?.dispatchEvent(
+    new MouseEvent("click", { bubbles: true })));
+  await sleep(400);
+  await navTo("Tools");
+  const after = await p.evaluate(() => ({
+    dup: [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Duplicate"))?.disabled ?? null,
+    grp: [...document.querySelectorAll(".panel.left .presets button")]
+      .find((x) => x.textContent.includes("Group"))?.disabled ?? null,
+    why: [...document.querySelectorAll(".panel.left .muted")].map((e) => e.textContent.trim()).at(-1) || "",
+  }));
+  t(`a selection re-enables them (Duplicate ${after.dup}, Group ${after.grp})`,
+    after.dup === false && after.grp === false && !/needs a selection/.test(after.why));
+
+  /* ── the agent pane ── */
+  await navTo("Agent");
+  const greet = await p.evaluate(() => ({
+    turns: [...document.querySelectorAll(".agent-row")].map((r) => ({
+      who: r.getAttribute("data-who"),
+      text: (r.querySelector(".name")?.textContent || "").trim(),
+    })),
+  }));
+  t(`the agent opens by naming what it can do (${greet.turns[0]?.text})`,
+    greet.turns.length === 1 && greet.turns[0].who === "agent" &&
+    /frame/.test(greet.turns[0].text) && /rectangle/.test(greet.turns[0].text) &&
+    !/colo(?:u)?r/i.test(greet.turns[0].text));
+
+  const ask = async (text) => {
+    await p.evaluate((v) => {
+      const el = [...document.querySelectorAll(".panel.left .search input")]
+        .find((i) => i.getAttribute("aria-label") === "Ask the agent");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      el.focus();
+      set.call(el, v);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, text);
+    await sleep(200);
+    await p.keyboard.press("Enter");
+    await sleep(500);
+  };
+
+  // Pan somewhere else first: the old pane placed layers at a fixed document
+  // coordinate, so "added" routinely meant "added off-screen".
+  const selRgb = await tokenRgb("--cv-sel");
+  const idle = await countNear(selRgb, 24);
+  await p.keyboard.press("h");
+  await p.mouse.move(900, 500); await p.mouse.down();
+  await p.mouse.move(1250, 720, { steps: 8 }); await p.mouse.up();
+  await p.keyboard.press("v");
+  await sleep(400);
+  await ask("please add a frame");
+  const reply = await p.evaluate(() => {
+    const turns = [...document.querySelectorAll(".agent-row")].map((r) => ({
+      who: r.getAttribute("data-who"),
+      text: (r.querySelector(".name")?.textContent || "").trim(),
+      h: r.getBoundingClientRect().height,
+      nameColor: getComputedStyle(r.querySelector(".name")).color,
+      whiteSpace: getComputedStyle(r.querySelector(".name")).whiteSpace,
+    }));
+    return { turns, rows: document.querySelectorAll(".panel.left .tree").length };
+  });
+  const said = reply.turns.at(-1);
+  t(`a matched ask is answered with what happened (${said?.text})`,
+    said?.who === "agent" && /393 × 852/.test(said.text) && /centred/.test(said.text));
+  const chromePx = (await countNear(selRgb, 24)) - idle;
+  t(`and the frame it added is on screen where the user is looking (+${chromePx}px of selection chrome)`,
+    chromePx > 500);
+  const size = { w: await field(p, "W"), h: await field(p, "H") };
+  t(`the inspector agrees it is the preset (${size.w} × ${size.h})`, size.w === "393" && size.h === "852");
+
+  // A reply is a sentence, not a layer name: it wraps, and the two voices differ.
+  const mutedInk = await cssColor("--muted");
+  t(`the reply wraps instead of ellipsising (${Math.round(said?.h ?? 0)}px tall, ${said?.whiteSpace})`,
+    (said?.h ?? 0) > 30 && said?.whiteSpace === "normal");
+  t(`and the agent's voice is muted against the visitor's (${said?.nameColor} vs ${mutedInk})`,
+    said?.nameColor === mutedInk &&
+    reply.turns.filter((x) => x.who === "you").every((x) => x.nameColor !== mutedInk));
+
+  // An ask it cannot answer still gets an answer, and changes nothing.
+  const layersBefore = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  await navTo("File");
+  await navTo("Agent");
+  await ask("make me a sandwich");
+  const void_ = await p.evaluate(() => {
+    const turns = [...document.querySelectorAll(".agent-row")].map((r) => (r.querySelector(".name")?.textContent || "").trim());
+    return { last: turns.at(-1), count: turns.length };
+  });
+  await navTo("File");
+  const layersAfter = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  t(`an ask it cannot answer says so (${void_.last?.slice(0, 40)}…)`,
+    /nothing/i.test(void_.last || "") && /changed nothing/i.test(void_.last || ""));
+  t(`and changes nothing (${layersBefore} → ${layersAfter} layers)`, layersAfter === layersBefore);
+  await p.close();
+}
+
+// 46. RW-U1 + FR-U4 + PM-U6: chrome that fits its screen and answers the keyboard
+{
+  const p = await page();
+  await rows(p);
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+  /** Accent pixels inside one horizontal band of the canvas, measured from the
+   *  bottom edge up. The badge is painted in --cv-sel, the same ink as the
+   *  selection outline, so every check here compares two bands rather than
+   *  trusting an absolute count: the outline contributes a hairline to both. */
+  const band = (rgb, tol, fromBottom, height) =>
+    p.evaluate((r, g, b, t2, fb, hh) => {
+      const c = document.querySelector("canvas");
+      const y0 = Math.max(0, c.height - fb - hh);
+      const d = c.getContext("2d").getImageData(0, y0, c.width, Math.min(hh, c.height - y0)).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol, fromBottom, height);
+  const panBy = async (dy) => {
+    const w = await p.evaluate(() => {
+      const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+      return { cx: Math.round(r.left + r.width / 2), top: Math.round(r.top) };
+    });
+    await p.keyboard.press("h");
+    await p.mouse.move(w.cx, w.top + 120); await p.mouse.down();
+    await p.mouse.move(w.cx, w.top + 120 + dy, { steps: 10 }); await p.mouse.up();
+    await p.keyboard.press("v");
+    await sleep(500);
+  };
+
+  /* ── FR-U4: the size readout stays on the canvas ── */
+  const sel = await tokenRgb("--cv-sel");
+  const box = await p.evaluate(() => {
+    const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+    return { left: Math.round(r.left), top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  });
+  // A rectangle in the middle of the stage: its badge hangs 8px below it, far
+  // from either edge, so both bands start empty of chrome.
+  await drawRect(p, box.left + Math.round(box.w / 2) - 70, box.top + Math.round(box.h / 2) - 50);
+  const flipBand = { from: 110, h: 35 };   // where a badge flipped above the box lands
+  const clampBand = { from: 5, h: 30 };    // where a badge clamped into view lands
+  const baseFlip = await band(sel, 24, flipBand.from, flipBand.h);
+  const baseClamp = await band(sel, 24, clampBand.from, clampBand.h);
+
+  // Pan until the box's bottom edge is 10px above the canvas bottom: below no
+  // longer fits, above does, so the readout has to move above the box.
+  await panBy(Math.round(box.h / 2) - 60);
+  const flipNow = await band(sel, 24, flipBand.from, flipBand.h) - baseFlip;
+  const clampNow = await band(sel, 24, clampBand.from, clampBand.h) - baseClamp;
+  t(`the readout flips above the box when below is off-canvas (+${flipNow}px above vs +${clampNow}px below)`,
+    flipNow > 500 && flipNow > clampNow);
+
+  // Pan further, so neither side of the box is on screen: the last resort is the
+  // clamp, and the readout must still be painted somewhere.
+  await panBy(220);
+  const flipGone = await band(sel, 24, flipBand.from, flipBand.h) - baseFlip;
+  const clampGone = await band(sel, 24, clampBand.from, clampBand.h) - baseClamp;
+  t(`and clamps into view when neither side fits (+${clampGone}px below vs +${flipGone}px above)`,
+    clampGone > 500 && clampGone > flipGone);
+
+  /* ── RW-U1: the dock is bounded by the column it hangs in ── */
+  const dockFit = () => p.evaluate(() => {
+    const dock = document.querySelector(".dock");
+    const col = document.querySelector(".canvas-col");
+    const dr = dock.getBoundingClientRect();
+    const cr = col.getBoundingClientRect();
+    const cs = getComputedStyle(dock);
+    const hits = [...dock.querySelectorAll("button.hit")];
+    const off = hits.filter((b) => {
+      const r = b.getBoundingClientRect();
+      return r.width === 0 || r.right > window.innerWidth + 0.5 || r.left < -0.5 || r.bottom > window.innerHeight + 0.5;
+    });
+    return {
+      tools: hits.length,
+      off: off.map((b) => b.getAttribute("aria-label")),
+      inside: dr.left >= cr.left - 0.5 && dr.right <= cr.right + 0.5,
+      rows: new Set(hits.map((b) => Math.round(b.getBoundingClientRect().top / 10))).size,
+      scrollable: dock.scrollWidth > dock.clientWidth + 1,
+      overflow: cs.overflowX,
+      wrap: cs.flexWrap,
+      multi: !!dock.querySelector(".toolset.multi"),
+    };
+  });
+  await p.setViewport({ width: 1600, height: 900, deviceScaleFactor: 1 });
+  await sleep(500);
+  await p.keyboard.down("Meta"); await p.keyboard.press("a"); await p.keyboard.up("Meta");
+  await sleep(400);
+  for (const width of [1600, 1100, 900, 700]) {
+    await p.setViewport({ width, height: 900, deviceScaleFactor: 1 });
+    await sleep(600);
+    const d = await dockFit();
+    t(`at ${width}px all ${d.tools} dock tools are on screen (${d.off.join(", ") || "none off"}, ${d.rows} row(s), multi ${d.multi})`,
+      d.tools > 6 && d.off.length === 0 && d.inside && d.scrollable === false &&
+      d.overflow === "visible" && d.wrap === "wrap");
+  }
+
+  // On a phone the strip is narrower than the tool menu that escapes it, which is
+  // exactly what the old `overflow-x: auto` override clipped.
+  await p.setViewport({ width: 430, height: 780, deviceScaleFactor: 1 });
+  await sleep(700);
+  const narrow = await dockFit();
+  t(`at 430px the dock still fits its column (${narrow.off.join(", ") || "none off"}, overflow ${narrow.overflow})`,
+    narrow.off.length === 0 && narrow.inside && narrow.overflow === "visible");
+  const opened = await p.evaluate(() => {
+    const caret = document.querySelector('.dock .tool[data-group="bool"] .caret');
+    if (!caret) return false;
+    caret.click();
+    return true;
+  });
+  await sleep(400);
+  const fly = await p.evaluate(() => {
+    const f = document.querySelector('.dock .tool[data-group="bool"] .fly');
+    if (!f) return null;
+    const r = f.getBoundingClientRect();
+    const dock = document.querySelector(".dock").getBoundingClientRect();
+    // Clipping is visual, not geometric: an element inside a scroll container
+    // still reports its full rect. Ask the browser what is actually painted at
+    // the menu's centre.
+    const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { h: Math.round(r.height), w: Math.round(r.width), above: Math.round(dock.top - r.top), painted: !!el?.closest(".fly") };
+  });
+  t(`the tool menu escapes the strip and is painted there (${fly ? `${fly.h}px tall, ${fly.above}px above the dock` : "no bool tool"})`,
+    !opened || (!!fly && fly.h > 40 && fly.above > 10 && fly.painted));
+  await p.keyboard.press("Escape");
+  await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
+  await sleep(500);
+
+  /* ── PM-U6: the export sheet opens with the keyboard already inside it ── */
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(500);
+  const ran = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".actions button, [role=\"dialog\"] button")]
+      .find((x) => (x.textContent || "").includes("Export assets"));
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  await sleep(600);
+  const sheet = await p.evaluate(() => {
+    const d = document.querySelector('.xmodal[aria-label="Export assets"]');
+    const a = document.activeElement;
+    const first = d?.querySelector("input, button, select, textarea, a[href]");
+    return {
+      open: !!d,
+      modal: d?.getAttribute("aria-modal"),
+      focused: a?.className || a?.tagName,
+      inSheet: !!a?.closest?.(".xmodal"),
+      firstIsFilter: first?.className === "xmodal-filter",
+      rows: document.querySelectorAll(".xrow").length,
+    };
+  });
+  t(`Export assets opens as a modal sheet (${sheet.modal ? "aria-modal" : "not modal"}, ${sheet.rows} rows)`,
+    ran && sheet.open && sheet.modal === "true" && sheet.rows > 0);
+  t(`and the keyboard is already in its filter field (${sheet.focused})`,
+    sheet.inSheet && sheet.focused === "xmodal-filter" && sheet.firstIsFilter);
+  await p.keyboard.type("zzz-no-such-layer");
+  await sleep(400);
+  const filtered = await p.evaluate(() => document.querySelectorAll(".xrow").length);
+  t(`typing filters without a click first (${sheet.rows} → ${filtered} rows)`, filtered === 0);
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  t("and Escape closes it", await p.evaluate(() => !document.querySelector(".xmodal")));
   await p.close();
 }
 
