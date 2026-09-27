@@ -1292,12 +1292,14 @@ fn parse_children(
         node: ImportNode,
         pending_text: Option<ImportNode>,
         style: SvgStyle,
+        flatten_on_close: bool,
     }
     let base = std::mem::replace(root, ImportNode::new(ImportKind::Frame));
     let mut stack: Vec<Frame> = vec![Frame {
         node: base,
         pending_text: None,
         style: root_style,
+        flatten_on_close: false,
     }];
     let mut gradients: HashMap<String, SvgPaint> = HashMap::new();
     loop {
@@ -1309,6 +1311,9 @@ fn parse_children(
                         f.node.children.push(t);
                     }
                     match stack.last_mut() {
+                        Some(top) if f.flatten_on_close => {
+                            top.node.children.append(&mut f.node.children);
+                        }
                         Some(top) => top.node.children.push(f.node),
                         None => {
                             *root = f.node;
@@ -1323,6 +1328,9 @@ fn parse_children(
                     f.node.children.push(t);
                 }
                 match stack.last_mut() {
+                    Some(top) if f.flatten_on_close => {
+                        top.node.children.append(&mut f.node.children);
+                    }
                     Some(top) => top.node.children.push(f.node),
                     None => {
                         *root = f.node;
@@ -1363,23 +1371,32 @@ fn parse_children(
                     SvgStyle::from_parent(&inherited, &attrs, &gradients, &css_rules, &name);
                 match name.as_str() {
                     "g" => {
-                        let mut g = with_id(ImportNode::new(ImportKind::Group));
-                        g.opacity = current_style.opacity;
-                        apply_transform_attr(&mut g, &attrs);
+                        // The web SVG importer flattens ordinary groups into
+                        // their children. Match that contract when no transform
+                        // has to be represented structurally. Inherited paints,
+                        // stroke options and opacity already live in current_style.
+                        let flatten = attr(&attrs, "transform").is_none();
                         if self_closed {
-                            stack.last_mut().unwrap().node.children.push(g);
-                        } else {
-                            if stack.len() >= MAX_SVG_DEPTH {
-                                return Err(format!(
-                                    "SVG nesting deeper than {MAX_SVG_DEPTH} levels"
-                                ));
-                            }
-                            stack.push(Frame {
-                                node: g,
-                                pending_text: None,
-                                style: current_style.clone(),
-                            });
+                            continue;
                         }
+                        if stack.len() >= MAX_SVG_DEPTH {
+                            return Err(format!("SVG nesting deeper than {MAX_SVG_DEPTH} levels"));
+                        }
+                        let mut g = if flatten {
+                            ImportNode::new(ImportKind::Group)
+                        } else {
+                            with_id(ImportNode::new(ImportKind::Group))
+                        };
+                        if !flatten {
+                            g.opacity = current_style.opacity;
+                            apply_transform_attr(&mut g, &attrs);
+                        }
+                        stack.push(Frame {
+                            node: g,
+                            pending_text: None,
+                            style: current_style.clone(),
+                            flatten_on_close: flatten,
+                        });
                     }
                     "rect" => {
                         let mut n = with_id(ImportNode::new(ImportKind::Rect {
@@ -1584,6 +1601,29 @@ mod tests {
         s.push_str(&"</g>".repeat(depth));
         s.push_str("</svg>");
         assert!(import_svg(&s).is_ok(), "64 levels must import fine");
+    }
+
+    #[test]
+    fn svg_import_flattens_untransformed_groups_and_inherits_group_style() {
+        let page = import_svg(r##"<svg xmlns="http://www.w3.org/2000/svg">
+          <g id="outer" fill="#123456" opacity=".5"><g id="inner"><rect id="box" width="20" height="10"/></g></g>
+          <g id="empty"/>
+        </svg>"##).unwrap();
+        assert_eq!(page.children.len(), 1);
+        let rect = &page.children[0];
+        assert_eq!(rect.id.as_deref(), Some("box"));
+        assert_eq!(rect.opacity, 0.5);
+        assert!(
+            matches!(rect.fill, Paint::Solid(c) if c.to_rgba8() == Color::from_rgb8(0x12, 0x34, 0x56).to_rgba8())
+        );
+    }
+
+    #[test]
+    fn svg_import_keeps_transformed_groups_structural() {
+        let page = import_svg(r##"<svg xmlns="http://www.w3.org/2000/svg"><g id="rotated" transform="rotate(15)"><rect width="20" height="10"/></g></svg>"##).unwrap();
+        assert_eq!(page.children.len(), 1);
+        assert_eq!(page.children[0].id, "rotated");
+        assert_eq!(page.children[0].children.len(), 1);
     }
 
     #[test]

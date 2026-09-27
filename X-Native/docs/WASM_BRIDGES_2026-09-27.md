@@ -650,3 +650,33 @@ fixture. Synthetic fixture coverage is not general real-world or visual signoff.
 
 Evidence: `/home/user/wasm-source-effects-{red,focused,unit,tsc,build,browser,ci}.log`,
 `/home/user/wasm-source-effects-annotations.json`.
+
+## 15. Neutral SVG group flattening (2026-09-27)
+
+Import-only continuation. The strict import oracle, native geometry and persisted
+`.x` model are unchanged. Web SVG import walks through `<g>` wrappers and returns
+its drawable children directly; native import previously returned explicit Group
+nodes even when there was no transform. This structural mismatch blocked native
+selection for otherwise basic SVGs.
+
+### Fixes
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W27 — transform-free SVG groups differ structurally across importers | Flatten untransformed groups into their parent on close, including nested/empty wrappers. Child style computation still inherits fill/stroke/opacity. Keep groups with a transform structural so current unsupported affine/group composition safely falls back | Native tests cover nested groups, empty group, inherited fill+opacity, and transformed group retention; actual-module smoke requires full equivalence and `backend=wasm` for neutral groups, and confirms transformed groups stay on TS |
+
+Group IDs are not emitted as drawable nodes, matching existing web behavior.
+Transformed groups are not flattened or patched with the TS result; they remain
+subject to the unchanged full-contract guard. This only aligns neutral wrappers,
+not broad SVG parity.
+
+### Verification
+
+- New Rust tests and full actual-WASM assertions are **pending CI**; local Cargo and
+  rustc are unavailable.
+- Serial local web suite: **3,081/0**, 51 summaries; `tsc -b` and production build
+  pass. Local headless Chromium smoke could not run because `/tmp/chromium` is not
+  present. The previous CI fallback browser smoke is recorded in §14.
+- Native browser visual fidelity and broad SVG/import parity remain **NOT VERIFIED**.
+
+Evidence: `/home/user/wasm-svg-groups-{unit,tsc,build,browser}.log`.
