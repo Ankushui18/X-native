@@ -837,3 +837,56 @@ resource imports are not declared equivalent by this slice.
 - Native geometry promotion remains **NOT APPROVED (1/30 equivalent, 29 failed)**.
   `auto` retains the TS comparator. Browser-visual parity, broad SVG coverage
   and import speedup are **NOT VERIFIED**.
+
+## 20. Opt-in Rust document command/state session (2026-09-27)
+
+The requested **destination** is one Rust document/command/undo/layout engine
+shared by web (WASM) and native (direct Rust), with TypeScript limited to UI and
+application concerns. This is the first **command-boundary** slice, not a claim
+that the production web editor has already reached that destination.
+
+`x-editor::DocumentSession` owns one `x-core::Document` page and delegates edits
+and undo/redo to the existing Rust `Editor`; the remaining native document
+metadata stays in Rust. `x-native::editor` re-exports the exact same Rust API
+for a future native UI. `x-wasm` exports an independently versioned
+`RustDocumentSession` wasm-bindgen class over native `.x` JSON. Web's
+`rustSession.ts` calls that class; it has **no JS node tree, layout or history**.
+
+| Operation | Transport | Owner / boundary |
+| --- | --- | --- |
+| Open | Native `.x` once; refuses malformed/zero/multiple pages or duplicate IDs | `x-format::load_x` → `x-editor::DocumentSession` |
+| `getNode(id)`, `state()` | One node's id/name/x/y or revision + history flags | Explicit read, no document snapshot |
+| `renameNode`, `moveNode`, `undo`, `redo` | One affected node's id/name/x/y, monotonic revision, canUndo/canRedo | `x-editor` command log and inverse, **not** TS undo |
+| `exportX()` | Complete native `.x` only at explicit save/checkpoint | `x-format::save_x`; never called for paint or command acknowledgement |
+| Close | wasm-bindgen `free()` | No global mutable session shared across files |
+
+This slice supports only **one page** and two layer mutations (rename and
+relative move). It rejects a page-root target and invalid/nonfinite moves;
+no-op commands do not add history or erase redo. Name history now copies only
+the edited subtree rather than an entire page. There is no hand-written
+parallel undo implementation in JavaScript or extra document model in Rust.
+An absent/older optional WASM module leaves the existing import bridge intact.
+
+**Not migrated:** the current web editor uses `MemoryEngine` with a different
+persisted document shape (`Page.root`) and TS Auto Layout, undo, hit testing and
+rendering. The new session is deliberately **not routed into** `App.tsx` or
+`MemoryEngine` while the web/native document contract is not lossless; doing so
+would create two sources of truth and could drop unsupported styling/resources.
+Native desktop currently has no GUI; the direct Rust-host test demonstrates the
+shared API, not a shipped desktop application. Geometry `auto` keeps its
+unchanged TS equivalence guard, and the SVG/FIG/Sketch import comparator is
+unchanged. Next gates: lossless document conversion and round-trip, command and
+layout/undo parity, persisted-format safety, then a single UI-owner swap per
+proven slice, followed by removal of the TS duplicate.
+
+### Verification
+
+- Local `npm test`, `npm run build`, `node --check tests/wasm/real-bridges.mjs`
+  and `git diff --check` pass; local Cargo/wasm-bindgen are unavailable.
+- Rust session and native-host tests cover status, no-op/invalid commands,
+  rename/move/undo/redo, metadata preservation, explicit `.x` round-trip,
+  one-page/unique-ID limits and per-node rather than whole-page rename history.
+- The real generated-WASM smoke gate opens the native `.x` result from a real
+  SVG import, calls the actual wasm-bindgen class and the TS transport wrapper,
+  checks small deltas, undo/redo, independent sessions, explicit export and
+  invalid/multi-page refusals. CI verification of that new gate: **PENDING**.

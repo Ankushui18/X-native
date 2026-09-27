@@ -217,14 +217,11 @@ impl Editor {
         if node.name == new_name {
             return false;
         }
-        let before = Box::new(self.root.clone());
-        let mut after = self.root.clone();
-        if let Some(node) = find_mut(&mut after, id) {
-            node.name = new_name.to_string();
-        }
-        let root_id = self.root.id.clone();
-        self.push_replace(&root_id, before, after);
-        true
+        // History should retain just this subtree, not clone the entire page
+        // for a single layer label (especially important at the WASM boundary).
+        let mut after = node.clone();
+        after.name = new_name.to_string();
+        self.replace_node(id, after)
     }
     pub fn new(root: Node) -> Self {
         Self {
@@ -2650,6 +2647,23 @@ impl Editor {
     /// Number of undo entries (lets the UI count a gesture's commands).
     pub fn undo_depth(&self) -> usize {
         self.undo_stack.len()
+    }
+
+    /// The command session exposes only single-node edits. Ask the editor's
+    /// actual history which id the next undo/redo will touch, rather than
+    /// maintaining a second history of ids beside the real command stack.
+    pub(crate) fn next_undo_node(&self) -> Option<&str> {
+        match self.undo_stack.last()?.first()? {
+            Command::Move { id, .. } | Command::ReplaceNode { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn next_redo_node(&self) -> Option<&str> {
+        match self.redo_stack.last()?.first()? {
+            Command::Move { id, .. } | Command::ReplaceNode { id, .. } => Some(id),
+            _ => None,
+        }
     }
 
     /// Drop oldest undo groups together with their structural snapshots.

@@ -9,7 +9,20 @@ import { wasmAssetUrl } from "./wasmAssets";
 import { decodeRustImport } from "./wasmImportAdapter";
 
 export const IMPORT_BRIDGE_VERSION = 1;
+export const SESSION_BRIDGE_VERSION = 1;
 export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
+/** wasm-bindgen owns this stateful instance; JS never mirrors its document or
+ * undo stack. The only large payload is an explicit open/export of native .x. */
+export interface WasmDocumentSession {
+  state: () => string;
+  getNode: (id: string) => string;
+  renameNode: (id: string, name: string) => string;
+  moveNode: (id: string, dx: number, dy: number) => string;
+  undo: () => string;
+  redo: () => string;
+  exportX: () => string;
+  free: () => void;
+}
 export interface WasmImportModule {
   default: () => Promise<unknown>;
   bridgeVersion: () => number;
@@ -17,6 +30,10 @@ export interface WasmImportModule {
   importFigToX: (bytes: Uint8Array) => string;
   importSketchToX: (bytes: Uint8Array) => string;
   importSvgToX: (text: string) => string;
+  /** Optional independently versioned command/session slice. Older import
+   * artifacts still work; they simply cannot open a Rust command session. */
+  sessionBridgeVersion?: () => number;
+  RustDocumentSession?: new (x: string) => WasmDocumentSession;
 }
 export interface EngineInfo {
   name: string;
@@ -65,6 +82,16 @@ export function initWasmBridge(load = loadGenerated): Promise<boolean> {
     }
   })();
   return loading;
+}
+
+export function rustSessionConstructor(): WasmImportModule["RustDocumentSession"] {
+  if (!loaded || typeof loaded.sessionBridgeVersion !== "function" || typeof loaded.RustDocumentSession !== "function") return undefined;
+  try {
+    return loaded.sessionBridgeVersion() === SESSION_BRIDGE_VERSION ? loaded.RustDocumentSession : undefined;
+  } catch {
+    // A broken optional session export must not disable the import-only bridge.
+    return undefined;
+  }
 }
 
 export function getEngineInfo(): EngineInfo {

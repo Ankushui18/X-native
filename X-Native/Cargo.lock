@@ -2018,6 +2018,7 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "x-core",
+ "x-editor",
  "x-format",
 ]
 
