@@ -572,6 +572,11 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   min-height: 0;
   background: var(--canvas);
 }
+/* PM-U3: the canvas column is the app's focus home, so it takes focus without a
+   ring — a 1px outline around the whole stage would read as a selection (the
+   column is what e2e §47 checks the caret has landed on when the palette row
+   that opened the export sheet is gone). */
+.canvas-col:focus { outline: none; }
 .canvas-wrap {
   position: absolute;
   inset: 0;

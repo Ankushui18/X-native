@@ -3342,6 +3342,109 @@ for (const [label, payload] of [
   await p.keyboard.press("Escape");
   await sleep(400);
   t("and Escape closes it", await p.evaluate(() => !document.querySelector(".xmodal")));
+
+  /* ── PM-U3: one Escape, and the caret comes back ─────────────────────── */
+  // Two overlays at once: the dock's shape flyout, then the shortcuts sheet on
+  // top of it (⇧/ — the sheet's own key; it is not looking for an input because
+  // focus is on a menu item). Escape must close the overlay opened last, which
+  // is the sheet, and only it; before the registry, the press was answered by
+  // registration order, and the sheet could be starved outright.
+  const flyOpen = () => p.evaluate(() => !!document.querySelector('.dock .tool[data-group="shape"] .fly'));
+  await p.evaluate(() => document.querySelector('.dock .tool[data-group="shape"] .hit')?.focus());
+  await p.keyboard.press("ArrowDown");
+  await sleep(350);
+  t("the shape menu is open on the dock", (await flyOpen()));
+
+  await p.keyboard.down("Shift"); await p.keyboard.press("Slash"); await p.keyboard.up("Shift");
+  await sleep(500);
+  const stacked = await p.evaluate(() => ({
+    sheet: !!document.querySelector(".help-pop"),
+    fly: !!document.querySelector('.tool[data-group="shape"] .fly'),
+    focused: document.activeElement?.className || document.activeElement?.tagName,
+  }));
+  t(`the shortcuts sheet opens on top of it (focus in ${stacked.focused})`, stacked.sheet && stacked.fly);
+
+  await p.keyboard.press("Escape");
+  await sleep(450);
+  const afterOne = await p.evaluate(() => ({
+    sheet: !!document.querySelector(".help-pop"),
+    fly: !!document.querySelector('.tool[data-group="shape"] .fly'),
+    inMenu: !!document.activeElement?.closest?.('.tool[data-group="shape"]'),
+  }));
+  t(`one Escape closes the sheet and leaves the menu under it (sheet ${afterOne.sheet}, menu ${afterOne.fly})`,
+    !afterOne.sheet && afterOne.fly);
+  t("and hands the caret back into that menu", afterOne.inMenu);
+
+  await p.keyboard.press("Escape");
+  await sleep(450);
+  const afterTwo = await p.evaluate(() => {
+    const a = document.activeElement;
+    return { fly: !!document.querySelector('.tool[data-group="shape"] .fly'), active: a?.className || a?.tagName,
+             onTrigger: !!a?.closest?.('.tool[data-group="shape"] .hit') };
+  });
+  t(`the next Escape closes the menu itself (${afterTwo.fly ? "still open" : "closed"})`, !afterTwo.fly);
+  t(`with the caret on the control that opened it (${afterTwo.active})`, afterTwo.onTrigger);
+
+  // The same, on an inspector menu, and then the case that made the ordering
+  // rule worth stating: a click on another control while a menu is open still
+  // focuses what was clicked, because the browser focuses as the default action
+  // of mousedown, after the handler that closed the menu has run.
+  await p.evaluate(() => document.querySelector(".zoom-caret")?.focus());
+  await p.evaluate(() => document.querySelector(".zoom-caret")?.click());
+  await sleep(350);
+  const zoomWas = await p.evaluate(() => !!document.querySelector(".ctx.zoom-menu"));
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const zoomNow = await p.evaluate(() => ({
+    open: !!document.querySelector(".ctx.zoom-menu"),
+    caret: document.activeElement?.className === "zoom-caret",
+  }));
+  t(`the zoom menu closes on Escape (${zoomWas ? "was open" : "never opened"})`, zoomWas && !zoomNow.open);
+  t("and the caret goes back to its caret button", zoomNow.caret);
+
+  const target = await p.evaluate(() => {
+    const input = [...document.querySelectorAll(".inspector .field input")].find((i) => i.getAttribute("aria-label"));
+    if (!input) return null;
+    const r = input.getBoundingClientRect();
+    return { label: input.getAttribute("aria-label"), x: Math.round(r.left + 10), y: Math.round(r.top + r.height / 2) };
+  });
+  await p.evaluate(() => document.querySelector(".zoom-caret")?.click());
+  await sleep(300);
+  if (target) {
+    await p.mouse.click(target.x, target.y);
+    await sleep(400);
+    const won = await p.evaluate(() => ({
+      menu: !!document.querySelector(".ctx.zoom-menu"),
+      focused: document.activeElement?.getAttribute?.("aria-label") || document.activeElement?.className || document.activeElement?.tagName,
+    }));
+    t(`a click on another control still focuses it (${won.focused} · menu ${won.menu ? "open" : "closed"})`,
+      !won.menu && won.focused === target.label);
+  }
+
+  // The export sheet opened from the palette: the row that ran the command is
+  // gone by the time the sheet closes, so the caret cannot go back to it. It
+  // must land on the editor's own surface instead of <body> — the fallback the
+  // canvas column carries.
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(500);
+  await p.evaluate(() => [...document.querySelectorAll(".actions button")]
+    .find((x) => (x.textContent || "").includes("Export assets"))?.click());
+  await sleep(600);
+  await p.keyboard.press("Escape");
+  await sleep(500);
+  const landed = await p.evaluate(() => {
+    const a = document.activeElement;
+    return {
+      sheet: !!document.querySelector(".xmodal"),
+      tag: a?.tagName,
+      home: !!a?.hasAttribute?.("data-focus-home"),
+      where: a?.className || a?.tagName,
+    };
+  });
+  t(`closing the export sheet does not drop the caret on <body> (${landed.where})`,
+    !landed.sheet && landed.tag !== "BODY");
+  t(`it lands on the editor's focus home (${landed.home ? "canvas column" : landed.where})`, landed.home);
+
   await p.close();
 }
 

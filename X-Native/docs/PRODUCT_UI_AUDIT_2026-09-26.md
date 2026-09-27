@@ -266,10 +266,10 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 |---|---|---|---|
 | PM-U1 (=FS-U2) | FIXED — same work: one XDialog-backed prompt/confirm/choice (no separate XConfirm component was needed; the bus is the wrapper). 32 headless checks on the bus (cancel values, queue order, double-settle, no-host fallback) + e2e §31 (no native dialog call recorded during rename, create, delete, style choice, dashboard project). PM-U6 (focus) covered for the new dialogs: primary action focused, prompt selects its value | FIXED (P1) | — |
 | PM-U2 | FIXED: the palette now has a dismissible scrim — click anywhere outside closes it, clicks inside keep working (the sheet is not dismiss-on-any-click), and the scrim swallows clicks so the canvas underneath does not take them. Verified that a click meant for the backdrop did not also touch the document (layer rows unchanged). | FIXED (P2) | — |
-| PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
+| PM-U3 | FIXED: one Escape owner. Every overlay registers in `ui/escape.ts` while it is open — the App's five sheets, the dock's flyouts, XDialog/XPopover, the dialog bus, the context menu, the fill picker, the radial menu, the shortcuts sheet and the inspector's zoom/language/property menus — and the topmost (opened most recently) closes on one press, which the central handler consumes. Order used to follow *registration*, not the screen: a dialog on top of the export sheet lost the press to the sheet behind it, and the shortcuts sheet could be starved outright. The old `popoverGuard` counter (which protected the selection but closed nothing) is deleted, and the presentation's second Escape implementation with it, so one press walks back one frame. The same registry hands the caret back: an overlay that closes unmounts the field it focused, and focus now returns to whatever opened it, or to the canvas column when that control is gone (a palette row), instead of falling to `<body>`. §4v, §4w | FIXED (P1) | — |
 | PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
-| PM-U6 | FIXED: the sheet focuses its filter field on open, which is both the first control in the sheet and the first thing worth doing in it — every other modal input in the app (shortcuts, find-in-page, the palette) already did. The dialog also says `aria-modal="true"`, which it did not, so a screen reader was not told the document behind the veil is inert. §46 types into it with no click first and watches the list filter. Focus *restore* on close is still the App's (the sheet is closed by the global overlay owner, PM-U3), so the caret returns to `<body>` rather than to the command that opened it. | FIXED (P2) | — |
+| PM-U6 | FIXED: the sheet focuses its filter field on open, which is both the first control in the sheet and the first thing worth doing in it — every other modal input in the app (shortcuts, find-in-page, the palette) already did. The dialog also says `aria-modal="true"`, which it did not, so a screen reader was not told the document behind the veil is inert. §46 types into it with no click first and watches the list filter. Focus *restore* on close was PM-U3's, and is answered there: the registry hands the caret back to the command that opened the sheet, or to the canvas column when that row is gone with the palette (no longer `<body>`, and e2e §47 checks it). | FIXED (P2) | — |
 
 ## §12. Left panel + states trace (prompts §§20, 23–25) — NavRail + LeftPanel + App screens
 
@@ -314,7 +314,7 @@ palette (max-width/max-height/scroll).
   two different weights; the vector card's `<strong>` header is a third.
 - DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wasted its density on
   7 shortcut-less buttons until §4t (LP-U5) — each row now carries its chord and its disabled state.
-- CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), two Esc owners (PM-U3),
+- CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), one Esc owner (§4v/§4w),
   `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens — since §4r two
   *named roles* (`--accent` for controls, `--cv-sel` for selection ink on the canvas) rather than one
   literal and one token that happened to disagree (FR-U2).
@@ -791,7 +791,7 @@ written down above — needs eyes on it), FR-U2 (the canvas chrome constants —
 the `--accent` token `#0e9f6e`, `#a855f7`, `#ff3b6b`, `#18181b` — the largest remaining token gap, and
 it needs the same token-feeding the canvas already does for `--canvas`/`--grid`/`--canvas-label`;
 **closed in §4r**), IN-U6/FS-U4 (native `title=` on the flip and ColorRow buttons: behaviourally equivalent since §2.3's
-bridge, stylistically split, and frozen by the drift ratchet rather than fixed), PM-U3 (two Escape
+bridge, stylistically split, and frozen by the drift ratchet rather than fixed), ~~PM-U3~~ (one Escape owner, §4v/§4w),
 ownership patterns), ~~PM-U6 (export sheet's initial focus)~~, LP-U3–U6, ~~RW-U1~~ (both §4u), FR-U3/U4 — and the
 `inspector.tsx` / `FigInspectorModal.tsx` rows of the drift table, which are where the next rounds'
 numbers come from.
@@ -883,7 +883,7 @@ printing the `N passed, M failed` form:
 clean and warning-free, the sheet at 96.88 kB (17.86 kB gzip) with the new tokens.
 
 **Still open after this round:** FR-U2b (the dark column exists for every canvas role and retunes
-three of them — the rest is a design call that needs eyes), MOTION-U1, IN-U6/FS-U4, PM-U3, PM-U6,
+three of them — the rest is a design call that needs eyes), MOTION-U1, IN-U6/FS-U4, ~~PM-U3~~, ~~PM-U6~~,
 LP-U3–U6, RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows. (LP-U3 and
 LP-U4 closed in §4s; LP-U5/U6 in §4t; PM-U6, RW-U1 and FR-U4 in §4u.)
 
@@ -964,7 +964,7 @@ is `XButton`), which is the ratchet earning its keep: the new UI had to arrive t
 
 **Still open after this round:** LP-U5 (ToolsPane: no disabled states or shortcuts, and a "Plugins"
 label with no plugins) and LP-U6 (AgentPane silently ignores input it cannot match, and hardcodes a
-390×844 frame at 120,80) — both closed in §4t — plus MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6,
+390×844 frame at 120,80) — both closed in §4t — plus MOTION-U1, FR-U2b, IN-U6/FS-U4, ~~PM-U3~~/~~PM-U6~~,
 RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows.
 
 ## §4t. P2 round 7 — the two panes that were placeholders (LP-U5, LP-U6)
@@ -1035,7 +1035,7 @@ inline 51 → 50 (the agent pane's `style={{ marginLeft: 0 }}` became `.share.le
 414 → 413, with no new raw `<button>`, no new `title=` and no new colour literal across two rebuilt
 panes — the rows stayed the recipe they were already in.
 
-**Still open after this round:** MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6, RW-U1, FR-U3/U4, and the
+**Still open after this round:** MOTION-U1, FR-U2b, IN-U6/FS-U4, ~~PM-U3~~/~~PM-U6~~ (both §4v/§4w), RW-U1, FR-U3/U4, and the
 `inspector.tsx` / `FigInspectorModal.tsx` drift rows. The LP family (LP-U1 … LP-U6) is now closed end to
 end. (PM-U6, RW-U1 and FR-U4 closed in §4u.)
 
@@ -1083,8 +1083,8 @@ every other modal input in the app (shortcuts, find-in-page, the palette) alread
 this was the outlier rather than a new convention. The dialog also says `aria-modal="true"` now, since
 a modal that does not announce itself leaves the document behind it sounding live. What is *not* fixed
 here: focus **restore** on close. The sheet is closed by the App's global overlay owner, so the caret
-returns to `<body>` rather than to the command that opened it — that is PM-U3's two-Escapes question,
-and answering it in one place is worth more than patching this sheet.
+returns to `<body>` rather than to the command that opened it — that became PM-U3's question and
+is answered there (§4w).
 
 **Verification.** `edgefit.test.mjs` (26 checks) covers all three at the level each can be checked at:
 nine arithmetic cases on `clampBadge` (fits, exactly-fits-the-pad boundary, one pixel over flips, flip
@@ -1114,9 +1114,9 @@ clean and warning-free, the sheet at 97.84 kB (18.01 kB gzip). The drift table d
 50/4/40/64/2 — because this round added almost no markup: four declarations, one function call at two
 sites, and one attribute.
 
-**Still open after this round:** MOTION-U1 and FR-U2b (both need eyes), IN-U6/FS-U4, PM-U3 (which now
-also owns the export sheet's focus restore), RW-U2, FR-U3, and the `inspector.tsx` /
-`FigInspectorModal.tsx` drift rows.
+**Still open after this round:** MOTION-U1 and FR-U2b (both need eyes), IN-U6/FS-U4, RW-U2, FR-U3,
+and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows. PM-U3, which owned the export sheet's
+focus restore as well as the Escape ownership, is closed in §4v/§4w below.
 
 ## §4v. P1 round 9 — one Escape, one owner (PM-U3)
 
@@ -1149,6 +1149,58 @@ that reject a second popover mechanism or App-local overlay cascade. Unit suite
 **322 checks, NOT RUN** in this environment. Visual stacking and focus restoration
 remain NOT VERIFIED here; the registry is the PM-U3 ownership foundation for
 those follow-ups.
+
+## §4w. P1 round 10 — the caret comes back (PM-U3, caret half)
+
+An overlay that closes unmounts the field it focused, so focus fell to `<body>`.
+The visible symptom was the export sheet: opened from the palette's Export assets
+command, it put the caret in its filter on open (PM-U6), and on close the next
+Tab started again at the top of the document — outside the editor the keyboard
+user was working in. Nothing was "broken" in the sense of a failed operation;
+the editor had simply lost the place it had given the user.
+
+`ui/escape.ts` now remembers what had focus when an overlay opened and hands it
+back when the overlay goes. The capture happens during *render*, which is the
+last moment the invoker is still knowable: React applies `autoFocus` at commit,
+before passive effects, so an effect-time capture would record the overlay's own
+field. It is a read of a module-level focus trail (`focusin`, `capture`) and not
+a render side effect, and the same value lands in the same ref if React renders
+twice.
+
+Restoring runs on every close path — Escape, the sheet's close button, a click
+outside, a chosen item — because all of them unmount the focused element, and
+telling them apart is not worth a heuristic that would guess wrong. Two things
+bound it. `focus()` is skipped when the target is already focused, gone,
+`<body>` or disabled; and when there is no target at all — the palette row that
+ran `Export assets` is unmounted with the palette — the caret lands on
+`[data-focus-home]`, the canvas column, which App marks with `tabIndex={-1}` and
+styles without a ring, so `Tab` resumes inside the editor rather than restarting
+at the document. A click on another control still wins: the browser applies its
+own focus as the default action of `mousedown`, after the handler that closed the
+overlay has run.
+
+**Where it is checked.** `escape.test.mjs` grew from 33 to 49 checks: the
+registry-level semantics just described (invoker, gone invoker → focus home, no
+home at all, disabled invoker, focus already back, a close that was not Escape),
+the dialog bus mounted for real (DialogHost's question puts focus back on the
+button that asked it), the inspector's zoom menu closing with the caret on its
+caret button, and source checks that the focus home is declared once and
+uninterruptable by a ring. The unit suite is **2,175 checks, 0 failed**;
+`tsc -b` clean.
+
+**Browser suite §47 — written, NOT RUN here** (11 checks, 333 total). It opens
+the dock's shape flyout, then the shortcuts sheet on top of it, and presses
+Escape twice: the sheet goes first and hands the caret back *into* the menu below
+it, then the menu goes and the caret is on the trigger that opened it. Then the
+zoom menu on Escape (caret on its caret), a click on another inspector field
+while a menu is open (that field wins), and the export sheet opened from the
+palette — where the caret must not end up on `<body>`, and does end up on the
+canvas column.
+
+**Not verified here:** which of two focus rings a browser paints after a click
+that both closes a menu and focuses a control, and whether the two-row dock from
+§4u reads well with focus inside it. Both need eyes; the geometry and the
+attribute-level behaviour are asserted instead.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

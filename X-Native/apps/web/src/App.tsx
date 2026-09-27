@@ -558,7 +558,13 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         style={{ display: minUi || hideUi ? "none" : undefined }}
         {...leftDrag}
       />
-      <main className="canvas-col">
+      {/* PM-U3: the editor's surface is the focus home — where the caret goes
+          when an overlay closes and the control that opened it is gone (the
+          palette row that ran Export assets, a deleted layer's button). It is
+          programmatically focusable, so `Tab` resumes inside the editor instead
+          of restarting at the top of the document, and `-1` keeps it out of the
+          tab order itself. */}
+      <main className="canvas-col" data-focus-home tabIndex={-1}>
         <h1 className="sr-only">{snap.fileName}</h1>
         {minUi && !hideUi && !snap.presentFrame && (
           // Keeps the file name and a way out of the minimized state on
