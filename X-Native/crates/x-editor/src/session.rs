@@ -14,10 +14,21 @@ use x_core::{Document, Node};
 /// delta and equivalence tests before they can be added to the bridge.
 #[derive(Debug, Clone, Copy)]
 pub enum SessionCommand<'a> {
-    Rename { id: &'a str, name: &'a str },
-    Move { id: &'a str, dx: f64, dy: f64 },
+    Rename {
+        id: &'a str,
+        name: &'a str,
+    },
+    Move {
+        id: &'a str,
+        dx: f64,
+        dy: f64,
+    },
     /// Absolute rectangle size; validation belongs here, not in a web UI.
-    Resize { id: &'a str, w: f64, h: f64 },
+    Resize {
+        id: &'a str,
+        w: f64,
+        h: f64,
+    },
     Undo,
     Redo,
 }
@@ -279,9 +290,12 @@ mod tests {
         let undone_node = undone.node.as_ref().unwrap();
         assert_eq!((undone_node.w, undone_node.h), (30.0, 40.0));
         assert_eq!(undone.revision, 2);
+        assert!(undone.can_redo);
         let redone = session.dispatch(SessionCommand::Redo).unwrap();
         let redone_node = redone.node.as_ref().unwrap();
         assert_eq!((redone_node.w, redone_node.h), (75.25, 42.5));
+        assert_eq!(redone.revision, 3);
+        assert!(redone.can_undo);
         assert_eq!(session.snapshot().pages[0].children[0].w, 75.25);
     }
 
@@ -343,7 +357,9 @@ mod tests {
             ("page", 20.0, 40.0),
             ("missing", 20.0, 40.0),
         ] {
-            assert!(session.dispatch(SessionCommand::Resize { id, w, h }).is_err());
+            assert!(session
+                .dispatch(SessionCommand::Resize { id, w, h })
+                .is_err());
         }
         assert_eq!(session.state(), state);
         let redone = session.dispatch(SessionCommand::Redo).unwrap();
@@ -411,6 +427,9 @@ mod tests {
             })
             .unwrap();
         let bytes = session.editor.history_bytes();
-        assert!(bytes < 10_000, "rename/resize history captured the page: {bytes}");
+        assert!(
+            bytes < 10_000,
+            "rename/resize history captured the page: {bytes}"
+        );
     }
 }

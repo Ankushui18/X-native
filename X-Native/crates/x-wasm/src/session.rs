@@ -149,7 +149,10 @@ mod tests {
         for (w, h) in [(f64::NAN, 10.0), (10.0, 0.0)] {
             assert!(bridge.resize_node("box", w, h).is_err());
         }
-        assert_eq!(bridge.resize_node("box", 80.0, 24.5).unwrap(), bridge.state());
+        assert_eq!(
+            bridge.resize_node("box", 80.0, 24.5).unwrap(),
+            bridge.state()
+        );
     }
 
     #[test]

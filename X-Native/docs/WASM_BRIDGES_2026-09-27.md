@@ -997,7 +997,8 @@ The optional command ABI now advertises `sessionBridgeVersion() == 2`, **separat
 from the import bridge's version 1 and the web-document dialect's version 1.
 `x-editor::DocumentSession` dispatches absolute `Resize { id, w, h }` into the
 existing native `Editor::resize` command log; native hosts call the same Rust
-session directly. Renames, moves, resizes and undo/redo return one node's
+session directly. The editor's own next-undo/redo-node query now recognizes
+`Resize`, so Rust reports its changed node without a second ID history. Renames, moves, resizes and undo/redo return one node's
 `id/name/x/y/w/h`, monotonic revision and history flags. There is still no
 full-document transfer per command or frame. The web adapter rejects any
 missing/extra/nonfinite response field. A V1 or incomplete V2 optional WASM

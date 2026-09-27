@@ -2654,14 +2654,18 @@ impl Editor {
     /// maintaining a second history of ids beside the real command stack.
     pub(crate) fn next_undo_node(&self) -> Option<&str> {
         match self.undo_stack.last()?.first()? {
-            Command::Move { id, .. } | Command::ReplaceNode { id, .. } => Some(id),
+            Command::Move { id, .. }
+            | Command::Resize { id, .. }
+            | Command::ReplaceNode { id, .. } => Some(id),
             _ => None,
         }
     }
 
     pub(crate) fn next_redo_node(&self) -> Option<&str> {
         match self.redo_stack.last()?.first()? {
-            Command::Move { id, .. } | Command::ReplaceNode { id, .. } => Some(id),
+            Command::Move { id, .. }
+            | Command::Resize { id, .. }
+            | Command::ReplaceNode { id, .. } => Some(id),
             _ => None,
         }
     }
