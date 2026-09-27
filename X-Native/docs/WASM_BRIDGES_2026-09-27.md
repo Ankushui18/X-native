@@ -274,10 +274,24 @@ complete FIG/Sketch typography or rendering fidelity.
   suite remains **39/0**. `tsc -b` clean and production build passes (existing
   chunk-size warning). An intermediate TS check rejected `justify` because the
   web `TextAlign` contract lacks it; adapter now declines it explicitly, tested.
-- Local cargo/rustc are unavailable. Rust compilation/tests, regenerated WASM and
-  the expanded actual-artifact FIG/Sketch text smoke are **pending CI**, not yet
-  native execution evidence. The smoke decodes each complete native fixture and
-  separately checks the production wrapper against the complete TS result.
+- Local cargo/rustc are unavailable; native verification ran in **CI
+  [36316826914](https://github.com/Ankushui18/X-native/actions/runs/36316826914)**
+  at runtime commit `ed200ae3da50ce9922f208bc647c70f0a2c45f4b`: **SUCCESS**.
+  Rust workspace gate, regenerated WASM packages, real-artifact smoke and web
+  checks passed. Rust job: `108612990861`.
+- Actual WASM output for both committed file fixtures retains the expected text
+  content, source **200×24** box and **18px** font size. Each complete native
+  document now passes the adapter, including its literal typography bindings.
+  Both production wrappers still use TS: **“Native import differs from
+  TypeScript; kept the complete TypeScript result.”** The former unsupported
+  `text`/`bindings` rejection is resolved, not whole-document fidelity.
+- Browser fallback smoke rerun: actual dashboard SVG upload, persisted editable
+  rectangle and reload pass, with zero uncaught errors and native assets absent.
+- Unchanged geometry diagnostic: **1/30 equivalent, 29 failures**, repeat 2;
+  summed means TS 72.00ms / native 6.56ms. Non-blocking geometry failure remains
+  visible in CI annotations; green CI is not geometry promotion or speedup proof.
 - Native browser E2E and broad rich-import fidelity remain **NOT VERIFIED**.
+  The screenshot job again uploaded no screenshots, so is not visual signoff.
 
-Local evidence: `/home/user/wasm-text-{red,focused,unit,tsc,build}.log`.
+Local evidence: `/home/user/wasm-text-{red,focused,unit,tsc,build,browser,ci}.log`;
+native evidence: `/home/user/wasm-text-annotations.json`.
