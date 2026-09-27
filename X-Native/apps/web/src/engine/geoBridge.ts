@@ -2,10 +2,11 @@
  * TypeScript side of the TS↔Rust geometry bridge (docs/GEO_BRIDGE_DESIGN_2026-09-25.md).
  *
  * The Rust module (`x_geo.wasm`, built from `crates/x-geo` in a Rust-capable
- * environment) is a candidate accelerator for `booleanPath`. Auto mode checks
- * its result against TS; unavailable/invalid/unequal results degrade to the
- * pure-TS implementation. Nothing here may ever throw past the choke point in
- * `geometry.ts`: the bridge is an accelerator, not a dependency.
+ * environment) is the promoted Boolean engine for `booleanPath`. Auto mode
+ * selects it directly when ready; missing, rejected or invalid traffic falls
+ * back to TS. `?geo=audit` additionally compares every result to the TS
+ * oracle and falls back on a mismatch. Nothing may throw past the choke point
+ * in `geometry.ts`: a missing optional module is not a dependency failure.
  *
  * Lives apart from `wasmBridge.ts` deliberately: that module imports the file
  * importers (which import `geometry.ts`), so geometry calling into it would be
@@ -150,18 +151,20 @@ export function decodeGeoResponse(buf: Uint8Array): GeoContours {
 /* mode + loader                                                               */
 /* -------------------------------------------------------------------------- */
 
-export type GeoMode = "auto" | "ts" | "wasm";
+export type GeoMode = "auto" | "ts" | "wasm" | "audit";
 
-/** `?geo=` beats the stored override beats the default. Node-safe (no window). */
+/** `?geo=` beats the stored override beats the default. Node-safe (no window).
+ * `auto` selects Rust when ready, `audit` alone runs the TS oracle on every
+ * candidate, `ts` disables native, and `wasm` is the legacy forced alias. */
 export function getGeoMode(): GeoMode {
   try {
     const loc =
       typeof window !== "undefined" ? window.location : typeof location !== "undefined" ? location : null;
     const q = loc?.search ? new URLSearchParams(loc.search).get("geo") : null;
-    if (q === "ts" || q === "wasm" || q === "auto") return q;
+    if (q === "ts" || q === "wasm" || q === "auto" || q === "audit") return q;
     const stored =
       typeof localStorage !== "undefined" ? localStorage.getItem("x-native-geo") : null;
-    if (stored === "ts" || stored === "wasm" || stored === "auto") return stored;
+    if (stored === "ts" || stored === "wasm" || stored === "auto" || stored === "audit") return stored;
   } catch {
     /* storage/URL accessors can throw in locked-down contexts; default out */
   }
@@ -238,15 +241,15 @@ registerAuditProbe("geometry", {
     abiVersion: cached?.version ?? null,
     availableFunctions: geoExports,
     lastFailure: geoFailure,
-    guard: getGeoMode() === "auto" ? "compare to TS oracle on every candidate" :
-      getGeoMode() === "wasm" ? "bypassed for diagnostics; not a parity claim" : "TS only",
+    guard: getGeoMode() === "audit" ? "compare to TS oracle on every candidate; fall back on mismatch" :
+      getGeoMode() === "ts" ? "TS only" : "native-first; TS only on unavailable/error (no per-call oracle)",
   }),
   load: () => ensureGeo(),
 });
 
-/** Loud in `wasm` mode (a debugging flag), once-per-session otherwise. */
+/** Loud in diagnostic modes, once-per-session otherwise. */
 function geoWarn(e: unknown): void {
-  if (getGeoMode() === "wasm") {
+  if (getGeoMode() === "wasm" || getGeoMode() === "audit") {
     console.warn("geo bridge fallback to TS:", e);
     return;
   }

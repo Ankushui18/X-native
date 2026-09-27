@@ -77,18 +77,25 @@ try {
     { x, y }, { x: x + 10, y }, { x: x + 10, y: y + 10 }, { x, y: y + 10 },
   ], ox: 0, oy: 0 });
   const shapes = [rect(0, 0), rect(5, 5)];
+  assert.equal(booleanPath("union", shapes), null, "promoted auto selects native empty without the oracle");
+  snap = command.snapshot();
+  assert.equal(snap.functions["x-geo.xgeo_boolean"].calls, 1);
+  assert.equal(snap.functions["x-geo.xgeo_alloc"].calls, 2);
+  assert.equal(snap.functions["x-geo.xgeo_free"].calls, 3);
+  assert.equal(snap.decisions["geometry.union"].rust, 1);
+  assert.equal(snap.decisions["geometry.union"].last.guard, "not-run");
+  assert.equal(snap.modules.geometry.source, "test-injected");
+
+  window.location.search = "?bridgeAudit=1&geo=audit";
   const prevWarn = console.warn;
   console.warn = () => {};
   try { assert.deepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes)); }
   finally { console.warn = prevWarn; }
   snap = command.snapshot();
-  assert.equal(snap.functions["x-geo.xgeo_boolean"].calls, 1);
-  assert.equal(snap.functions["x-geo.xgeo_alloc"].calls, 2);
-  assert.equal(snap.functions["x-geo.xgeo_free"].calls, 3);
+  assert.equal(snap.functions["x-geo.xgeo_boolean"].calls, 2);
   assert.equal(snap.decisions["geometry.union"].ts, 1);
   assert.equal(snap.decisions["geometry.union"].blocked, 1);
   assert.match(snap.decisions["geometry.union"].last.reason, /emptiness/);
-  assert.equal(snap.modules.geometry.source, "test-injected");
 
   // When the mode is explicitly TS, no native call and no guard comparison.
   window.location.search = "?bridgeAudit=1&geo=ts&imports=ts";
@@ -97,7 +104,7 @@ try {
   importSvg(svg);
   snap = command.snapshot();
   assert.equal(snap.decisions["geometry.intersect"].last.guard, "not-run");
-  assert.equal(snap.functions["x-geo.xgeo_boolean"].calls, 1);
+  assert.equal(snap.functions["x-geo.xgeo_boolean"].calls, 2);
   assert.equal(snap.functions["x-wasm.importSvgToX"].calls, 2);
   window.location.search = "?bridgeAudit=1";
   delete globalThis.location;

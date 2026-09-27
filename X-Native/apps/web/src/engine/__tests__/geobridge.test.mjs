@@ -134,6 +134,8 @@ function cannedResponse(status, msg = "") {
   t("?geo=ts", getGeoMode() === "ts");
   globalThis.window = { location: { search: "?geo=bogus" } };
   t("?geo=bogus falls to auto", getGeoMode() === "auto");
+  globalThis.window = { location: { search: "?geo=audit" } };
+  t("?geo=audit enables diagnostic oracle", getGeoMode() === "audit");
   globalThis.window = { location: { search: "" } };
   globalThis.localStorage = { getItem: () => "wasm" };
   t("stored override", getGeoMode() === "wasm");
@@ -228,6 +230,15 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   __resetGeoForTests();
 }
 {
+  __setGeoModuleForTests({ version: 1, call: () => stubResp });
+  const via = booleanPath("union", shapes2());
+  const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
+    (19 / 160) * 0.85, false);
+  t("default uses native shaped output even when a mock disagrees with TS",
+    eq(via, direct) && !eq(via, booleanPathTs("union", shapes2())));
+  __resetGeoForTests();
+}
+{
   // Throwing module -> TS fallback, identical to the authority.
   __setGeoModuleForTests({ version: 1, call: () => { throw new Error("trap"); } });
   const warn = console.warn; console.warn = () => {};
@@ -237,11 +248,15 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   __resetGeoForTests();
 }
 {
-  // Status-1 (wasm empty) defers to the authority, never returns null itself.
+  // No per-call oracle in auto: the native result, including empty, is used.
+  // In audit mode the same false-empty candidate is rejected against TS.
   __setGeoModuleForTests({ version: 1, call: () => cannedResponse(1) });
+  t("auto selects native empty without running the TS oracle", booleanPath("union", shapes2()) === null);
+  const priorLocation = globalThis.location;
+  globalThis.location = { search: "?geo=audit" };
   const via = booleanPath("union", shapes2());
-  const ts = booleanPathTs("union", shapes2());
-  t("wasm-empty defers to TS", eq(via, ts) && via !== null);
+  t("geo=audit rejects false empty and restores TS", eq(via, booleanPathTs("union", shapes2())) && via !== null);
+  if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
   __resetGeoForTests();
 }
 {

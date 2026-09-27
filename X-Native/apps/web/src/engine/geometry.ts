@@ -462,10 +462,11 @@ export function shapeBooleanResult(
   };
 }
 
-/** Choke point: optionally execute x-geo; in auto compare the *shaped* result
- *  (including emptiness) to the TS authority before selecting it. Missing or
- *  failing modules use TS. Only the explicit wasm diagnostic mode can bypass
- *  the equivalence guard and change the output. */
+/** Promoted Boolean choke: native results are selected without a per-call TS
+ * oracle once x-geo is ready. Missing/invalid modules fall back to TS;
+ * `?geo=audit` compares shaped results (including emptiness) and falls back
+ * on mismatch. Keep audit: 30 corpus cases are evidence, not a proof for
+ * every possible document. The opt-in Rust document session is separate. */
 export function booleanPath(
   op: BooleanOp,
   shapes: { poly: PathPoint[]; ox: number; oy: number }[],
@@ -489,12 +490,9 @@ export function booleanPath(
           Math.max(sampling.sx, sampling.sy) * 0.85,
           hasCurveHandles(shapes),
         ) : null;
-        // Auto must still compare against TS for every call, including cases
-        // outside the corpus. Explicit wasm mode only bypasses the guard for
-        // differential diagnostics, never as a parity claim.
-        if (getGeoMode() === "wasm") {
-          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "bypassed", candidate: true,
-            reason: "forced diagnostic mode; equivalence NOT checked" });
+        if (getGeoMode() !== "audit") {
+          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "not-run", candidate: true,
+            reason: "native Boolean selected without TS oracle (audit available via geo=audit)" });
           return candidate;
         }
         const authority = booleanPathTs(op, shapes);
