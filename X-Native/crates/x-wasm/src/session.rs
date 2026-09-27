@@ -80,7 +80,12 @@ mod tests {
     fn fixture() -> String {
         save_x(&Document {
             pages: vec![Node::frame("page", 400.0, 300.0).child(Node::rect(
-                "box", 10.0, 20.0, 30.0, 40.0, Color::BLACK,
+                "box",
+                10.0,
+                20.0,
+                30.0,
+                40.0,
+                Color::BLACK,
             ))],
             default_font: Some("Inter".into()),
             ..Default::default()
@@ -90,14 +95,23 @@ mod tests {
     #[test]
     fn a_session_returns_small_deltas_and_explicit_persistence() {
         let mut bridge = CommandBridge::open(&fixture()).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
-        assert_eq!(serde_json::from_str::<Value>(&bridge.get_node("box")).unwrap()["x"], 10.0);
+        assert_eq!(
+            serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"],
+            0
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&bridge.get_node("box")).unwrap()["x"],
+            10.0
+        );
         assert_eq!(bridge.get_node("missing"), "null");
         let renamed = bridge.rename_node("box", "Renamed").unwrap();
         let update: Value = serde_json::from_str(&renamed).unwrap();
         assert_eq!(update["node"]["name"], "Renamed");
         assert_eq!(update["canUndo"], true);
-        assert!(renamed.len() < 256, "command returned a document, not a delta");
+        assert!(
+            renamed.len() < 256,
+            "command returned a document, not a delta"
+        );
         let moved = bridge.move_node("box", 3.0, -4.0).unwrap();
         let moved: Value = serde_json::from_str(&moved).unwrap();
         assert_eq!(moved["node"]["x"], 13.0);
@@ -117,7 +131,10 @@ mod tests {
         let mut bridge = CommandBridge::open(&fixture()).unwrap();
         assert!(bridge.move_node("box", f64::NAN, 0.0).is_err());
         assert!(bridge.rename_node("missing", "X").is_err());
-        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
+        assert_eq!(
+            serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"],
+            0
+        );
         let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
         assert_eq!(undone["node"], Value::Null);
     }
