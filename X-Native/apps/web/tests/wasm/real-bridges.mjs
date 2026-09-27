@@ -89,13 +89,9 @@ try {
   assert.equal(getEngineInfo().importBackend, "ts", "transformed groups remain guarded until their flattening is equivalent");
   const text = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
   const textRaw = JSON.parse(glue.importSvgToX(text));
-  console.log(`Diff SVG text envelope: ${JSON.stringify({metrics: textRaw.textMetrics, node: textRaw.doc?.pages?.[0]?.children?.[0]})}`);
   assert.equal(textRaw.textMetrics.version, 1);
-  let textCandidate;
-  try { textCandidate = decodeRustImport(JSON.stringify(textRaw)); }
-  catch (error) { console.log(`Diff SVG text decode error: ${String(error)}`); throw error; }
-  const textExpected = svgTs(text);
-  console.log(`Diff SVG text candidate: ${JSON.stringify(textCandidate.nodes[0])}; expected: ${JSON.stringify(textExpected.nodes[0])}`);
+  const textCandidate = decodeRustImport(JSON.stringify(textRaw)), textExpected = svgTs(text);
+  console.log(`Diff SVG text candidate paths: ${differencePaths(textCandidate, textExpected).join(", ") || "none"}`);
   assert.equal(textCandidate.nodes[0].name, "Keep this text");
   assert.equal(textCandidate.nodes[0].textAlign, "center");
   assert.deepEqual([textCandidate.nodes[0].x, textCandidate.nodes[0].y, textCandidate.nodes[0].w, textCandidate.nodes[0].h], [10, 10, 168, 28]);
@@ -246,7 +242,7 @@ try {
   assert.equal(sourceCandidate.nodes[1].effects[0].visible, false);
   console.log("PASS native FIG source effects: hidden entries, spread, blend, show-behind; full candidate equivalent; wrapper=wasm");
   assert.equal(calls.fig, 6);
-  assert.equal(calls.svg, 4);
+  assert.equal(calls.svg, 6);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");
 
