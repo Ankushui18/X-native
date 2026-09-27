@@ -4,11 +4,17 @@ Date: 2026-09-27. Priority: complete the existing bridges before further Figma-p
 
 ## 1. Status and authority
 
-**Integration, build wiring and fallback tests are implemented. Native execution and
-promotion are NOT VERIFIED.** This sandbox has no cargo/rustc; official toolchain,
-mirror and GitHub artifact/release downloads failed. Previous successful CI runs
-prove only the baseline, not the Rust/CI changes in this patch. No binaries are
-checked in, and the local preview is running the TypeScript fallback.
+**Both bridges compile, package and execute in CI. Native geometry promotion has
+FAILED the differential check; the TS guards remain enabled.** The sandbox itself
+still has no cargo/rustc, and artifact/log CDN downloads remain inaccessible.
+After user authorization, the current work was committed and pushed only to
+`arena/01a0e1ff-x-native`. No generated binaries are checked in; the local preview
+still uses the TypeScript fallback.
+
+Latest verified code/CI checkpoint: `7532f05`, [CI run 36314867997](https://github.com/Ankushui18/X-native/actions/runs/36314867997).
+The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
+The geometry promotion diagnostic is explicitly non-blocking while auto retains
+its oracle: **a green CI conclusion does not mean native geometry parity passed**.
 
 TypeScript remains authoritative, as required by `ARCHITECTURE_BOUNDARY.md`:
 
@@ -108,11 +114,14 @@ CI now packages both bridges, runs `test:wasm` against the real generated module
 builds the web app with those assets, and uploads browser-ready files as `x-wasm`.
 The smoke gate fails for missing artifacts: it does not substitute mocks/replay.
 Full corpus equivalence is a separate promotion gate, not claimed by smoke tests.
-These CI changes have not run for this uncommitted patch.
+The `wasm-verification` artifact contains smoke logs, the real differential log
+and per-case JSON. CI emits API-readable annotations too, because the log/artifact
+CDNs are inaccessible here. Promotion diagnostics are non-blocking, clearly marked
+as NOT approved on mismatch; the strict benchmark command itself exits nonzero.
 
 ## 5. Verified checks and limitations
 
-| Check | Result in this sandbox |
+| Check | Verified result / environment |
 | --- | --- |
 | Full `npm test` | **2,906 passed, 0 failed**, 45 suites |
 | Existing geometry bridge suite | **92 passed, 0 failed** (includes synthetic wasm, NOT native Rust geometry) |
@@ -124,20 +133,63 @@ These CI changes have not run for this uncommitted patch.
 | `node e2e/wasm-fallback.mjs` | **PASS**: real dashboard SVG upload, editor layer persistence and reload with assets deliberately 404; zero uncaught browser errors |
 | Shell syntax, manifest/lockfile declaration consistency, `git diff --check` | **PASS** (not a substitute for Cargo resolution) |
 | `build:wasm` local preflight | **BLOCKED**: reports missing Rust toolchain, exit 1 |
-| Host Rust tests/clippy and pinned `cargo fmt` gate | **NOT RUN**; source formatted/parsed with WASM rustfmt, not compiled |
-| Real generated bindgen/native x-geo smoke | **NOT RUN**; requires built assets |
-| Real 30-case differential/performance | **NOT RUN**; no native equivalence/speedup claim |
+| Host Rust tests/clippy and pinned `cargo fmt` gate | **PASS in CI**, `scripts/check.sh` at `7532f05`; unavailable locally |
+| WASM release build and matched bindgen packaging | **PASS in CI**, both crates; browser-ready `x-wasm` artifact uploaded |
+| Real generated bindgen/native x-geo smoke | **PASS in CI**, real exports and production wrappers, not mock/replay |
+| Real 30-case differential/performance | **1/30 equivalent, 29 failures** in CI; bounds, area, topology and emptiness mismatches; native promotion NOT approved |
 | Full application E2E | **NOT RERUN**; prior failures remain recorded in parity reports |
 
-Logs: `/home/user/wasm-{unit,tsc,build,replay,browser}.log`.
+Local logs: `/home/user/wasm-{unit,tsc,build,replay,browser}.log`.
+CI evidence: `/home/user/wasm-ci-5-annotations.json` (complete 30-case summary) and the linked run/artifacts.
+
+### Native results that were actually exercised
+
+- Generated bindgen initialization, ABI/build identifier, SVG string interchange,
+  malformed FIG/Sketch envelopes, and native-node document schema.
+- **Simple SVG uses the actual Rust result** (`importBackend === "wasm"`), checked
+  against the TS import contract. Text safely retains the TS result.
+- Real `sample.fig` and `sample.sketch` production wrappers invoke the native
+  functions and retain complete TS results. Native FIG declines this fixture with
+  `figma file contains no canvases`; Sketch conversion declines unmapped native
+  properties. This is verified fallback, NOT successful native FIG/Sketch parity.
+- Native union/subtract/intersect/exclude, disjoint empty intersection, malformed
+  requests, bad pointers, double-free and 50 repeated allocation/free cycles pass.
+- Real geometry differs from TS: e.g. overlapping rectangles yield native bbox
+  x/y `0.25/0.25` vs TS `0.078125/0.078125`; native exclusion has one contour vs
+  two in the TS fixture. Auto mode demonstrably returns the TS result for such
+  differences. No tolerance was relaxed, and neither algorithm was rewritten.
+
+### Complete native differential result
+
+Run `36314867997` tested real `public/x_geo.wasm`, ABI v1, with two repeats:
+**1 passed, 29 failed**. Only `identical-subtract-empty` matched. All other
+fixtures—including the simple rectangle operations—failed at least one existing
+comparator check. `sliver-sliver-intersect` disagreed on emptiness; several
+exclusion/star/triangle cases disagreed on contour counts as well as geometry.
+
+The benchmark reported sums of per-case mean timings: TS **60.48 ms**, native
+module path **6.47 ms** across the 30 cases. These timings are diagnostic only:
+29 results were not equivalent, and auto mode also runs the TS oracle. They do
+NOT establish a safe replacement, a browser speedup or an acceleration signoff.
+The detailed numerical reasons and per-case timings are in `wasm-verification`.
+
+### CI failure fixed during verification
+
+Runs `36313881976` and `36314083392` compiled/packaged successfully but the smoke
+runner failed with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING`. `Function("return
+import(...)")` bypassed vite-node's VM import transform. Commit `e1e5d5f` switched
+to a supported dynamic import of the generated file URL. The native smoke then
+passed in run `36314302359`; expanded real import fixtures passed at `7a05157`.
+This was a real failing gate, not a mocked success or a waived smoke assertion.
 
 ## 6. Remaining before native promotion
 
-1. Run the changed Rust workspace gate and real-artifact CI smoke on this patch.
-   Fix any compile, lint, schema or actual ABI failures; mocks do not waive this.
-2. Run the real-module differential corpus. Keep failures visible and leave the
-   automatic TS guard enabled; do not relax tolerances to manufacture a pass.
-3. Expand native import equivalence coverage with real FIG/Sketch/SVG fixtures,
-   especially typography, embedded images, resources and multi-page documents.
-4. Measure native timing separately from the TS oracle and browser main-thread
-   cost. Remove a per-call oracle only after promotion is backed by evidence.
+1. Resolve measured native geometry differences before removing the TS oracle.
+   Preserve existing web behavior and keep the strict comparator; do not loosen
+   tolerances to manufacture a pass or describe diagnostic-mode output as parity.
+2. Improve FIG fixture handling and extend the native schema mapping for Sketch,
+   typography, resources and layered paints, with real fixture equivalence gates.
+3. Measure broader native timing and browser main-thread cost separately from the
+   TS oracle. Successful ABI smoke is not a production performance signoff.
+4. Native-asset browser E2E and broad import fidelity remain unverified; current
+   browser smoke covers the actual UI with native assets deliberately unavailable.

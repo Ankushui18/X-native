@@ -2,9 +2,10 @@
 
 **Implementation update, 2026-09-27:** `crates/x-geo` now implements the binary
 ABI over the existing RasterGuided backend. Both bridges have packaging and a
-real-artifact CI smoke gate. TypeScript tests/build and browser fallback pass;
-Rust compilation, native execution and true corpus equivalence remain **NOT
-VERIFIED** in this toolchain-less sandbox. See
+real-artifact CI smoke gate. TypeScript tests/build and browser fallback pass.
+Rust compilation and native smoke now **PASS in CI** (`7532f05`, run
+`36314867997`), while true native corpus equivalence **FAILS: 1/30 pass, 29 fail**. The local sandbox
+still lacks a Rust toolchain. See
 [implementation record](WASM_BRIDGES_2026-09-27.md) for the exact verification ledger.
 
 `auto` now checks native results against the TS oracle before using them. Explicit

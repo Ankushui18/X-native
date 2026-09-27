@@ -1,8 +1,8 @@
 # Rust / TypeScript boundary
 
 > **2026-09-27 update:** optional import and geometry bridges are now wired, with
-> TypeScript equivalence guards and build/CI packaging. Native execution of these
-> changes is **NOT VERIFIED** here. See [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
+> TypeScript equivalence guards and build/CI packaging. Native build and smoke
+> are now **verified in CI**; native geometry promotion **failed** its comparator. See [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
 > The baseline inventory below is historical, not a claim that the new bridges are inert.
 
 Status: **provisional by design.** This document describes what the repository
@@ -115,14 +115,15 @@ Both bridge crates are leaves in the dependency graph.
 
 `npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
 real generated artifacts (no mock/replay substitution). CI is configured to run
-both. **The changed Rust code and this CI job have not executed in this sandbox.**
-Prior successful CI runs establish the old x-wasm baseline, not these changes.
+both. **The changed Rust code and real modules passed CI at `7532f05`** (run
+`36314867997`); the local sandbox still cannot run Cargo. The separate native
+geometry promotion diagnostic failed 29 of 30 cases; auto retains its per-call TS guard.
 
 TypeScript remains authoritative. Imports use a native result only after the
 whole converted contract agrees with TS; unsupported resources/typography/styles
 fall back, never partially import. Geometry `auto` compares against TS using the
 existing §8 comparator; `?geo=wasm` exposes native results for differential tests.
-Neither native equivalence across the corpus nor a speedup is claimed. See the
+Native equivalence across the corpus failed; no speedup is claimed. See the
 linked implementation record for commands, checks, and remaining promotion gates.
 
 ## Migration sequence
