@@ -543,6 +543,7 @@ kernels/guards and persisted `.x` rendering defaults are also unchanged.
 | W20 — native fallback paints mistaken for source fills | Capture per-layer FIG appearance facts keyed by final IDs. Distinguish absent fill, one opaque visible unblended solid fill, and unsupported paint data. Adapter restores absent source fills instead of exposing native black-text/white-frame fallback paint | Native original fixture checks text remains black in `.x` while source fact says no fill; web test restores transparent source text without losing text or dimensions |
 | W21 — explicit FIG contract defaults missing from adapter | Versioned `figmaAppearance` metadata permits source-backed fill type, absent-vs-explicit layer blend, empty effect list, uniform/linked rectangle corners and zero imported-image count | New appearance suite validates defaults, explicit NORMAL, complete metadata coverage, contradictions, unsupported paints/resources and unchanged full-result comparison |
 | W22 — dropped paints could appear falsely absent | Binary shim retains an unsupported-paint marker and source paint blend presence through the REST shim; native paint conversion still declines unsupported types | Rust regression proves an unrepresentable VIDEO paint is marked unsupported, not an empty fill list |
+| W23 — shared lowering overflows the normal stack after IR metadata grows | Separate single-node construction from recursive traversal, releasing the large constructor frame before descending; retain preorder IDs and all import semantics | Existing 64-level SVG test unchanged; new explicit 2 MiB-stack, 65-node metadata regression checks final IDs, source maps, text metrics and native fill defaults |
 
 The supported subset is deliberately narrow: single opaque visible normal-composited
 solid fills or no fill. Multiple/hidden/translucent/blended/unsupported paints decline.
@@ -561,7 +562,13 @@ promotion gate for that fixture, not a relaxed comparison or broad promotion.
 - Initial appearance regression: **3 passed / 22 failed**; final suite **25/0**.
 - Serial local full suite: **3,049 passed / 0 failed**, 50 suite summaries.
   `tsc -b` and production build pass (existing chunk-size warning).
-- Rust checks, regenerated WASM and the actual basic-FIG promotion assertion are
+- Initial native gate failed in CI `36321987492`, then reproduced in
+  `36322180613` and `36322340267`. Improved API-readable crash annotations
+  identified `svg_import::tests::svg_import_accepts_reasonable_nesting`:
+  **stack overflow / SIGABRT**, not an appearance assertion failure. Build and
+  clippy passed; packaging and actual WASM smoke did not run in those attempts.
+  W23 addresses the shared lowering frame; no test/depth/stack limits were relaxed.
+- Post-fix Rust checks, regenerated WASM and the actual basic-FIG promotion assertion are
   **pending CI**; no native promotion is claimed yet. Local cargo/rustc remain
   unavailable.
 - Native-browser visual fidelity, broad rich-import parity and performance

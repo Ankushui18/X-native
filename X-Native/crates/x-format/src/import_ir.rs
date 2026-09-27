@@ -332,6 +332,26 @@ fn lower_node(
     asset_ids: &HashMap<String, String>,
     report: &mut ImportReport,
 ) -> Node {
+    // Keep the large construction frame off the stack during recursion.
+    // ImportNode metadata can grow without multiplying every constructor
+    // temporary by the source tree depth (including non-FIG imports).
+    let (mut node, children) = lower_single_node(ir, used, counter, is_page, asset_ids, report);
+    for child in children {
+        node.children
+            .push(lower_node(child, used, counter, false, asset_ids, report));
+    }
+    node
+}
+
+#[inline(never)]
+fn lower_single_node(
+    ir: ImportNode,
+    used: &mut HashSet<String>,
+    counter: &mut usize,
+    is_page: bool,
+    asset_ids: &HashMap<String, String>,
+    report: &mut ImportReport,
+) -> (Node, Vec<ImportNode>) {
     // ---- id: sanitize source id or generate; dedupe globally
     let base = match &ir.id {
         Some(raw) => sanitize_id(raw),
@@ -574,16 +594,72 @@ fn lower_node(
         }
     }
 
-    for c in ir.children {
-        let cn = lower_node(c, used, counter, false, asset_ids, report);
-        node.children.push(cn);
-    }
-    node
+    (node, ir.children)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_lowering_fits_normal_stack_and_keeps_preorder_ids() {
+        std::thread::Builder::new()
+            .name("metadata-lowering-normal-stack".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let mut tree = ImportNode::new(ImportKind::Text {
+                    content: "leaf".into(),
+                    size: Some(16.0),
+                    font: None,
+                    line_height: None,
+                    letter_spacing: None,
+                    runs: vec![],
+                });
+                for level in 0..=64 {
+                    tree.id = Some("layer".into());
+                    tree.w = 40.0;
+                    tree.h = 20.0;
+                    tree.source_position = Some((level as f64, 0.0));
+                    tree.figma_appearance = Some(FigmaAppearance {
+                        fill: "none",
+                        blend: None,
+                        effect_count: 0,
+                        uniform_corners: false,
+                    });
+                    if level < 64 {
+                        tree = ImportNode::new(ImportKind::Frame).child(tree);
+                    }
+                }
+                let (doc, report) = lower_with_report(ImportDoc {
+                    pages: vec![tree],
+                    ..Default::default()
+                });
+                assert_eq!(report.nodes_imported, 65);
+                assert_eq!(report.source_positions.len(), 65);
+                assert_eq!(report.figma_appearance.len(), 65);
+                let mut node = &doc.pages[0];
+                for index in 1..=65 {
+                    let id = if index == 1 {
+                        "layer".to_string()
+                    } else {
+                        format!("layer-{index}")
+                    };
+                    assert_eq!(node.id, id);
+                    assert_eq!(report.source_positions[&id], ((65 - index) as f64, 0.0));
+                    assert_eq!(report.figma_appearance[&id].fill, "none");
+                    if index < 65 {
+                        assert_eq!(node.children.len(), 1);
+                        node = &node.children[0];
+                    }
+                }
+                assert_eq!(node.fill, Paint::Solid(Color::BLACK));
+                assert_eq!(report.text_metrics[&node.id].height, 20.0);
+                assert_eq!(report.text_metrics[&node.id].font_size, Some(16.0));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn source_positions_follow_final_ids_without_changing_native_geometry() {
