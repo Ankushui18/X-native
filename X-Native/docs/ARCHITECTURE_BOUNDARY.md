@@ -115,22 +115,24 @@ Both bridge crates are leaves in the dependency graph.
 
 `npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
 real generated artifacts (no mock/replay substitution). CI is configured to run
-both. **The changed Rust code and real modules passed CI at `f7de255`** (run
-`36320770727`); the local sandbox still cannot run Cargo. The separate native
-geometry promotion diagnostic failed 29 of 30 cases; auto retains its per-call TS guard.
-The user selected keeping geometry guarded. Import follow-up fixes radians/pivots,
-parentless FIG recovery and Sketch names. The next batch preserves FIG text and
-source text-box metrics and maps guarded literal typography bindings. Both real
-FIG/Sketch fixtures now decode, but their complete results still differ from TS
-and fall back. Layer locks, all four horizontal text alignments and Sketch Cocoa spacing keys
-now survive native import as well. FIG stroke options and simple materialized
-solid strokes are mapped, and native stroke materialization retains imported
-effects. Explicit FIG layer blend modes and guarded basic effects now map too;
-the blur shim accepts both source spellings. Complex stacks, source-only effect
-properties, rich runs and resources remain guarded. FIG source translations now
-travel in versioned metadata, restoring web placement, all-page content extents
-and first-nonempty-page selection without changing native page normalization.
-See §§7–12 of the implementation record.
+both. **The changed Rust code and real modules passed CI at `9677ddf`** (run
+`36322532944`); the local sandbox still cannot run Cargo. The separate native
+geometry promotion diagnostic failed 29 of 30 cases; auto retains its per-call TS
+guard, as the user requested.
+
+Import follow-ups preserve FIG source coordinates and text-box metrics, literal
+typography, layer locks/alignment, stroke options, basic effects and explicit layer
+blends. Versioned source appearance facts now distinguish absent fills and defaults
+from native rendering fallbacks. **The basic FIG fixture passes complete native
+candidate equivalence and selects WASM**; FIG state, stroke-options and coordinate
+fixtures also select WASM. Sketch fixtures and the richer FIG effects fixture still
+fall back to the complete TS result. Complex stacks, source-only effect properties,
+rich runs and resources remain guarded; this is not broad native import parity.
+
+Metadata growth exposed a shared-lowering stack overflow in the existing 64-level
+SVG test. Single-node construction is now separated from recursive traversal;
+that test and an explicit 2 MiB-stack metadata regression pass without relaxing
+limits or changing native defaults. See §§7–13 of the implementation record.
 
 TypeScript remains authoritative. Imports use a native result only after the
 whole converted contract agrees with TS; unsupported resources/typography/styles

@@ -11,7 +11,8 @@ After user authorization, the current work was committed and pushed only to
 `arena/01a0e1ff-x-native`. No generated binaries are checked in; the local preview
 still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `1d9fe9e`, [CI run 36315979388](https://github.com/Ankushui18/X-native/actions/runs/36315979388).
+Latest verified code/CI checkpoint: `9677ddf`, [CI run 36322532944](https://github.com/Ankushui18/X-native/actions/runs/36322532944).
+Basic FIG now passes the complete-result gate with `backend=wasm`; see §13.
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -568,10 +569,30 @@ promotion gate for that fixture, not a relaxed comparison or broad promotion.
   **stack overflow / SIGABRT**, not an appearance assertion failure. Build and
   clippy passed; packaging and actual WASM smoke did not run in those attempts.
   W23 addresses the shared lowering frame; no test/depth/stack limits were relaxed.
-- Post-fix Rust checks, regenerated WASM and the actual basic-FIG promotion assertion are
-  **pending CI**; no native promotion is claimed yet. Local cargo/rustc remain
-  unavailable.
-- Native-browser visual fidelity, broad rich-import parity and performance
-  promotion remain **NOT VERIFIED**.
+- **CI [36322532944](https://github.com/Ankushui18/X-native/actions/runs/36322532944)
+  SUCCESS** at `9677ddf59c92777e00931e8a4650c174144e162f`. Rust workspace
+  formatting/clippy/tests, both WASM packages, actual-module smoke and web gates
+  pass. Rust job: `108629004183`. Local cargo/rustc remain unavailable.
+- Original basic FIG: **candidate differences: none; backend=wasm; fallback=none**.
+  The smoke asserts full candidate equivalence, not merely selected fields or a
+  TS-patched return value. FIG state, stroke-options and coordinate fixtures also
+  select WASM. Sketch fixtures and the richer FIG effects fixture still select TS;
+  these are verified safe fallbacks, not full native-format parity.
+- Both the existing 64-level SVG nesting regression and new explicit 2 MiB-stack
+  metadata lowering regression pass through the workspace gate. Construction is
+  separated from recursion; ordering, final IDs, metadata and native defaults are
+  retained. No enlarged stack environment, skipped test or reduced depth limit.
+- After the stack fix, serial local full npm suite again **3,049/0**, 50 summaries;
+  `tsc -b` and production build pass. Missing-WASM browser fallback smoke also
+  passed in this batch (dashboard SVG → editable rectangle → persistence/reload,
+  no uncaught errors).
+- Geometry remains guarded: **1/30 equivalent, 29 failures**, repeat 2; summed
+  means TS 57.85ms / native 6.40ms. This is not promotion or speedup proof.
+- CI published `x-wasm` and `wasm-verification` artifacts. Screenshot job produced
+  no screenshots. Native-browser visual fidelity, broad rich-import parity and
+  performance promotion remain **NOT VERIFIED**.
 
-Evidence: `/home/user/wasm-appearance-{red,focused,unit,tsc,build}.log`.
+Evidence: `/home/user/wasm-appearance-{red,focused,unit,tsc,build,browser,ci,ci-2,ci-3,ci-4}.log`,
+`/home/user/wasm-appearance-stack-{unit,tsc,build}.log`,
+`/home/user/wasm-appearance-ci-red-3.json` (named stack abort),
+`/home/user/wasm-appearance-annotations.json` (genuine artifact results).
