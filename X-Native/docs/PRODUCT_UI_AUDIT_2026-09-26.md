@@ -269,6 +269,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U3 | FIXED: one Escape owner. Every overlay registers in `ui/escape.ts` while it is open — the App's five sheets, the dock's flyouts, XDialog/XPopover, the dialog bus, the context menu, the fill picker, the radial menu, the shortcuts sheet and the inspector's zoom/language/property menus — and the topmost (opened most recently) closes on one press, which the central handler consumes. Order used to follow *registration*, not the screen: a dialog on top of the export sheet lost the press to the sheet behind it, and the shortcuts sheet could be starved outright. The old `popoverGuard` counter (which protected the selection but closed nothing) is deleted, and the presentation's second Escape implementation with it, so one press walks back one frame. The same registry hands the caret back: an overlay that closes unmounts the field it focused, and focus now returns to whatever opened it, or to the canvas column when that control is gone (a palette row), instead of falling to `<body>`. §4v, §4w | FIXED (P1) | — |
 | PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
+| PM-U10 | The cross-component event bus had never been audited, and one wire was dangling: the radial menu's **Bend Tool** slice dispatched `x-native-bend-tool` and nothing anywhere listened — choosing it reset the user's tool and did nothing else, while the real Bend button sat in the vector-edit toolbar. A menu item that promises a tool and delivers a no-op is the "phantom control" the design rules forbid. FIXED: the canvas answers the request through a shared rule (`ui/vectorEdit.ts`), turning the sub-tool on where the vector-edit toolbar is up and saying what it needs where it is not — and the whole bus is now a census (`events.test.mjs`) with each event's sender, listener and purpose pinned. §4aa | FIXED (P2) | — |
 | PM-U9 | Tab was the modal's and Escape was the modal's, but nothing else was: with the export sheet open and focus on one of its own buttons — where Tab lands — `Delete` **removed the selected layer behind the sheet**, a tool letter switched the tool behind it, `⌘A` selected the whole page behind it and `⌘Z` then undid a deletion nobody asked for. Typing in a modal's field was always safe (the chord surface's typing guard covers input/textarea), so the exposure was exactly the modal's buttons. FIXED: the registry records whether a surface is *modal*, and the three global key surfaces — the editor's chords (`chrome.tsx`), the canvas's own handler and App's zen/radial chords — ask `modalOpen()` before they do anything. Non-modal overlays are deliberately excluded: a menu or popover does not veil the canvas, and Delete under a context menu should still delete. §4z | FIXED (P1) | — |
 | PM-U8 | The product announced nothing: the toast — the only confirmation channel there is ("Deleted 5 layers · ⌘Z to undo", "Copied to clipboard") — was a plain `<div className="toast">`, and across the whole app the single ARIA live region was the dialog's validation error. FIXED: `ui/announce.tsx` owns the announcement half — `LiveStatus` (a polite `role="status"` region, always mounted before it has text, clipped not `display:none`, and deliberately not wrapped around the visible pill so nothing is said twice), `ToastPill` for the pill, `LiveLog` for a stream that arrives on its own (the agent's answers), and `useToastMessage` for the bus → message half both screens hand-rolled. §4y | FIXED (P2) | — |
 | PM-U7 | A modal did not hold the keyboard: `aria-modal="true"` was set but Tab from the last control in the export sheet walked out from under the veil into the toolbar behind it (where Enter operated chrome the user could not see), and the nudge dialog never took focus at all, so it opened with the caret still on whatever was behind it. FIXED: `useFocusTrap` (ui/escape.ts) — both modals take the caret on open (their first field if they have one) and ring Tab/Shift+Tab among their controls, skipping disabled ones; non-modal overlays are deliberately not trapped. §4x | FIXED (P2) | — |
@@ -1353,6 +1354,57 @@ dropping the caret on `<body>`; and Delete deleting again once the sheet is gone
 **Not verified here:** whether any of these chords *should* stay live inside a modal (a "save" chord is the
 case a designer would argue about; there is none in this product today), and the speech a screen reader makes
 of a modal's own controls while the guard is on — the DOM contract is asserted, the reading is not.
+
+## §4aa. P2 round 14 — no phantom wiring (PM-U10)
+
+The product has a second nervous system besides the keyboard and the engine: cross-component signals travel as
+window `CustomEvent`s, because a menu row in `chrome.tsx` cannot call into `Canvas.tsx`. Twenty-three such
+events existed and nobody had ever looked at them as a set. One was dangling:
+
+**The radial menu's Bend Tool slice dispatched `x-native-bend-tool`, and nothing anywhere listened.** Its
+action also did `setTool("select")`, so choosing "Bend Tool" from the radial (Q, or Actions ▸ Marking /
+Radial menu) reset the user's tool to Select and did nothing else — while the real Bend button sat in the
+vector-edit toolbar with a working implementation behind it. That is the "phantom control" the design system
+forbids, in its purest form: a labelled affordance with no effect.
+
+**The fix has two halves.** The canvas now answers the request, through a shared rule
+(`ui/vectorEdit.ts ▸ bendReadiness`): where the vector-edit toolbar is up — a vector in point edit, the pen
+tool, or a pen path in progress, the same guard the toolbar itself renders under — the slice turns the
+sub-tool on and says so; where it is not, it says what it needs ("Select a vector, press Enter to edit its
+points, then Bend — or start a pen path"), which is the LP-U6 pattern for a request the app cannot satisfy.
+The slice deliberately does **not** switch the tool: with the pen active that would take off screen the very
+toolbar that hosts Bend, turning "the menu item did nothing" into "the menu item closed the tools".
+
+**And the bus became a census.** `events.test.mjs` recomputes the wiring from the source — every `x-…` name
+that is the literal first argument of an `addEventListener` or of a `new CustomEvent(` — and fails on: a name
+that is not in the pinned table (each row naming the files that send it, the file that hears it and why it
+exists), a row whose sites moved, an event dispatched with nothing to hear it, a listener waiting for an
+event nothing sends, and a listener without its matching `removeEventListener`. It is the same instrument as
+the chrome drift table, applied to the wiring: the map cannot change without someone saying so out loud.
+
+Matching the *call* rather than "a window of nearby lines" is what keeps the census honest — the first cut of
+the scanner counted CSS class names (`x-dialog`), storage keys (`x-native-recents`) and each listener's
+`removeEventListener` mirror as events, and reported a phantom where there was none. The check was
+mutation-tested both ways: a made-up `x-native-made-up` dispatch fails as unlisted *and* as dangling, and
+renaming a real one shows the row as "sent nowhere" plus vice versa for its listener. The radial also gained
+a `.radial-menu` class (it had none — an overlay nothing could address by selector, for tests or the sheet).
+
+**Verified here:** unit suite **2,312 checks, 0 failed** (2,270 → 2,312): 42 from `events.test.mjs`, including
+the six `bendReadiness` cases, the source checks that the radial no longer acts on its own and that the
+canvas's handler neither copies the rule nor switches the tool, and the census rows. `tsc -b` clean,
+`vite build` clean, drift totals unmoved at 413/131/340/363/49 (the radial gained a class, no markup).
+
+**Browser suite §51 — written, NOT RUN here** (11 checks, 372 total): the radial opened on Q, the Bend slice
+hovered by geometry (eight slices, 45° each, index 4 straight left at the hit test's 100px), chosen with
+nothing in play — it must say what it needs and close — then a shape drawn, Enter to enter point edit, the
+radial opened through the palette's Marking / Radial menu row (the App's Q chord stands down in point edit),
+the same slice chosen again, and the Bend button in the vector-edit toolbar must be on, the toolbar still up,
+the tone line naming the tool.
+
+**Not verified here:** whether the refusal sentence is the most useful instruction to a designer who just
+picked "Bend Tool" from a radial (it names the two real ways in, but a shorter one may read better), and
+whether any *other* event in the census should have a second listener (the table records where each is heard;
+whether a pane should also react is a design question, not a wiring one).
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

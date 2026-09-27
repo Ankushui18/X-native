@@ -3748,6 +3748,80 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 51. PM-U10: the radial's Bend slice does something, or says why not --------
+{
+  const p = await page();
+  await rows(p);
+
+  const state = () =>
+    p.evaluate(() => ({
+      radial: !!document.querySelector(".radial-menu"),
+      toast: (document.querySelector(".toast")?.textContent || "").trim(),
+      bendOn: !!document.querySelector('.vector-edit-toolbar .tool-btn.on[title^="Bend"]'),
+      toolbar: !!document.querySelector(".vector-edit-toolbar"),
+      active: document.querySelector(".radial-menu .on, .radial-menu text")?.textContent?.trim() ?? null,
+    }));
+
+  // ── nothing in play: the slice must say what it needs ──
+  const cx = 760, cy = 420;
+  await p.mouse.move(cx, cy);
+  await sleep(150);
+  await p.keyboard.press("q");
+  await sleep(400);
+  t("the radial menu opens on Q", (await state()).radial);
+
+  // Eight slices, 45° each, slice 0 at the top: Bend is index 4, i.e. straight
+  // left of the centre at the radius the hit test uses (100px).
+  await p.mouse.move(cx - 100, cy);
+  await sleep(250);
+  const hovered = await state();
+  await p.mouse.up();
+  await sleep(500);
+  const refused = await state();
+  t(`hovering the Bend slice selects it (${hovered.active ?? "no readout"})`,
+    /⌥/.test(hovered.active || "") || /Bend/i.test(hovered.active || ""));
+  t(`with no vector in play it says what it needs ("${refused.toast.slice(0, 64)}")`,
+    /Enter/.test(refused.toast) && /pen/i.test(refused.toast));
+  t("and the radial closes once a slice is chosen", !refused.radial);
+
+  // ── a vector in point edit: the same slice turns the tool on ──
+  await drawRect(p, 620, 300);
+  await p.keyboard.press("Enter"); // enter point edit on the selected shape
+  await sleep(500);
+  const editing = await state();
+  t(`Enter on the new shape opens the vector-edit toolbar (${editing.toolbar ? "up" : "missing"})`,
+    editing.toolbar && !editing.bendOn);
+
+  // The App's own Q chord stands down in point edit (it is an editor chord), so
+  // the radial is reached the other way it is offered: the palette's command.
+  await p.mouse.move(cx, cy);
+  await sleep(150);
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(500);
+  const ran = await p.evaluate(() => {
+    const row = [...document.querySelectorAll(".actions button, [role='dialog'] button")]
+      .find((x) => /Radial menu/i.test(x.textContent || ""));
+    if (!row) return false;
+    row.click();
+    return true;
+  });
+  await sleep(500);
+  t(`the palette offers Marking / Radial menu (${ran ? "run" : "not found"})`, ran && (await state()).radial);
+
+  await p.mouse.move(cx - 100, cy);
+  await sleep(250);
+  await p.mouse.up();
+  await sleep(600);
+  const bent = await state();
+  t(`now the Bend slice activates the tool ("${bent.toast.slice(0, 48)}")`,
+    /Bend tool active/i.test(bent.toast) && bent.bendOn);
+  t("with the toolbar still on screen — it did not switch the tool away",
+    bent.toolbar && bent.bendOn);
+  t("and the radial closed", !bent.radial);
+
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

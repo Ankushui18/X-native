@@ -67,6 +67,7 @@ import {
   type ClipPayload,
 } from "../engine/clipboard";
 import { toast } from "./toast";
+import { bendReadiness } from "./vectorEdit";
 import { Icon } from "./icons";
 import { clampBadge, zoomAtPoint, zoomToRect } from "./zoom";
 import { modalOpen } from "./escape";
@@ -1052,6 +1053,31 @@ export function Canvas({
       window.removeEventListener("keyup", onKey, true);
     };
   }, [snap, edit, draft, engine, vecEdit, runInteraction, selectedConn]);
+
+  // Radial menu ▸ Bend Tool (PM-U10). The radial is a separate component, so it
+  // asks for the sub-tool over the window event bus — and until now *nothing
+  // listened*: the slice reset the tool to Select and did nothing else, a menu
+  // item that promised a tool and delivered a no-op while the real Bend button
+  // sat in the vector-edit toolbar. The sub-tool only means anything while that
+  // toolbar is up (a vector in point edit, the pen, or a path in progress), so
+  // where it is not, the slice says what it needs instead of pretending.
+  useEffect(() => {
+    const onBend = () => {
+      const ready = bendReadiness({ vecEdit, tool: engine.snapshot().tool, drafting: draft.length > 0 });
+      if (!ready.ok) {
+        toast(ready.need);
+        return;
+      }
+      // The sub-tool only — deliberately not the tool: with the pen active,
+      // switching to select would take the very toolbar that hosts Bend off the
+      // screen, which is how "the menu item did nothing" would have become "the
+      // menu item closed the tools".
+      setVecSubTool("bend");
+      toast(ready.say);
+    };
+    window.addEventListener("x-native-bend-tool", onBend);
+    return () => window.removeEventListener("x-native-bend-tool", onBend);
+  }, [engine, vecEdit, draft.length]);
 
   // Escape finishes the path and leaves it open. The finisher is published
   // to ui/penDraft.ts because that is the layer which actually decides Escape.

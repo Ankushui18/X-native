@@ -91,6 +91,12 @@ sheet, colours from tokens, controls from the primitives.
   (add viewport clamp, FR-U4), locked dialect REQUIRED (FR-U1), top-level-only labels.
 
 ## Rules
+0. Cross-component signals are window CustomEvents named `x-…`, and every one of them is listed in
+   `ui/__tests__/events.test.mjs` — with the file that sends it and the file that hears it. A dispatch with
+   no listener is a phantom control (the radial's Bend slice promised a tool and did nothing for months);
+   a listener with no dispatch is dead wiring; a listener without its matching `removeEventListener` leaks
+   one handler per mount. The test fails on all three, and on any new event that is not in the census.
+
 
 1. No new raw `<button>`/`<select>`/tooltip/`title=` in product surfaces — compose the primitives.
 2. No hardcoded colors/geometry in chrome — tokens (or canvas-fed tokens) only.

@@ -226,7 +226,7 @@ be committed apart). Reproduce the totals instead of trusting this file:
 cd apps/web && npx vite-node src/ui/__tests__/drift.test.mjs
 ```
 
-This ratchet and the 2,270 checks around it run in CI as the `web` job of
+This ratchet and the 2,312 checks around it run in CI as the `web` job of
 `.github/workflows/ci.yml` (`npm ci && npm test && npm run build`); before
 2026-09-26 nothing outside a Rust workspace was gated at all. That total is the
 sum of every `N passed` line the suites print, which is reproducible with
@@ -236,7 +236,7 @@ suites printing the `N passed, M failed` form. Two caveats stay
 open. `scripts/check.sh` — the script the repo calls the single definition of
 green — is still Rust-only, so a local `check.sh` run does not cover the product
 UI. And the **browser tier is not in CI**: `apps/web/e2e/behaviour.mjs` needs a
-Chromium and a running dev server, so its 361 checks (computed geometry, focus,
+Chromium and a running dev server, so its 372 checks (computed geometry, focus,
 hover, canvas pixels, keyboard chords) run only where someone provides both —
 including the eleven added by §43/§43b of `PRODUCT_UI_AUDIT_2026-09-26.md`,
 which retheme a canvas token under the running app and watch the chrome follow,
@@ -250,10 +250,13 @@ and that the caret comes back to the control that opened it, the eight from
 §48, which Tab through the export sheet and the nudge dialog twenty-four times
 to check that the keyboard cannot walk out from under a modal, the ten from
 §49, which delete a layer and read the announcement out of the live region a
-screen reader would hear, and the ten from §50, which put focus on a button
+screen reader would hear, the ten from §50, which put focus on a button
 inside the export sheet and press Delete, a tool letter, ⌘A, ⌘Z and ⌘K to prove
 none of them reaches the editor behind the veil — and then Delete again after
-the sheet closes, to prove the guard is scope and not a freeze.
+the sheet closes, to prove the guard is scope and not a freeze — and the eleven
+from §51, which choose the radial menu's Bend slice with nothing in play (it
+must say what it needs) and with a shape in point edit (it must turn the tool on
+without switching tools).
 Everything a browser cannot reach is covered by the headless DOM tier instead
 (`apps/web/src/ui/__tests__/domEnv.mjs`, jsdom), which is why a UI finding is
 recorded as closed by *both* halves — and why the ledger names which tier closed
