@@ -34,6 +34,7 @@ pub mod transaction;
 pub mod transform;
 pub mod variables;
 pub mod vector_network;
+pub mod web_raster;
 
 pub use expression::*;
 pub use modifier::*;

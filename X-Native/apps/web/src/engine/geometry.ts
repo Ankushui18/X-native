@@ -301,14 +301,10 @@ export const defaultGeometryBoolean: GeometryBoolean = {
   },
 };
 
-/** Raster-guided boolean → polyline contours (same approach as x-core).
- *  The authoritative implementation: the wasm accelerator defers here on any
- *  anomaly, and `booleanPath` below is the choke that tries wasm first. */
-export function booleanPathTs(
-  op: BooleanOp,
-  shapes: { poly: PathPoint[]; ox: number; oy: number }[],
-): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
-  if (shapes.length < 2) return null;
+/** Compute the oracle's sampling grid once for both the TS raster and the
+ *  native candidate's shared TS shaper. The response bbox describes OUTPUT,
+ *  so it cannot be used to infer the input grid's simplification scale. */
+function booleanRasterSetup(shapes: { poly: PathPoint[]; ox: number; oy: number }[]) {
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -336,6 +332,20 @@ export function booleanPathTs(
   const gh = Math.max(8, Math.round((bh / bw) * res));
   const sx = bw / gw;
   const sy = bh / gh;
+  return { world, minX, minY, gw, gh, sx, sy };
+}
+
+/** Raster-guided boolean → polyline contours (also implemented by x-core's
+ *  web-parity raster). TS stays authoritative: the wasm accelerator defers
+ *  here on any anomaly through the guarded `booleanPath` choke below. */
+export function booleanPathTs(
+  op: BooleanOp,
+  shapes: { poly: PathPoint[]; ox: number; oy: number }[],
+): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
+  if (shapes.length < 2) return null;
+  const setup = booleanRasterSetup(shapes);
+  if (!setup) return null;
+  const { world, minX, minY, gw, gh, sx, sy } = setup;
   const cov: boolean[][] = [];
   for (let y = 0; y < gh; y++) {
     const row: boolean[] = [];
@@ -469,15 +479,19 @@ export function booleanPath(
     try {
       const raw = tryGeoBoolean(op, shapes);
       if (raw) {
-        const candidate = raw.contours.length ? shapeBooleanResult(
+        // The oracle simplifies by its INPUT cell size, not the OUTPUT bbox
+        // in the wire header (which may be tiny after subtraction).
+        const sampling = raw.contours.length ? booleanRasterSetup(shapes) : null;
+        if (raw.contours.length && !sampling) throw new Error("geo: missing sampling grid");
+        const candidate = raw.contours.length && sampling ? shapeBooleanResult(
           op,
           raw.contours.map((c) => c.map((p) => ({ x: p.x, y: p.y }))),
-          (Math.max(raw.w, raw.h) / 160) * 0.85,
+          Math.max(sampling.sx, sampling.sy) * 0.85,
           hasCurveHandles(shapes),
         ) : null;
-        // Native and web raster grids intentionally differ. Until promotion
-        // passes the real-module corpus, auto must not alter shipped geometry.
-        // Explicit wasm mode is for differential testing, never a parity claim.
+        // Auto must still compare against TS for every call, including cases
+        // outside the corpus. Explicit wasm mode only bypasses the guard for
+        // differential diagnostics, never as a parity claim.
         if (getGeoMode() === "wasm") {
           auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "bypassed", candidate: true,
             reason: "forced diagnostic mode; equivalence NOT checked" });
