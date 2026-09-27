@@ -240,32 +240,61 @@ mod tests {
     #[test]
     fn refusals_and_no_ops_leave_history_and_revision_unchanged() {
         let mut session = DocumentSession::new(sample()).unwrap();
-        session
-            .dispatch(SessionCommand::Rename { id: "box", name: "First" })
-            .unwrap();
+        let first = SessionCommand::Rename {
+            id: "box",
+            name: "First",
+        };
+        session.dispatch(first).unwrap();
         session.dispatch(SessionCommand::Undo).unwrap();
         let state = session.state();
-        for command in [
-            SessionCommand::Rename { id: "box", name: "   " },
-            SessionCommand::Move { id: "box", dx: 0.0, dy: 0.0 },
-        ] {
+        let blank = SessionCommand::Rename {
+            id: "box",
+            name: "   ",
+        };
+        let no_move = SessionCommand::Move {
+            id: "box",
+            dx: 0.0,
+            dy: 0.0,
+        };
+        for command in [blank, no_move] {
             assert_eq!(session.dispatch(command).unwrap(), state);
         }
         assert!(session.state().can_redo, "no-op must preserve redo");
-        let nan = SessionCommand::Move { id: "box", dx: f64::NAN, dy: 1.0 };
-        let infinity = SessionCommand::Move { id: "box", dx: f64::INFINITY, dy: 1.0 };
+        let nan = SessionCommand::Move {
+            id: "box",
+            dx: f64::NAN,
+            dy: 1.0,
+        };
+        let infinity = SessionCommand::Move {
+            id: "box",
+            dx: f64::INFINITY,
+            dy: 1.0,
+        };
         assert!(session.dispatch(nan).is_err());
         assert!(session.dispatch(infinity).is_err());
-        assert!(session.dispatch(SessionCommand::Rename { id: "missing", name: "X" }).is_err());
-        assert!(session.dispatch(SessionCommand::Rename { id: "page", name: "X" }).is_err());
+        let unknown = SessionCommand::Rename {
+            id: "missing",
+            name: "X",
+        };
+        let root = SessionCommand::Rename {
+            id: "page",
+            name: "X",
+        };
+        assert!(session.dispatch(unknown).is_err());
+        assert!(session.dispatch(root).is_err());
         assert_eq!(session.state(), state);
-        assert_eq!(session.dispatch(SessionCommand::Redo).unwrap().node.unwrap().name, "First");
+        let redone = session.dispatch(SessionCommand::Redo).unwrap();
+        assert_eq!(redone.node.unwrap().name, "First");
         assert_eq!(session.dispatch(SessionCommand::Redo).unwrap().node, None);
 
         let mut overflow_doc = sample();
         overflow_doc.pages[0].children[0].transform.x = f64::MAX;
         let mut overflow = DocumentSession::new(overflow_doc).unwrap();
-        let move_overflow = SessionCommand::Move { id: "box", dx: f64::MAX, dy: 0.0 };
+        let move_overflow = SessionCommand::Move {
+            id: "box",
+            dx: f64::MAX,
+            dy: 0.0,
+        };
         assert!(overflow.dispatch(move_overflow).is_err());
         assert_eq!(overflow.state().revision, 0);
     }
@@ -277,11 +306,19 @@ mod tests {
         duplicate_page.pages.push(Node::frame("page-2", 200.0, 100.0));
         assert!(DocumentSession::new(duplicate_page).is_err());
         let mut duplicate_id = sample();
-        duplicate_id.pages[0].children.push(Node::rect("box", 0.0, 0.0, 1.0, 1.0, Color::BLACK));
+        duplicate_id.pages[0]
+            .children
+            .push(Node::rect("box", 0.0, 0.0, 1.0, 1.0, Color::BLACK));
         assert!(DocumentSession::new(duplicate_id).is_err());
 
         let mut session = DocumentSession::new(sample()).unwrap();
-        session.dispatch(SessionCommand::Move { id: "box", dx: 3.0, dy: 4.0 }).unwrap();
+        session
+            .dispatch(SessionCommand::Move {
+                id: "box",
+                dx: 3.0,
+                dy: 4.0,
+            })
+            .unwrap();
         let saved = x_format::serialize::save_x(&session.snapshot());
         let reopened = x_format::deserialize::load_x(&saved).unwrap();
         assert_eq!(reopened.pages[0].children[0].transform.x, 13.0);
@@ -297,7 +334,12 @@ mod tests {
             ));
         }
         let mut session = DocumentSession::new(doc).unwrap();
-        session.dispatch(SessionCommand::Rename { id: "box", name: "Small" }).unwrap();
+        session
+            .dispatch(SessionCommand::Rename {
+                id: "box",
+                name: "Small",
+            })
+            .unwrap();
         assert!(session.editor.history_bytes() < 10_000, "rename history captured the page");
     }
 }
