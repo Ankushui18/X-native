@@ -1611,7 +1611,7 @@ mod tests {
         </svg>"##).unwrap();
         assert_eq!(page.children.len(), 1);
         let rect = &page.children[0];
-        assert_eq!(rect.id.as_deref(), Some("box"));
+        assert_eq!(rect.id, "box");
         assert_eq!(rect.opacity, 0.5);
         assert!(
             matches!(rect.fill, Paint::Solid(c) if c.to_rgba8() == Color::from_rgb8(0x12, 0x34, 0x56).to_rgba8())
