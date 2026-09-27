@@ -113,19 +113,54 @@ jobs:
           cache-dependency-path: X-Native/apps/web/package-lock.json
 
       - name: Package both WASM bridges (matching bindgen glue)
+        id: package-wasm
         run: |
           rustup target add wasm32-unknown-unknown --toolchain 1.98.1
           cargo install wasm-bindgen-cli --version 0.2.127 --locked
           bash scripts/build-wasm.sh
 
       - name: Real WASM bridge smoke tests (no mocks or replay)
+        id: wasm-smoke
         run: |
           cd apps/web
           npm ci --no-audit --no-fund
-          npm run test:wasm
+          set +e
+          npm run test:wasm > /tmp/wasm-smoke.log 2>&1
+          status=$?
+          cat /tmp/wasm-smoke.log
+          if [ "$status" -ne 0 ]; then
+            # Logs live behind a separate CDN. Annotations remain API-readable.
+            tail -60 /tmp/wasm-smoke.log | while IFS= read -r line; do
+              line=${line//%/%25}
+              printf '::error::%s\n' "$line"
+            done
+            exit "$status"
+          fi
           npm run build
 
+      # This measures promotion readiness, not just ABI connectivity. Until the
+      # native/web grids agree, auto mode retains its TS oracle. A diagnostic
+      # failure is explicit and must not be described as native parity passing.
+      - name: Native geometry promotion diagnostic (real corpus, no replay)
+        id: wasm-differential
+        continue-on-error: true
+        run: |
+          cd apps/web
+          set +e
+          npm run bench:wasm -- --module public/x_geo.wasm --repeat 2 --out /tmp/geo-native.json > /tmp/geo-native.log 2>&1
+          status=$?
+          cat /tmp/geo-native.log
+          if [ "$status" -ne 0 ]; then
+            tail -45 /tmp/geo-native.log | while IFS= read -r line; do
+              line=${line//%/%25}
+              printf '::warning::Native promotion NOT approved: %s\n' "$line"
+            done
+          fi
+          cat /tmp/geo-native.log >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
       - name: Upload browser-ready wasm assets
+        if: always() && steps.package-wasm.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: x-wasm
