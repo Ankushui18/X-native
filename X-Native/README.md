@@ -2,15 +2,19 @@
 
 Design tool with a **web designer** as the only product UI, and a **Rust
 codebase** (document, layout, `.x` IO, headless render, format import/export)
-that is currently headless and unconnected. Visual language: Graphite & Signal.
+connected through guarded, optional WASM import and command-session bridges.
+Visual language: Graphite & Signal.
 
 ## Architecture boundary
 
 **TypeScript is the production runtime engine for the web application today.**
-`apps/web/src/engine/` owns the document model, undo, Auto Layout, snapping,
-persistence and import/export, and does not call the Rust crates at all. Rust
-is a future candidate engine whose role has not yet been proven — it cannot
-currently be built in this environment.
+`apps/web/src/engine/` still owns live document edits, undo, Auto Layout,
+snapping and persistence. Optional Rust WASM imports use whole-result guards;
+there is also an opt-in Rust-owned command session for native `.x` and a strict,
+rectangle-only web-document round trip. Neither replaces the production editor
+or runs a second undo history alongside it. Native geometry promotion remains
+unapproved; local Cargo/WASM builds are unavailable, so generated-WASM checks
+run in CI.
 
 The rule is *one authoritative production implementation per engine
 capability*, with the Rust ↔ TypeScript boundary explicitly provisional until

@@ -899,3 +899,36 @@ proven slice, followed by removal of the TS duplicate.
 - The unchanged geometry diagnostic remains **NOT APPROVED (1/30 equivalent)**.
   A passed command ABI does not promote geometry, the full web editor, native
   desktop UI or per-frame rendering parity.
+
+## 21. Gated web-document V1 admission (opt-in; not a live editor switch)
+
+`apps/web/src/engine/webDocumentSession.ts` translates **only** a one-page
+`DocSeed`/`PersistedDoc` with its transparent `Page.root` and up to 2048 direct
+solid, opaque rectangle children to native `.x` at open. Required web node keys
+are frozen to V1; every other node value must match the explicitly reviewed
+factory defaults. File/page metadata must have the supported shape; unsupported
+pages, styles, components, variables, annotations, guides, interactions,
+strokes, gradients, effects, text, layout, nested layers and unknown keys cause
+the **whole file** to decline (`null`), with the existing `MemoryEngine` left
+as its owner. The bridge requires the existing session ABI, and its own dialect
+constant is `WEB_DOCUMENT_SESSION_VERSION = 1`.
+
+On admission, the generated WASM class loads native `.x`, immediately exports
+one checkpoint, and the adapter compares the **entire** reconstructed web file
+with the input. Mismatched native defaults/precision/metadata close that Rust
+session rather than losing data. The retained JavaScript shell has only
+file/page/viewport metadata and a root ID — not the original node tree or a
+parallel undo stack. Commands call the one Rust-owned session and return
+single-node deltas; a full JSON document is read **only** at admission and an
+explicit `exportDocument()` checkpoint. Export validates every native field
+and refuses native features or metadata the dialect cannot represent. The FIG,
+Sketch and SVG import adapters and geometry equivalence guards are unchanged.
+
+Local `npm test` (including negative document/node/native-field cases),
+`npm run build`, and `node --check tests/wasm/real-bridges.mjs` passed. The
+real-generated-WASM smoke now also exercises actual web-document admission,
+Rust rename/move/undo/redo, full metadata round trips and strict fallback; CI
+verification is recorded separately once it runs. Local Cargo/WASM builds are
+unavailable. This **does not** migrate production rendering, layout, file store,
+undo or `App.tsx` to Rust. Wider schemas and a single production document owner
+remain prerequisites before retiring the TS engine.

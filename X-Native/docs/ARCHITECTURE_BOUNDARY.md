@@ -3,6 +3,8 @@
 > **2026-09-27 update:** optional import and geometry bridges are wired and
 > equivalence-guarded. A separate, stateful Rust command-session boundary now
 > exists for native `.x` documents; it is **not** the production web editor.
+> A strictly gated, opt-in web-document V1 admission/checkpoint adapter now
+> covers a small rectangle-only subset; no production editor owner changed.
 > The import bridges and command-session ABI passed CI; native geometry
 > promotion **failed** its comparator. See [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
 > The baseline inventory below is historical, not a claim that the bridges are inert.
@@ -27,7 +29,7 @@ before a lossless document boundary and behavior parity would lose user work.
 | --- | --- | --- |
 | `x-core` model, `x-editor` commands/undo, Rust layout | Engine authority shared across hosts | One-page native `.x` command session; live web engine not migrated |
 | TypeScript / UI | Application state, input and presentation only | Existing `MemoryEngine` still drives the production web editor |
-| WASM | Web boundary | Import bridge and optional `RustDocumentSession` class |
+| WASM | Web boundary | Import bridge, optional `RustDocumentSession`, and opt-in rectangle-only web-document admission/checkpoint |
 | Native desktop | Direct Rust boundary | Direct Rust session API and native-host test; no desktop UI yet |
 | Document, Auto Layout, undo duplicated in TS | **Avoid** in the destination | Existing duplication must be removed one proven slice at a time; no new TS engine in the bridge |
 | Rust ↔ TS per-frame full JSON | **Avoid** | Native `.x` read once at open / written on explicit export; command replies are one-node deltas |
@@ -37,11 +39,20 @@ before a lossless document boundary and behavior parity would lose user work.
 `Editor` history. `x-wasm` only exposes it; `apps/web/src/engine/rustSession.ts`
 only decodes its small deltas. The native facade re-exports the **same** session.
 The session currently admits **exactly one native `.x` page** with unique node
-IDs, and commands target individual layers. It is not a TS-doc adapter: the
-persisted web `Page.root` tree is not the native `.x` schema. Do not run two
-histories against the same document or silently rehydrate one from the other.
-The web UI continues using `MemoryEngine` until document round-tripping,
-commands, layout, undo, persistence and rendering agree on observable behavior.
+IDs, and commands target individual layers. The persisted web `Page.root` tree
+is **not** native `.x`. `webDocumentSession.ts` now supplies an independent,
+opt-in **V1 format gate** for exactly one page, a transparent root and direct
+solid/opaque rectangles. It rejects unknown node/document fields, comments,
+variables, styled/nested layers and unsupported features *as a whole file*;
+uses the existing native session ABI; compares the complete web document after
+Rust open → export; and throws if any explicit checkpoint cannot be decoded
+without dropping native data. It retains only web application/page metadata and
+the root ID, **not** a shadow node tree or TS undo stack. A full document crosses
+only at open/checkpoint, never per command or frame. This is a bounded
+format contract, **not** production behavior, rendering or layout parity.
+Do not run two histories against the same document or silently rehydrate one
+from the other. The web UI continues using `MemoryEngine` until commands,
+layout, undo, persistence and rendering agree on observable behavior.
 The shared Rust/native and real generated-WASM session tests passed
 [CI 36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226).
 See §20 in the WASM implementation record for scope and tests.
@@ -173,8 +184,9 @@ resources/typography/styles fall back, never partially import. Geometry `auto`
 compares against TS using the existing §8 comparator; `?geo=wasm` exposes native
 results for differential tests. Native equivalence across the corpus failed; no
 speedup is claimed. The new **opt-in** Rust command session is deliberately not
-wired to `MemoryEngine` until a lossless web-document round-trip and a single
-history owner can be verified. See the linked implementation record for gates.
+wired to `MemoryEngine`: the new rectangle-only document round-trip does not
+cover general files, and the editor still needs a single history, layout and
+persistence owner. See the linked implementation record for gates.
 
 ## Migration sequence
 

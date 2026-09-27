@@ -11,6 +11,9 @@ import { importSketch as sketchTs } from "../../src/engine/sketchImport.ts";
 import { initWasmBridge, getEngineInfo, importSvg, importFig, importSketch, importsEquivalent, __resetWasmForTests } from "../../src/engine/wasmBridge.ts";
 import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
 import { openRustSession } from "../../src/engine/rustSession.ts";
+import { admitWebDocument, openWebDocumentSession } from "../../src/engine/webDocumentSession.ts";
+import { docFromTemplate } from "../../src/engine/files.ts";
+import { node } from "../../src/engine/memory.ts";
 import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
 import { booleanPath, booleanPathTs } from "../../src/engine/geometry.ts";
 
@@ -99,6 +102,43 @@ try {
   const multiPage = { ...savedSessionDoc, pages: [savedSessionDoc.pages[0], { ...savedSessionDoc.pages[0], id: "second" }] };
   await assert.rejects(() => openRustSession(JSON.stringify(multiPage)), "unsupported multi-page session must decline");
   console.log("PASS real Rust command session: open, per-node deltas, move/rename, Rust undo/redo, explicit .x export, isolation and refusals");
+
+  // The web-document gate is separate from import conversion. Check a real
+  // persisted web shape through x-format -> x-editor -> x-format and back,
+  // including the web-only file/page/viewport shell. Unsupported whole files
+  // must stay on MemoryEngine without opening a second Rust history.
+  const web = docFromTemplate("blank");
+  web.fileName = 'Web ↔ Rust "working file"';
+  web.pages[0].name = "Canvas label ≠ root label";
+  web.pages[0].root.children.push(
+    node("rect", "Card \"α\"", 10, 20, 30, 40, { fill: "#a1b2c3" }),
+    node("rect", "Hidden", -25, 9, 80, 12, { fill: "#445566", visible: false, locked: true }),
+  );
+  web.showFlows = false; web.zoom = 1.25; web.panX = -80; web.panY = 53;
+  assert.ok(admitWebDocument(web));
+  const before = JSON.parse(JSON.stringify(web));
+  const webSession = await openWebDocumentSession(web);
+  assert.ok(webSession, "real Rust artifact must preserve the complete admitted web file");
+  assert.deepEqual(webSession.exportDocument(), before, "full open -> Rust -> web checkpoint is lossless");
+  const cardId = web.pages[0].root.children[0].id;
+  assert.equal(webSession.getNode(cardId).name, 'Card "α"');
+  const changeName = webSession.renameNode(cardId, "Renamed");
+  assert.deepEqual([changeName.revision, changeName.node.name], [1, "Renamed"]);
+  const changePosition = webSession.moveNode(cardId, -3, 4);
+  assert.deepEqual([changePosition.revision, changePosition.node.x, changePosition.node.y], [2, 7, 24]);
+  assert.ok(JSON.stringify(changePosition).length < 256, "web command boundary must remain a small delta");
+  assert.deepEqual([webSession.undo().node.x, webSession.undo().node.name], [10, 'Card "α"']);
+  assert.deepEqual([webSession.redo().node.name, webSession.redo().node.x], ["Renamed", 7]);
+  const expectedWeb = JSON.parse(JSON.stringify(before));
+  expectedWeb.pages[0].root.children[0].name = "Renamed";
+  expectedWeb.pages[0].root.children[0].x = 7;
+  expectedWeb.pages[0].root.children[0].y = 24;
+  assert.deepEqual(webSession.exportDocument(), expectedWeb, "Rust edits + history persist without web shadow edits");
+  assert.deepEqual(web, before, "caller document was never mutated by Rust session");
+  webSession.close();
+  assert.equal(await openWebDocumentSession({ ...web, styles: [{ name: "unsupported" }] }), null);
+  console.log("PASS real WASM web-document admission: lossless blank/rect metadata, Rust history, strict fallback");
+
   const extended = JSON.parse(glue.importSvgToX(plain));
   extended.doc.comments = [{ text: "do not discard me" }];
   assert.throws(() => decodeRustImport(JSON.stringify(extended)), /Unsupported Rust comments/);
