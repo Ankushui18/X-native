@@ -303,7 +303,8 @@ mod tests {
     fn single_page_unique_id_contract_and_explicit_snapshot() {
         assert!(DocumentSession::new(Document::default()).is_err());
         let mut duplicate_page = sample();
-        duplicate_page.pages.push(Node::frame("page-2", 200.0, 100.0));
+        let extra_page = Node::frame("page-2", 200.0, 100.0);
+        duplicate_page.pages.push(extra_page);
         assert!(DocumentSession::new(duplicate_page).is_err());
         let mut duplicate_id = sample();
         let duplicate = Node::rect("box", 0.0, 0.0, 1.0, 1.0, Color::BLACK);

@@ -269,7 +269,7 @@ jobs:
           if [ -f /tmp/report.txt ]; then
             printf '::notice::%s\n' "$(head -1 /tmp/report.txt)"
           fi
-          if grep -q 'FAIL unformatted code' /tmp/gate.log 2>/dev/null; then
+          if grep -q 'unformatted code' /tmp/gate.log 2>/dev/null; then
             # The gate's short summary has only "Diff in file:line"; emit the
             # first actual hunks through the API for toolchain-less hosts.
             python3 -c '

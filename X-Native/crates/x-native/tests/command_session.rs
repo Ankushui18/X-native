@@ -7,10 +7,10 @@ use x_native::{Color, Document, Node};
 
 #[test]
 fn native_host_edits_and_saves_the_same_rust_document() {
+    let box_node = Node::rect("box", 10.0, 20.0, 30.0, 40.0, Color::BLACK);
+    let page = Node::frame("page", 400.0, 300.0).child(box_node);
     let doc = Document {
-        pages: vec![Node::frame("page", 400.0, 300.0).child(Node::rect(
-            "box", 10.0, 20.0, 30.0, 40.0, Color::BLACK,
-        ))],
+        pages: vec![page],
         ..Default::default()
     };
     let mut session = DocumentSession::new(load_x(&save_x(&doc)).unwrap()).unwrap();
