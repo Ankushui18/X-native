@@ -151,12 +151,20 @@ jobs:
           npm run bench:wasm -- --module public/x_geo.wasm --repeat 2 --out /tmp/geo-native.json > /tmp/geo-native.log 2>&1
           status=$?
           cat /tmp/geo-native.log
-          if [ "$status" -ne 0 ]; then
-            # One encoded annotation avoids GitHub's ten-warnings-per-step cap.
-            node -e 'const fs = require("fs"); const text = "Native promotion NOT approved\n" + fs.readFileSync("/tmp/geo-native.log", "utf8").slice(-30000); console.log("::warning::" + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));'
-          else
-            node -e 'const fs = require("fs"); const text = fs.readFileSync("/tmp/geo-native.log", "utf8").slice(-30000); console.log("::notice::" + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));'
-          fi
+          # API annotations truncate at 4096 chars and at ten warnings/step.
+          # Publish a compact complete-case summary, not the first few log lines.
+          node -e '
+            const fs = require("fs");
+            let text = fs.readFileSync("/tmp/geo-native.log", "utf8").slice(-3500);
+            if (fs.existsSync("/tmp/geo-native.json")) {
+              const r = JSON.parse(fs.readFileSync("/tmp/geo-native.json", "utf8"));
+              const sum = (k) => r.rows.reduce((n, row) => n + row[k], 0).toFixed(2);
+              text = `${r.mode}: ${r.rows.length - r.fails}/${r.rows.length} equivalent; failures=${r.fails}; repeat=${r.repeat}; TS total=${sum("tsMs")}ms; native total=${sum("modMs")}ms\n` + r.rows.map(row => `${row.sanityOk && row.diffOk ? "PASS" : "FAIL"} ${row.name}: ${row.reasons.map(x => x.split(":")[0]).join(",")}`).join("\n");
+            }
+            const failed = Number(process.argv[1]) !== 0;
+            text = (failed ? "Native promotion NOT approved\n" : "Native corpus passed\n") + text;
+            console.log((failed ? "::warning::" : "::notice::") + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));
+          ' "$status"
           cat /tmp/geo-native.log >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
