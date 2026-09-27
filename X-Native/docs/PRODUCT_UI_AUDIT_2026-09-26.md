@@ -246,7 +246,7 @@ on-canvas gradient handles, star/poly param handles, frame-tool + badges, smart 
 | FR-U2 | FIXED: canvas chrome is a token family now. `styles.css` declares 15 `--cv-*` roles in **both** themes (selection ink / wash / glow, chrome ink, lock, guide, target, mask, on-canvas card + hairline + text, scrim, well, line, dim) and `ui/canvasChrome.ts` reads all 22 of them — the 15 plus the seven the canvases already read ad hoc (`--panel --canvas --grid --canvas-label --comp --accent --accent-wash`) — once per paint: `readCanvasChrome(get)` is pure and testable, `canvasChrome()` does the style read for the minimap and rulers, and `withAlpha()` thins a role so the five incidental `rgba(16,185,129,…)` alphas do not have to be literals either. `COMP_PURPLE`'s "kept in step by hand — change both" comment is gone because the canvas now reads `--comp` itself. The two greens are answered by naming them: `--accent` is the control accent (#0e9f6e light / #10b981 dark, contrast-tuned for panel surfaces) and `--cv-sel` is selection ink on the document canvas (#10b981 in both themes today, i.e. the same pixels as before — retuning it per theme is FR-U2b and needs eyes). What stays literal is **document ink**, named `DOC_*` where it is a constant: a new slice's stroke, paint-bucket defaults, a glass effect's tint, `#00000000` creation fills, the noise renderer's black, a boolean mask's white — values written into saved files and their SVG exports, which must not move with the viewer's appearance. Canvas.tsx 68 → 13 colour literals, Minimap.tsx 4 → 0, Rulers.tsx 5 → 0 (workspace colour drift 195 → 131, ceiling lowered in the same commit). `canvasChrome.test.mjs` (50 checks) is the ratchet: fallbacks ≡ the sheet's light column key-for-key, the dark block declares every role, no chrome literal may come back, and every emerald left in Canvas.tsx is a `DOC_*`. §4r | FIXED (P2) | — |
 | FR-U2b | The dark theme now *can* retune canvas chrome — it does not yet. `--cv-sel`, `--cv-ink`, `--cv-guide`, `--cv-target`, `--cv-mask`, `--cv-chip*` and `--cv-scrim` carry the same value in both columns, because changing them is a visible design decision on the one surface this sandbox cannot look at. Only `--cv-well` / `--cv-line` / `--cv-dim` differ (they were already theme-split as literals). One sheet edit each, with eyes, closes this | OPEN (needs eyes) | P3 |
 | FR-U3 | Rotate affordance invisible (zone-only = Figma parity, but zero first-time discoverability) — roadmap: subtle corner affordance on hover | ROADMAP | P2 |
-| FR-U4 | Size/angle badge has no viewport clamp (by = sy+sh+8 can run off-screen at viewport bottom) | PARTIAL (§18 class) | P2 |
+| FR-U4 | FIXED: `clampBadge(rect, view, { pad, flipY })` in `ui/zoom.ts` is the only place a painted badge may sit, and both badge sites (single selection and multi-selection) go through it. Below the box when it fits; flipped above it when below is off-canvas; clamped inside the view when neither side fits (a selection taller than the canvas has nowhere to hang), never negative, with the flip rejected if the flip target is itself off-screen — trading one invisible badge for another is not a fix. Nine arithmetic checks on the pure function plus two band-comparison checks in §46. | FIXED (P2) | — |
 
 ## §11. Popovers/Modals/Tabs trace (prompts §§17–19, 21–22)
 
@@ -269,7 +269,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U3 | Two Esc patterns: component-local (Nudge capture, FillPicker, EffectPopover, ContextMenu) vs App-global closeOverlay (export/actions/find/figInspector) — both work, inconsistent ownership | DRIFT | P2 |
 | PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
-| PM-U6 | ExportAssetsDialog has no initial focus (no autoFocus) — keyboard users start from top | PARTIAL | P2 |
+| PM-U6 | FIXED: the sheet focuses its filter field on open, which is both the first control in the sheet and the first thing worth doing in it — every other modal input in the app (shortcuts, find-in-page, the palette) already did. The dialog also says `aria-modal="true"`, which it did not, so a screen reader was not told the document behind the veil is inert. §46 types into it with no click first and watches the list filter. Focus *restore* on close is still the App's (the sheet is closed by the global overlay owner, PM-U3), so the caret returns to `<body>` rather than to the command that opened it. | FIXED (P2) | — |
 
 ## §12. Left panel + states trace (prompts §§20, 23–25) — NavRail + LeftPanel + App screens
 
@@ -302,7 +302,7 @@ palette (max-width/max-height/scroll).
 
 | # | Finding | Status | Pri |
 |---|---|---|---|
-| RW-U1 | Bottom toolbar dock has NO narrow-width protection (fixed content row, no max-width/scroll/wrap) → tools clip off-screen on narrow windows while minUi saves only the panels. Fix: max-width + scroll or overflow flyout | PARTIAL | P2 |
+| RW-U1 | FIXED: the dock is bounded by the column it hangs in (`max-width: calc(100% - 24px)`) and wraps into a second row instead of running off the screen — `.toolset` wraps too, with `min-width: 0`, so a tool row wider than the stage folds rather than overflows. Wrapping rather than the scroll the finding suggested, because a scroll container clips the tool flyouts as well: `overflow-x: auto` computes `overflow-y` to `auto`, and those menus escape 40px above a 44px strip. That is what the ≤860px override did, so on a phone the boolean menu was opening into a clipped box; the override is gone and the dock's computed `overflow` is `visible` at every width. §4u | FIXED (P2) | — |
 | RW-U2 | All window-size behavior code-verified ONLY (1280/1440/1920/2560 + narrow/wide need a browser) | NOT VERIFIED visually | P2 |
 
 ## §14. Senior designer critique (prompt §26) — evidence-linked, no subjective language
@@ -331,7 +331,8 @@ palette (max-width/max-height/scroll).
 - ACCESSIBILITY: align/valign/decoration buttons have no accessible name at all (TY-U2 FIXED); tooltips
   are pointer-only (TY-U6 FIXED — both the shared component and the `title` bridge now show labels on
   `:focus-visible`, and the bridge names controls that had no accessible name); tool flyouts/menu-less
-  popovers lack keyboard paths (TB-U2 FIXED); dialogs lack initial focus (PM-U6 FIXED); canvas chrome is
+  popovers lack keyboard paths (TB-U2 FIXED); dialogs lack initial focus (PM-U1's dialogs FIXED, the export
+  sheet in §4u); canvas chrome is
   color-only for lock state (FR-U1 FIXED with a dashed ring + "Locked" pill).
 - KEYBOARD WORKFLOW: palette/tree/menus have arrows; flyouts, tabs, orientation segs, and the dock have
   none; shortcuts exist but are advertised inconsistently (⌘/ claimed twice, ⇧E/⇧F hidden).
@@ -502,7 +503,7 @@ read `title` *or* `data-tip` (5 sites, inline) so a resting pointer cannot hide 
    mechanical swap to XButton/XSelect/XSection/XTabs with no behaviour change.
 2. **Two dead affordances (PT-U1 no-op handler, TY-U5 dead UI, LP-U2 dead state)** — cheap, visible.
 3. **IA / missing UI (PT-U6 view menu inside the inspector tab bar, ~~LP-U3/LP-U4 first-run and empty
-   states~~ — done in §4s, FR-U3 rotate zone, RW-U1/RW-U2 unverified visual states)** — needs a design
+   states~~ — done in §4s, FR-U3 rotate zone, ~~RW-U1~~ done in §4u, RW-U2 unverified visual states)** — needs a design
    decision, not a sweep.
 
 ## §4g. P2 round 2 — one inspector header chrome (IN-U3, PT-U1)
@@ -791,7 +792,7 @@ the `--accent` token `#0e9f6e`, `#a855f7`, `#ff3b6b`, `#18181b` — the largest 
 it needs the same token-feeding the canvas already does for `--canvas`/`--grid`/`--canvas-label`;
 **closed in §4r**), IN-U6/FS-U4 (native `title=` on the flip and ColorRow buttons: behaviourally equivalent since §2.3's
 bridge, stylistically split, and frozen by the drift ratchet rather than fixed), PM-U3 (two Escape
-ownership patterns), PM-U6 (export sheet's initial focus), LP-U3–U6, RW-U1, FR-U3/U4 — and the
+ownership patterns), ~~PM-U6 (export sheet's initial focus)~~, LP-U3–U6, ~~RW-U1~~ (both §4u), FR-U3/U4 — and the
 `inspector.tsx` / `FigInspectorModal.tsx` rows of the drift table, which are where the next rounds'
 numbers come from.
 
@@ -884,7 +885,7 @@ clean and warning-free, the sheet at 96.88 kB (17.86 kB gzip) with the new token
 **Still open after this round:** FR-U2b (the dark column exists for every canvas role and retunes
 three of them — the rest is a design call that needs eyes), MOTION-U1, IN-U6/FS-U4, PM-U3, PM-U6,
 LP-U3–U6, RW-U1, FR-U3/U4, and the `inspector.tsx` / `FigInspectorModal.tsx` drift rows. (LP-U3 and
-LP-U4 closed in §4s; LP-U5/U6 in §4t.)
+LP-U4 closed in §4s; LP-U5/U6 in §4t; PM-U6, RW-U1 and FR-U4 in §4u.)
 
 ## §4s. P2 round 6 — the empty page says something (LP-U3, LP-U4)
 
@@ -1036,7 +1037,86 @@ panes — the rows stayed the recipe they were already in.
 
 **Still open after this round:** MOTION-U1, FR-U2b, IN-U6/FS-U4, PM-U3, PM-U6, RW-U1, FR-U3/U4, and the
 `inspector.tsx` / `FigInspectorModal.tsx` drift rows. The LP family (LP-U1 … LP-U6) is now closed end to
-end.
+end. (PM-U6, RW-U1 and FR-U4 closed in §4u.)
+
+## §4u. P2 round 8 — nothing off the edge, nothing out of reach (RW-U1, FR-U4, PM-U6)
+
+Three findings from three different sections of this audit — §13 (responsive), §11 (canvas/frame) and
+§17 (modals) — with one shape: chrome the product puts on screen without asking whether the screen has
+room for it, or whether the keyboard can get to it.
+
+**RW-U1: the dock was bounded by nothing.** `.dock` is absolutely centred in `.canvas-col`
+(`left: 50%; transform: translateX(-50%); bottom: 18px`) at a fixed `height: 44px`, and the column is
+narrower than the window whenever a panel is docked — at 900px the stage can be ~300px wide while the
+tool row, a multi-selection cluster and the right-hand cluster (Assets, Prototype, Dev Mode, Actions)
+add up to ~500px. The strip had no width limit at all, so its tail simply left the screen, and the only
+escape was `minUi` — which "solves" *the tools do not fit* by *closing your panels*. The one override
+that did exist, under `@media (max-width: 860px)`, made the dock a scroll container, which is worse
+than it sounds: `overflow-x: auto` computes `overflow-y` to `auto` as well, and `.tool .fly` escapes
+40px above a 44px strip — so on a phone the boolean menu opened into a clipped box. The dock is bounded
+by its own column now (`max-width: calc(100% - 24px)`, which is the right reference at every width
+rather than the `100vw` the override guessed), keeps `min-height: 44px` so it grows upward from its
+`bottom: 18px` anchor, and **wraps** — `flex-wrap: wrap` with `justify-content: center` on the dock and
+on `.toolset` (plus `min-width: 0`, without which a flex item refuses to shrink below its content). No
+`overflow` anywhere on it, so the flyouts escape at every width and the phone override is deleted.
+A wrapped dock is a two-row pill, and what that looks like is exactly the kind of call this sandbox
+cannot make — **NOT VERIFIED visually**; §46 measures the rects instead of trusting the shape.
+
+**FR-U4: the one readout of "how big is this" could leave the screen.** Both badge sites — the single
+selection and the multi-selection box — computed `by = sy + sh + 8` and painted unconditionally, so a
+selection whose bottom edge was at the canvas bottom lost its size/angle badge: most often mid-resize
+of something tall, which is precisely when the number is wanted. `ui/zoom.ts` gained
+`clampBadge(rect, view, { pad, flipY })`, and both sites go through it: below the box when below fits;
+flipped above it when below does not; clamped inside the view when neither side does (a selection
+taller than the canvas has nowhere to hang), never negative. One subtlety the first draft got wrong and
+a test caught: the flip has to be *rejected* when the flip target is itself off-screen, which happens
+whenever the whole box is below the fold — trading one invisible badge for another is not a fix. It is
+pure arithmetic on canvas-local pixels, so the paint loop stays the only code that knows about a `ctx`
+and the behaviour is testable without a browser.
+
+**PM-U6: the export sheet left the keyboard outside.** `Export assets…` (⇧⌘E, the palette, or the
+inspector's Export button, all through the `x-native-export-dialog` seam) opened a sheet with
+`role="dialog"` but no `aria-modal` and no initial focus, so focus stayed on whatever launched it and a
+keyboard user tabbed in from the top of the document *behind* the veil. The filter field is now the
+first stop, which is both the first control in the sheet and the first thing worth doing in it — and
+every other modal input in the app (shortcuts, find-in-page, the palette) already focused itself, so
+this was the outlier rather than a new convention. The dialog also says `aria-modal="true"` now, since
+a modal that does not announce itself leaves the document behind it sounding live. What is *not* fixed
+here: focus **restore** on close. The sheet is closed by the App's global overlay owner, so the caret
+returns to `<body>` rather than to the command that opened it — that is PM-U3's two-Escapes question,
+and answering it in one place is worth more than patching this sheet.
+
+**Verification.** `edgefit.test.mjs` (26 checks) covers all three at the level each can be checked at:
+nine arithmetic cases on `clampBadge` (fits, exactly-fits-the-pad boundary, one pixel over flips, flip
+target off-screen falls through to the clamp, no flip target, badge taller than the view, both x edges,
+`pad` as a parameter, a view smaller than the badge); the sheet read as text for the dock, because jsdom
+has no layout engine and the stylesheet is what the browser will actually apply (bounded, wraps,
+`min-height` not `height`, centred, `.toolset` folds too, and **no rule anywhere makes the dock a
+scroll container** — the assertion that keeps the flyout bug from coming back); both badge sites in
+`Canvas.tsx` call the helper with a flip target and neither keeps the old formula; and the export sheet
+mounted for real, where React's commit-time focus is observable — `document.activeElement` is the
+filter, it is the first focusable in the sheet, the sheet lists rows, and unmounting removes it.
+
+**Browser suite §46 — written, NOT RUN here** (9 checks, 322 total). The badge is measured as two band
+comparisons rather than one absolute count, because the badge is painted in `--cv-sel`, the same ink as
+the selection outline that crosses both bands: pan until below no longer fits and there must be more
+accent above the box than below, pan further and the reverse, which is the clamp. The dock is measured
+at 1600/1100/900/700 with a select-all multi cluster and again at 430 — every `button.hit` inside both
+the column and the viewport, `scrollWidth <= clientWidth`, computed `overflow-x: visible` — and at 430
+the boolean menu is proven *painted*, not merely present, with `elementFromPoint` at its centre,
+because clipping is visual and not geometric: an element inside a scroll container still reports its
+full rect. The export sheet is opened through the palette and typed into with no click first, then
+closed with Escape.
+
+**Numbers.** Unit suite **2126 checks, 0 failed** (2100 → 2126: +26). `tsc -b` clean; `vite build`
+clean and warning-free, the sheet at 97.84 kB (18.01 kB gzip). The drift table did not move —
+413 inline / 131 colour / 340 `title=` / 363 raw `<button>` / 49 `<select>`, `chrome.tsx` still
+50/4/40/64/2 — because this round added almost no markup: four declarations, one function call at two
+sites, and one attribute.
+
+**Still open after this round:** MOTION-U1 and FR-U2b (both need eyes), IN-U6/FS-U4, PM-U3 (which now
+also owns the export sheet's focus restore), RW-U2, FR-U3, and the `inspector.tsx` /
+`FigInspectorModal.tsx` drift rows.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

@@ -68,7 +68,7 @@ import {
 } from "../engine/clipboard";
 import { toast } from "./toast";
 import { Icon } from "./icons";
-import { zoomAtPoint, zoomToRect } from "./zoom";
+import { clampBadge, zoomAtPoint, zoomToRect } from "./zoom";
 import { getNudgePrefs } from "./nudgePrefs";
 import { alignKey, flowGapLine, flowInsertIndex, wrapLines as flowWrapLines, wraps } from "../engine/layout";
 import { ContextToolbar, XButton } from "./x-ui";
@@ -2669,8 +2669,16 @@ export function Canvas({
       const tw = ctx.measureText(dim).width;
       const bw = tw + 16;
       const bh = 20;
-      const bx = sx + sw / 2 - bw / 2;
-      const by = sy + sh + 8;
+      // FR-U4: the readout used to hang 8px below the box unconditionally, so a
+      // selection whose bottom edge was at the canvas bottom lost it — usually
+      // mid-resize of something tall, which is when it is wanted most.
+      const badge = clampBadge(
+        { x: sx + sw / 2 - bw / 2, y: sy + sh + 8, w: bw, h: bh },
+        { w, h },
+        { flipY: sy - 8 - bh },
+      );
+      const bx = badge.x;
+      const by = badge.y;
       ctx.fillStyle = lockedSel && !isRotating ? LOCK : accent;
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
@@ -2961,8 +2969,14 @@ export function Canvas({
         const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
         ctx.font = "500 11px Inter, system-ui";
         const bw = ctx.measureText(dim).width + 16;
-        const bx = sx + sw / 2 - bw / 2;
-        const by = sy + sh + 8;
+        // FR-U4, the multi-selection badge: same clamp, same flip above the box.
+        const badge = clampBadge(
+          { x: sx + sw / 2 - bw / 2, y: sy + sh + 8, w: bw, h: 20 },
+          { w, h },
+          { flipY: sy - 8 - 20 },
+        );
+        const bx = badge.x;
+        const by = badge.y;
         ctx.fillStyle = allLocked ? LOCK : SEL;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();

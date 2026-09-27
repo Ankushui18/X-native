@@ -3170,6 +3170,181 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 46. RW-U1 + FR-U4 + PM-U6: chrome that fits its screen and answers the keyboard
+{
+  const p = await page();
+  await rows(p);
+  const tokenRgb = (name) =>
+    p.evaluate((n) => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+      const c = document.createElement("canvas").getContext("2d");
+      c.fillStyle = "#000000";
+      c.fillStyle = raw;
+      const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+      return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+    }, name);
+  /** Accent pixels inside one horizontal band of the canvas, measured from the
+   *  bottom edge up. The badge is painted in --cv-sel, the same ink as the
+   *  selection outline, so every check here compares two bands rather than
+   *  trusting an absolute count: the outline contributes a hairline to both. */
+  const band = (rgb, tol, fromBottom, height) =>
+    p.evaluate((r, g, b, t2, fb, hh) => {
+      const c = document.querySelector("canvas");
+      const y0 = Math.max(0, c.height - fb - hh);
+      const d = c.getContext("2d").getImageData(0, y0, c.width, Math.min(hh, c.height - y0)).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (Math.abs(d[i] - r) < t2 && Math.abs(d[i + 1] - g) < t2 && Math.abs(d[i + 2] - b) < t2 && d[i + 3] > 200) n++;
+      }
+      return n;
+    }, rgb[0], rgb[1], rgb[2], tol, fromBottom, height);
+  const panBy = async (dy) => {
+    const w = await p.evaluate(() => {
+      const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+      return { cx: Math.round(r.left + r.width / 2), top: Math.round(r.top) };
+    });
+    await p.keyboard.press("h");
+    await p.mouse.move(w.cx, w.top + 120); await p.mouse.down();
+    await p.mouse.move(w.cx, w.top + 120 + dy, { steps: 10 }); await p.mouse.up();
+    await p.keyboard.press("v");
+    await sleep(500);
+  };
+
+  /* ── FR-U4: the size readout stays on the canvas ── */
+  const sel = await tokenRgb("--cv-sel");
+  const box = await p.evaluate(() => {
+    const r = document.querySelector(".canvas-wrap").getBoundingClientRect();
+    return { left: Math.round(r.left), top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  });
+  // A rectangle in the middle of the stage: its badge hangs 8px below it, far
+  // from either edge, so both bands start empty of chrome.
+  await drawRect(p, box.left + Math.round(box.w / 2) - 70, box.top + Math.round(box.h / 2) - 50);
+  const flipBand = { from: 110, h: 35 };   // where a badge flipped above the box lands
+  const clampBand = { from: 5, h: 30 };    // where a badge clamped into view lands
+  const baseFlip = await band(sel, 24, flipBand.from, flipBand.h);
+  const baseClamp = await band(sel, 24, clampBand.from, clampBand.h);
+
+  // Pan until the box's bottom edge is 10px above the canvas bottom: below no
+  // longer fits, above does, so the readout has to move above the box.
+  await panBy(Math.round(box.h / 2) - 60);
+  const flipNow = await band(sel, 24, flipBand.from, flipBand.h) - baseFlip;
+  const clampNow = await band(sel, 24, clampBand.from, clampBand.h) - baseClamp;
+  t(`the readout flips above the box when below is off-canvas (+${flipNow}px above vs +${clampNow}px below)`,
+    flipNow > 500 && flipNow > clampNow);
+
+  // Pan further, so neither side of the box is on screen: the last resort is the
+  // clamp, and the readout must still be painted somewhere.
+  await panBy(220);
+  const flipGone = await band(sel, 24, flipBand.from, flipBand.h) - baseFlip;
+  const clampGone = await band(sel, 24, clampBand.from, clampBand.h) - baseClamp;
+  t(`and clamps into view when neither side fits (+${clampGone}px below vs +${flipGone}px above)`,
+    clampGone > 500 && clampGone > flipGone);
+
+  /* ── RW-U1: the dock is bounded by the column it hangs in ── */
+  const dockFit = () => p.evaluate(() => {
+    const dock = document.querySelector(".dock");
+    const col = document.querySelector(".canvas-col");
+    const dr = dock.getBoundingClientRect();
+    const cr = col.getBoundingClientRect();
+    const cs = getComputedStyle(dock);
+    const hits = [...dock.querySelectorAll("button.hit")];
+    const off = hits.filter((b) => {
+      const r = b.getBoundingClientRect();
+      return r.width === 0 || r.right > window.innerWidth + 0.5 || r.left < -0.5 || r.bottom > window.innerHeight + 0.5;
+    });
+    return {
+      tools: hits.length,
+      off: off.map((b) => b.getAttribute("aria-label")),
+      inside: dr.left >= cr.left - 0.5 && dr.right <= cr.right + 0.5,
+      rows: new Set(hits.map((b) => Math.round(b.getBoundingClientRect().top / 10))).size,
+      scrollable: dock.scrollWidth > dock.clientWidth + 1,
+      overflow: cs.overflowX,
+      wrap: cs.flexWrap,
+      multi: !!dock.querySelector(".toolset.multi"),
+    };
+  });
+  await p.setViewport({ width: 1600, height: 900, deviceScaleFactor: 1 });
+  await sleep(500);
+  await p.keyboard.down("Meta"); await p.keyboard.press("a"); await p.keyboard.up("Meta");
+  await sleep(400);
+  for (const width of [1600, 1100, 900, 700]) {
+    await p.setViewport({ width, height: 900, deviceScaleFactor: 1 });
+    await sleep(600);
+    const d = await dockFit();
+    t(`at ${width}px all ${d.tools} dock tools are on screen (${d.off.join(", ") || "none off"}, ${d.rows} row(s), multi ${d.multi})`,
+      d.tools > 6 && d.off.length === 0 && d.inside && d.scrollable === false &&
+      d.overflow === "visible" && d.wrap === "wrap");
+  }
+
+  // On a phone the strip is narrower than the tool menu that escapes it, which is
+  // exactly what the old `overflow-x: auto` override clipped.
+  await p.setViewport({ width: 430, height: 780, deviceScaleFactor: 1 });
+  await sleep(700);
+  const narrow = await dockFit();
+  t(`at 430px the dock still fits its column (${narrow.off.join(", ") || "none off"}, overflow ${narrow.overflow})`,
+    narrow.off.length === 0 && narrow.inside && narrow.overflow === "visible");
+  const opened = await p.evaluate(() => {
+    const caret = document.querySelector('.dock .tool[data-group="bool"] .caret');
+    if (!caret) return false;
+    caret.click();
+    return true;
+  });
+  await sleep(400);
+  const fly = await p.evaluate(() => {
+    const f = document.querySelector('.dock .tool[data-group="bool"] .fly');
+    if (!f) return null;
+    const r = f.getBoundingClientRect();
+    const dock = document.querySelector(".dock").getBoundingClientRect();
+    // Clipping is visual, not geometric: an element inside a scroll container
+    // still reports its full rect. Ask the browser what is actually painted at
+    // the menu's centre.
+    const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { h: Math.round(r.height), w: Math.round(r.width), above: Math.round(dock.top - r.top), painted: !!el?.closest(".fly") };
+  });
+  t(`the tool menu escapes the strip and is painted there (${fly ? `${fly.h}px tall, ${fly.above}px above the dock` : "no bool tool"})`,
+    !opened || (!!fly && fly.h > 40 && fly.above > 10 && fly.painted));
+  await p.keyboard.press("Escape");
+  await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
+  await sleep(500);
+
+  /* ── PM-U6: the export sheet opens with the keyboard already inside it ── */
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(500);
+  const ran = await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".actions button, [role=\"dialog\"] button")]
+      .find((x) => (x.textContent || "").includes("Export assets"));
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  await sleep(600);
+  const sheet = await p.evaluate(() => {
+    const d = document.querySelector('.xmodal[aria-label="Export assets"]');
+    const a = document.activeElement;
+    const first = d?.querySelector("input, button, select, textarea, a[href]");
+    return {
+      open: !!d,
+      modal: d?.getAttribute("aria-modal"),
+      focused: a?.className || a?.tagName,
+      inSheet: !!a?.closest?.(".xmodal"),
+      firstIsFilter: first?.className === "xmodal-filter",
+      rows: document.querySelectorAll(".xrow").length,
+    };
+  });
+  t(`Export assets opens as a modal sheet (${sheet.modal ? "aria-modal" : "not modal"}, ${sheet.rows} rows)`,
+    ran && sheet.open && sheet.modal === "true" && sheet.rows > 0);
+  t(`and the keyboard is already in its filter field (${sheet.focused})`,
+    sheet.inSheet && sheet.focused === "xmodal-filter" && sheet.firstIsFilter);
+  await p.keyboard.type("zzz-no-such-layer");
+  await sleep(400);
+  const filtered = await p.evaluate(() => document.querySelectorAll(".xrow").length);
+  t(`typing filters without a click first (${sheet.rows} → ${filtered} rows)`, filtered === 0);
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  t("and Escape closes it", await p.evaluate(() => !document.querySelector(".xmodal")));
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

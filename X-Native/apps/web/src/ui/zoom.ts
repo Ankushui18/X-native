@@ -29,6 +29,34 @@ export function viewportCentreWorld(snap: Snapshot): { x: number; y: number } {
   };
 }
 
+/** Where a canvas-painted badge is allowed to sit (FR-U4).
+ *
+ *  The size/angle readout hangs 8px below the selection box, which is right
+ *  until the box's bottom edge reaches the bottom of the canvas: the badge then
+ *  paints off-screen and the one answer to "how big is this?" disappears — most
+ *  often while resizing something tall, which is exactly when it is wanted.
+ *  Flip it above the box when below does not fit, and clamp both axes into the
+ *  view as a last resort, because a selection taller than the canvas has
+ *  neither side to hang from. Pure arithmetic on canvas-local pixels, so the
+ *  paint loop stays the only thing that has to know about the ctx. */
+export function clampBadge(
+  rect: { x: number; y: number; w: number; h: number },
+  view: { w: number; h: number },
+  opts: { pad?: number; flipY?: number } = {},
+): { x: number; y: number; flipped: boolean } {
+  const pad = opts.pad ?? 8;
+  const x = Math.max(pad, Math.min(rect.x, Math.max(pad, view.w - rect.w - pad)));
+  /** A candidate row is usable only if the whole badge is inside the view: a flip
+   *  target above a selection that starts below the fold is off-screen too, and
+   *  trading one invisible badge for another is not a fix. */
+  const fits = (top: number) => top >= pad && top + rect.h <= view.h - pad;
+  if (!fits(rect.y) && opts.flipY !== undefined && fits(opts.flipY)) {
+    return { x, y: opts.flipY, flipped: true };
+  }
+  const y = Math.max(pad, Math.min(rect.y, Math.max(pad, view.h - rect.h - pad)));
+  return { x, y, flipped: false };
+}
+
 /** Change the zoom while keeping the middle of the canvas still, which is what
  *  zoom-in/zoom-out shortcuts and percentage menu do. */
 export function zoomAboutCentre(engine: Engine, zoom: number) {

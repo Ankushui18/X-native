@@ -637,14 +637,27 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   box-sizing: border-box;
 }
 
+/* RW-U1: the dock hangs inside `.canvas-col`, which is narrower than the window
+   whenever a panel is docked — at 900px the stage can be ~300px wide while the
+   tool row, a multi-selection cluster and the right-hand cluster add up to
+   ~500px. It was a fixed 44px strip with no width limit at all, so its tail
+   simply left the screen and only `minUi` (which hides the panels) saved it.
+   It is bounded by its own column now and wraps into a second row rather than
+   scrolling, because a scroll container would clip the tool flyouts too:
+   `overflow-x: auto` computes `overflow-y` to `auto` as well, and those menus
+   escape 40px above a 44px strip. That is what the ≤860px rule used to do, so
+   on a phone the boolean menu was opening into a clipped box. */
 .dock {
   position: absolute;
   left: 50%;
   bottom: 18px;
   transform: translateX(-50%);
-  height: 44px;
+  max-width: calc(100% - 24px);
+  min-height: 44px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 4px 6px;
   border-radius: 16px;
@@ -658,8 +671,11 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
    everywhere made the dock read as one undifferentiated strip. */
 .toolset {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 2px;
+  min-width: 0;
 }
 /* The multi-selection end of the dock: the count, then the actions that apply
    to the whole selection. Both used to carry their layout inline (TB-U5), which
@@ -5153,8 +5169,9 @@ html[data-theme="dark"] .x-btn-danger {
     border-radius: 12px;
     box-shadow: var(--elev-overlay);
   }
-  .dock { max-width: calc(100vw - 24px); overflow-x: auto; scrollbar-width: none; }
-  .dock::-webkit-scrollbar { display: none; }
+  /* The dock needs no override here any more: its base rule is bounded by
+     `.canvas-col`, which is the full width at this breakpoint, and it wraps
+     instead of scrolling so the tool flyouts stay reachable (RW-U1). */
   .min-chip { max-width: calc(100vw - 24px); }
   .min-chip-name { max-width: 120px; }
 }

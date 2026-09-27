@@ -339,14 +339,20 @@ function ExportAssetsDialog({
 
   return createPortal(
     <div className="xmodal-veil" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="xmodal" role="dialog" aria-label="Export assets">
+      <div className="xmodal" role="dialog" aria-modal="true" aria-label="Export assets">
         <div className="xmodal-head">
           <h3>Export assets</h3>
+          {/* PM-U6: the sheet opened with focus still on whatever launched it, so
+              a keyboard user tabbed in from the top of the document behind the
+              veil. The filter is the first thing in the sheet and the first
+              thing worth doing in it — every other modal input in the app
+              (shortcuts, find-in-page, the palette) already focuses itself. */}
           <input
             className="xmodal-filter"
             placeholder="Filter layers"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+            autoFocus
           />
           <button className="link" onClick={() => setChecked(Object.fromEntries(candidates.map((n) => [n.id, true])))}>
             Check all
