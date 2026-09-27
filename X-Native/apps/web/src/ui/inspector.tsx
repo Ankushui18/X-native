@@ -106,7 +106,7 @@ import { askChoice, askPrompt } from "./dialog";
 import { buildPdf } from "../engine/pdf";
 import { contentBox, exportClipSvg, exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
-import { armPopover } from "./popoverGuard";
+import { useEscape, useFocusTrap } from "./escape";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
 import { addAutoLayout, removeAutoLayout, setFlow, suggestAutoLayout } from "./layoutActions";
 import {
@@ -122,7 +122,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
-import { XPopover, XSegmentedControl, XTabs } from "./x-ui";
+import { XButton, XPopover, XSegmentedControl, XTabs } from "./x-ui";
 
 /** "Round to Pixel" is only shown when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -337,16 +337,36 @@ function ExportAssetsDialog({
     onClose();
   };
 
+  // PM-U7: `aria-modal` says the page behind the veil is inert; this is what
+  // makes that true for the keyboard too, so Tab cannot leave the sheet for the
+  // toolbar behind it.
+  const sheet = useRef<HTMLDivElement>(null);
+  useFocusTrap(true, sheet);
+  // PM-U9: and the modality is intrinsic to the sheet, not only to the App state
+  // that opened it — anything that renders this sheet gets the guard that stops
+  // the editor's chords (Delete, tool letters, ⌘A/⌘Z) reaching through the veil.
+  // App registers its own entry for the same sheet ("export", also modal), which
+  // is the one that carries the caret home; this one is pushed later (child
+  // effects run first) so it is the top of the stack, and Escape closes the sheet
+  // exactly once either way.
+  useEscape("export-sheet", onClose, true);
+
   return createPortal(
     <div className="xmodal-veil" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="xmodal" role="dialog" aria-label="Export assets">
+      <div ref={sheet} className="xmodal" role="dialog" aria-modal="true" aria-label="Export assets" tabIndex={-1}>
         <div className="xmodal-head">
           <h3>Export assets</h3>
+          {/* PM-U6: the sheet opened with focus still on whatever launched it, so
+              a keyboard user tabbed in from the top of the document behind the
+              veil. The filter is the first thing in the sheet and the first
+              thing worth doing in it — every other modal input in the app
+              (shortcuts, find-in-page, the palette) already focuses itself. */}
           <input
             className="xmodal-filter"
             placeholder="Filter layers"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+            autoFocus
           />
           <button className="link" onClick={() => setChecked(Object.fromEntries(candidates.map((n) => [n.id, true])))}>
             Check all
@@ -441,7 +461,10 @@ interface PresetCategory {
   items: { name: string; w: number; h: number }[];
 }
 
-const PRESET_GROUPS: PresetCategory[] = [
+/** Frame presets, shared: the inspector's preset grid and the agent pane's
+ *  "add a frame" both place one of these, so the sizes and names stay in one
+ *  place (LP-U6 — the agent used to invent a 390x844 that matched nothing). */
+export const PRESET_GROUPS: PresetCategory[] = [
   {
     category: "Phone",
     icon: "phone",
@@ -2234,15 +2257,15 @@ function DevLangMenu({
     const close = (e: MouseEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", esc);
     return () => {
       window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", esc);
     };
   }, [open]);
-  useEffect(() => (open ? armPopover() : undefined), [open]);
+  // PM-U3: the menu joins the one Escape cascade. It used to arm the shared
+  // popover counter, which protected the selection but closed nothing when the
+  // app's capture handler got there first.
+  useEscape(open ? "dev-lang" : null, () => setOpen(false));
   const current = DEV_LANGS.find((l) => l.id === format)?.label ?? "CSS";
   const pick = (fn: () => void) => () => {
     fn();
@@ -2671,8 +2694,10 @@ function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: S
     window.addEventListener("x-native-annotate", on);
     return () => window.removeEventListener("x-native-annotate", on);
   }, []);
-  // While the property menu is open it owns Escape, like the language menu.
-  useEffect(() => (pin ? armPopover() : undefined), [pin]);
+  // While the property menu is open it owns Escape, like the language menu —
+  // which arming the popover counter never actually delivered: the counter kept
+  // the selection alive and the menu stayed open. PM-U3 registers it instead.
+  useEscape(pin ? "dev-property-menu" : null, () => setPin(false));
   const list = (snap.annotations ?? []).filter((a) => a.nodeId === n.id) ?? [];
   const pins: [string, () => string][] = [
     ["Fill", () => (n.fillVisible === false || isNone(n.fill) ? "Fill: none" : `Fill: ${n.fill.toUpperCase()}`)],
@@ -4459,346 +4484,311 @@ function Design({
         </div>
       </div>
       {(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
-        <div className="insp-pad" style={{ marginTop: 2 }}>
-          <div style={{ padding: 10, background: "var(--hover)", borderRadius: 8, border: "1px solid var(--line)", display: "grid", gap: 10 }}>
-            {/* Header */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <strong style={{ fontSize: 11, letterSpacing: "0.02em" }}>Vector</strong>
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                {snap.vecEdit === n.id ? (
-                  <button
-                    className="export-run"
-                    style={{ padding: "2px 10px", fontSize: 10, background: "var(--accent)", color: "#fff", borderRadius: 12, fontWeight: 600 }}
-                    onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
-                    title="Done editing path (Esc / ↵)"
-                  >
-                    Done
-                  </button>
-                ) : (
-                  <button
-                    className="export-run"
-                    style={{ padding: "2px 10px", fontSize: 10, borderRadius: 12 }}
-                    onClick={() => engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 })}
-                    title="Enter vector edit mode (↵)"
-                  >
-                    Edit Path
-                  </button>
-                )}
-                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--bg-subtle)", color: "var(--dim)", borderRadius: 10, border: "1px solid var(--border)" }}>
+        <>
+          {/* IN-U4: the vector card was the last bespoke block in the panel — a
+              `<strong>` header, `export-run` buttons resized by inline style, a
+              hand-written 24px icon row and raw `<input type="number">`s. It is
+              the shared primitives now: `Section` for the header (fold +
+              persistence + the scroll-to hook every other block has), `Field`
+              for the vertex numbers (arithmetic, label-scrub, accessible
+              names), `XSegmentedControl` for the two switches and `XButton` for
+              the actions. The names are vertex-specific on purpose: the e2e
+              suite (and assistive tech) address inspector fields by aria-label,
+              so "Corner radius" has to stay the *layer's* corner radius. */}
+          <Section
+            id="vector"
+            title="Vector"
+            actions={
+              <div className="h-act">
+                <span className="vec-chip" title="This layer keeps an editable vector network">
                   Native Graph
                 </span>
+                {snap.vecEdit === n.id ? (
+                  <XButton variant="primary" size="sm" title="Done editing path (Esc / ↵)" onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}>
+                    Done
+                  </XButton>
+                ) : (
+                  <XButton variant="secondary" size="sm" title="Enter vector edit mode (↵)" onClick={() => engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 })}>
+                    Edit points
+                  </XButton>
+                )}
               </div>
-            </div>
+            }
+          >
+            <div className="insp-pad">
+              <div className="vec-card">
+                {/* Point alignment is the panel's own align idiom — `.align > .g`
+                    icon buttons behind a shared Tooltip, exactly what the
+                    Position section draws for layers — not a segmented control:
+                    these are six one-shot actions, so a `role=tab` row would
+                    claim a selection the points do not have (and, with nothing
+                    selected, would have taken the row out of the tab order).
+                    No shortcut chip either: `vectorAlign` has no chord, and ⌥A
+                    belongs to the layer row above. */}
+                <div className="vec-row">
+                  <span className="vec-label">Alignment</span>
+                  <span className="vec-note">Selected points</span>
+                </div>
+                <div className="align vec-align">
+                  {POINT_ALIGN_ROWS.map((row) => (
+                    <div className="g" key={row[0]}>
+                      {row.map((a) => (
+                        <Tooltip key={a} label={POINT_ALIGN[a].label}>
+                          <button
+                            aria-label={POINT_ALIGN[a].label}
+                            onClick={() => engine.dispatch({ type: "vectorAlign", alignment: a })}
+                          >
+                            <Icon name={POINT_ALIGN[a].icon} />
+                          </button>
+                        </Tooltip>
+                      ))}
+                    </div>
+                  ))}
+                </div>
 
-            {/* Alignment Row for Vector Points */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ fontSize: 10, color: "var(--dim)" }}>Alignment</div>
-              <div style={{ display: "flex", gap: 2, background: "var(--bg-subtle)", padding: 2, borderRadius: 6, border: "1px solid var(--border)" }}>
-{(
-                  [
-                    { id: "left", label: "Align left", icon: "align-left" },
-                    { id: "center", label: "Align horizontal centers", icon: "align-center" },
-                    { id: "right", label: "Align right", icon: "align-right" },
-                    { id: "top", label: "Align top", icon: "align-top" },
-                    { id: "middle", label: "Align vertical centers", icon: "align-middle" },
-                    { id: "bottom", label: "Align bottom", icon: "align-bottom" },
-                  ] as { id: string; label: string; icon: IconName }[]
-                ).map((a) => (
-                  <button
-                    key={a.id}
-                    style={{
-                      flex: 1,
-                      height: 24,
-                      background: "transparent",
-                      border: 0,
-                      color: "inherit",
-                      borderRadius: 4,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
+                {/* Position & active vertex */}
+                {(() => {
+                  const activePtIdx =
+                    snap.vecPoint !== null &&
+                    snap.vecPoint !== undefined &&
+                    snap.vecPoint >= 0 &&
+                    snap.vecPoint < n.path.length
+                      ? snap.vecPoint
+                      : (n.path.length > 0 ? 0 : null);
+                  const pt = activePtIdx !== null ? n.path[activePtIdx] : null;
+                  if (!pt || activePtIdx === null) return null;
+                  const movePoint = (axis: "x" | "y", val: number) => {
+                    const newPath = [...n.path];
+                    newPath[activePtIdx] = { ...newPath[activePtIdx], [axis]: val };
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                  };
+
+                  return (
+                    <div className="vec-vertex">
+                      <div className="vec-row">
+                        <span className="vec-label">Position</span>
+                        <span className="vec-note">Vertex #{activePtIdx + 1}</span>
+                      </div>
+                      <div className="vec-pair">
+                        <Field label="X" aria="Vertex X" value={Math.round(pt.x)} onChange={(v) => movePoint("x", v)} />
+                        <Field label="Y" aria="Vertex Y" value={Math.round(pt.y)} onChange={(v) => movePoint("y", v)} />
+                      </div>
+                      <div className="vec-row">
+                        <span className="vec-label">Mirroring</span>
+                      </div>
+                      <XSegmentedControl
+                        className="vec-seg"
+                        ariaLabel="Handle mirroring"
+                        value={pt.mirrorMode ?? "none"}
+                        options={[
+                          { value: "none", label: "No mirror", title: "No mirroring (sharp corner / independent handles)" },
+                          { value: "angleAndLength", label: "Angle & len", title: "Mirror angle and length (symmetric handles)" },
+                          { value: "angle", label: "Angle only", title: "Mirror angle only (asymmetric lengths)" },
+                        ]}
+                        onChange={(v) =>
+                          engine.dispatch({
+                            type: "setPointMirror",
+                            id: n.id,
+                            pointIndex: activePtIdx,
+                            mode: v as "none" | "angleAndLength" | "angle",
+                          })
+                        }
+                      />
+                      <div className="vec-row">
+                        <span className="vec-label">Corner radius</span>
+                      </div>
+                      <div className="vec-slider">
+                        <input
+                          type="range"
+                          className="vec-range"
+                          aria-label="Vertex corner radius"
+                          min={0}
+                          max={60}
+                          value={Math.min(60, pt.cornerRadius ?? 0)}
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setPointCornerRadius",
+                              id: n.id,
+                              pointIndex: activePtIdx,
+                              radius: parseFloat(e.target.value) || 0,
+                            })
+                          }
+                        />
+                        <Field
+                          icon="radius"
+                          aria="Vertex corner radius"
+                          value={pt.cornerRadius ?? 0}
+                          onChange={(r) =>
+                            engine.dispatch({
+                              type: "setPointCornerRadius",
+                              id: n.id,
+                              pointIndex: activePtIdx,
+                              radius: Math.max(0, r),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Quick actions: the four path operations, on the shared button
+                    recipe. The two that open a form read as pressed while it is
+                    open, which is what the state is. */}
+                <div className="vec-actions">
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    active={showSimplifyControls}
+                    title="Reduce redundant anchor points with tolerance control"
+                    onClick={() => {
+                      setShowSimplifyControls((v) => !v);
+                      setShowOffsetControls(false);
                     }}
-                    onClick={() => engine.dispatch({ type: "vectorAlign", alignment: a.id as any })}
-                    title={a.label}
                   >
-                    <Icon name={a.icon} size={14} />
-                  </button>
-                ))}
-              </div>
-            </div>
+                    Simplify…
+                  </XButton>
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    title="Smooth bezier curves"
+                    onClick={() => {
+                      const smoothed = smoothPath(n.path, n.closed);
+                      engine.dispatch({ type: "patchPath", id: n.id, path: smoothed, closed: n.closed });
+                      toast("Smoothed vector handles");
+                    }}
+                  >
+                    Smooth
+                  </XButton>
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    active={showOffsetControls}
+                    title="Expand or contract outline path with offset distance"
+                    onClick={() => {
+                      setShowOffsetControls((v) => !v);
+                      setShowSimplifyControls(false);
+                    }}
+                  >
+                    Offset Path…
+                  </XButton>
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    title="Convert stroke to vector path (⇧⌘O)"
+                    onClick={() => {
+                      if (!(n.kind === "text" || n.strokeWidth > 0 || n.kind === "line" || n.kind === "arrow")) {
+                        toast("Add a stroke to outline it");
+                        return;
+                      }
+                      engine.dispatch({ type: "outlineStroke", id: n.id });
+                      toast("Outlined stroke");
+                    }}
+                  >
+                    Outline stroke
+                  </XButton>
+                </div>
 
-            {/* Position & Active Vertex */}
-            {(() => {
-              const activePtIdx =
-                snap.vecPoint !== null &&
-                snap.vecPoint !== undefined &&
-                snap.vecPoint >= 0 &&
-                snap.vecPoint < n.path.length
-                  ? snap.vecPoint
-                  : (n.path.length > 0 ? 0 : null);
-              const pt = activePtIdx !== null ? n.path[activePtIdx] : null;
-              if (!pt || activePtIdx === null) return null;
-
-              return (
-                <div style={{ display: "grid", gap: 8 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 10, color: "var(--dim)" }}>Position</span>
-                      <span style={{ fontSize: 9, color: "var(--dim)" }}>Vertex #{activePtIdx + 1}</span>
+                {/* Inline Simplify form */}
+                {showSimplifyControls && (
+                  <div className="vec-sub">
+                    <div className="vec-sub-head">
+                      <span className="vec-sub-title">Simplify path</span>
+                      <XButton variant="icon" size="sm" icon="close" title="Close simplify" onClick={() => setShowSimplifyControls(false)} />
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                      <div className="prop-row" style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 6px" }}>
-                        <span style={{ fontSize: 10, color: "var(--dim)", width: 10 }}>X</span>
-                        <input
-                          type="number"
-                          value={Math.round(pt.x)}
-                          style={{ width: "100%", background: "transparent", border: 0, color: "inherit", fontSize: 11 }}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0;
-                            const newPath = [...n.path];
-                            newPath[activePtIdx] = { ...newPath[activePtIdx], x: val };
-                            engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                          }}
-                        />
-                      </div>
-                      <div className="prop-row" style={{ display: "flex", alignItems: "center", gap: 4, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 6px" }}>
-                        <span style={{ fontSize: 10, color: "var(--dim)", width: 10 }}>Y</span>
-                        <input
-                          type="number"
-                          value={Math.round(pt.y)}
-                          style={{ width: "100%", background: "transparent", border: 0, color: "inherit", fontSize: 11 }}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value) || 0;
-                            const newPath = [...n.path];
-                            newPath[activePtIdx] = { ...newPath[activePtIdx], y: val };
-                            engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Mirroring */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <span style={{ fontSize: 10, color: "var(--dim)" }}>Mirroring</span>
-                    <div className="seg" style={{ width: "100%", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", fontSize: 10 }}>
-                      <button
-                        className={pt.mirrorMode === "none" || !pt.mirrorMode ? "on" : ""}
-                        title="No mirroring (sharp corner / independent handles)"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "none" })}
-                      >
-                        No mirror
-                      </button>
-                      <button
-                        className={pt.mirrorMode === "angleAndLength" ? "on" : ""}
-                        title="Mirror angle and length (symmetric handles)"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angleAndLength" })}
-                      >
-                        Angle & len
-                      </button>
-                      <button
-                        className={pt.mirrorMode === "angle" ? "on" : ""}
-                        title="Mirror angle only (asymmetric lengths)"
-                        onClick={() => engine.dispatch({ type: "setPointMirror", id: n.id, pointIndex: activePtIdx, mode: "angle" })}
-                      >
-                        Angle only
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Corner radius with slider */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontSize: 10, color: "var(--dim)" }}>Corner radius</span>
+                    <div className="vec-sub-row">
                       <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={pt.cornerRadius ?? 0}
-                        style={{ width: 44, padding: "1px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit", textAlign: "right" }}
-                        onChange={(e) => {
-                          const r = Math.max(0, parseFloat(e.target.value) || 0);
-                          engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
-                        }}
+                        className="vec-range"
+                        type="range"
+                        aria-label="Simplify tolerance slider"
+                        min={1}
+                        max={20}
+                        step={0.5}
+                        value={simplifyTol}
+                        onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
+                      />
+                      {/* The number is a `Field`, not a raw input: it takes the
+                          panel's arithmetic (`*2`), its label-scrub and its
+                          accessible name, so the slider's twin behaves like
+                          every other number in the inspector. */}
+                      <Field
+                        label="Tolerance"
+                        aria="Simplify tolerance"
+                        value={simplifyTol}
+                        onChange={(v) => setSimplifyTol(Math.min(50, Math.max(1, v)))}
                       />
                     </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={60}
-                      value={pt.cornerRadius ?? 0}
-                      style={{ width: "100%", height: 4, accentColor: "var(--accent)", cursor: "pointer" }}
-                      onChange={(e) => {
-                        const r = parseFloat(e.target.value) || 0;
-                        engine.dispatch({ type: "setPointCornerRadius", id: n.id, pointIndex: activePtIdx, radius: r });
+                    <XButton
+                      variant="primary"
+                      size="sm"
+                      className="vec-apply"
+                      onClick={() => {
+                        engine.dispatch({ type: "simplifyPath", id: n.id, tolerance: simplifyTol });
+                        toast(`Simplified path with tolerance ${simplifyTol}`);
+                        setShowSimplifyControls(false);
                       }}
-                    />
+                    >
+                      Apply simplify
+                    </XButton>
                   </div>
-                </div>
-              );
-            })()}
+                )}
 
-            {/* Quick Actions */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-              <button
-                className={`export-run ${showSimplifyControls ? "on" : ""}`}
-                style={{ padding: "4px 8px", fontSize: 10 }}
-                onClick={() => {
-                  setShowSimplifyControls((v) => !v);
-                  setShowOffsetControls(false);
-                }}
-                title="Reduce redundant anchor points with tolerance control"
-              >
-                Simplify…
-              </button>
-              <button
-                className="export-run"
-                style={{ padding: "4px 8px", fontSize: 10 }}
-                onClick={() => {
-                  const smoothed = smoothPath(n.path, n.closed);
-                  engine.dispatch({ type: "patchPath", id: n.id, path: smoothed, closed: n.closed });
-                  toast("Smoothed vector handles");
-                }}
-                title="Smooth bezier curves"
-              >
-                Smooth
-              </button>
-              <button
-                className={`export-run ${showOffsetControls ? "on" : ""}`}
-                style={{ padding: "4px 8px", fontSize: 10 }}
-                onClick={() => {
-                  setShowOffsetControls((v) => !v);
-                  setShowSimplifyControls(false);
-                }}
-                title="Expand or contract outline path with offset distance"
-              >
-                Offset Path…
-              </button>
-              <button
-                className="export-run"
-                style={{ padding: "4px 8px", fontSize: 10 }}
-                onClick={() => {
-                  if (!(n.kind === "text" || n.strokeWidth > 0 || n.kind === "line" || n.kind === "arrow")) {
-                    toast("Add a stroke to outline it");
-                    return;
-                  }
-                  engine.dispatch({ type: "outlineStroke", id: n.id });
-                  toast("Outlined stroke");
-                }}
-                title="Convert stroke to vector path (⇧⌘O)"
-              >
-                Outline stroke
-              </button>
+                {/* Inline Offset form */}
+                {showOffsetControls && (
+                  <div className="vec-sub">
+                    <div className="vec-sub-head">
+                      <span className="vec-sub-title">Offset vector path</span>
+                      <XButton variant="icon" size="sm" icon="close" title="Close offset" onClick={() => setShowOffsetControls(false)} />
+                    </div>
+                    <div className="vec-sub-row">
+                      <input
+                        className="vec-range"
+                        type="range"
+                        aria-label="Offset distance slider"
+                        min={-40}
+                        max={40}
+                        step={1}
+                        value={offsetDist}
+                        onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
+                      />
+                      <Field
+                        label="Distance"
+                        aria="Offset distance"
+                        value={offsetDist}
+                        onChange={setOffsetDist}
+                      />
+                    </div>
+                    <div className="vec-sub-row">
+                      <span className="vec-label">Join</span>
+                      <XSegmentedControl
+                        className="vec-seg"
+                        ariaLabel="Offset join"
+                        value={offsetJoin}
+                        options={[
+                          { value: "round", label: "Round" },
+                          { value: "miter", label: "Square" },
+                        ]}
+                        onChange={(v) => setOffsetJoin(v as "round" | "miter")}
+                      />
+                    </div>
+                    <XButton
+                      variant="primary"
+                      size="sm"
+                      className="vec-apply"
+                      onClick={() => {
+                        engine.dispatch({ type: "offsetPath", id: n.id, distance: offsetDist, join: offsetJoin });
+                        toast(`Offset path by ${offsetDist > 0 ? "+" : ""}${offsetDist}px`);
+                        setShowOffsetControls(false);
+                      }}
+                    >
+                      Apply offset
+                    </XButton>
+                  </div>
+                )}
+              </div>
             </div>
-
-            {/* Inline Simplify Controls */}
-            {showSimplifyControls && (
-              <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--input)", borderRadius: 6, display: "grid", gap: 6, fontSize: 11 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontWeight: 500 }}>Simplify Path</span>
-                  <button
-                    onClick={() => setShowSimplifyControls(false)}
-                    style={{ background: "transparent", border: 0, color: "var(--dim)", cursor: "pointer", fontSize: 13 }}
-                  >
-                    ×
-                  </button>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Tolerance:</span>
-                  <input
-                    type="range"
-                    min="1"
-                    max="20"
-                    step="0.5"
-                    value={simplifyTol}
-                    onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
-                    style={{ flex: 1, accentColor: "var(--accent)" }}
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={simplifyTol}
-                    onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
-                    style={{ width: 44, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
-                  />
-                </div>
-                <button
-                  style={{ background: "var(--accent)", color: "#ffffff", border: 0, borderRadius: 4, padding: "4px 8px", fontWeight: 600, fontSize: 11, cursor: "pointer", marginTop: 2 }}
-                  onClick={() => {
-                    engine.dispatch({ type: "simplifyPath", id: n.id, tolerance: simplifyTol });
-                    toast(`Simplified path with tolerance ${simplifyTol}`);
-                    setShowSimplifyControls(false);
-                  }}
-                >
-                  Apply Simplify
-                </button>
-              </div>
-            )}
-
-            {/* Inline Offset Controls */}
-            {showOffsetControls && (
-              <div style={{ marginTop: 8, padding: "8px 10px", background: "var(--input)", borderRadius: 6, display: "grid", gap: 6, fontSize: 11 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontWeight: 500 }}>Offset Vector Path</span>
-                  <button
-                    onClick={() => setShowOffsetControls(false)}
-                    style={{ background: "transparent", border: 0, color: "var(--dim)", cursor: "pointer", fontSize: 13 }}
-                  >
-                    ×
-                  </button>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Distance:</span>
-                  <input
-                    type="range"
-                    min="-40"
-                    max="40"
-                    step="1"
-                    value={offsetDist}
-                    onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
-                    style={{ flex: 1, accentColor: "var(--accent)" }}
-                  />
-                  <input
-                    type="number"
-                    value={offsetDist}
-                    onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
-                    style={{ width: 44, padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }}
-                  />
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: "var(--dim)", fontSize: 10, width: 60 }}>Join:</span>
-                  <div className="segmented" style={{ flex: 1 }}>
-                    <button
-                      className={offsetJoin === "round" ? "on" : ""}
-                      onClick={() => setOffsetJoin("round")}
-                      style={{ fontSize: 10, padding: "2px 6px" }}
-                    >
-                      Round
-                    </button>
-                    <button
-                      className={offsetJoin === "miter" ? "on" : ""}
-                      onClick={() => setOffsetJoin("miter")}
-                      style={{ fontSize: 10, padding: "2px 6px" }}
-                    >
-                      Square
-                    </button>
-                  </div>
-                </div>
-                <button
-                  style={{ background: "var(--accent)", color: "#ffffff", border: 0, borderRadius: 4, padding: "4px 8px", fontWeight: 600, fontSize: 11, cursor: "pointer", marginTop: 2 }}
-                  onClick={() => {
-                    engine.dispatch({ type: "offsetPath", id: n.id, distance: offsetDist, join: offsetJoin });
-                    toast(`Offset path by ${offsetDist > 0 ? "+" : ""}${offsetDist}px`);
-                    setShowOffsetControls(false);
-                  }}
-                >
-                  Apply Offset
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+          </Section>
+        </>
       )}
       {(n.isComponent || n.componentId) && (() => {
         const master = snap.components.find((c) => c.id === n.componentId || c.node.id === n.componentId || (n.isComponent && (c.id === n.id || c.node.id === n.id)));
@@ -4809,7 +4799,7 @@ function Design({
               id="component"
               title={n.isComponent ? "Component" : "Instance"}
               actions={
-                <div style={{ display: "flex", gap: 4 }}>
+                <div className="h-act">
                 {n.componentId && (
                   <>
                     <button
@@ -9334,6 +9324,9 @@ function setDir(engine: Engine, snap: Snapshot, n: XNode, direction: "horizontal
  */
 function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [open, setOpen] = useState(false);
+  // PM-U3: the zoom menu joins the one Escape cascade (it listened for itself
+  // in the bubble phase, which the app's capture handler could starve).
+  useEscape(open ? "zoom" : null, () => setOpen(false));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const btn = useRef<HTMLButtonElement>(null);
@@ -9345,12 +9338,9 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
     const close = (e: MouseEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", esc);
     return () => {
       window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", esc);
     };
   }, [open]);
 
@@ -9540,6 +9530,25 @@ const ALIGN_SHORTCUT: Record<string, string> = {
   "align-vcenter": "⌥V",
   "align-bottom": "⌥S",
 };
+
+/** The vector card's point-alignment row. Same six directions and the same
+ *  glyphs as `ALIGN_LABEL` above, named for what they move here — anchor points,
+ *  not layers — and with no chord, because `vectorAlign` has none (⌥A and
+ *  friends belong to the layer row). Two groups of three, the panel's `.align`
+ *  layout, so the row reads as the same control it looks like. */
+type PointAlign = "left" | "center" | "right" | "top" | "middle" | "bottom";
+const POINT_ALIGN: Record<PointAlign, { label: string; icon: IconName }> = {
+  left: { label: "Align points left", icon: "align-left" },
+  center: { label: "Align points to horizontal center", icon: "align-hcenter" },
+  right: { label: "Align points right", icon: "align-right" },
+  top: { label: "Align points top", icon: "align-top" },
+  middle: { label: "Align points to vertical center", icon: "align-vcenter" },
+  bottom: { label: "Align points bottom", icon: "align-bottom" },
+};
+const POINT_ALIGN_ROWS: [PointAlign[], PointAlign[]] = [
+  ["left", "center", "right"],
+  ["top", "middle", "bottom"],
+];
 
 export function align(
   engine: Engine,

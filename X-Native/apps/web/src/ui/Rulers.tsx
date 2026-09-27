@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { canvasChrome } from "./canvasChrome";
 
 /**
  * Rulers along the top and left edges of the viewport.
@@ -54,11 +55,13 @@ export function Rulers({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    const dark = theme === "dark";
-    const bg = dark ? "#171c22" : "#ffffff";
-    const line = dark ? "rgba(255, 255, 255, 0.08)" : "#e5e5e5";
-    const text = dark ? "rgba(241, 245, 243, 0.56)" : "#8c8c8c";
-    const accent = "#10b981";
+    // Chrome comes from the sheet, not from a hand-maintained dark/light pair
+    // (FR-U2); `theme` stays in the deps so the rails re-read on a flip.
+    const chrome = canvasChrome();
+    const bg = chrome.panel;
+    const line = chrome.line;
+    const text = chrome.dim;
+    const accent = chrome.sel;
 
     // Rails
     ctx.fillStyle = bg;
@@ -67,7 +70,7 @@ export function Rulers({
 
     // Highlight the selected range
     if (selection) {
-      ctx.fillStyle = dark ? "rgba(16,185,129,.22)" : "rgba(14,159,110,.16)";
+      ctx.fillStyle = chrome.accentWash;
       const sx = panX + selection.x * zoom;
       const sy = panY + selection.y * zoom;
       ctx.fillRect(sx, 0, selection.w * zoom, SIZE);

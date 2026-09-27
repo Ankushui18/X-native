@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useEscape } from "./escape";
 import type { Engine } from "../engine/types";
 
 export interface RadialSlice {
@@ -22,8 +23,11 @@ const SLICES: RadialSlice[] = [
   { id: "frame", label: "Frame", shortcut: "F", icon: "frame", action: (e) => e.dispatch({ type: "setTool", tool: "frame" }) },
   { id: "rect", label: "Rectangle", shortcut: "R", icon: "rect", action: (e) => e.dispatch({ type: "setTool", tool: "rect" }) },
   { id: "pen", label: "Pen", shortcut: "P", icon: "pen", action: (e) => e.dispatch({ type: "setTool", tool: "pen" }) },
-  { id: "bend", label: "Bend Tool", shortcut: "⌥", icon: "vector", action: (e) => {
-    e.dispatch({ type: "setTool", tool: "select" });
+  { id: "bend", label: "Bend Tool", shortcut: "⌥", icon: "vector", action: () => {
+    // One owner for what "Bend tool" means: the canvas, which knows whether the
+    // vector-edit toolbar is up and can say so when it is not (PM-U10). This
+    // slice used to reset the tool itself and dispatch an event nothing listened
+    // for, so choosing it did nothing except drop the user's tool.
     window.dispatchEvent(new CustomEvent("x-native-bend-tool"));
   } },
   { id: "shapeBuilder", label: "Shape Builder", shortcut: "B", icon: "shapes", action: (e) => {
@@ -47,6 +51,9 @@ export function RadialMenu({
   onClose: () => void;
 }) {
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  // PM-U3: the radial joins the one Escape cascade instead of listening for
+  // itself in the bubble phase, where the app's capture handler could starve it.
+  useEscape("radial", onClose);
   const radius = 100;
   const innerRadius = 38;
   const numSlices = SLICES.length;
@@ -81,22 +88,21 @@ export function RadialMenu({
       onClose();
     };
 
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp, { capture: true });
-    window.addEventListener("keydown", handleKey);
     return () => {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp, { capture: true });
-      window.removeEventListener("keydown", handleKey);
     };
   }, [x, y, activeIdx, engine, onClose, sliceAngle, numSlices]);
 
   return (
     <div
+      // The radial is the one overlay with no sheet class: it is positioned
+      // entirely inline, and nothing could address it (a test, a stylesheet, the
+      // bridge's tooltip scan) without walking the DOM. Same naming as `.ctx`,
+      // `.actions` and `.xmodal` (PM-U10).
+      className="radial-menu"
       style={{
         position: "fixed",
         left: x,

@@ -55,6 +55,30 @@ html[data-theme="light"] {
   --help-fg: #ffffff;
   --grid: rgba(16, 185, 129, 0.07);
   --canvas-label: rgba(17, 24, 39, 0.5);
+  /* Canvas chrome roles (FR-U2): the ink the 2D surfaces paint with — selection
+     ring and handles, guides, drop targets, mask outlines, on-canvas cards, and
+     the minimap/ruler backing. These are deliberately NOT --accent: the control
+     accent is contrast-tuned for panel surfaces, while selection ink sits on the
+     document canvas. Until now they were literals in Canvas.tsx / Minimap.tsx /
+     Rulers.tsx, with a comment asking a human to "keep both in step"; the
+     canvasChrome.ts reader reads these instead, and a contract test pins its
+     fallbacks to the light column below, so the sheet and the canvas cannot
+     drift apart silently. Changing selection chrome is now one sheet edit. */
+  --cv-sel: #10b981;
+  --cv-sel-wash: rgba(16, 185, 129, 0.14);
+  --cv-sel-glow: rgba(16, 185, 129, 0.35);
+  --cv-ink: #ffffff;
+  --cv-lock: #9aa0a6;
+  --cv-guide: #ff3b6b;
+  --cv-target: #0d99ff;
+  --cv-mask: #00c853;
+  --cv-chip: rgba(15, 23, 42, 0.95);
+  --cv-chip-line: rgba(255, 255, 255, 0.15);
+  --cv-chip-ink: #f8fafc;
+  --cv-well: #eef1f4;
+  --cv-line: #e5e5e5;
+  --cv-dim: #8c8c8c;
+  --cv-scrim: rgba(13, 20, 38, 0.45);
   --dot: #cbd5d1;
   --shadow: 0 6px 22px rgba(16, 30, 24, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05);
   /* Elevation scale — every floating surface uses one of these, not ad-hoc shadow */
@@ -123,6 +147,27 @@ html[data-theme="dark"] {
   --help-fg: #ffffff;
   --grid: rgba(16, 185, 129, 0.09);
   --canvas-label: rgba(241, 245, 243, 0.5);
+  /* Canvas chrome (FR-U2). Only the well/line/dim trio differs from the light
+     column today, because those were already theme-split as literals in
+     Minimap.tsx/Rulers.tsx. The selection ink is deliberately identical in both
+     themes so this change alters no pixel anyone has approved — the dark column
+     exists so a designer can retune chrome for the dark canvas in the sheet
+     (tracked as FR-U2b, needs eyes). */
+  --cv-sel: #10b981;
+  --cv-sel-wash: rgba(16, 185, 129, 0.14);
+  --cv-sel-glow: rgba(16, 185, 129, 0.35);
+  --cv-ink: #ffffff;
+  --cv-lock: #9aa0a6;
+  --cv-guide: #ff3b6b;
+  --cv-target: #0d99ff;
+  --cv-mask: #00c853;
+  --cv-chip: rgba(15, 23, 42, 0.95);
+  --cv-chip-line: rgba(255, 255, 255, 0.15);
+  --cv-chip-ink: #f8fafc;
+  --cv-well: #171c22;
+  --cv-line: rgba(255, 255, 255, 0.08);
+  --cv-dim: rgba(241, 245, 243, 0.56);
+  --cv-scrim: rgba(13, 20, 38, 0.45);
   --dot: #2d3a33;
   --shadow: 0 10px 36px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --elev-flat: none;
@@ -475,6 +520,13 @@ input, textarea { user-select: text; }
   white-space: nowrap;
   font-size: 12px;
 }
+/* The agent pane's transcript borrows the row recipe, but a reply is a sentence
+   rather than a layer name: it wraps instead of ellipsising, the row grows to
+   fit it, and the agent's own turns are muted so the two voices read apart
+   (LP-U6). */
+.agent-row { height: auto; min-height: 32px; align-items: flex-start; padding: 6px 8px; }
+.agent-row .name { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+.agent-row[data-who="agent"] .name { color: var(--muted); }
 /* The status dot in the layers list on an auto layout frame, which is
    also how the frames "Suggest auto layout" creates are spotted afterwards. */
 .row .al-dot {
@@ -520,6 +572,15 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   min-height: 0;
   background: var(--canvas);
 }
+/* PM-U3: the canvas column is the app's focus home, so it takes focus without a
+   ring — a 1px outline around the whole stage would read as a selection (the
+   column is what e2e §47 checks the caret has landed on when the palette row
+   that opened the export sheet is gone). */
+.canvas-col:focus { outline: none; }
+/* PM-U7: a modal that has no control to hand the caret to keeps it on its own
+   box, so the ring it draws would be the whole sheet. */
+.xmodal:focus,
+.x-dialog:focus { outline: none; }
 .canvas-wrap {
   position: absolute;
   inset: 0;
@@ -585,14 +646,27 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   box-sizing: border-box;
 }
 
+/* RW-U1: the dock hangs inside `.canvas-col`, which is narrower than the window
+   whenever a panel is docked — at 900px the stage can be ~300px wide while the
+   tool row, a multi-selection cluster and the right-hand cluster add up to
+   ~500px. It was a fixed 44px strip with no width limit at all, so its tail
+   simply left the screen and only `minUi` (which hides the panels) saved it.
+   It is bounded by its own column now and wraps into a second row rather than
+   scrolling, because a scroll container would clip the tool flyouts too:
+   `overflow-x: auto` computes `overflow-y` to `auto` as well, and those menus
+   escape 40px above a 44px strip. That is what the ≤860px rule used to do, so
+   on a phone the boolean menu was opening into a clipped box. */
 .dock {
   position: absolute;
   left: 50%;
   bottom: 18px;
   transform: translateX(-50%);
-  height: 44px;
+  max-width: calc(100% - 24px);
+  min-height: 44px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 4px 6px;
   border-radius: 16px;
@@ -606,9 +680,37 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
    everywhere made the dock read as one undifferentiated strip. */
 .toolset {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 2px;
+  min-width: 0;
 }
+/* The multi-selection end of the dock: the count, then the actions that apply
+   to the whole selection. Both used to carry their layout inline (TB-U5), which
+   is where the sheet could not reach them. */
+.toolset.multi { gap: 3px; }
+.sel-count {
+  padding: 0 6px;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* "Done" while editing points: the dock's one commit button rather than a tool
+   pick, so it wears the accent — with the accent's own ink, which the `#fff` it
+   used to hardcode could not follow into the dark theme. */
+.tool .hit.vec-done {
+  width: auto;
+  padding: 0 10px;
+  gap: 4px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.tool .hit.vec-done:hover { background: var(--accent-hover); }
 .tool {
   position: relative;
   display: flex;
@@ -687,6 +789,14 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
 .fly button:hover { background: var(--hover); }
 .fly button.on { background: var(--sel); }
 .fly .sc { margin-left: auto; color: var(--dim); font-size: 11px; }
+/* A hairline between two groups of menu rows. The boolean flyout used to write
+   `style={{ height: 1, background: "var(--border)", margin: "4px 0" }}` inline
+   (TB-U5); every menu separator is this now. */
+.fly-div {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
 .fly-hint {
   margin-top: 4px;
   padding: 6px 8px 2px;
@@ -753,6 +863,9 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   transition: all 0.15s ease;
 }
 .share { transition: box-shadow 160ms, filter 160ms; }
+/* `.share` pushes itself to the right edge of a head; a pane that has nothing
+   beside it wants the button on the left instead (was an inline marginLeft). */
+.share.left { margin-left: 0; }
 .share:hover {
   background: linear-gradient(135deg, var(--accent-hover), #087a54);
   box-shadow: 0 4px 12px rgba(14, 159, 110, 0.4);
@@ -907,6 +1020,15 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
      At full text strength they competed with the fields and the whole panel
      read as one flat list. */
   color: var(--muted);
+}
+/* A section header's action slot: buttons and chips in a row at the far end.
+   Sections used to write `style={{ display: "flex", gap: 4 }}` per call site
+   (IN-U3's leftovers); this is that layout, once. */
+.h-act {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 .plus {
   width: 24px;
@@ -1535,6 +1657,12 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
 }
 .presets button:hover { background: var(--hover); }
 .presets .sz { color: var(--muted); font-size: 11px; }
+/* The Tools pane is a list of commands, so it wears the same chord chip every
+   menu does (LP-U5) — each container declares its own, as .menu/.fly/.ctx do. */
+.presets .sc { margin-left: auto; color: var(--dim); font-size: 11px; }
+/* An action that cannot run says so instead of doing nothing when clicked. */
+.presets button:disabled { color: var(--dim); cursor: default; }
+.presets button:disabled:hover { background: transparent; }
 
 .color-row .minus { opacity: 0; }
 .color-row:hover .minus,
@@ -2470,20 +2598,22 @@ button,
   from { opacity: 0; transform: translateY(-4px) scale(0.98); }
   to   { opacity: 1; transform: none; }
 }
-.fill-pop,
-.ctx,
-.menu,
-.type-menu,
-.palette,
+/* A dangling selector list used to sit here — `.fill-pop, .ctx, .menu,
+   .type-menu, .palette,` with no declaration block after it, followed by a
+   reduced-motion `@media`. Two consequences, both silent: the `@media` was
+   parsed as the next selector in that list (esbuild's "Unexpected @media"
+   warning at build time, and the block dropped from the minified sheet), and
+   `.palette` named a class nothing in `src/` renders.
 
-/* Respect the OS reduced-motion preference. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
+   The reduced-motion rule survives — the copy further down this file is the
+   well-formed one, and it is the one that was actually being applied. The
+   selector list is deleted rather than completed on purpose: it was the shared
+   entrance animation for the four popover surfaces (`.dash-menu`, `.xmodal` and
+   the command palette all carry `animation: x-pop-in 110ms cubic-bezier(0.2, 0,
+   0.13, 1)`), and giving those four the same rule is a *visible* motion change
+   that has to be looked at, not inferred. It is recorded as an open motion-parity
+   item in docs/PRODUCT_UI_AUDIT_2026-09-26.md §4q; the rule to add is
+   `.fill-pop, .ctx, .menu, .type-menu { animation: x-pop-in 110ms cubic-bezier(0.2, 0, 0.13, 1); }`. */
 
 /* Tooltip: dark pill, label plus dimmed shortcut. */
 .tip-host { display: contents; }
@@ -2514,7 +2644,8 @@ html[data-theme="dark"] .tip { background: #383838; }
    (measured ~50%), which rendered the pill washed out over the panel. */
 .tip[data-static] { animation: none; }
 
-/* Empty state for the right panel with nothing selected. */
+/* Empty states: the right panel with nothing selected (inspector.tsx) and the
+   layers tree with nothing on the page (chrome.tsx, LP-U3) share this recipe. */
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -2528,7 +2659,8 @@ html[data-theme="dark"] .tip { background: #383838; }
 .empty-title { margin: 0; font-size: 12px; font-weight: 500; color: var(--text); }
 .empty-body { margin: 2px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
 .empty-hint { margin: 10px 0 0; font-size: 11px; line-height: 1.7; color: var(--dim); }
-.empty-hint kbd {
+.empty-hint kbd,
+.canvas-hint kbd {
   display: inline-block;
   min-width: 16px;
   padding: 1px 4px;
@@ -2539,6 +2671,35 @@ html[data-theme="dark"] .tip { background: #383838; }
   font-size: 10px;
   color: var(--text);
 }
+
+/* LP-U4: the first-run card over an empty canvas. It floats above the canvas and
+   the rulers (z 4) and under the comment pins (6) and the minimap (7), and it
+   must not intercept the drag it is describing — so the card takes no pointer
+   events and only its own button gets them back, the `.cm-layer` / `.cm-pin`
+   recipe. No entrance animation: MOTION-U1 is the round that adds motion to
+   surfaces like this one, with eyes on it. */
+.canvas-hint {
+  position: absolute;
+  top: 16%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 340px;
+  padding: 14px 18px 12px;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--elev-floating);
+  pointer-events: none;
+}
+.canvas-hint-title { margin: 0; font: var(--t-section); color: var(--text); }
+.canvas-hint-body { margin: 0; font: var(--t-body); line-height: 1.6; color: var(--muted); }
+.canvas-hint-x { pointer-events: auto; margin-top: 2px; }
 
 /* Keyboard focus. Only `:focus-visible`, so mouse users never see a ring but
    keyboard users can always tell where they are. Previously fields showed a
@@ -4530,6 +4691,122 @@ html[data-theme="dark"] .zoom-menu {
 .x-field-hint { font: var(--t-body); color: var(--dim); font-size: 10px; }
 .x-field.disabled { opacity: 0.5; pointer-events: none; }
 
+/* ── Vector card (IN-U4) ───────────────────────────────────────────────────
+   The card used to carry its whole layout inline: a `padding/background/radius/
+   border/grid` style object, six alignment buttons written out with their own
+   24px flex recipe, `export-run` buttons resized by inline padding, and
+   `#fff`/`#ffffff` typed straight onto the accent buttons (so the accent's own
+   `--on-accent` ink never reached them). The classes below are that layout, and
+   the buttons are `XButton` / `XSegmentedControl`, so the card reads the tokens
+   the rest of the panel does — including in the dark theme. */
+.vec-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  background: var(--hover);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+/* One labelled row: a caption on the left, its control (or a note) filling the
+   rest. Replaces the four inline `flex-direction: column` wrappers. */
+.vec-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+.vec-label {
+  font: var(--t-label);
+  color: var(--dim);
+  white-space: nowrap;
+}
+/* The vertex counter sits on the same line as its caption, at the far end. */
+.vec-row .vec-note { margin-left: auto; }
+.vec-note {
+  font: var(--t-label);
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+/* "Native Graph": an informational chip in the section's action slot, so it
+   keeps the 9px badge idiom instead of an inline style object. */
+.vec-chip {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--input);
+  color: var(--dim);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.vec-vertex { display: grid; gap: 8px; }
+/* The point-alignment row is the panel's `.align` recipe; inside the card's own
+   10px grid its 8px bottom margin would double the gap. */
+.vec-align { margin-bottom: 0; }
+.vec-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.vec-pair .field { min-width: 0; }
+/* Sliders: the range grows, the number beside it stays a fixed 52px. One
+   accent colour, from the token, for every slider in the card. */
+.vec-slider,
+.vec-sub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vec-range {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* The number beside a slider is a shared `Field`, so the row only has to give
+   it a stable width: the slider grows, the field does not. */
+.vec-sub-row .field {
+  flex: 0 0 auto;
+  width: 116px;
+}
+/* The four path operations, two to a row. */
+.vec-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.vec-actions .x-btn { width: 100%; }
+/* A toggle that opens a form reads as pressed while the form is open. */
+.x-btn-secondary.on {
+  background: var(--sel);
+  border-color: var(--accent-ring);
+  color: var(--accent-ink);
+}
+/* Simplify / Offset forms: the card's own inset well. */
+.vec-sub {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.vec-sub-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.vec-sub-title { font: var(--t-control); font-weight: 500; }
+.vec-sub .vec-label { width: 60px; flex: 0 0 auto; }
+.vec-apply { width: 100%; margin-top: 2px; }
+/* The segmented rows inside the card sit on the card's own well, so they take
+   the panel colour instead of `--input` (which the well already uses). */
+.seg.vec-seg { background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+.seg.vec-seg button { min-width: 0; }
+.seg.vec-seg button[role="tab"] { height: 24px; font-size: 10px; }
+
 /* P0-D interaction states — centralize Default/Hover/Pressed/Active/Focused/Selected/Disabled */
 
 /* ── x-ui Component System (Audit P0-C & P0-D) ────────────────────────── */
@@ -4901,8 +5178,9 @@ html[data-theme="dark"] .x-btn-danger {
     border-radius: 12px;
     box-shadow: var(--elev-overlay);
   }
-  .dock { max-width: calc(100vw - 24px); overflow-x: auto; scrollbar-width: none; }
-  .dock::-webkit-scrollbar { display: none; }
+  /* The dock needs no override here any more: its base rule is bounded by
+     `.canvas-col`, which is the full width at this breakpoint, and it wraps
+     instead of scrolling so the tool flyouts stay reachable (RW-U1). */
   .min-chip { max-width: calc(100vw - 24px); }
   .min-chip-name { max-width: 120px; }
 }

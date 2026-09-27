@@ -4,6 +4,8 @@ import { Canvas } from "./ui/Canvas";
 import { copyText, worldClones } from "./engine/clipboard";
 import { worldPos } from "./engine/memory";
 import { zoomTo } from "./ui/zoom";
+import { modalOpen, useEscape } from "./ui/escape";
+import { LiveStatus, ToastPill, useToastMessage } from "./ui/announce";
 import { devLangLabel, getDevPrefs, type DevFormat } from "./ui/devPrefs";
 import {
   Actions,
@@ -24,7 +26,7 @@ import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { ZenHUD } from "./ui/ZenHUD";
 import { RadialMenu } from "./ui/RadialMenu";
-import { subscribeToast, toast as toastMsg } from "./ui/toast";
+import { toast as toastMsg } from "./ui/toast";
 import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
 import { DEMO_ID, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
@@ -272,20 +274,12 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return () => window.clearTimeout(t);
   }, [engine]);
 
-  // Any module can raise a toast via the bus; keep the existing local setter
-  // working for the share button.
-  useEffect(() => {
-    let timer = 0;
-    const off = subscribeToast((msg) => {
-      setToast(msg);
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => setToast(""), 1800);
-    });
-    return () => {
-      off();
-      window.clearTimeout(timer);
-    };
-  }, []);
+  // Any module can raise a toast via the bus (PM-U8: the subscription and the
+  // 1800ms are the shared hook's now, so the editor and the dashboard cannot
+  // drift). The editor's own warnings above keep their own, longer durations —
+  // what is shared is the channel, not the clock.
+  const busToast = useToastMessage();
+  const shown = toast || busToast;
 
   // Opening a file shows the whole page - default view for a file you have
   // not seen before - rather than whatever viewport the last session left in
@@ -311,13 +305,20 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
 
   // The zoom menu offers "Hide UI", which is this component's state, so it asks
   // through an event rather than threading another prop through the inspector.
-  // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, because
-  // Escape has to be resolved by the central hotkey handler: listeners a modal
-  // attaches itself are starved by the app's own capture-phase handler.
+  // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, and each
+  // overlay joins the one Escape cascade while it is open (PM-U3): the sheet
+  // opened last is the one Escape closes first, whoever owns the state.
   const [exportOpen, setExportOpen] = useState(false);
   const [nudgeOpen, setNudgeOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
-  const overlayRef = useRef({ exportOpen, nudgeOpen, actions, figInspector, findOpen });
+  // PM-U9: the four veiled sheets are *modal* — the editor's global chords stand
+  // down while they are up (see ui/escape.ts). The find bar is not: it is a strip
+  // over the canvas and the editor keeps working underneath it.
+  useEscape(findOpen ? "find" : null, () => setFindOpen(false));
+  useEscape(nudgeOpen ? "nudge" : null, () => setNudgeOpen(false), true);
+  useEscape(exportOpen ? "export" : null, () => setExportOpen(false), true);
+  useEscape(actions ? "actions" : null, () => setActions(false), true);
+  useEscape(figInspector ? "fig-inspector" : null, () => setFigInspector(false), true);
   // Handoff plumbing that needs the live document: land on the layer a shared
   //  link points at, then answer the two copy commands the menu asks for.
   useEffect(() => {
@@ -355,10 +356,10 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return () => window.clearTimeout(timer);
   }, [engine]);
   useEffect(() => {
-    const flash = (msg: string) => {
-      setToast(msg);
-      window.setTimeout(() => setToast(""), 1800);
-    };
+    // Through the bus, not the local state: these are ordinary confirmations, so
+    // they get the shared 1800ms clock and the announcement with it (PM-U8).
+    // What stays local is the two warnings below, which are deliberately longer.
+    const flash = (msg: string) => toastMsg(msg);
     const onCopyLink = () => {
       const s = engine.snapshot();
       if (!s.selection.length) flash("Select a layer first · this link opens one layer");
@@ -414,17 +415,6 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     };
   }, [engine, fileId]);
 
-  overlayRef.current = { exportOpen, nudgeOpen, actions, figInspector, findOpen };
-  const closeOverlay = () => {
-    const o = overlayRef.current;
-    if (o.findOpen) setFindOpen(false);
-    else if (o.nudgeOpen) setNudgeOpen(false);
-    else if (o.exportOpen) setExportOpen(false);
-    else if (o.actions) setActions(false);
-    else if (o.figInspector) setFigInspector(false);
-    else return false;
-    return true;
-  };
   useEffect(() => {
     let mousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     const trackMouse = (e: MouseEvent) => {
@@ -454,6 +444,10 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
 
     const handleKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+      // PM-U9: a modal owns the keyboard. Zen (`z`) and the radial menu (`q`)
+      // are editor chords; opening either over a sheet is the same mistake the
+      // tool letters and Delete were making.
+      if (modalOpen()) return;
       if (e.key === "z" || e.key === "Z") {
         if (!e.metaKey && !e.ctrlKey && !e.altKey) {
           onZen();
@@ -501,8 +495,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   const present = () => {
     engine.dispatch({ type: "presentStart" });
     setHideUi(true);
-    setToast("Presenting — click hotspots, Esc to go back");
-    window.setTimeout(() => setToast(""), 1800);
+    toastMsg("Presenting — click hotspots, Esc to go back");
   };
 
   useEffect(
@@ -513,7 +506,6 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onHide: () => setHideUi((v) => !v),
         onMinimize: () => setMinUi((v) => !v),
         onNav: setNav,
-        onEscapeOverlay: closeOverlay,
         onPresentExit: () => {
           const s = engine.snapshot();
           if (s.presentFrame) {
@@ -565,7 +557,13 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         style={{ display: minUi || hideUi ? "none" : undefined }}
         {...leftDrag}
       />
-      <main className="canvas-col">
+      {/* PM-U3: the editor's surface is the focus home — where the caret goes
+          when an overlay closes and the control that opened it is gone (the
+          palette row that ran Export assets, a deleted layer's button). It is
+          programmatically focusable, so `Tab` resumes inside the editor instead
+          of restarting at the top of the document, and `-1` keeps it out of the
+          tab order itself. */}
+      <main className="canvas-col" data-focus-home tabIndex={-1}>
         <h1 className="sr-only">{snap.fileName}</h1>
         {minUi && !hideUi && !snap.presentFrame && (
           // Keeps the file name and a way out of the minimized state on
@@ -661,7 +659,11 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onOpenVariables={() => setNav("variables")}
       />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
-      {toast && <div className="toast">{toast}</div>}
+      {/* PM-U8: the message has two channels — the pill you see and the status
+          region a screen reader hears. The pill stays out of the live region on
+          purpose; two of them saying the same string says it twice. */}
+      <ToastPill text={shown} />
+      <LiveStatus text={shown} />
       {nudgeOpen && <NudgeDialog onClose={() => setNudgeOpen(false)} />}
       {figInspector && <FigInspectorModal engine={engine} onClose={() => setFigInspector(false)} />}
     </div>

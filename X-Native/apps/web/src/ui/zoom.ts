@@ -14,6 +14,49 @@ function viewport(): { w: number; h: number; x: number; y: number } {
   return { w: window.innerWidth - 520, h: window.innerHeight - 96, x: 240, y: 0 };
 }
 
+/** The world point under the middle of the visible canvas.
+ *
+ *  Anything placed on the user's behalf — a layer an agent created, a paste with
+ *  no better idea — has to land where they are looking. Before LP-U6 the agent
+ *  pane guessed document coordinates (a 390x844 frame at 120,80), so the layer
+ *  it "added" was routinely somewhere off-screen. Same local-canvas reasoning as
+ *  `zoomTo`: pan is relative to the canvas element, not the window. */
+export function viewportCentreWorld(snap: Snapshot): { x: number; y: number } {
+  const vp = viewport();
+  return {
+    x: (vp.w / 2 - snap.panX) / snap.zoom,
+    y: (vp.h / 2 - snap.panY) / snap.zoom,
+  };
+}
+
+/** Where a canvas-painted badge is allowed to sit (FR-U4).
+ *
+ *  The size/angle readout hangs 8px below the selection box, which is right
+ *  until the box's bottom edge reaches the bottom of the canvas: the badge then
+ *  paints off-screen and the one answer to "how big is this?" disappears — most
+ *  often while resizing something tall, which is exactly when it is wanted.
+ *  Flip it above the box when below does not fit, and clamp both axes into the
+ *  view as a last resort, because a selection taller than the canvas has
+ *  neither side to hang from. Pure arithmetic on canvas-local pixels, so the
+ *  paint loop stays the only thing that has to know about the ctx. */
+export function clampBadge(
+  rect: { x: number; y: number; w: number; h: number },
+  view: { w: number; h: number },
+  opts: { pad?: number; flipY?: number } = {},
+): { x: number; y: number; flipped: boolean } {
+  const pad = opts.pad ?? 8;
+  const x = Math.max(pad, Math.min(rect.x, Math.max(pad, view.w - rect.w - pad)));
+  /** A candidate row is usable only if the whole badge is inside the view: a flip
+   *  target above a selection that starts below the fold is off-screen too, and
+   *  trading one invisible badge for another is not a fix. */
+  const fits = (top: number) => top >= pad && top + rect.h <= view.h - pad;
+  if (!fits(rect.y) && opts.flipY !== undefined && fits(opts.flipY)) {
+    return { x, y: opts.flipY, flipped: true };
+  }
+  const y = Math.max(pad, Math.min(rect.y, Math.max(pad, view.h - rect.h - pad)));
+  return { x, y, flipped: false };
+}
+
 /** Change the zoom while keeping the middle of the canvas still, which is what
  *  zoom-in/zoom-out shortcuts and percentage menu do. */
 export function zoomAboutCentre(engine: Engine, zoom: number) {

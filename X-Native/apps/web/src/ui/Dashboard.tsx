@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ICON_LG, Icon, caretSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { THEME_OPTIONS, useTheme } from "./theme";
-import { subscribeToast, toast } from "./toast";
+import { toast } from "./toast";
+import { LiveStatus, ToastPill, useToastMessage } from "./announce";
 import { askPrompt } from "./dialog";
 import {
   createFile,
@@ -298,22 +299,10 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
   }, [menu]);
 
   // Every action on this screen reports through the toast bus ("File deleted",
-  // "Moved to Drafts", an import that failed), but nothing here was rendering
-  // one: the messages went nowhere and the dashboard looked like it had
-  // silently ignored the click. The editor has always drawn its own.
-  const [note, setNote] = useState("");
-  useEffect(() => {
-    let timer = 0;
-    const off = subscribeToast((msg) => {
-      setNote(msg);
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => setNote(""), 1800);
-    });
-    return () => {
-      off();
-      window.clearTimeout(timer);
-    };
-  }, []);
+  // "Moved to Drafts", an import that failed). PM-U8: the bus → message and the
+  // 1800ms are the shared hook's now, so the dashboard and the editor cannot
+  // drift on either, and the message goes to both channels below.
+  const note = useToastMessage();
 
   const title = view === "recents" ? "Recently viewed" : view === "trash" ? "Trash" : "All files";
 
@@ -795,7 +784,8 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
           </div>
         </div>
       )}
-      {note && <div className="toast">{note}</div>}
+      <ToastPill text={note} />
+      <LiveStatus text={note} />
     </div>
   );
 }
