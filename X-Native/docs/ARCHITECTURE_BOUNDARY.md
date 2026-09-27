@@ -6,8 +6,9 @@
 > A strictly gated web-document V1 adapter now powers an explicit
 > `#/file/<id>?engine=rust` rectangle preview when genuine WASM is available.
 > The ordinary editor, production history and persistence remain TypeScript-owned.
-> The import bridges, command-session ABI and narrow web-document gate passed
-> CI; native geometry promotion **failed** its comparator. See
+> The import bridges, command-session ABI and narrow preview passed generated-
+> WASM [CI 36342756975](https://github.com/Ankushui18/X-native/actions/runs/36342756975).
+> Native geometry promotion **failed** its comparator. See
 > [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
 > The baseline inventory below is historical, not a claim that the bridges are inert.
 

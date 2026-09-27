@@ -982,3 +982,11 @@ move/undo round trip and release; it requires CI-built artifacts and is not a
 browser paint test. Browser rendering parity, native desktop integration,
 advanced document schemas, durable Rust-owned persistence and default-route
 promotion are still **unverified** and outside this slice.
+
+**Verification (2026-09-28):**
+[CI 36342756975](https://github.com/Ankushui18/X-native/actions/runs/36342756975)
+passed on `06e6a81`: Rust workspace gate, generated WASM packaging and real
+bridge/React preview smoke, full web test/build and the screenshot job. The
+native geometry diagnostic is nonblocking and does not change its NOT APPROVED
+status. This proves the bounded generated-WASM host path, not a production
+editor swap or visual browser parity.
