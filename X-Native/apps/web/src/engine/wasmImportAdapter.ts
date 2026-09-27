@@ -92,7 +92,7 @@ export function decodeRustImport(payload: string): ImportResult {
   function convert(value: unknown, depth = 0): ImportedNode {
     if (++count > 100_000 || depth > 256) throw new Error("Rust import exceeds document limits");
     const n = object(value), kind = object(n.kind);
-    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow"]);
+    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow", "origin"]);
     keys(kind, ["t", "radius", "path"]);
     if (!["rect", "ellipse", "line", "frame", "group", "vector"].includes(String(kind.t))) {
       throw new Error("Unsupported Rust layer kind; use TS importer");
@@ -107,6 +107,17 @@ export function decodeRustImport(payload: string): ImportResult {
       hidden: n.visible === false, locked: n.locked === true,
     };
     if (out.w < 0 || out.h < 0 || out.opacity < 0 || out.opacity > 1) throw new Error("Invalid Rust layer dimensions/opacity");
+    if (n.origin != null) {
+      if (!Array.isArray(n.origin) || n.origin.length !== 2) throw new Error("Invalid Rust origin");
+      // The native SVG lowering uses a top-left pivot; web imported nodes
+      // rotate about their center. Rebase translation so the affine is equal:
+      // t_web = t_native + (pivot_native - center) - R(pivot_native - center).
+      const dx = number((number(n.origin[0]) - 0.5) * out.w);
+      const dy = number((number(n.origin[1]) - 0.5) * out.h);
+      const a = number(n.rotation), c = Math.cos(a), s = Math.sin(a);
+      out.x = number(out.x + dx - (c * dx - s * dy));
+      out.y = number(out.y + dy - (s * dx + c * dy));
+    }
     if (n.stroke != null) {
       const stroke = object(n.stroke); keys(stroke, ["color", "width"]);
       out.strokePaint = paint({ t: "solid", c: stroke.color }); out.strokeWidth = number(stroke.width);

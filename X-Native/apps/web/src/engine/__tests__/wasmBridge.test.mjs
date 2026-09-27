@@ -41,6 +41,23 @@ await test("angle conversion overflow declines rather than producing Infinity", 
 await test("unsupported field diagnostics identify the unmapped schema keys", () => {
   assert.throws(() => decodeRustImport(envelope([page([rect({ bindings: { font: "Inter" } })])])), /properties: bindings/);
 });
+await test("native pivots rebase to the same web affine at all four corners", () => {
+  for (const angle of [0, Math.PI / 2, -Math.PI / 2, Math.PI / 6]) {
+    for (const origin of [[0, 0], [0.5, 0.5], [1, 1], [0.2, 0.8]]) {
+      const raw = rect({ rotation: angle, origin });
+      const n = decodeRustImport(envelope([page([raw])])).nodes[0];
+      const place = (x, y, tx, ty, px, py, a) => [tx + px + (x - px) * Math.cos(a) - (y - py) * Math.sin(a), ty + py + (x - px) * Math.sin(a) + (y - py) * Math.cos(a)];
+      for (const [x, y] of [[0, 0], [raw.w, 0], [raw.w, raw.h], [0, raw.h]]) {
+        const expected = place(x, y, raw.x, raw.y, origin[0] * raw.w, origin[1] * raw.h, angle);
+        const actual = place(x, y, n.x, n.y, n.w / 2, n.h / 2, n.rotation * Math.PI / 180);
+        assert.ok(Math.hypot(actual[0] - expected[0], actual[1] - expected[1]) < 1e-9);
+      }
+    }
+  }
+});
+await test("invalid pivots and pivot overflow decline safely", () => {
+  for (const origin of [[0], [0, 0, 0], [null, 0], [1e308, 0]]) assert.throws(() => decodeRustImport(envelope([page([rect({ origin })])])));
+});
 await test("opaque black vs transparent black", () => {
   for (const [c, visible] of [["#000000", true], ["#00000000", false]]) assert.equal(decodeRustImport(envelope([page([rect({ fill: { t: "solid", c } })])])).nodes[0].fillVisible, visible);
 });
