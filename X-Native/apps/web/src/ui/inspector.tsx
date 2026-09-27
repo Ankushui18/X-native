@@ -342,6 +342,14 @@ function ExportAssetsDialog({
   // toolbar behind it.
   const sheet = useRef<HTMLDivElement>(null);
   useFocusTrap(true, sheet);
+  // PM-U9: and the modality is intrinsic to the sheet, not only to the App state
+  // that opened it — anything that renders this sheet gets the guard that stops
+  // the editor's chords (Delete, tool letters, ⌘A/⌘Z) reaching through the veil.
+  // App registers its own entry for the same sheet ("export", also modal), which
+  // is the one that carries the caret home; this one is pushed later (child
+  // effects run first) so it is the top of the stack, and Escape closes the sheet
+  // exactly once either way.
+  useEscape("export-sheet", onClose, true);
 
   return createPortal(
     <div className="xmodal-veil" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>

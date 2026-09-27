@@ -69,6 +69,7 @@ import {
 import { toast } from "./toast";
 import { Icon } from "./icons";
 import { clampBadge, zoomAtPoint, zoomToRect } from "./zoom";
+import { modalOpen } from "./escape";
 import { getNudgePrefs } from "./nudgePrefs";
 import { alignKey, flowGapLine, flowInsertIndex, wrapLines as flowWrapLines, wraps } from "../engine/layout";
 import { ContextToolbar, XButton } from "./x-ui";
@@ -708,6 +709,10 @@ export function Canvas({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // PM-U9: while a modal is open the canvas does not answer the keyboard —
+      // not the point editor's digits, not its Delete. Escape is the modal's and
+      // is consumed by bindHotkeys before this runs; see ui/escape.ts.
+      if (modalOpen() && e.key !== "Escape") return;
       const targetEl = e.target as HTMLElement;
       const isTyping =
         targetEl?.tagName === "INPUT" ||

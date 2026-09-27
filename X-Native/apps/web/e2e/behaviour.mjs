@@ -3657,6 +3657,97 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 50. PM-U9: a modal owns the keyboard ---------------------------------------
+{
+  const p = await page();
+  await rows(p);
+
+  // What the editor is showing that a stray chord would change: the layer count,
+  // which tool is active, and the selection ring. Read them the way a person
+  // would — the rows, the dock's active tool, the panel's selected row.
+  const snapshot = () =>
+    p.evaluate(() => ({
+      rows: document.querySelectorAll(".panel.left .row").length,
+      tool: document.querySelector('.dock .tool.active .hit')?.getAttribute("aria-label") ?? null,
+      sel: document.querySelectorAll(".panel.left .row.sel").length,
+      toast: (document.querySelector(".toast")?.textContent || "").trim(),
+      palette: !!document.querySelector(".actions"),
+      sheet: !!document.querySelector(".xmodal"),
+    }));
+
+  // Open the export sheet the way §46 does: the palette's own command, so the
+  // sheet's registration is the one the App makes in real use.
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(500);
+  await p.evaluate(() => {
+    [...document.querySelectorAll('.actions button, [role="dialog"] button')]
+      .find((x) => (x.textContent || "").includes("Export assets"))?.click();
+  });
+  await sleep(650);
+  const opened = await snapshot();
+  t(`the export sheet is up over the editor (${opened.rows} rows, tool ${opened.tool})`,
+    opened.sheet && opened.rows > 0 && !!opened.tool);
+
+  // Focus one of the sheet's own buttons — exactly where Tab lands, and the state
+  // the finding was measured in (typing in a field was always safe).
+  await p.evaluate(() => {
+    const b = [...document.querySelectorAll(".xmodal button")].find((x) => x.className.includes("icon-btn"));
+    b?.focus();
+  });
+  const onButton = await p.evaluate(() => !!document.activeElement?.closest?.(".xmodal"));
+  t("with focus on one of its buttons", onButton);
+
+  // Let any earlier toast expire, so the "nothing was said" assertions below are
+  // about this round of keys and not about the palette's leftovers.
+  await sleep(2000);
+
+  await p.keyboard.press("Delete");
+  await sleep(400);
+  await p.keyboard.press("r");
+  await sleep(300);
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await sleep(300);
+  await p.keyboard.down("Control"); await p.keyboard.press("z"); await p.keyboard.up("Control");
+  await sleep(400);
+
+  const after = await snapshot();
+  t(`Delete removes nothing behind it (${opened.rows} → ${after.rows} rows, no toast)`,
+    after.rows === opened.rows && !/delet/i.test(after.toast));
+  t(`a tool letter switches nothing behind it (${opened.tool} → ${after.tool})`, after.tool === opened.tool);
+  t(`⌘A selects nothing behind it (${opened.sel} → ${after.sel} selected row(s))`, after.sel === opened.sel);
+  t("and ⌘Z has nothing to undo, because nothing happened", after.rows === opened.rows);
+
+  await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+  await sleep(450);
+  const stacked = await snapshot();
+  t(`⌘K does not open the palette on top of the sheet (palette ${stacked.palette ? "open" : "closed"}, sheet ${stacked.sheet ? "up" : "gone"})`,
+    !stacked.palette && stacked.sheet);
+
+  // Escape is still the sheet's, and it hands the caret back (rounds 9 and 10).
+  await p.keyboard.press("Escape");
+  await sleep(450);
+  const gone = await snapshot();
+  t(`Escape closes it (${gone.sheet ? "still up" : "gone"}, caret on ${await p.evaluate(() => document.activeElement?.className || document.activeElement?.tagName)})`,
+    !gone.sheet);
+  t("without dropping the caret on <body>",
+    await p.evaluate(() => document.activeElement?.tagName !== "BODY"));
+
+  // The scope proof: the guard is modality, not a freeze. With the sheet gone the
+  // same keys must work again — Delete deletes, and says so. Select a layer first,
+  // since the deletable thing is whatever the layer list has selected.
+  await p.evaluate(() => document.querySelector(".panel.left .row")?.dispatchEvent(
+    new MouseEvent("click", { bubbles: true })));
+  await sleep(400);
+  const beforeDelete = await snapshot();
+  await p.keyboard.press("Delete");
+  await sleep(500);
+  const afterDelete = await snapshot();
+  t(`and Delete deletes again once it is gone (${beforeDelete.rows} → ${afterDelete.rows} rows)`,
+    afterDelete.rows === beforeDelete.rows - 1 && /delet/i.test(afterDelete.toast));
+
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

@@ -341,7 +341,9 @@ const registers = {
   "ContextMenu.tsx": 1,
   "FillPicker.tsx": 1,
   "RadialMenu.tsx": 1,
-  "inspector.tsx": 3,
+  // Four since round 13: the three panel menus plus the export sheet, which
+  // registers itself so its modality does not depend on who rendered it.
+  "inspector.tsx": 4,
 };
 for (const [file, want] of Object.entries(registers)) {
   const p = file.startsWith("..") ? path.join(UI, "..", file.slice(3)) : path.join(UI, file);

@@ -101,7 +101,11 @@ sheet, colours from tokens, controls from the primitives.
    control wraps to the first, Shift+Tab at the first wraps to the last, disabled controls are not stops.
    Non-modal overlays (popovers, menus, flyouts) are deliberately not trapped — Tab leaving them is how
    a keyboard user gets out.
-6. Transient status is announced, not just drawn: a confirmation goes to both channels — the `.toast` pill
+6. A modal owns the keyboard while it is open: Escape (one owner, `ui/escape.ts`), Tab (the trap), and
+   nothing else reaches the editor — the global chords (tool letters, ⌘A/⌘Z, Delete, ⌘K, zen, the radial
+   menu) stand down on `modalOpen()`. A modal registers with `modal: true`; a popover, menu or flyout does
+   not, because the user is still working with the canvas under it and Delete there should still delete.
+7. Transient status is announced, not just drawn: a confirmation goes to both channels — the `.toast` pill
    and the hidden `LiveStatus` region (`ui/announce.tsx`, `role="status"`/`aria-live="polite"`), which is
    mounted before it has anything to say. A stream that arrives on its own is a `role="log"` (`LiveLog`).
    Those are the product's only live regions; the one `assertive` message is the dialog's validation error.

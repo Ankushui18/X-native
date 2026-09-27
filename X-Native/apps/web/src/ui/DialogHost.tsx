@@ -46,7 +46,7 @@ function DialogView({ req }: { req: DialogRequest }) {
   // cancel a crop). This used to be its own capture listener, which lost to the
   // App's sheet cascade whenever both were open: one press closed the sheet
   // *behind* the dialog and left the dialog on screen.
-  useEscape("dialog", () => closeRef.current(null));
+  useEscape("dialog", () => closeRef.current(null), true);
 
   return (
     <XDialog

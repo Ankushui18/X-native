@@ -1,5 +1,23 @@
 /**
- * One Escape owner, and one place that hands the caret back (PM-U3).
+ * One Escape owner, one place that hands the caret back, one trap — and (PM-U9)
+ * one place that knows whether the keyboard belongs to a modal.
+ *
+ * That last part is the round-13 finding. Tab was the modal's (round 11) and
+ * Escape was the modal's (round 9); everything else reached straight through the
+ * veil. With the export sheet open and focus on one of its own buttons — which
+ * is where Tab lands — `Delete` **removed the selected layer behind the sheet**,
+ * the tool letters switched tools behind it, `⌘A` selected the whole page behind
+ * it, and `⌘Z` then undid the deletion the user never asked for. Typing in a
+ * modal's *field* was already safe (the chord surface's typing guard covers
+ * `input`/`textarea`), so the exposure was exactly the modal's buttons.
+ *
+ * So the registry records whether an entry is *modal* (a sheet that veils the
+ * editor and holds Tab) or not (a popover, menu, flyout or the radial menu — the
+ * user is still working with the canvas, and Delete with a context menu open
+ * should still delete). `modalOpen()` is what the three global key surfaces ask
+ * before they do anything.
+ *
+ * The original finding, for context:
  *
  * Escape used to be answered by whoever happened to be listening, in whichever
  * phase they happened to register:
@@ -42,7 +60,7 @@
  */
 import { useEffect, useRef } from "react";
 
-type Entry = { id: string; close: () => void; home: HTMLElement | null };
+type Entry = { id: string; close: () => void; home: HTMLElement | null; modal: boolean };
 
 const stack: Entry[] = [];
 
@@ -83,9 +101,14 @@ watchFocus();
 /** Register an open overlay. Returns the release function; call it on close.
  *  Releasing twice is harmless, and releasing an entry a press already popped
  *  is a no-op — which is what makes `close()`-then-unmount safe. */
-export function pushEscape(id: string, close: () => void, home?: HTMLElement | null): () => void {
+export function pushEscape(
+  id: string,
+  close: () => void,
+  home?: HTMLElement | null,
+  modal = false,
+): () => void {
   watchFocus();
-  const entry: Entry = { id, close, home: home === undefined ? null : home };
+  const entry: Entry = { id, close, home: home === undefined ? null : home, modal };
   stack.push(entry);
   let released = false;
   return () => {
@@ -110,6 +133,20 @@ export function closeTopEscape(): boolean {
  *  order, one press at a time — readable in a test and in a debugger. */
 export function escapeStack(): string[] {
   return stack.map((e) => e.id);
+}
+
+/** Is a *modal* overlay open? The editor's global chords stand down while one
+ *  is: the modal's own controls (which the trap keeps focus inside) and Escape
+ *  are the keyboard. A non-modal overlay does not answer yes — a popover or menu
+ *  does not veil the editor, and the canvas keys should keep working under it. */
+export function modalOpen(): boolean {
+  return stack.some((e) => e.modal);
+}
+
+/** The modal ids that are open, bottom first. The same question as `modalOpen`
+ *  with the answer spelled out, for tests and for the debugger. */
+export function openModals(): string[] {
+  return stack.filter((e) => e.modal).map((e) => e.id);
 }
 
 /** Empty the stack. Tests mount and unmount surfaces out of order, and a leaked
@@ -177,7 +214,7 @@ function giveBackFocus(entry: Entry): void {
  *  open. `close` is read through a ref, so a component can pass a fresh closure
  *  every render without re-registering (and without losing its place in the
  *  stack, which is what "opened most recently" means). */
-export function useEscape(id: string | null, close: () => void): void {
+export function useEscape(id: string | null, close: () => void, modal = false): void {
   const ref = useRef(close);
   ref.current = close;
   const home = useRef<HTMLElement | null>(null);
@@ -188,8 +225,8 @@ export function useEscape(id: string | null, close: () => void): void {
   }
   useEffect(() => {
     if (!id) return undefined;
-    return pushEscape(id, () => ref.current(), home.current);
-  }, [id]);
+    return pushEscape(id, () => ref.current(), home.current, modal);
+  }, [id, modal]);
 }
 
 /* ── the veil is a wall (PM-U7) ──────────────────────────────────────────── */

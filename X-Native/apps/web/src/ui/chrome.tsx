@@ -20,7 +20,7 @@ import { rankSearch, loadRecents, saveRecent } from "./search";
 import type { RecentEntry, SearchEntry, SearchKind } from "./search";
 import { useRestoreFocus } from "./a11y";
 import { selectInverse, selectMatching } from "./selectSame";
-import { closeTopEscape, useEscape } from "./escape";
+import { closeTopEscape, modalOpen, useEscape } from "./escape";
 import { LiveLog } from "./announce";
 import {
   DEFAULT_NUDGE,
@@ -1844,6 +1844,17 @@ export function bindHotkeys(
       e.stopImmediatePropagation();
       return;
     }
+    // PM-U9: and a *modal* owns the rest of the keyboard too. Tab (round 11) and
+    // Escape (round 9) were already its; everything below this line used to reach
+    // through the veil from a button inside the sheet — Delete removed the
+    // selected layer behind the export sheet, `r` switched tools behind it, ⌘A
+    // selected the whole page behind it and ⌘Z then undid the deletion nobody
+    // asked for. Typing in a modal's field was already covered by the typing
+    // guard, so the exposure was exactly the modal's buttons — which is where
+    // Tab puts focus. Non-modal overlays (popovers, menus, flyouts) are excluded:
+    // the user is still working with the canvas, and Delete under a context menu
+    // should still delete.
+    if (modalOpen()) return;
     if (typing) return;
     // The alignment box in the right panel answers to its own keys while it has
     // focus - arrows, W/A/S/D, B and X - so just those stand down. Everything
@@ -4195,7 +4206,7 @@ export function HelpBtn() {
   // PM-U3: the sheet joins the one Escape cascade. Its own bubble listener was
   // starved whenever an App overlay was open — with Find open and this sheet
   // opened on top of it, Escape closed Find and left the sheet up.
-  useEscape(open ? "shortcuts" : null, () => setOpen(false));
+  useEscape(open ? "shortcuts" : null, () => setOpen(false), true);
 
   // The dashboard's header has no editor to hang a sheet on, so it asks for
   // this one through an event instead of duplicating the modal.

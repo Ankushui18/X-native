@@ -4,7 +4,7 @@ import { Canvas } from "./ui/Canvas";
 import { copyText, worldClones } from "./engine/clipboard";
 import { worldPos } from "./engine/memory";
 import { zoomTo } from "./ui/zoom";
-import { useEscape } from "./ui/escape";
+import { modalOpen, useEscape } from "./ui/escape";
 import { LiveStatus, ToastPill, useToastMessage } from "./ui/announce";
 import { devLangLabel, getDevPrefs, type DevFormat } from "./ui/devPrefs";
 import {
@@ -311,11 +311,14 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   const [exportOpen, setExportOpen] = useState(false);
   const [nudgeOpen, setNudgeOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
+  // PM-U9: the four veiled sheets are *modal* — the editor's global chords stand
+  // down while they are up (see ui/escape.ts). The find bar is not: it is a strip
+  // over the canvas and the editor keeps working underneath it.
   useEscape(findOpen ? "find" : null, () => setFindOpen(false));
-  useEscape(nudgeOpen ? "nudge" : null, () => setNudgeOpen(false));
-  useEscape(exportOpen ? "export" : null, () => setExportOpen(false));
-  useEscape(actions ? "actions" : null, () => setActions(false));
-  useEscape(figInspector ? "fig-inspector" : null, () => setFigInspector(false));
+  useEscape(nudgeOpen ? "nudge" : null, () => setNudgeOpen(false), true);
+  useEscape(exportOpen ? "export" : null, () => setExportOpen(false), true);
+  useEscape(actions ? "actions" : null, () => setActions(false), true);
+  useEscape(figInspector ? "fig-inspector" : null, () => setFigInspector(false), true);
   // Handoff plumbing that needs the live document: land on the layer a shared
   //  link points at, then answer the two copy commands the menu asks for.
   useEffect(() => {
@@ -441,6 +444,10 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
 
     const handleKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+      // PM-U9: a modal owns the keyboard. Zen (`z`) and the radial menu (`q`)
+      // are editor chords; opening either over a sheet is the same mistake the
+      // tool letters and Delete were making.
+      if (modalOpen()) return;
       if (e.key === "z" || e.key === "Z") {
         if (!e.metaKey && !e.ctrlKey && !e.altKey) {
           onZen();

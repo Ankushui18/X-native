@@ -269,6 +269,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U3 | FIXED: one Escape owner. Every overlay registers in `ui/escape.ts` while it is open — the App's five sheets, the dock's flyouts, XDialog/XPopover, the dialog bus, the context menu, the fill picker, the radial menu, the shortcuts sheet and the inspector's zoom/language/property menus — and the topmost (opened most recently) closes on one press, which the central handler consumes. Order used to follow *registration*, not the screen: a dialog on top of the export sheet lost the press to the sheet behind it, and the shortcuts sheet could be starved outright. The old `popoverGuard` counter (which protected the selection but closed nothing) is deleted, and the presentation's second Escape implementation with it, so one press walks back one frame. The same registry hands the caret back: an overlay that closes unmounts the field it focused, and focus now returns to whatever opened it, or to the canvas column when that control is gone (a palette row), instead of falling to `<body>`. §4v, §4w | FIXED (P1) | — |
 | PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
+| PM-U9 | Tab was the modal's and Escape was the modal's, but nothing else was: with the export sheet open and focus on one of its own buttons — where Tab lands — `Delete` **removed the selected layer behind the sheet**, a tool letter switched the tool behind it, `⌘A` selected the whole page behind it and `⌘Z` then undid a deletion nobody asked for. Typing in a modal's field was always safe (the chord surface's typing guard covers input/textarea), so the exposure was exactly the modal's buttons. FIXED: the registry records whether a surface is *modal*, and the three global key surfaces — the editor's chords (`chrome.tsx`), the canvas's own handler and App's zen/radial chords — ask `modalOpen()` before they do anything. Non-modal overlays are deliberately excluded: a menu or popover does not veil the canvas, and Delete under a context menu should still delete. §4z | FIXED (P1) | — |
 | PM-U8 | The product announced nothing: the toast — the only confirmation channel there is ("Deleted 5 layers · ⌘Z to undo", "Copied to clipboard") — was a plain `<div className="toast">`, and across the whole app the single ARIA live region was the dialog's validation error. FIXED: `ui/announce.tsx` owns the announcement half — `LiveStatus` (a polite `role="status"` region, always mounted before it has text, clipped not `display:none`, and deliberately not wrapped around the visible pill so nothing is said twice), `ToastPill` for the pill, `LiveLog` for a stream that arrives on its own (the agent's answers), and `useToastMessage` for the bus → message half both screens hand-rolled. §4y | FIXED (P2) | — |
 | PM-U7 | A modal did not hold the keyboard: `aria-modal="true"` was set but Tab from the last control in the export sheet walked out from under the veil into the toolbar behind it (where Enter operated chrome the user could not see), and the nudge dialog never took focus at all, so it opened with the caret still on whatever was behind it. FIXED: `useFocusTrap` (ui/escape.ts) — both modals take the caret on open (their first field if they have one) and ring Tab/Shift+Tab among their controls, skipping disabled ones; non-modal overlays are deliberately not trapped. §4x | FIXED (P2) | — |
 | PM-U6 | FIXED: the sheet focuses its filter field on open, which is both the first control in the sheet and the first thing worth doing in it — every other modal input in the app (shortcuts, find-in-page, the palette) already did. The dialog also says `aria-modal="true"`, which it did not, so a screen reader was not told the document behind the veil is inert. §46 types into it with no click first and watches the list filter. Focus *restore* on close was PM-U3's, and is answered there: the registry hands the caret back to the command that opened the sheet, or to the canvas column when that row is gone with the palette (no longer `<body>`, and e2e §47 checks it). | FIXED (P2) | — |
@@ -317,7 +318,8 @@ palette (max-width/max-height/scroll).
 - DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wasted its density on
   7 shortcut-less buttons until §4t (LP-U5) — each row now carries its chord and its disabled state.
 - CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), one Esc owner (§4v/§4w),
-  one live-region owner (§4y: two polite regions and a log, and nothing else anywhere),
+  one live-region owner (§4y: two polite regions and a log, and nothing else anywhere), one owner of the
+  keyboard itself (§4z: a modal claims it, and the editor asks before answering),
   `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens — since §4r two
   *named roles* (`--accent` for controls, `--cv-sel` for selection ink on the canvas) rather than one
   literal and one token that happened to disagree (FR-U2).
@@ -1293,6 +1295,64 @@ staying mounted; the agent pane's named log carrying both turns and the answer p
 **Not verified here:** what a screen reader actually says, and how the queue behaves when two toasts land
 within the timeout (the second replaces the first rather than queueing, so a fast pair is announced as the
 later one). The DOM contract is asserted; the speech is not.
+
+## §4z. P1 round 13 — a modal owns the keyboard (PM-U9)
+
+The third and last of the modal-input findings, and the one with consequences. Rounds 9 and 11 gave a modal
+Escape and Tab; nothing else was its. The chord surface's typing guard (`input, textarea, select,
+[contenteditable], .x-field, .x-popover, .inspector`) covers a modal's *fields*, which is why typing in the
+export sheet's filter was always safe — so what was left exposed was precisely the modal's **buttons**, and
+that is where Tab puts focus.
+
+Measured on the real thing before the fix (mounted sheet, focus on its own close button, chords dispatched
+from it):
+
+| press | before | after |
+| --- | --- | --- |
+| `Delete` | tree 24 → **23 nodes**, selection 1 → **0** — the selected layer was deleted behind the sheet | unchanged |
+| `r` | tool `select` → **`rect`** | unchanged |
+| `⌘A` | selection 1 → **3** | unchanged |
+| `⌘Z` | **undid the deletion the user never asked for** | nothing to undo |
+| `⌘K` | palette opened **on top of** the sheet | nothing |
+
+The sheet was literally offering to export the layer that Delete removed from under it.
+
+**The rule.** A surface registered as *modal* means: while it is open it owns the keyboard — Escape (one
+owner), Tab (the trap), and its own controls; the editor's global chords stand down. `ui/escape.ts` records
+the flag on the entry, `modalOpen()` answers it, and exactly three surfaces ask: the editor's chord surface
+(`bindHotkeys`, which asks after Escape has had its turn and before the typing guard), the canvas's own key
+handler (where the point editor's Delete and 1–4 live), and App's zen/radial chords. The registry's four
+App-owned sheets (`export`, `nudge`, `actions`, `fig-inspector`), `XDialog` and the dialog bus (`dialog`),
+the shortcuts sheet and the export sheet itself are modal. The export sheet registers **itself** as well as
+being registered by App, so the guarantee travels with the component rather than with whoever rendered it
+(App's entry is the one that carries the caret home; the sheet's is pushed later, so Escape closes the sheet
+exactly once either way).
+
+**Deliberately not modal.** Popovers, menus, flyouts, the fill picker, the radial menu and the find bar: none
+veils the editor, and the user is still working *with* the canvas — Delete under an open context menu should
+still delete, which is what Figma does too. `modalkeys.test.mjs` asserts that scope in both directions: the
+same `⌘K` that the sheet swallows reaches `onActions` when only the zoom menu is open, and the same tool
+letter that is ignored behind the sheet switches the tool once it is gone.
+
+**Where it is checked.** `modalkeys.test.mjs` (37 checks, and it exits in three seconds because the dialog
+bus's promise is resolved defensively rather than awaited): the registry's arithmetic (a non-modal overlay
+does not claim the keyboard; a modal one does; a non-modal above a modal does not change the answer; the
+claim is released with the last modal); the sheet mounted for real with the four keys above asserted against
+the engine's own tree and selection, `⌘K` asserted against a counted `onActions`, Escape closing it exactly
+once; the release, then the same keys working again; the nudge dialog claiming it through `XDialog` while its
+own field still takes typing; the dialog bus claiming it while the prompt's own Enter still submits; the zoom
+menu *not* claiming it; and source checks that exactly three surfaces ask `modalOpen()` and that each veiled
+surface registers as modal. Unit suite **2,270 checks, 0 failed** (2,233 → 2,270); `tsc -b` clean; drift
+unmoved at 413/131/340/363/49.
+
+**Browser suite §50 — written, NOT RUN here** (10 checks, 361 total): the same measurement in a browser —
+focus on a button inside the sheet, then Delete (no toast, no lost row), `r` (dock's active tool unchanged),
+⌘A (selected rows unchanged), ⌘Z (nothing to undo), ⌘K (no palette on top); Escape closing it without
+dropping the caret on `<body>`; and Delete deleting again once the sheet is gone.
+
+**Not verified here:** whether any of these chords *should* stay live inside a modal (a "save" chord is the
+case a designer would argue about; there is none in this product today), and the speech a screen reader makes
+of a modal's own controls while the guard is on — the DOM contract is asserted, the reading is not.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

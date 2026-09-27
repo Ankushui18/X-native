@@ -582,7 +582,7 @@ export function XDialog({
   // PM-U3: one Escape owner. This bubble listener used to be starved outright
   // whenever an App sheet was open, and a dialog on top of one is exactly when
   // a press has to reach the dialog.
-  useEscape("dialog", onClose);
+  useEscape("dialog", onClose, true);
   // PM-U7: and the keyboard does not leave it while it is open.
   const box = useRef<HTMLDivElement>(null);
   useFocusTrap(true, box);
