@@ -111,3 +111,52 @@ fn sketch_fixture_preserves_page_and_nested_layer_names() {
     );
     assert_eq!(home.children[3].children[0].name, "Inner");
 }
+
+#[test]
+fn source_text_metrics_survive_native_lowering_for_both_file_formats() {
+    for (format, bytes) in [
+        (
+            "fig",
+            &include_bytes!("../../../apps/web/e2e/fixtures/sample.fig")[..],
+        ),
+        (
+            "sketch",
+            &include_bytes!("../../../apps/web/e2e/fixtures/sample.sketch")[..],
+        ),
+    ] {
+        let (doc, report) = if format == "fig" {
+            import_fig_bytes_with_report(bytes).unwrap()
+        } else {
+            x_format::sketch::import_sketch_with_report(bytes).unwrap()
+        };
+        fn texts<'a>(n: &'a x_core::Node, out: &mut Vec<&'a x_core::Node>) {
+            if matches!(n.kind, x_core::NodeKind::Text { .. }) {
+                out.push(n);
+            }
+            for c in &n.children {
+                texts(c, out);
+            }
+        }
+        let mut found = Vec::new();
+        for p in &doc.pages {
+            texts(p, &mut found);
+        }
+        assert_eq!(found.len(), 1);
+        let node = found[0];
+        let metrics = &report.text_metrics[&node.id];
+        assert_eq!(
+            (metrics.width, metrics.height, metrics.font_size),
+            (200.0, 24.0, Some(18.0))
+        );
+        assert_eq!(
+            node.h, 18.0,
+            "native rendering convention remains unchanged"
+        );
+        let expected = if format == "fig" {
+            "Figma Hello"
+        } else {
+            "Sketch Hello"
+        };
+        assert!(matches!(&node.kind, x_core::NodeKind::Text { text } if text == expected));
+    }
+}

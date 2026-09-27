@@ -29,14 +29,33 @@ fn envelope(result: Result<String, String>) -> String {
     }
 }
 
+/// Additive, independently versioned import metadata. The persisted .x schema
+/// and native document remain unchanged. Older clients still decline text;
+/// newer clients require these original dimensions rather than guessing.
+fn import_envelope(result: Result<(x_core::Document, x_format::ImportReport), String>) -> String {
+    match result {
+        Err(e) => envelope(Err(e)),
+        Ok((doc, report)) => {
+            let metrics: serde_json::Map<String, serde_json::Value> = report.text_metrics.iter().map(|(id, m)| {
+                (id.clone(), serde_json::json!({ "width": m.width, "height": m.height, "fontSize": m.font_size }))
+            }).collect();
+            let metadata = serde_json::json!({ "version": 1, "nodes": metrics });
+            format!(
+                "{{\"ok\":true,\"doc\":{},\"textMetrics\":{metadata}}}",
+                save_x(&doc)
+            )
+        }
+    }
+}
+
 /// Import a  `.fig` archive and return it as `.x` JSON.
 pub fn import_fig_to_x(bytes: &[u8]) -> String {
-    envelope(figbinary::import_fig_bytes(bytes).map(|d| save_x(&d)))
+    import_envelope(figbinary::import_fig_bytes_with_report(bytes))
 }
 
 /// Import a  archive and return it as `.x` JSON.
 pub fn import_sketch_to_x(bytes: &[u8]) -> String {
-    envelope(sketch::import_sketch(bytes).map(|d| save_x(&d)))
+    import_envelope(sketch::import_sketch_with_report(bytes))
 }
 
 /// Import an SVG document and return it as `.x` JSON.
@@ -134,6 +153,27 @@ mod tests {
             serde_json::from_str(&envelope(Err(message.into()))).unwrap();
         assert_eq!(value["error"], message);
         assert_eq!(value["ok"], false);
+    }
+
+    #[test]
+    fn file_imports_include_versioned_original_text_metrics() {
+        for out in [
+            import_fig_to_x(include_bytes!("../../../apps/web/e2e/fixtures/sample.fig")),
+            import_sketch_to_x(include_bytes!(
+                "../../../apps/web/e2e/fixtures/sample.sketch"
+            )),
+        ] {
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(value["ok"], true);
+            assert_eq!(value["doc"]["version"], 1, "persisted .x schema unchanged");
+            assert_eq!(value["textMetrics"]["version"], 1);
+            let nodes = value["textMetrics"]["nodes"].as_object().unwrap();
+            assert_eq!(nodes.len(), 1);
+            let metrics = nodes.values().next().unwrap();
+            assert_eq!(metrics["width"], 200.0);
+            assert_eq!(metrics["height"], 24.0);
+            assert_eq!(metrics["fontSize"], 18.0);
+        }
     }
 
     #[test]

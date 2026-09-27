@@ -311,11 +311,15 @@ fn number_val(v: Option<&V>) -> Option<(f64, String)> {
 }
 
 fn text_json(nc: &V, diags: &mut Vec<String>) -> Vec<(String, V)> {
-    let Some(td) = nc.get("textData") else {
-        return vec![];
-    };
+    // Modern files nest characters in textData; older/partial writers put
+    // characters on NodeChange itself. Both layouts already exist in the web
+    // reader. Do not drop the root-level text or its fontSize/style fields.
+    let td = nc.get("textData").unwrap_or(nc);
     let mut out = vec![];
-    let chars = gstr(td, "characters").unwrap_or("").to_string();
+    let chars = gstr(td, "characters")
+        .or_else(|| gstr(nc, "characters"))
+        .unwrap_or("")
+        .to_string();
     out.push(("characters".into(), V::Str(chars)));
     // Base style lives on the NodeChange itself (Figma's UI style fields
     // were hoisted onto the node in .fig; REST nests them under "style").
@@ -1045,5 +1049,35 @@ mod orphan_page_tests {
             canvas_children(&nodes, &kids, &known, "0:0"),
             vec![(2, vec![3]), (1, vec![])]
         );
+    }
+}
+
+#[cfg(test)]
+mod text_source_tests {
+    use super::*;
+
+    #[test]
+    fn nested_characters_take_precedence_but_root_style_is_retained() {
+        let source = obj(vec![
+            ("characters".into(), V::Str("legacy".into())),
+            ("fontSize".into(), V::Num(24.0)),
+            (
+                "textData".into(),
+                obj(vec![("characters".into(), V::Str("nested λ".into()))]),
+            ),
+        ]);
+        let result = obj(text_json(&source, &mut vec![]));
+        assert_eq!(gstr(&result, "characters"), Some("nested λ"));
+        assert_eq!(gnum(result.get("style").unwrap(), "fontSize"), Some(24.0));
+    }
+
+    #[test]
+    fn partial_text_data_falls_back_to_root_characters() {
+        let source = obj(vec![
+            ("characters".into(), V::Str("legacy λ".into())),
+            ("textData".into(), obj(vec![])),
+        ]);
+        let result = obj(text_json(&source, &mut vec![]));
+        assert_eq!(gstr(&result, "characters"), Some("legacy λ"));
     }
 }

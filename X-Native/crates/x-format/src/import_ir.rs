@@ -178,9 +178,20 @@ pub struct ImportDoc {
     pub diagnostics: Vec<String>,
 }
 
+/// Source text box and explicit font size, before the native model repurposes
+/// Node.h as the font size. Interop consumers must not infer a bounding box
+/// from that native rendering convention. Keys are final, deduplicated IDs.
+#[derive(Debug, Clone)]
+pub struct ImportTextMetrics {
+    pub width: f64,
+    pub height: f64,
+    pub font_size: Option<f64>,
+}
+
 /// Import result with per-file fidelity diagnostics.
 #[derive(Debug, Clone, Default)]
 pub struct ImportReport {
+    pub text_metrics: HashMap<String, ImportTextMetrics>,
     pub nodes_imported: usize,
     pub assets_imported: usize,
     pub diagnostics: Vec<String>,
@@ -246,7 +257,14 @@ pub fn lower_with_report(doc: ImportDoc) -> (Document, ImportReport) {
     };
     report.assets_imported = asset_ids.len();
     for (pi, page_ir) in doc.pages.into_iter().enumerate() {
-        let mut page = lower_node(page_ir, &mut used, &mut counter, true, &asset_ids);
+        let mut page = lower_node(
+            page_ir,
+            &mut used,
+            &mut counter,
+            true,
+            &asset_ids,
+            &mut report.text_metrics,
+        );
         // shared page semantics: a page is always a Frame, auto-sized to
         // its content envelope when the source gave no/zero size
         if page.w <= 0.0 || page.h <= 0.0 {
@@ -285,6 +303,7 @@ fn lower_node(
     counter: &mut usize,
     is_page: bool,
     asset_ids: &HashMap<String, String>,
+    text_metrics: &mut HashMap<String, ImportTextMetrics>,
 ) -> Node {
     // ---- id: sanitize source id or generate; dedupe globally
     let base = match &ir.id {
@@ -307,6 +326,17 @@ fn lower_node(
         clean(ir.w).max(0.0),
         clean(ir.h).max(0.0),
     );
+
+    if let ImportKind::Text { size, .. } = &ir.kind {
+        text_metrics.insert(
+            id.clone(),
+            ImportTextMetrics {
+                width: w,
+                height: h,
+                font_size: size.filter(|v| v.is_finite() && *v > 0.0),
+            },
+        );
+    }
 
     // ---- kind + kind-default fills (THE shared defaults table)
     let mut node = match ir.kind {
@@ -497,7 +527,7 @@ fn lower_node(
     node.visible = ir.visible;
 
     for c in ir.children {
-        let cn = lower_node(c, used, counter, false, asset_ids);
+        let cn = lower_node(c, used, counter, false, asset_ids, text_metrics);
         node.children.push(cn);
     }
     node
@@ -506,6 +536,43 @@ fn lower_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_metrics_use_final_ids_and_preserve_source_boxes() {
+        let make = |h, size| {
+            ImportNode::new(ImportKind::Text {
+                content: "text".into(),
+                size,
+                font: None,
+                line_height: None,
+                letter_spacing: None,
+                runs: vec![],
+            })
+            .id("same id")
+            .size(100.0, h)
+        };
+        let input = ImportDoc {
+            pages: vec![ImportNode::new(ImportKind::Frame)
+                .child(make(40.0, Some(16.0)))
+                .child(make(60.0, None))],
+            ..Default::default()
+        };
+        let (doc, report) = lower_with_report(input);
+        assert_eq!(report.text_metrics.len(), 2);
+        let a = &doc.pages[0].children[0];
+        let b = &doc.pages[0].children[1];
+        assert_eq!(a.id, "same-id");
+        assert_eq!(b.id, "same-id-2");
+        assert_eq!(a.h, 16.0);
+        assert_eq!(b.h, 60.0);
+        assert_eq!(report.text_metrics[&a.id].height, 40.0);
+        assert_eq!(report.text_metrics[&a.id].font_size, Some(16.0));
+        assert_eq!(report.text_metrics[&b.id].height, 60.0);
+        assert_eq!(
+            report.text_metrics[&b.id].font_size, None,
+            "unknown font size must not be invented"
+        );
+    }
 
     #[test]
     fn lower_dedupes_colliding_and_sanitizes_ids() {

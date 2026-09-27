@@ -242,3 +242,42 @@ assertion nor equivalence tolerance was waived.
 
 Local logs: `/home/user/wasm-import-next-{red,focused,unit,tsc,build,browser}.log`;
 CI annotations: `/home/user/wasm-import-next-annotations.json`.
+
+## 8. Source text metrics and guarded typography (2026-09-27)
+
+Import-only continuation; geometry kernels, comparators and promotion policy are
+unchanged. This supersedes §7's text/bindings limitation only for the subset below,
+not its historical results or remaining whole-file fidelity limitations.
+
+### Fixes
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W05 — FIG root-level characters lost | Native `text_json` accepts root `characters` when nested `textData.characters` is absent; nested content still wins; root typography is processed in either case | Committed FIG fixture plus nested/partial text-data Rust regressions |
+| W06 — source text height lost during native lowering | `ImportReport.text_metrics` captures source width/height and explicit font size before native `Node.h` becomes font size; final deduplicated IDs key entries. FIG/Sketch WASM envelopes add independent `textMetrics.version=1` metadata | Collision/unknown-size Rust regression; both file fixtures assert source 200×24 versus native h=18; WASM envelope regression |
+| W07 — all native typography bindings rejected | Adapter accepts text only with valid matching metadata; preserves Unicode content, source box, explicit size, literal font family, line-height ratio→pixels, tracking and left/center/right alignment | New `wasmText.test.mjs`: positive mappings plus legacy/malformed metadata, rich runs, non-text bindings, unsupported alignment, numeric overflow and full-contract fallback |
+| W08 — native variable tables ignored | Accept only known empty variable tables; decline nonempty resources or unknown variable schemas rather than silently losing them | Empty/nonempty/unknown-variable regressions |
+
+Persisted `.x` and ABI version 1 are unchanged. Legacy glue remains safe: text
+without source metrics declines. SVG still does not supply explicit font-size
+metadata and remains on TS for text. Font weight is the native unstyled default
+400, not inferred from PostScript font names; missing source styles still require
+the unchanged complete-contract TS equivalence check. Rich runs, variable-backed
+styles and unmapped properties are not promoted. Metadata does not establish
+complete FIG/Sketch typography or rendering fidelity.
+
+### Verification
+
+- Initial new regression suite: **24 passed / 8 failed**, establishing the missing
+  text mapping and metadata checks. Final expanded suite: **34/0**.
+- Local full suite: **2,945 passed / 0 failed**, 46 suite summaries; existing bridge
+  suite remains **39/0**. `tsc -b` clean and production build passes (existing
+  chunk-size warning). An intermediate TS check rejected `justify` because the
+  web `TextAlign` contract lacks it; adapter now declines it explicitly, tested.
+- Local cargo/rustc are unavailable. Rust compilation/tests, regenerated WASM and
+  the expanded actual-artifact FIG/Sketch text smoke are **pending CI**, not yet
+  native execution evidence. The smoke decodes each complete native fixture and
+  separately checks the production wrapper against the complete TS result.
+- Native browser E2E and broad rich-import fidelity remain **NOT VERIFIED**.
+
+Local evidence: `/home/user/wasm-text-{red,focused,unit,tsc,build}.log`.

@@ -59,6 +59,29 @@ try {
     for (const expectedName of format === "fig" ? ["Page 1", "Home", "FigCard", "FigDot", "FigLabel"] : ["Page 1", "Home", "Card", "Dot", "Label", "Grp", "Inner"]) {
       assert.ok(nativeNames.includes(expectedName), `${format} native import lost layer name ${expectedName}`);
     }
+    const flatten = (n) => [n, ...(n.children ?? []).flatMap(flatten)];
+    const rawTexts = raw.doc.pages.flatMap(flatten).filter((n) => n.kind.t === "text");
+    assert.equal(rawTexts.length, 1);
+    const rawText = rawTexts[0];
+    const content = format === "fig" ? "Figma Hello" : "Sketch Hello";
+    assert.equal(rawText.kind.text, content);
+    assert.equal(raw.textMetrics.version, 1);
+    assert.deepEqual(raw.textMetrics.nodes[rawText.id], { width: 200, height: 24, fontSize: 18 });
+    assert.equal(rawText.h, 18, "native h remains font size, not source box height");
+    // Decode the entire real document; don't carve out unsupported nodes to
+    // manufacture a native success. Whole-result equivalence is checked below.
+    const decoded = decodeRustImport(JSON.stringify(raw));
+    const decodedText = decoded.nodes.flatMap(flatten).find((n) => n.kind === "text");
+    assert.ok(decodedText, `${format} adapter must retain text`);
+    assert.equal(decodedText.text, content);
+    assert.equal(decodedText.w, 200); assert.equal(decodedText.h, 24); assert.equal(decodedText.fontSize, 18);
+    for (const [key, value] of Object.entries(rawText.bindings ?? {})) {
+      assert.ok(["font", "lh", "ls"].includes(key), `unknown fixture binding ${key}`);
+      if (key === "font") assert.equal(decodedText.fontFamily, value);
+      if (key === "lh") assert.equal(decodedText.lineHeight, Number(value) * 18);
+      if (key === "ls") assert.equal(decodedText.letterSpacing, Number(value));
+    }
+    console.log(`PASS native ${format} text: content, source 200x24, font size 18, literal typography`);
     console.log(`PASS native ${format} parser: ${raw.doc.pages.length} page(s), source layer names retained`);
     const expected = await tsImport(data);
     const actual = await nativeImport(data);

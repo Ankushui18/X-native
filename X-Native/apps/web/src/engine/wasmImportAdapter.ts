@@ -88,13 +88,30 @@ export function decodeRustImport(payload: string): ImportResult {
     const value = doc[key];
     if (value && typeof value === "object" && Object.keys(value).length) throw new Error(`Unsupported Rust ${key}`);
   }
+  if (doc.variables != null) {
+    const vars = object(doc.variables);
+    keys(vars, ["colors", "numbers", "strings", "bools", "collections", "modes", "num_modes", "str_modes", "bool_modes"]);
+    for (const table of Object.values(vars)) {
+      if (Object.keys(object(table)).length) throw new Error("Unsupported Rust variables");
+    }
+  }
+  // Native Node.h is font size for text, NOT its source bounding-box height.
+  // Old glue (and SVG without explicit metrics) must continue to fall back.
+  let textMetrics: Obj = {};
+  if (envelope.textMetrics != null) {
+    const metadata = object(envelope.textMetrics);
+    keys(metadata, ["version", "nodes"]);
+    if (metadata.version !== 1) throw new Error("Unsupported Rust text metrics version");
+    textMetrics = object(metadata.nodes);
+  }
+  const usedMetrics = new Set<string>();
   let count = 0;
   function convert(value: unknown, depth = 0): ImportedNode {
     if (++count > 100_000 || depth > 256) throw new Error("Rust import exceeds document limits");
     const n = object(value), kind = object(n.kind);
-    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow", "origin"]);
-    keys(kind, ["t", "radius", "path"]);
-    if (!["rect", "ellipse", "line", "frame", "group", "vector"].includes(String(kind.t))) {
+    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow", "origin", ...(kind.t === "text" ? ["bindings", "text_align"] : [])]);
+    keys(kind, kind.t === "text" ? ["t", "text"] : ["t", "radius", "path"]);
+    if (!["rect", "ellipse", "line", "frame", "group", "vector", "text"].includes(String(kind.t))) {
       throw new Error("Unsupported Rust layer kind; use TS importer");
     }
     const fill = paint(n.fill);
@@ -106,6 +123,40 @@ export function decodeRustImport(payload: string): ImportResult {
       fill, fillVisible: fill.length !== 9 || !fill.endsWith("00"), strokePaint: "#00000000", strokeWidth: 0, strokeVisible: false,
       hidden: n.visible === false, locked: n.locked === true,
     };
+    if (kind.t === "text") {
+      const id = text(n.id);
+      if (!Object.prototype.hasOwnProperty.call(textMetrics, id) || usedMetrics.has(id)) throw new Error("Missing or duplicate Rust source text metrics");
+      usedMetrics.add(id);
+      const metrics = object(textMetrics[id]); keys(metrics, ["width", "height", "fontSize"]);
+      out.w = number(metrics.width); out.h = number(metrics.height);
+      out.fontSize = number(metrics.fontSize);
+      if (out.fontSize <= 0 || out.fontSize !== number(n.h) || out.w !== number(n.w)) throw new Error("Invalid Rust source text metrics");
+      out.text = text(kind.text);
+      // No inferred weight from PostScript names. Unsupported source styling
+      // still fails the whole-result TS comparison in wasmBridge.choose.
+      out.fontWeight = 400;
+      const align = n.text_align ?? "left";
+      if (align !== "left" && align !== "center" && align !== "right") throw new Error("Unsupported Rust text alignment");
+      out.textAlign = align;
+      if (n.bindings != null) {
+        const bindings = object(n.bindings); keys(bindings, ["font", "lh", "ls"]);
+        const literalNumber = (v: unknown) => {
+          const raw = text(v);
+          if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) throw new Error("Invalid Rust typography literal");
+          return number(Number(raw));
+        };
+        if (bindings.font !== undefined) {
+          out.fontFamily = text(bindings.font);
+          if (!out.fontFamily.trim()) throw new Error("Invalid Rust font family");
+        }
+        if (bindings.lh !== undefined) {
+          const ratio = literalNumber(bindings.lh);
+          if (ratio <= 0) throw new Error("Invalid Rust line height");
+          out.lineHeight = number(ratio * out.fontSize); // native ratio → web px
+        }
+        if (bindings.ls !== undefined) out.letterSpacing = literalNumber(bindings.ls);
+      }
+    }
     if (out.w < 0 || out.h < 0 || out.opacity < 0 || out.opacity > 1) throw new Error("Invalid Rust layer dimensions/opacity");
     if (n.origin != null) {
       if (!Array.isArray(n.origin) || n.origin.length !== 2) throw new Error("Invalid Rust origin");
@@ -143,6 +194,7 @@ export function decodeRustImport(payload: string): ImportResult {
     return out;
   }
   const roots = doc.pages.map((p) => convert(p));
+  if (usedMetrics.size !== Object.keys(textMetrics).length) throw new Error("Unused Rust source text metrics");
   const pages = roots.map((p) => ({ name: p.name, nodes: p.children ?? [] }));
   return { nodes: pages[0].nodes, pages, width: roots[0].w, height: roots[0].h, skipped: 0 };
 }
