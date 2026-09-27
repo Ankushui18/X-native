@@ -91,7 +91,10 @@ try {
   const textRaw = JSON.parse(glue.importSvgToX(text));
   console.log(`Diff SVG text envelope: ${JSON.stringify({metrics: textRaw.textMetrics, node: textRaw.doc?.pages?.[0]?.children?.[0]})}`);
   assert.equal(textRaw.textMetrics.version, 1);
-  const textCandidate = decodeRustImport(JSON.stringify(textRaw)), textExpected = svgTs(text);
+  let textCandidate;
+  try { textCandidate = decodeRustImport(JSON.stringify(textRaw)); }
+  catch (error) { console.log(`Diff SVG text decode error: ${String(error)}`); throw error; }
+  const textExpected = svgTs(text);
   console.log(`Diff SVG text candidate: ${JSON.stringify(textCandidate.nodes[0])}; expected: ${JSON.stringify(textExpected.nodes[0])}`);
   assert.equal(textCandidate.nodes[0].name, "Keep this text");
   assert.equal(textCandidate.nodes[0].textAlign, "center");
