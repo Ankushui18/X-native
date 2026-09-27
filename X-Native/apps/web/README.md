@@ -84,8 +84,11 @@ The e2e suite points `CHROMIUM_PATH` / `CHROMIUM_LIBS` at a local Chromium
 With the optional WASM artifacts installed (`npm run build:wasm` in a Rust-enabled
 environment), open a stored, flat rectangle-only file at
 `#/file/<id>?engine=rust`. The standard `#/file/<id>` editor and its TypeScript
-document engine remain unchanged. The preview has Rust-owned move, rename and
-undo/redo commands; it does not autosave or support the full editor toolset.
+document engine remain unchanged. The preview has Rust-owned move, rename,
+resize and undo/redo commands; it does not autosave or support the full editor
+toolset. The resize control uses the version-2 command ABI and requires both
+rectangle dimensions to be at least 1; older WASM session artifacts refuse the
+preview while leaving guarded imports available.
 "Prepare download" gives you a copy, not an update to the stored file. You will
 be prompted before leaving with edits. An unsupported file or unavailable WASM
 stays read-only and offers an explicit return to the standard editor; there is

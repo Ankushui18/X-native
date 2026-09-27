@@ -210,6 +210,7 @@ export class RustWebDocumentSession {
   getNode(id: string) { return this.rust.getNode(id); }
   renameNode(id: string, name: string) { return this.rust.renameNode(id, name); }
   moveNode(id: string, dx: number, dy: number) { return this.rust.moveNode(id, dx, dy); }
+  resizeNode(id: string, w: number, h: number) { return this.rust.resizeNode(id, w, h); }
   undo() { return this.rust.undo(); }
   redo() { return this.rust.redo(); }
   /** Whole document only on an explicit checkpoint; never per command/frame. */

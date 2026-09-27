@@ -138,10 +138,10 @@ mod bindings {
     }
 
     /// Separate version from the import-only bridge; older optional bundles
-    /// may still serve imports without advertising a command session.
+    /// still serve imports, but v1 sessions lacked the size delta/resize command.
     #[wasm_bindgen(js_name = sessionBridgeVersion)]
     pub fn session_bridge_version() -> u32 {
-        1
+        2
     }
 
     #[wasm_bindgen]
@@ -176,6 +176,11 @@ mod bindings {
         #[wasm_bindgen(js_name = moveNode)]
         pub fn move_node(&mut self, id: &str, dx: f64, dy: f64) -> Result<String, JsValue> {
             self.bridge.move_node(id, dx, dy).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = resizeNode)]
+        pub fn resize_node(&mut self, id: &str, w: f64, h: f64) -> Result<String, JsValue> {
+            self.bridge.resize_node(id, w, h).map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

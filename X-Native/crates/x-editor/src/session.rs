@@ -1,8 +1,8 @@
 //! Stateful, UI-independent command session over an x-core document.
 //!
 //! A native host calls this directly; the web host calls the same Rust code
-//! through x-wasm. Only the changed node's identity, label and position cross
-//! the command boundary. A complete document is read at open and produced
+//! through x-wasm. Only the changed node's identity, label, position and size
+//! cross the command boundary. A complete document is read at open and produced
 //! again only at an explicit save/checkpoint, never on every interaction.
 
 use std::collections::HashSet;
@@ -16,6 +16,8 @@ use x_core::{Document, Node};
 pub enum SessionCommand<'a> {
     Rename { id: &'a str, name: &'a str },
     Move { id: &'a str, dx: f64, dy: f64 },
+    /// Absolute rectangle size; validation belongs here, not in a web UI.
+    Resize { id: &'a str, w: f64, h: f64 },
     Undo,
     Redo,
 }
@@ -26,6 +28,8 @@ pub struct NodeDelta {
     pub name: String,
     pub x: f64,
     pub y: f64,
+    pub w: f64,
+    pub h: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +87,8 @@ impl DocumentSession {
             name: node.name.clone(),
             x: node.transform.x,
             y: node.transform.y,
+            w: node.w,
+            h: node.h,
         })
     }
 
@@ -123,6 +129,22 @@ impl DocumentSession {
                 } else {
                     let before = self.editor.undo_depth();
                     self.editor.move_node(id, dx, dy);
+                    (self.editor.undo_depth() > before).then(|| id.to_string())
+                }
+            }
+            SessionCommand::Resize { id, w, h } => {
+                // Editor::resize clamps dimensions below one; refuse instead of
+                // silently reporting a different size. This is the SAME Rust
+                // undo command used by native, not a web-side resize history.
+                if !w.is_finite() || !h.is_finite() || w < 1.0 || h < 1.0 {
+                    return Err("resize dimensions must be finite and at least one".into());
+                }
+                let node = self.target(id)?;
+                if node.w == w && node.h == h {
+                    None
+                } else {
+                    let before = self.editor.undo_depth();
+                    self.editor.resize(id, w, h);
                     (self.editor.undo_depth() > before).then(|| id.to_string())
                 }
             }
@@ -238,6 +260,32 @@ mod tests {
     }
 
     #[test]
+    fn resize_is_shared_rust_history_with_one_node_delta() {
+        let mut session = DocumentSession::new(sample()).unwrap();
+        let original = session.node("box").unwrap();
+        assert_eq!((original.w, original.h), (30.0, 40.0));
+        let resized = session
+            .dispatch(SessionCommand::Resize {
+                id: "box",
+                w: 75.25,
+                h: 42.5,
+            })
+            .unwrap();
+        assert_eq!(resized.revision, 1);
+        assert!(resized.can_undo);
+        let node = resized.node.unwrap();
+        assert_eq!((node.id.as_str(), node.w, node.h), ("box", 75.25, 42.5));
+        let undone = session.dispatch(SessionCommand::Undo).unwrap();
+        let undone_node = undone.node.as_ref().unwrap();
+        assert_eq!((undone_node.w, undone_node.h), (30.0, 40.0));
+        assert_eq!(undone.revision, 2);
+        let redone = session.dispatch(SessionCommand::Redo).unwrap();
+        let redone_node = redone.node.as_ref().unwrap();
+        assert_eq!((redone_node.w, redone_node.h), (75.25, 42.5));
+        assert_eq!(session.snapshot().pages[0].children[0].w, 75.25);
+    }
+
+    #[test]
     fn refusals_and_no_ops_leave_history_and_revision_unchanged() {
         let mut session = DocumentSession::new(sample()).unwrap();
         let first = SessionCommand::Rename {
@@ -256,7 +304,12 @@ mod tests {
             dx: 0.0,
             dy: 0.0,
         };
-        for command in [blank, no_move] {
+        let no_resize = SessionCommand::Resize {
+            id: "box",
+            w: 30.0,
+            h: 40.0,
+        };
+        for command in [blank, no_move, no_resize] {
             assert_eq!(session.dispatch(command).unwrap(), state);
         }
         assert!(session.state().can_redo, "no-op must preserve redo");
@@ -282,6 +335,16 @@ mod tests {
         };
         assert!(session.dispatch(unknown).is_err());
         assert!(session.dispatch(root).is_err());
+        for (id, w, h) in [
+            ("box", f64::NAN, 20.0),
+            ("box", 30.0, f64::INFINITY),
+            ("box", 0.0, 40.0),
+            ("box", 20.0, -1.0),
+            ("page", 20.0, 40.0),
+            ("missing", 20.0, 40.0),
+        ] {
+            assert!(session.dispatch(SessionCommand::Resize { id, w, h }).is_err());
+        }
         assert_eq!(session.state(), state);
         let redone = session.dispatch(SessionCommand::Redo).unwrap();
         assert_eq!(redone.node.unwrap().name, "First");
@@ -326,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn renaming_one_layer_does_not_snapshot_sibling_subtrees_into_history() {
+    fn small_layer_edits_do_not_snapshot_sibling_subtrees_into_history() {
         let mut doc = sample();
         for i in 0..300 {
             let id = format!("sibling-{i}");
@@ -340,7 +403,14 @@ mod tests {
                 name: "Small",
             })
             .unwrap();
+        session
+            .dispatch(SessionCommand::Resize {
+                id: "box",
+                w: 2.0,
+                h: 3.0,
+            })
+            .unwrap();
         let bytes = session.editor.history_bytes();
-        assert!(bytes < 10_000, "rename history captured the page: {bytes}");
+        assert!(bytes < 10_000, "rename/resize history captured the page: {bytes}");
     }
 }

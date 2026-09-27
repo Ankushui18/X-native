@@ -990,3 +990,33 @@ bridge/React preview smoke, full web test/build and the screenshot job. The
 native geometry diagnostic is nonblocking and does not change its NOT APPROVED
 status. This proves the bounded generated-WASM host path, not a production
 editor swap or visual browser parity.
+
+## 23. Version-2 Rust resize command and sized node deltas (2026-09-28)
+
+The optional command ABI now advertises `sessionBridgeVersion() == 2`, **separate**
+from the import bridge's version 1 and the web-document dialect's version 1.
+`x-editor::DocumentSession` dispatches absolute `Resize { id, w, h }` into the
+existing native `Editor::resize` command log; native hosts call the same Rust
+session directly. Renames, moves, resizes and undo/redo return one node's
+`id/name/x/y/w/h`, monotonic revision and history flags. There is still no
+full-document transfer per command or frame. The web adapter rejects any
+missing/extra/nonfinite response field. A V1 or incomplete V2 optional WASM
+class cannot start a Rust preview; guarded import remains independently usable.
+
+Rust refuses a missing/root target and dimensions below 1 or nonfinite values
+**before** touching history; exact no-ops retain redo. The web V1 format gate
+still accepts its previously admitted positive subpixel rectangles. The preview
+disables resizing those layers because the underlying Rust editor clamps sizes
+below 1; rename/move remain available rather than silently rewriting an
+untouched small dimension. For safe rectangles, the UI paints native-returned
+sizes after resize and after Rust undo/redo, retaining only presentation data,
+not a second edit engine. Explicit export still validates the entire native
+checkpoint, and the stored browser file is not changed. This is a bounded
+rectangle command, **not** drag-handle, layout, browser-renderer, persistence
+or default-route promotion.
+
+Tests exercise the same command and undo in `x-editor`, the direct `x-native`
+host, the `x-wasm` bridge, the strict TS transport, the web document adapter and
+the opt-in mounted view. `npm run test:wasm` exercises the **real generated**
+V2 artifact's resize/undo and view paint path when CI builds it. The import
+parity gates and native geometry NOT APPROVED guard are unchanged.

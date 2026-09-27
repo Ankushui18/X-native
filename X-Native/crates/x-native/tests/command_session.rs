@@ -24,8 +24,23 @@ fn native_host_edits_and_saves_the_same_rust_document() {
         .unwrap();
     assert_eq!(update.node.as_ref().unwrap().x, 15.0);
     assert!(session.dispatch(SessionCommand::Undo).unwrap().can_redo);
+    let resized = session
+        .dispatch(SessionCommand::Resize {
+            id: "box",
+            w: 65.0,
+            h: 48.0,
+        })
+        .unwrap();
+    let resized_node = resized.node.as_ref().unwrap();
+    assert_eq!((resized_node.w, resized_node.h), (65.0, 48.0));
+    let undone = session.dispatch(SessionCommand::Undo).unwrap();
+    assert_eq!(undone.node.unwrap().w, 30.0);
+    let redone = session.dispatch(SessionCommand::Redo).unwrap();
+    assert_eq!(redone.node.unwrap().h, 48.0);
     let saved = save_x(&session.into_document());
     let reopened = load_x(&saved).unwrap();
     assert_eq!(reopened.pages[0].children[0].transform.x, 10.0);
     assert_eq!(reopened.pages[0].children[0].transform.y, 20.0);
+    let node = &reopened.pages[0].children[0];
+    assert_eq!((node.w, node.h), (65.0, 48.0));
 }

@@ -68,7 +68,7 @@ try {
   assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "simple SVG must use native output");
   // Real stateful class, not a synthetic session/replayed patch. The Rust
   // document is opened once; each edit/undo returns one node, never .x JSON.
-  assert.equal(glue.sessionBridgeVersion(), 1);
+  assert.equal(glue.sessionBridgeVersion(), 2);
   const sessionX = JSON.stringify(JSON.parse(glue.importSvgToX(plain)).doc);
   const session = await openRustSession(sessionX);
   assert.ok(session, "generated bindgen must expose the shared Rust command session");
@@ -80,19 +80,25 @@ try {
   const moved = session.moveNode("box", 3, -4);
   assert.deepEqual([moved.revision, moved.node.x, moved.node.y], [2, 13, 6]);
   assert.equal(moved.canUndo, true);
-  assert.ok(JSON.stringify(moved).length < 256, "command delta must not contain the document");
+  const resized = session.resizeNode("box", 95, 65);
+  assert.deepEqual([resized.revision, resized.node.w, resized.node.h], [3, 95, 65]);
+  assert.ok(JSON.stringify(resized).length < 256, "command delta must not contain the document");
+  const undoneSize = session.undo();
   const undoneMove = session.undo();
   const undoneRename = session.undo();
-  assert.deepEqual([undoneMove.node.x, undoneRename.node.name], [10, "box"]);
+  assert.deepEqual([undoneSize.node.w, undoneSize.node.h, undoneMove.node.x, undoneRename.node.name], [80, 50, 10, "box"]);
   const redoneRename = session.redo();
   const redoneMove = session.redo();
-  assert.deepEqual([redoneRename.node.name, redoneMove.node.x], ["Card", 13]);
-  assert.equal(session.state().revision, 6);
+  const redoneSize = session.redo();
+  assert.deepEqual([redoneRename.node.name, redoneMove.node.x, redoneSize.node.w], ["Card", 13, 95]);
+  assert.equal(session.state().revision, 9);
   assert.throws(() => session.moveNode("box", Number.NaN, 1), "nonfinite move must be refused");
-  assert.equal(session.state().revision, 6);
+  assert.throws(() => session.resizeNode("box", 0, 65), "invalid dimensions must be refused");
+  assert.equal(session.state().revision, 9);
   const savedSessionDoc = JSON.parse(session.exportX());
   assert.equal(savedSessionDoc.pages[0].children[0].name, "Card");
-  assert.deepEqual([savedSessionDoc.pages[0].children[0].x, savedSessionDoc.pages[0].children[0].y], [13, 6]);
+  assert.deepEqual([savedSessionDoc.pages[0].children[0].x, savedSessionDoc.pages[0].children[0].y,
+    savedSessionDoc.pages[0].children[0].w, savedSessionDoc.pages[0].children[0].h], [13, 6, 95, 65]);
   const independentSession = await openRustSession(sessionX);
   assert.ok(independentSession);
   assert.equal(independentSession.getNode("box").name, "box", "sessions cannot share mutable state");
@@ -101,7 +107,7 @@ try {
   await assert.rejects(() => openRustSession("not a native document"));
   const multiPage = { ...savedSessionDoc, pages: [savedSessionDoc.pages[0], { ...savedSessionDoc.pages[0], id: "second" }] };
   await assert.rejects(() => openRustSession(JSON.stringify(multiPage)), "unsupported multi-page session must decline");
-  console.log("PASS real Rust command session: open, per-node deltas, move/rename, Rust undo/redo, explicit .x export, isolation and refusals");
+  console.log("PASS real Rust command session V2: move/rename/resize deltas, Rust undo/redo, explicit .x export, isolation and refusals");
 
   // The web-document gate is separate from import conversion. Check a real
   // persisted web shape through x-format -> x-editor -> x-format and back,
@@ -126,18 +132,22 @@ try {
   assert.deepEqual([changeName.revision, changeName.node.name], [1, "Renamed"]);
   const changePosition = webSession.moveNode(cardId, -3, 4);
   assert.deepEqual([changePosition.revision, changePosition.node.x, changePosition.node.y], [2, 7, 24]);
-  assert.ok(JSON.stringify(changePosition).length < 256, "web command boundary must remain a small delta");
-  assert.deepEqual([webSession.undo().node.x, webSession.undo().node.name], [10, 'Card "α"']);
-  assert.deepEqual([webSession.redo().node.name, webSession.redo().node.x], ["Renamed", 7]);
+  const changeSize = webSession.resizeNode(cardId, 41.25, 55.5);
+  assert.deepEqual([changeSize.revision, changeSize.node.w, changeSize.node.h], [3, 41.25, 55.5]);
+  assert.ok(JSON.stringify(changeSize).length < 256, "web command boundary must remain a small delta");
+  assert.deepEqual([webSession.undo().node.w, webSession.undo().node.x, webSession.undo().node.name], [30, 10, 'Card "α"']);
+  assert.deepEqual([webSession.redo().node.name, webSession.redo().node.x, webSession.redo().node.h], ["Renamed", 7, 55.5]);
   const expectedWeb = JSON.parse(JSON.stringify(before));
   expectedWeb.pages[0].root.children[0].name = "Renamed";
   expectedWeb.pages[0].root.children[0].x = 7;
   expectedWeb.pages[0].root.children[0].y = 24;
+  expectedWeb.pages[0].root.children[0].w = 41.25;
+  expectedWeb.pages[0].root.children[0].h = 55.5;
   assert.deepEqual(webSession.exportDocument(), expectedWeb, "Rust edits + history persist without web shadow edits");
   assert.deepEqual(web, before, "caller document was never mutated by Rust session");
   webSession.close();
   assert.equal(await openWebDocumentSession({ ...web, styles: [{ name: "unsupported" }] }), null);
-  console.log("PASS real WASM web-document admission: lossless blank/rect metadata, Rust history, strict fallback");
+  console.log("PASS real WASM web-document admission: lossless rectangle resize/history, metadata and strict fallback");
 
   const extended = JSON.parse(glue.importSvgToX(plain));
   extended.doc.comments = [{ text: "do not discard me" }];
@@ -474,10 +484,14 @@ try {
   assert.equal(host.querySelector(".rust-preview-toolbar span")?.textContent, "Rust revision 1");
   await React.act(async () => action("Undo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
   assert.equal(host.querySelector(".rust-preview-rect")?.style.left, "10px");
+  await React.act(async () => action("Wider 10").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(host.querySelector(".rust-preview-rect")?.style.width, "60px");
+  await React.act(async () => action("Undo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(host.querySelector(".rust-preview-rect")?.style.width, "50px");
   assert.ok(releases.some(owner => owner && typeof owner.close === "function" && owner.hasEdits()));
   await React.act(async () => root.unmount());
   host.remove();
-  console.log("PASS real WASM opt-in React host: one Rust session, small visual deltas, native undo and safe unmount");
+  console.log("PASS real WASM opt-in React host V2: move/resize paint from Rust deltas, native undo and safe unmount");
 } catch (error) {
   const detail = error instanceof Error ? error.stack ?? error.message : String(error);
   console.log(`::error::Real WASM Rust UI failed: ${detail.slice(0, 3000).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`);

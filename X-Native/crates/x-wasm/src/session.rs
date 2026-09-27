@@ -6,7 +6,7 @@ use x_editor::{DocumentSession, NodeDelta, SessionCommand, SessionDelta};
 use x_format::{deserialize::load_x, serialize::save_x};
 
 fn node_value(node: NodeDelta) -> Value {
-    json!({ "id": node.id, "name": node.name, "x": node.x, "y": node.y })
+    json!({ "id": node.id, "name": node.name, "x": node.x, "y": node.y, "w": node.w, "h": node.h })
 }
 
 fn delta_json(delta: SessionDelta) -> String {
@@ -52,6 +52,10 @@ impl CommandBridge {
 
     pub fn move_node(&mut self, id: &str, dx: f64, dy: f64) -> Result<String, String> {
         self.dispatch(SessionCommand::Move { id, dx, dy })
+    }
+
+    pub fn resize_node(&mut self, id: &str, w: f64, h: f64) -> Result<String, String> {
+        self.dispatch(SessionCommand::Resize { id, w, h })
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -123,6 +127,29 @@ mod tests {
         let saved = load_x(&bridge.export_x()).unwrap();
         assert_eq!(saved.pages[0].children[0].transform.x, 13.0);
         assert_eq!(saved.default_font.as_deref(), Some("Inter"));
+    }
+
+    #[test]
+    fn resize_uses_the_shared_rust_editor_and_small_v2_node_delta() {
+        let mut bridge = CommandBridge::open(&fixture()).unwrap();
+        let changed = bridge.resize_node("box", 80.0, 24.5).unwrap();
+        assert!(changed.len() < 256, "resize serialized an entire document");
+        let delta: Value = serde_json::from_str(&changed).unwrap();
+        assert_eq!(delta["revision"], 1);
+        assert_eq!(delta["node"]["w"], 80.0);
+        assert_eq!(delta["node"]["h"], 24.5);
+        let queried: Value = serde_json::from_str(&bridge.get_node("box")).unwrap();
+        assert_eq!(queried["w"], 80.0);
+        let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+        assert_eq!(undone["node"]["w"], 30.0);
+        let redone: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
+        assert_eq!(redone["node"]["h"], 24.5);
+        let exported = load_x(&bridge.export_x()).unwrap();
+        assert_eq!(exported.pages[0].children[0].w, 80.0);
+        for (w, h) in [(f64::NAN, 10.0), (10.0, 0.0)] {
+            assert!(bridge.resize_node("box", w, h).is_err());
+        }
+        assert_eq!(bridge.resize_node("box", 80.0, 24.5).unwrap(), bridge.state());
     }
 
     #[test]

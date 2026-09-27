@@ -26,8 +26,6 @@ interface Props {
 
 type Phase = "opening" | "ready" | "unsupported" | "unavailable" | "fault";
 interface RectView extends RustNodeChange {
-  w: number;
-  h: number;
   fill: string;
   visible: boolean;
   locked: boolean;
@@ -90,18 +88,16 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
           if (controller.signal.aborted) { opened?.close(); return; }
           if (!opened) { setPhase("unavailable"); return; }
           try {
-            // Read ONLY names/positions from Rust. Static size/fill/flags are
-            // safe from the strictly admitted input: this command ABI cannot
-            // mutate them. No XNode tree or duplicate history is retained.
+            // Query name, position and size from Rust. Paint/flags are static
+            // in this V1 dialect and cannot be changed by the session ABI.
+            // No XNode tree or parallel history is retained in the web UI.
             const initial = seed.pages[0].root.children.map((n): RectView => {
               const actual = opened.getNode(n.id);
-              if (!actual || actual.name !== n.name || actual.x !== n.x || actual.y !== n.y) {
+              if (!actual || actual.name !== n.name || actual.x !== n.x || actual.y !== n.y ||
+                  actual.w !== n.w || actual.h !== n.h) {
                 throw new Error("Rust layer query disagrees with admitted file");
               }
-              return {
-                ...actual, w: n.w, h: n.h, fill: n.fill,
-                visible: n.visible, locked: n.locked,
-              };
+              return { ...actual, fill: n.fill, visible: n.visible, locked: n.locked };
             });
             const state = opened.state();
             owned = opened;
@@ -139,6 +135,9 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
 
   const selectedRect = rects.find(r => r.id === selected) ?? null;
   const ready = phase === "ready" && !!session.current;
+  // The shared Editor resize operation has a minimum size of one. Previously
+  // admitted subpixel files can still move/rename, but cannot resize safely.
+  const canResize = ready && !!selectedRect && selectedRect.w >= 1 && selectedRect.h >= 1;
   const phaseMessage = phase === "opening" ? "Checking the document and loading Rust"
     : phase === "unsupported" ? "Unsupported file. Use the standard editor"
     : phase === "unavailable" ? "Rust unavailable. Use the standard editor"
@@ -150,8 +149,9 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
     try {
       const change = command(rust);
       if (change.revision < lastRevision.current ||
-          (change.node && (change.revision === lastRevision.current || !rects.some(r => r.id === change.node!.id)))) {
-        throw new Error("Rust returned a stale or unknown layer delta");
+          (change.node && (change.revision === lastRevision.current ||
+            !rects.some(r => r.id === change.node!.id) || change.node.w <= 0 || change.node.h <= 0))) {
+        throw new Error("Rust returned an invalid layer delta");
       }
       lastRevision.current = change.revision;
       // Status/history are supplied by Rust; JS retains only what the DOM
@@ -160,7 +160,8 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
       if (change.node) {
         hasEdits.current = true;
         setRects(list => list.map(rect => rect.id === change.node!.id
-          ? { ...rect, name: change.node!.name, x: change.node!.x, y: change.node!.y }
+          ? { ...rect, name: change.node!.name, x: change.node!.x, y: change.node!.y,
+              w: change.node!.w, h: change.node!.h }
           : rect));
         setDraft(current => selected === change.node!.id ? change.node!.name : current);
         revokeDownload();
@@ -246,12 +247,24 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
                   <input id="rust-layer-name" value={draft} onChange={e => setDraft(e.target.value)} />
                   <button type="submit" disabled={!ready}>Rename</button>
                 </form>
-                <div className="rust-preview-nudges" aria-label="Move rectangle">
+                <div className="rust-preview-nudges" role="group" aria-label="Move rectangle">
                   <XButton disabled={!ready} onClick={() => apply(s => s.moveNode(selectedRect.id, -10, 0))}>Move left 10</XButton>
                   <XButton disabled={!ready} onClick={() => apply(s => s.moveNode(selectedRect.id, 10, 0))}>Move right 10</XButton>
                   <XButton disabled={!ready} onClick={() => apply(s => s.moveNode(selectedRect.id, 0, -10))}>Move up 10</XButton>
                   <XButton disabled={!ready} onClick={() => apply(s => s.moveNode(selectedRect.id, 0, 10))}>Move down 10</XButton>
                 </div>
+                <div className="rust-preview-nudges" role="group" aria-label="Resize rectangle">
+                  <XButton disabled={!canResize || !Number.isFinite(selectedRect.w + 10)}
+                    onClick={() => apply(s => s.resizeNode(selectedRect.id, selectedRect.w + 10, selectedRect.h))}>Wider 10</XButton>
+                  <XButton disabled={!canResize || selectedRect.w <= 1}
+                    onClick={() => apply(s => s.resizeNode(selectedRect.id, Math.max(1, selectedRect.w - 10), selectedRect.h))}>Narrower 10</XButton>
+                  <XButton disabled={!canResize || !Number.isFinite(selectedRect.h + 10)}
+                    onClick={() => apply(s => s.resizeNode(selectedRect.id, selectedRect.w, selectedRect.h + 10))}>Taller 10</XButton>
+                  <XButton disabled={!canResize || selectedRect.h <= 1}
+                    onClick={() => apply(s => s.resizeNode(selectedRect.id, selectedRect.w, Math.max(1, selectedRect.h - 10)))}>Shorter 10</XButton>
+                </div>
+                {(selectedRect.w < 1 || selectedRect.h < 1) &&
+                  <p>Native resize requires both dimensions to be at least 1. Other edits remain available.</p>}
               </>}
             </> : <p>Select a rectangle to inspect it.</p>}
           </aside>

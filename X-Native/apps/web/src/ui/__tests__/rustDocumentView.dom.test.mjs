@@ -25,7 +25,7 @@ const fixture = () => {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 1, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 2, RustDocumentSession: Session,
 });
 const calls = { opens: 0, exports: 0, queries: 0, edits: 0, closes: 0 };
 class FakeRust {
@@ -35,12 +35,12 @@ class FakeRust {
   getNode(id) {
     calls.queries++;
     const n = this.get(id);
-    return JSON.stringify(n ? { id, name: n.name ?? id, x: n.x, y: n.y } : null);
+    return JSON.stringify(n ? { id, name: n.name ?? id, x: n.x, y: n.y, w: n.w, h: n.h } : null);
   }
   edit(id, change) {
     calls.edits++;
-    const n = this.get(id), before = { name: n.name, x: n.x, y: n.y };
-    change(n); const after = { name: n.name, x: n.x, y: n.y };
+    const n = this.get(id), before = { name: n.name, x: n.x, y: n.y, w: n.w, h: n.h };
+    change(n); const after = { name: n.name, x: n.x, y: n.y, w: n.w, h: n.h };
     this.undos.push({ id, before, after }); this.redos.length = 0; this.revision++;
     return this.state({ id, ...after });
   }
@@ -54,6 +54,7 @@ class FakeRust {
     return result;
   }
   renameNode(id, name) { return this.edit(id, n => { n.name = name.trim(); }); }
+  resizeNode(id, w, h) { return this.edit(id, n => { n.w = w; n.h = h; }); }
   undo() {
     const op = this.undos.pop();
     if (!op) return this.state();
@@ -157,7 +158,20 @@ await ui.click("Undo");
 assert.equal(ui.host.querySelector(".rust-preview-rect").getAttribute("aria-label"), "Card");
 await ui.click("Redo");
 assert.equal(ui.host.querySelector(".rust-preview-rect").getAttribute("aria-label"), "Renamed");
-assert.equal(calls.exports, 1, "history never serializes the full document");
+await ui.click("Wider 10");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.width, "80px");
+assert.ok(ui.host.textContent.includes("Size 80 × 40"));
+await ui.click("Undo");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.width, "70px");
+await ui.click("Redo");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.width, "80px");
+await ui.click("Shorter 10");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.height, "30px");
+await ui.click("Undo");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.height, "40px");
+await ui.click("Redo");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.height, "30px");
+assert.equal(calls.exports, 1, "resize/history never serialize the full document");
 assert.deepEqual(source, snapshot, "React presentation never mutates original web seed");
 await ui.click("Prepare download");
 assert.equal(calls.exports, 2);
@@ -166,6 +180,7 @@ assert.ok(link && link.getAttribute("download") === "Rust _ preview.x.json");
 const downloaded = JSON.parse(await urls.get(link.href).text());
 assert.equal(downloaded.pages[0].root.children[0].x, 20);
 assert.equal(downloaded.pages[0].root.children[0].name, "Renamed");
+assert.deepEqual([downloaded.pages[0].root.children[0].w, downloaded.pages[0].root.children[0].h], [80, 30]);
 assert.deepEqual(downloaded.pages[0].root.children[1], snapshot.pages[0].root.children[1]);
 await ui.click("Move down 10");
 assert.equal(ui.host.querySelector("a[download]"), null, "stale link invalidated on Rust edit");
@@ -178,7 +193,7 @@ owner.close();
 assert.equal(calls.closes, 1);
 await ui.close();
 assert.equal(calls.closes, 1);
-console.log("  ok mounted Rust-only view: one owner, small deltas, Rust undo, explicit safe download and cleanup");
+console.log("  ok mounted Rust-only view: small rename/move/resize deltas, Rust history, explicit download and cleanup");
 
 const invalid = fixture(); invalid.styles.push({ name: "outside subset" });
 const no = mount(invalid);
@@ -188,6 +203,18 @@ assert.ok(no.host.textContent.includes("outside the safe Rust subset"));
 assert.ok(no.byText("Standard editor"));
 await no.close();
 console.log("  ok unsupported file keeps its stored data and offers standard editor");
+
+const subpixel = fixture(); subpixel.pages[0].root.children[0].w = 0.25;
+const tiny = mount(subpixel);
+await tiny.render();
+assert.equal(tiny.host.querySelector(".rust-preview-rect").style.width, "0.25px");
+assert.equal(tiny.byText("Wider 10").disabled, true, "native resize would clamp the other subpixel dimension");
+assert.equal(tiny.byText("Taller 10").disabled, true);
+assert.ok(tiny.host.textContent.includes("Native resize requires both dimensions to be at least 1"));
+await tiny.click("Move right 10");
+assert.equal(tiny.host.querySelector(".rust-preview-rect").style.left, "20px");
+await tiny.close();
+console.log("  ok subpixel files stay editable but cannot silently clamp dimensions on resize");
 
 const corrupt = mount(fixture());
 await corrupt.render();
@@ -212,6 +239,17 @@ assert.ok(missing.host.textContent.includes("Rust session is unavailable"));
 assert.ok(missing.byText("Standard editor"));
 await missing.close();
 console.log("  ok missing WASM does not silently mount another editing history");
+
+__resetWasmForTests();
+const openedBeforeOldAbi = calls.opens;
+assert.equal(await initWasmBridge(async () => ({ ...moduleWith(FakeRust), sessionBridgeVersion: () => 1 })), true);
+const oldAbi = mount(fixture());
+await oldAbi.render();
+assert.equal(calls.opens, openedBeforeOldAbi);
+assert.ok(oldAbi.host.textContent.includes("Rust session is unavailable"));
+assert.ok(oldAbi.byText("Standard editor"));
+await oldAbi.close();
+console.log("  ok V1 session artifact keeps imports but cannot mount a stale-size Rust preview");
 
 __resetWasmForTests();
 let finish;

@@ -10,6 +10,8 @@ export interface RustNodeChange {
   name: string;
   x: number;
   y: number;
+  w: number;
+  h: number;
 }
 export interface RustStateChange {
   revision: number;
@@ -30,11 +32,13 @@ function keys(value: Record<string, unknown>, expected: string[], label: string)
 function nodeValue(value: unknown): RustNodeChange | null {
   if (value === null) return null;
   const obj = record(value, "node delta");
-  keys(obj, ["id", "name", "x", "y"], "node delta");
+  keys(obj, ["id", "name", "x", "y", "w", "h"], "node delta");
   if (typeof obj.id !== "string" || !obj.id || typeof obj.name !== "string" ||
       typeof obj.x !== "number" || !Number.isFinite(obj.x) ||
-      typeof obj.y !== "number" || !Number.isFinite(obj.y)) throw new Error("Invalid Rust node delta");
-  return { id: obj.id, name: obj.name, x: obj.x, y: obj.y };
+      typeof obj.y !== "number" || !Number.isFinite(obj.y) ||
+      typeof obj.w !== "number" || !Number.isFinite(obj.w) ||
+      typeof obj.h !== "number" || !Number.isFinite(obj.h)) throw new Error("Invalid Rust node delta");
+  return { id: obj.id, name: obj.name, x: obj.x, y: obj.y, w: obj.w, h: obj.h };
 }
 function stateValue(json: string): RustStateChange {
   const obj = record(JSON.parse(json) as unknown, "session delta");
@@ -53,6 +57,13 @@ export class RustSessionClient {
   private binding: WasmDocumentSession | null;
 
   constructor(binding: WasmDocumentSession) {
+    // The version handshake alone is not enough if an optional asset was
+    // partially deployed. Do not hand an incomplete Rust owner to the UI.
+    const methods = ["state", "getNode", "renameNode", "moveNode", "resizeNode", "undo", "redo", "exportX", "free"] as const;
+    if (methods.some(method => typeof binding[method] !== "function")) {
+      if (typeof binding.free === "function") binding.free();
+      throw new Error("Incomplete Rust command-session ABI");
+    }
     this.binding = binding;
   }
   private current(): WasmDocumentSession {
@@ -63,6 +74,7 @@ export class RustSessionClient {
   getNode(id: string): RustNodeChange | null { return nodeValue(JSON.parse(this.current().getNode(id)) as unknown); }
   renameNode(id: string, name: string): RustStateChange { return stateValue(this.current().renameNode(id, name)); }
   moveNode(id: string, dx: number, dy: number): RustStateChange { return stateValue(this.current().moveNode(id, dx, dy)); }
+  resizeNode(id: string, w: number, h: number): RustStateChange { return stateValue(this.current().resizeNode(id, w, h)); }
   undo(): RustStateChange { return stateValue(this.current().undo()); }
   redo(): RustStateChange { return stateValue(this.current().redo()); }
   /** A complete .x document is returned ONLY at an explicit save. */

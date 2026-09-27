@@ -5346,6 +5346,7 @@ html[data-theme="dark"] .x-btn-danger {
 .rust-preview-head strong { font-size: 15px; }
 .rust-preview-head span, .rust-preview-toolbar small { color: var(--muted); font-size: 11px; }
 .rust-preview-actions, .rust-preview-nudges { display: flex; flex-wrap: wrap; gap: 6px; }
+.rust-preview-nudges + .rust-preview-nudges { margin-top: 8px; }
 .rust-preview-layers button, .rust-preview-inspector form button, .rust-preview-actions a[download] { padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 12px; text-decoration: none; cursor: pointer; }
 .rust-preview-layers button:hover, .rust-preview-inspector form button:hover:not(:disabled), .rust-preview-actions a[download]:hover { background: var(--hover); }
 .rust-preview button:focus-visible, .rust-preview a[download]:focus-visible, .rust-preview input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

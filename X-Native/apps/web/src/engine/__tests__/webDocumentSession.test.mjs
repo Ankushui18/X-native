@@ -26,7 +26,7 @@ async function test(label, fn) {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 1, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 2, RustDocumentSession: Session,
 });
 
 await test("one-page rect document and persisted v1 metadata round-trip exactly", () => {
@@ -139,6 +139,13 @@ await test("open gates without wasm and rejects mismatched native round trip, fr
   let released = 0;
   class BadSession {
     constructor(x) { this.x = x; }
+    state() { return "{}"; }
+    getNode() { return "null"; }
+    renameNode() { return "{}"; }
+    moveNode() { return "{}"; }
+    resizeNode() { return "{}"; }
+    undo() { return "{}"; }
+    redo() { return "{}"; }
     exportX() { const v = JSON.parse(this.x); v.pages[0].children[0].x++; return JSON.stringify(v); }
     free() { released++; }
   }
@@ -169,13 +176,19 @@ await test("once admitted, small commands go straight to Rust; full data only on
   const counters = { opens: 0, exports: 0, commands: 0, frees: 0 };
   class FakeSession {
     constructor(x) { counters.opens++; this.data = JSON.parse(x); this.revision = 0; }
-    state() { return JSON.stringify({ revision: this.revision, node: null, canUndo: false, canRedo: false }); }
-    getNode(id) { const n = this.data.pages[0].children.find(v => v.id === id); return JSON.stringify(n ? { id, name: n.name, x: n.x, y: n.y } : null); }
-    moveNode(id, dx, dy) {
+    node(id) { const n = this.data.pages[0].children.find(v => v.id === id); return n && { id, name: n.name, x: n.x, y: n.y, w: n.w, h: n.h }; }
+    state() { return JSON.stringify({ revision: this.revision, node: null, canUndo: this.revision > 0, canRedo: false }); }
+    getNode(id) { return JSON.stringify(this.node(id) ?? null); }
+    edit(id, change) {
       counters.commands++; this.revision++;
-      const n = this.data.pages[0].children.find(v => v.id === id); n.x += dx; n.y += dy;
-      return JSON.stringify({ revision: this.revision, node: { id, name: n.name, x: n.x, y: n.y }, canUndo: true, canRedo: false });
+      change(this.data.pages[0].children.find(v => v.id === id));
+      return JSON.stringify({ revision: this.revision, node: this.node(id), canUndo: true, canRedo: false });
     }
+    renameNode(id, name) { return this.edit(id, n => { n.name = name; }); }
+    moveNode(id, dx, dy) { return this.edit(id, n => { n.x += dx; n.y += dy; }); }
+    resizeNode(id, w, h) { return this.edit(id, n => { n.w = w; n.h = h; }); }
+    undo() { return this.state(); }
+    redo() { return this.state(); }
     exportX() { counters.exports++; return JSON.stringify(this.data); }
     free() { counters.frees++; }
   }
@@ -185,13 +198,16 @@ await test("once admitted, small commands go straight to Rust; full data only on
   assert.deepEqual(counters, { opens: 1, exports: 1, commands: 0, frees: 0 });
   const id = doc.pages[0].root.children[0].id;
   assert.equal(session.getNode(id).name, "Box \u000391");
-  assert.deepEqual(session.moveNode(id, -3, 4).node, { id, name: "Box \u000391", x: 7, y: 24 });
-  assert.equal(session.state().revision, 1);
+  assert.deepEqual(session.moveNode(id, -3, 4).node, { id, name: "Box \u000391", x: 7, y: 24, w: 30, h: 40 });
+  assert.deepEqual(session.resizeNode(id, 90, 55).node, { id, name: "Box \u000391", x: 7, y: 24, w: 90, h: 55 });
+  assert.equal(session.state().revision, 2);
+  assert.equal(counters.commands, 2);
   assert.equal(counters.exports, 1, "no full JSON on command/read/frame");
   doc.pages[0].name = "caller mutated"; doc.pages[0].root.children[0].name = "JS shadow";
   const out = session.exportDocument();
   assert.equal(counters.exports, 2);
   initial.pages[0].root.children[0].x = 7; initial.pages[0].root.children[0].y = 24;
+  initial.pages[0].root.children[0].w = 90; initial.pages[0].root.children[0].h = 55;
   assert.deepEqual(out, initial, "Rust tree + frozen shell, never mutated caller tree");
   session.close(); session.close();
   assert.equal(counters.frees, 1);
