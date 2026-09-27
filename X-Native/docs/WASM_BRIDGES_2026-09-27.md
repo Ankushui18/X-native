@@ -507,9 +507,25 @@ source positions are (-120,-80) and (300,200), with child-local (10,20).
 - The new binary fixture also parses through the real TS reader locally, with
   preserved page order, negative positions, local child coordinates and 470×340
   content bounds. This is not native execution evidence by itself.
-- Rust workspace checks, regenerated WASM and expanded real-artifact smoke are
-  **pending CI**; local cargo/rustc remain unavailable.
+- **CI [36320770727](https://github.com/Ankushui18/X-native/actions/runs/36320770727)
+  SUCCESS**, runtime `f7de25533a0c41dd9326d13a57dbc1aba04bbe34`.
+  Rust workspace gate, both WASM packages, expanded real-artifact smoke and web
+  checks pass. Rust job: `108624032736`. Local cargo/rustc remain unavailable.
+- Actual WASM verifies unchanged native (40,40) placement alongside restored
+  negative/positive source positions, unchanged nested local coordinates, empty
+  first-page selection and **470×340** content bounds matching TS. The original
+  sample FIG also restores Home to (100,50), Card x=120 and **320×240** bounds.
+- Sample FIG's first-12 differing paths now start with blend/effects/fill-type
+  metadata and corner independence, then text fill/visibility—not x/y. The
+  production wrappers still retain complete TS results for remaining differences;
+  this is not whole-file native promotion. Sketch behavior is unchanged.
+- Browser fallback smoke: dashboard SVG import, editable persisted rectangle and
+  reload pass with native assets absent; zero uncaught browser errors.
+- Geometry remains guarded: **1/30 equivalent, 29 failures**, repeat 2; summed
+  means TS 46.84ms / native 5.31ms. Non-blocking diagnostic failure is not native
+  promotion or speedup proof.
 - Native-browser visual fidelity, broad rich-import parity and performance
-  promotion remain **NOT VERIFIED**.
+  promotion remain **NOT VERIFIED**. The screenshot job produced no artifacts.
 
-Evidence: `/home/user/wasm-coordinates-{red,focused,unit,unit-serial,tsc,build,reference}.log`.
+Evidence: `/home/user/wasm-coordinates-{red,focused,unit,unit-serial,tsc,build,reference,browser,ci}.log`;
+actual-artifact messages: `/home/user/wasm-coordinates-annotations.json`.
