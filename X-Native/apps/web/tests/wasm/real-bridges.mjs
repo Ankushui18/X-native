@@ -136,6 +136,7 @@ try {
   assert.ok(importsEquivalent(boldCandidate, boldExpected), `numeric SVG weight candidate differs: ${boldDiff.join(", ")}`);
   assert.ok(importsEquivalent(importSvg(boldText), boldExpected));
   assert.equal(getEngineInfo().importBackend, "wasm", "complete numeric SVG weight candidate should select native");
+  console.log("PASS actual-module SVG numeric weight selects guarded WASM result");
   boldRaw.textMetrics.nodes[boldNode.id].fontWeight = "700";
   assert.throws(() => decodeRustImport(JSON.stringify(boldRaw)), /source font weight/);
   const partialWeight = boldText.replace('font-weight="700"', 'font-weight="700bold"');
@@ -297,9 +298,15 @@ try {
   assert.equal(sourceCandidate.nodes[1].effects[0].visible, false);
   console.log("PASS native FIG source effects: hidden entries, spread, blend, show-behind; full candidate equivalent; wrapper=wasm");
   assert.equal(calls.fig, 6);
-  assert.equal(calls.svg, 9);
+  assert.equal(calls.svg, 10); // additional guarded partial-weight fallback exercise
+} catch (error) {
+  // The raw job log is on an inaccessible CDN in some environments. Keep the
+  // actionable assertion/stack API-readable as a single bounded annotation.
+  const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+  console.log(`::error::Real WASM import smoke failed: ${detail.slice(0, 3000).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`);
+  throw error;
 } finally { dom.window.close(); delete globalThis.DOMParser; }
-console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");
+console.log("PASS production import routing: native simple SVG, numeric text weight, real FIG/Sketch fixtures");
 
 
 const geo = await ensureGeo(geoBytes);
