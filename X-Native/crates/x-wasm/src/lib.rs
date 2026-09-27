@@ -202,6 +202,26 @@ mod tests {
     }
 
     #[test]
+    fn translated_svg_group_exports_text_and_following_shape_without_a_wrapper() {
+        let out = import_svg_to_x(
+            r#"<svg width="120" height="80"><g id="wrapper" transform="translate(10 20)">
+              <text id="label" x="0" y="30" font-size="10">Hi</text>
+              <rect id="after" x="1" y="2" width="4" height="4" fill="red"/>
+            </g></svg>"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        let children = value["doc"]["pages"][0]["children"].as_array().unwrap();
+        assert_eq!(children.len(), 2);
+        let position = |node: &serde_json::Value| (node["x"].as_f64(), node["y"].as_f64());
+        assert_eq!(children[0]["id"], "label");
+        assert_eq!(position(&children[0]), (Some(10.0), Some(40.0)));
+        assert_eq!(children[1]["id"], "after");
+        assert_eq!(position(&children[1]), (Some(11.0), Some(22.0)));
+        assert_eq!(value["textMetrics"]["nodes"]["label"]["height"], 14.0);
+    }
+
+    #[test]
     fn svg_text_exports_the_same_source_box_metrics_as_the_web_importer() {
         let out = import_svg_to_x(
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##,

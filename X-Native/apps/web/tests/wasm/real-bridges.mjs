@@ -89,11 +89,37 @@ try {
   console.log(`Grouped SVG wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}; equivalent=${importsEquivalent(groupedActual, groupedExpected)}`);
   assert.ok(importsEquivalent(groupedActual, groupedExpected), "production group import must preserve the whole TS contract");
   assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "neutral groups should select native output");
+  const translatedGroupSvg = '<svg width="120" height="80"><g id="outer" transform="translate(10 20)" fill="#123456" opacity=".5"><g id="inner" transform="translate(-2 5)"><rect id="box" x="3" y="4" width="20" height="10"/></g><text id="label" x="10" y="30" font-size="10">Hi</text><rect id="after" x="0" y="1" width="4" height="4"/></g><rect id="outside" x="5" y="6" width="3" height="2" fill="red"/></svg>';
+  const translatedRaw = JSON.parse(glue.importSvgToX(translatedGroupSvg));
+  const translatedCandidate = decodeRustImport(JSON.stringify(translatedRaw));
+  assert.deepEqual(translatedCandidate.nodes.map(n => n.name), ["box", "label", "after", "outside"]);
+  assert.deepEqual(translatedCandidate.nodes.map(n => [n.x, n.y]), [[11, 29], [20, 40], [10, 21], [5, 6]]);
+  assert.equal(translatedRaw.textMetrics.nodes.label.height, 14, "text box remains import-only source metadata");
+  delete translatedCandidate.pages;
+  const translatedExpected = svgTs(translatedGroupSvg);
+  const translatedDiff = differencePaths(translatedCandidate, translatedExpected);
+  console.log(`Diff translated SVG group with text and siblings: ${translatedDiff.join(", ") || "none"}`);
+  assert.ok(importsEquivalent(translatedCandidate, translatedExpected), `translated group candidate differs: ${translatedDiff.join(", ")}`);
+  assert.ok(importsEquivalent(importSvg(translatedGroupSvg), translatedExpected));
+  assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "single translations should select native");
+  const matrixGroupSvg = '<svg width="120" height="80"><g transform="translate(7 -2)"><rect id="matrix" x="3" y="4" width="9" height="5" transform="matrix(1 0 0 1 2 3)" fill="red"/></g></svg>';
+  const matrixCandidate = decodeRustImport(glue.importSvgToX(matrixGroupSvg));
+  assert.deepEqual([matrixCandidate.nodes[0].x, matrixCandidate.nodes[0].y], [12, 5]);
+  delete matrixCandidate.pages;
+  const matrixExpected = svgTs(matrixGroupSvg);
+  const matrixDiff = differencePaths(matrixCandidate, matrixExpected);
+  console.log(`Diff translated SVG group with child matrix: ${matrixDiff.join(", ") || "none"}`);
+  assert.ok(importsEquivalent(matrixCandidate, matrixExpected), `child matrix composition differs: ${matrixDiff.join(", ")}`);
+  assert.ok(importsEquivalent(importSvg(matrixGroupSvg), matrixExpected));
+  assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "translated child matrix should select native");
   const transformedGroupSvg = '<svg width="120" height="80"><g transform="rotate(15)"><rect width="20" height="10"/></g></svg>';
   const transformedExpected = svgTs(transformedGroupSvg), transformedActual = importSvg(transformedGroupSvg);
   console.log(`Transformed SVG wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}; equivalent=${importsEquivalent(transformedActual, transformedExpected)}`);
   assert.ok(importsEquivalent(transformedActual, transformedExpected), "transformed group fallback must retain the complete TS result");
   assert.equal(getEngineInfo().importBackend, "ts", "transformed groups remain guarded until their flattening is equivalent");
+  const compoundGroupSvg = '<svg width="120" height="80"><g id="compound" transform="translate(10 5) rotate(15)"><rect width="20" height="10" fill="red"/></g></svg>';
+  assert.ok(importsEquivalent(importSvg(compoundGroupSvg), svgTs(compoundGroupSvg)));
+  assert.equal(getEngineInfo().importBackend, "ts", "compound transforms remain guarded");
   const text = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
   const textRaw = JSON.parse(glue.importSvgToX(text));
   console.log(`Diff SVG text envelope: ${JSON.stringify({metrics: textRaw.textMetrics, node: textRaw.doc?.pages?.[0]?.children?.[0]})}`);
@@ -298,7 +324,7 @@ try {
   assert.equal(sourceCandidate.nodes[1].effects[0].visible, false);
   console.log("PASS native FIG source effects: hidden entries, spread, blend, show-behind; full candidate equivalent; wrapper=wasm");
   assert.equal(calls.fig, 6);
-  assert.equal(calls.svg, 10); // additional guarded partial-weight fallback exercise
+  assert.equal(calls.svg, 13); // translated/nested groups, child matrix, compound-group fallback
 } catch (error) {
   // The raw job log is on an inaccessible CDN in some environments. Keep the
   // actionable assertion/stack API-readable as a single bounded annotation.

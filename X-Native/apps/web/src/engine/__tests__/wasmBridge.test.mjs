@@ -17,6 +17,16 @@ const rect = (extra = {}) => ({ id: "box", kind: { t: "rect", radius: 0 }, x: 10
 const page = (children = [rect()], name = "Page 1") => rect({ id: name, name, kind: { t: "frame" }, x: 0, y: 0, w: 200, h: 120, children });
 const envelope = (pages = [page()]) => JSON.stringify({ ok: true, doc: { format: "x-native", version: 1, pages } });
 const svg = '<svg width="200" height="120"><rect id="box" x="10" y="10" width="80" height="50" fill="#ff0000"/></svg>';
+const translatedGroupSvg = '<svg width="120" height="80"><g id="outer" transform="translate(10 20)" fill="#123456" opacity=".5"><g id="inner" transform="translate(-2 5)"><rect id="box" x="3" y="4" width="20" height="10"/></g><text id="label" x="10" y="30" font-size="10">Hi</text><rect id="after" x="0" y="1" width="4" height="4"/></g><rect id="outside" x="5" y="6" width="3" height="2" fill="red"/></svg>';
+await test("TS SVG oracle flattens nested translations and retains siblings after text", () => {
+  const { nodes, width, height, skipped } = svgTs(translatedGroupSvg);
+  assert.deepEqual([width, height, skipped], [120, 80, 0]);
+  assert.deepEqual(nodes.map(n => [n.name, n.x, n.y, n.opacity]), [
+    ["box", 11, 29, 0.5], ["label", 20, 40, 0.5], ["after", 10, 21, 0.5], ["outside", 5, 6, 1],
+  ]);
+  assert.deepEqual([nodes[1].kind, nodes[1].text, nodes[1].w, nodes[1].h], ["text", "Hi", 12, 14]);
+  assert.ok(nodes.slice(0, 3).every(n => n.fill === "#123456"));
+});
 let calls = 0;
 const glue = (extra = {}) => ({ default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)", importFigToX: () => envelope(), importSketchToX: () => envelope(), importSvgToX: () => { calls++; return envelope(); }, ...extra });
 await test("direct native pages (not pages[0].root), dimensions and names", () => {
