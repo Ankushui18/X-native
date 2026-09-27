@@ -69,6 +69,11 @@ try {
   assert.equal(groupedCandidate.nodes[0].name, "box");
   assert.equal(groupedCandidate.nodes[0].fill, "#123456");
   assert.equal(groupedCandidate.nodes[0].opacity, 0.5);
+  // Match choose()'s established SVG shape adaptation: a single native
+  // interchange page is removed only because the web SVG result has no pages.
+  assert.equal(groupedExpected.pages, undefined);
+  assert.equal(groupedCandidate.pages.length, 1);
+  delete groupedCandidate.pages;
   assert.ok(importsEquivalent(groupedCandidate, groupedExpected), "group flattening must preserve complete SVG contract");
   assert.ok(importsEquivalent(importSvg(groupedSvg), groupedExpected));
   assert.equal(getEngineInfo().importBackend, "wasm");
