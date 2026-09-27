@@ -115,15 +115,16 @@ Both bridge crates are leaves in the dependency graph.
 
 `npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
 real generated artifacts (no mock/replay substitution). CI is configured to run
-both. **The changed Rust code and real modules passed CI at `ed200ae`** (run
-`36316826914`); the local sandbox still cannot run Cargo. The separate native
+both. **The changed Rust code and real modules passed CI at `7fb7476`** (run
+`36318122770`); the local sandbox still cannot run Cargo. The separate native
 geometry promotion diagnostic failed 29 of 30 cases; auto retains its per-call TS guard.
 The user selected keeping geometry guarded. Import follow-up fixes radians/pivots,
 parentless FIG recovery and Sketch names. The next batch preserves FIG text and
 source text-box metrics and maps guarded literal typography bindings. Both real
 FIG/Sketch fixtures now decode, but their complete results still differ from TS
-and fall back. Rich runs/resources remain guarded. See §§7–8 of the implementation
-record.
+and fall back. Layer locks, all four horizontal text alignments and Sketch Cocoa spacing keys
+now survive native import as well. Rich runs/resources remain guarded. See §§7–9
+of the implementation record.
 
 TypeScript remains authoritative. Imports use a native result only after the
 whole converted contract agrees with TS; unsupported resources/typography/styles

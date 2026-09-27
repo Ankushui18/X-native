@@ -333,8 +333,27 @@ or copying TS values into the native result.
   all four alignments and the lock; Sketch preserves the lock and Cocoa spacing,
   but its existing reader maps justified to left. That discrepancy is retained
   by the strict fallback policy, not silently resolved in this WASM-only batch.
-- Rust workspace tests, actual generated WASM and expanded native smoke are
-  **pending CI**; local cargo/rustc remain unavailable.
+- **CI [36318122770](https://github.com/Ankushui18/X-native/actions/runs/36318122770)
+  SUCCESS**, runtime `7fb7476dc4d0a1ec5910b043a2b34f396661241d`.
+  Rust workspace gate, both WASM packages, expanded actual-artifact smoke and web
+  checks pass. Rust job: `108616600519`. Local cargo/rustc remain unavailable.
+- Actual WASM imports of both new archives retain all four alignments and the
+  locked/unlocked flags; Sketch additionally retains 27px line height and 2.25px
+  tracking. Original text/source-bounds regressions still pass. All four fixture
+  wrappers use TS after whole-result differences; native simple SVG still passes
+  equivalence and uses WASM.
+- Remaining sample FIG differences include x/y, blend mode, effects, fill type,
+  stroke alignment and cap fields. Sample Sketch differences include root kind,
+  x/y/rotation, child hierarchy, fill type and top-level node count. These are
+  observed differing paths, not a claim that each mismatch has the same cause;
+  none were normalized away to force promotion.
+- Dashboard SVG upload → editable persisted rectangle → reload passes again
+  with native assets deliberately missing; zero uncaught browser errors.
+- Geometry is unchanged: **1/30 equivalent, 29 failures**, repeat 2; summed means
+  TS 59.29ms / native 6.42ms. Non-blocking diagnostic failure is not promotion or
+  speedup approval.
 - Native browser E2E and broad rich-import fidelity remain **NOT VERIFIED**.
+  The screenshot job produced no screenshot artifacts; not visual signoff.
 
-Evidence: `/home/user/wasm-state-{red,unit,tsc,build,reference}.log`.
+Evidence: `/home/user/wasm-state-{red,unit,tsc,build,reference,browser,ci}.log`;
+actual-artifact messages: `/home/user/wasm-state-annotations.json`.
