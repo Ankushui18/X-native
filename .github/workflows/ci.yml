@@ -136,6 +136,7 @@ jobs:
             done
             exit "$status"
           fi
+          node -e 'const fs = require("fs"); const text = "Native smoke PASS\n" + fs.readFileSync("/tmp/wasm-smoke.log", "utf8").slice(-15000); console.log("::notice::" + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));'
           npm run build
 
       # This measures promotion readiness, not just ABI connectivity. Until the
@@ -151,10 +152,10 @@ jobs:
           status=$?
           cat /tmp/geo-native.log
           if [ "$status" -ne 0 ]; then
-            tail -45 /tmp/geo-native.log | while IFS= read -r line; do
-              line=${line//%/%25}
-              printf '::warning::Native promotion NOT approved: %s\n' "$line"
-            done
+            # One encoded annotation avoids GitHub's ten-warnings-per-step cap.
+            node -e 'const fs = require("fs"); const text = "Native promotion NOT approved\n" + fs.readFileSync("/tmp/geo-native.log", "utf8").slice(-30000); console.log("::warning::" + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));'
+          else
+            node -e 'const fs = require("fs"); const text = fs.readFileSync("/tmp/geo-native.log", "utf8").slice(-30000); console.log("::notice::" + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));'
           fi
           cat /tmp/geo-native.log >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
@@ -168,6 +169,17 @@ jobs:
             X-Native/apps/web/public/wasm
             X-Native/apps/web/public/x_geo.wasm
           if-no-files-found: error
+
+      - name: Upload native verification logs and differential data
+        if: always() && steps.package-wasm.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-verification
+          path: |
+            /tmp/wasm-smoke.log
+            /tmp/geo-native.log
+            /tmp/geo-native.json
+          if-no-files-found: warn
 
       # scripts/check.sh is deliberately opaque: cargo writes into temp files it
       # greps, the CLI build sends stderr to /dev/null, and the clippy branch

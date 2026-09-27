@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { initWasmBridge, getEngineInfo, __resetWasmForTests } from "../../src/engine/wasmBridge.ts";
+import { JSDOM } from "jsdom";
+import { importSvg as svgTs } from "../../src/engine/svgImport.ts";
+import { importFig as figTs } from "../../src/engine/figImport.ts";
+import { importSketch as sketchTs } from "../../src/engine/sketchImport.ts";
+import { initWasmBridge, getEngineInfo, importSvg, importFig, importSketch, importsEquivalent, __resetWasmForTests } from "../../src/engine/wasmBridge.ts";
 import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
 import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
 import { booleanPath, booleanPathTs } from "../../src/engine/geometry.ts";
@@ -16,7 +20,11 @@ const geoBytes = fs.readFileSync("public/x_geo.wasm");
 // bypasses vite-node's transform and has no VM dynamic-import callback.
 const glue = await import(/* @vite-ignore */ pathToFileURL(gluePath).href);
 __resetWasmForTests();
+const calls = { svg: 0, fig: 0, sketch: 0 };
 assert.equal(await initWasmBridge(async () => ({ ...glue,
+  importSvgToX: (text) => { calls.svg++; return glue.importSvgToX(text); },
+  importFigToX: (bytes) => { calls.fig++; return glue.importFigToX(bytes); },
+  importSketchToX: (bytes) => { calls.sketch++; return glue.importSketchToX(bytes); },
   default: () => glue.default({ module_or_path: importBytes }),
 })), true, "generated glue must initialize the actual Rust artifact");
 assert.equal(getEngineInfo().hasWasm, true);
@@ -28,6 +36,31 @@ assert.ok(imported.nodes.length > 0, "native pages are direct nodes, not Page.ro
 assert.equal(JSON.parse(glue.importFigToX(new Uint8Array([1, 2, 3]))).ok, false);
 assert.equal(JSON.parse(glue.importSketchToX(new Uint8Array([1, 2, 3]))).ok, false);
 console.log("PASS real wasm-bindgen: version, UTF-8 SVG/schema, binary error envelopes");
+
+// Exercise the production choose/fallback boundary, not only direct exports.
+const dom = new JSDOM("<!doctype html>");
+globalThis.DOMParser = dom.window.DOMParser;
+try {
+  const plain = svg.replace("λ-box", "box");
+  assert.ok(importsEquivalent(importSvg(plain), svgTs(plain)));
+  assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "simple SVG must use native output");
+  const text = '<svg width="200" height="120"><text x="10" y="30" font-size="20">Keep this text</text></svg>';
+  assert.ok(importsEquivalent(importSvg(text), svgTs(text)));
+  assert.equal(getEngineInfo().importBackend, "ts", "unmapped native typography must retain TS result");
+  for (const [format, nativeImport, tsImport] of [["fig", importFig, figTs], ["sketch", importSketch, sketchTs]]) {
+    const bytes = fs.readFileSync(`e2e/fixtures/sample.${format}`);
+    const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const expected = await tsImport(data);
+    const actual = await nativeImport(data);
+    assert.ok(actual.nodes.length > 0, `${format} fixture must contain imported layers`);
+    assert.ok(importsEquivalent(actual, expected), `${format} bridge must preserve the complete TS contract`);
+    assert.equal(calls[format], 1, `${format} must invoke the real native export`);
+    console.log(`PASS real ${format} wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}`);
+  }
+  assert.equal(calls.svg, 2);
+} finally { dom.window.close(); delete globalThis.DOMParser; }
+console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");
+
 
 const geo = await ensureGeo(geoBytes);
 assert.ok(geo, "native geometry module must load, not silently fall back");
