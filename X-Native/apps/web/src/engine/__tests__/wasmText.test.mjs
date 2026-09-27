@@ -80,7 +80,9 @@ await test("orphan metadata cannot be accepted for a shape-only document", () =>
 await test("SVG text id/name parity selects native only for the complete result", async () => {
   const dom = new JSDOM("<!doctype html>"); globalThis.DOMParser = dom.window.DOMParser;
   const svg = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
-  const n = layer({ id: "label", name: "label", kind: { t: "text", text: "Keep this text" }, x: 10, y: 10, w: 168, h: 20, text_align: "center" });
+  const n = layer({ id: "label", kind: { t: "text", text: "Keep this text" }, x: 10, y: 10, w: 168, h: 20, text_align: "center" });
+  // Native .x omits names identical to ids; the adapter must recover "label" from id.
+  delete n.name;
   const page = layer({ id: "svg-root", name: "svg-root", kind: { t: "frame" }, x: 0, y: 0, w: 200, h: 120, children: [n], fill: { t: "solid", c: "#00000000" } });
   const candidate = { ok: true, doc: { format: "x-native", version: 1, pages: [page] }, textMetrics: { version: 1, nodes: { label: metrics({ width: 168, height: 28, fontSize: 20 }) } } };
   __resetWasmForTests();

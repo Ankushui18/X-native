@@ -7,12 +7,13 @@ Date: 2026-09-27. Priority: complete the existing bridges before further Figma-p
 **Both bridges compile, package and execute in CI. Native geometry promotion has
 FAILED the differential check; the TS guards remain enabled.** The sandbox itself
 still has no cargo/rustc, and artifact/log CDN downloads remain inaccessible.
-After user authorization, the current work was committed and pushed only to
-`arena/01a0e1ff-x-native`. No generated binaries are checked in; the local preview
-still uses the TypeScript fallback.
+The earlier work was committed on `arena/01a0e1ff-x-native`; this import-only
+continuation is on `arena/01a0e36f-x-native`. No generated binaries are checked
+in; the local preview still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `ddf4472`, [CI run 36323243749](https://github.com/Ankushui18/X-native/actions/runs/36323243749).
-The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`; see §§13–14.
+Latest verified code/CI checkpoint: `9b2f31c`, [CI run 36329391845](https://github.com/Ankushui18/X-native/actions/runs/36329391845).
+The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`;
+plain SVG text now does too (see §§13–16).
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -29,8 +30,8 @@ TypeScript remains authoritative, as required by `ARCHITECTURE_BOUNDARY.md`:
   `?geo=wasm` deliberately bypasses that comparison for diagnostics; invalid
   traffic/traps still fall back. `?geo=ts` disables the geometry bridge.
 - Neither core geometry algorithm was rewritten or replaced. Rich native import
-  mapping (text, gradients, resources, components, layout, layered paints) is not
-  promoted; those files retain their existing TS result. No new product feature.
+  mapping (text runs, gradients, resources, components, layout, layered paints) is
+  not promoted; those files retain their existing TS result. No new product feature.
 - Prior parity changes are preserved. This work does not claim to close the
   previously reported full-browser failures or certify Figma parity.
 
@@ -701,6 +702,7 @@ fell back. The shared full-result oracle remains unchanged.
 | --- | --- | --- |
 | W28 — basic SVG text could never satisfy the web contract | Emit shared versioned text metrics for SVG imports; capture text content/name, UTF-16-compatible width estimate, source-box height, baseline top position, font size and `text-anchor` alignment | New Rust importer and wasm-envelope regression for “Keep this text” (200×120 SVG, 20px, middle anchor); real-module smoke requires the decoded candidate and wrapper to match the complete TS result |
 | W29 — rich SVG weight could be silently implied if routed natively | No weight inference added: the native adapter still reports only its existing 400 default, so non-400 text must fail the strict comparator and keep the TS result | Real-module smoke asserts weight 700 stays on the TS fallback |
+| W30 — initial real-module smoke rejected SVG text with an explicit `id` | Preserve the source id as the native display name; use a content preview only without an id. Native `.x` omits `name` when it equals `id`, so the adapter uses the serialized id as the effective name. Neither path borrows values from the TS result | Rust importer/envelope tests, TS whole-result guard regression (including omitted `name`), real-module named/unnamed text and bold fallback smoke |
 
 Only plain text representable by the current native typography contract is
 promoted. Complex SVG text/tspan/font styling remains guarded. Metrics describe
@@ -709,10 +711,20 @@ rendering or visual equivalence.
 
 ### Verification
 
-- Rust workspace and actual-module smoke are **pending CI**; local Cargo/rustc are
-  unavailable.
-- Serial local web suite: **3,081/0**, 51 summaries; `tsc -b` and production build
-  pass. Local Chromium remains unavailable (`/tmp/chromium` missing).
-- Native-browser visual fidelity and complex SVG text remain **NOT VERIFIED**.
+- The first SVG-text runs, including the merge commit, **failed** real-WASM smoke
+  because native named `<text>` used its content rather than its SVG id; the
+  initial follow-up also expected `.x` to serialize a redundant name. Both
+  issues were corrected without changing the TS comparator or persisted schema.
+- **CI [36329391845](https://github.com/Ankushui18/X-native/actions/runs/36329391845) SUCCESS**
+  on `9b2f31c`: Rust workspace fmt/clippy/tests, matched WASM packaging, genuine
+  generated-module smoke and web tests/build all pass. The native candidate and
+  production wrapper select `backend=wasm` for named and unnamed basic SVG text;
+  weight 700 safely falls back to TS. `x-wasm` and verification artifacts uploaded.
+- Local `npm test` and production `npm run build` pass. Local Cargo/rustc and
+  Chromium remain unavailable, so no local real-WASM or browser-visual claim.
+- Native geometry promotion remains **NOT APPROVED** (1/30 equivalent, 29 failed
+  in that CI run); `auto` keeps its TS comparator. Native-browser visual fidelity
+  and complex SVG text remain **NOT VERIFIED**.
 
-Evidence: `/home/user/wasm-svg-text-{unit,tsc,build}.log`.
+Evidence: CI run above and its `wasm-verification` artifact/annotations. The local
+preview does not contain the CI-built WASM assets and uses the TS fallback.

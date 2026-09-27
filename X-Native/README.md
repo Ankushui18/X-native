@@ -105,8 +105,11 @@ PR instead of a redesign.
 
 The product interface is the React designer in [`apps/web`](apps/web/README.md)
 (Figma UI3 chrome). It talks to the document through a command API so a future
-WASM `x-editor` can replace the in-memory engine without rewriting the shell.
-Undo, layout, `.x` IO and headless GPU export stay in Rust.
+WASM `x-editor` could replace the in-memory engine without rewriting the shell.
+Today the web document, undo, layout and persistence are TypeScript; the Rust
+CLI/native crates own their separate document and headless export. Optional
+Rust import and geometry WASM bridges exist, but the web app keeps a TypeScript
+parity guard. See [bridge verification](docs/WASM_BRIDGES_2026-09-27.md).
 
 There is **no native GPU chrome**. The old `x_native_app` window (Vello panels,
 immediate-mode inspector) was removed so there is one UI to design and ship.
