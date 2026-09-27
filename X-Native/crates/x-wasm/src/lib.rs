@@ -186,7 +186,10 @@ mod tests {
         let page = &value["doc"]["pages"][0];
         let text = &page["children"][0];
         let id = text["id"].as_str().unwrap();
-        assert_eq!(text["name"], "label", "SVG id is the web layer name");
+        assert_eq!(id, "label");
+        // The .x serializer omits `name` when it equals `id`; the web adapter
+        // restores the effective name from the id, not from the TS importer.
+        assert_eq!(text["name"].as_str().unwrap_or(id), "label");
         assert_eq!(text["h"], 20.0, "persisted native text h remains font size");
         assert_eq!(value["textMetrics"]["nodes"][id]["width"], 168.0);
         assert_eq!(value["textMetrics"]["nodes"][id]["height"], 28.0);

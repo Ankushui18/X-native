@@ -96,7 +96,9 @@ try {
   catch (error) { console.log(`Diff SVG text decode error: ${String(error)}`); throw error; }
   const textExpected = svgTs(text);
   console.log(`Diff SVG text candidate: ${JSON.stringify(textCandidate.nodes[0])}; expected: ${JSON.stringify(textExpected.nodes[0])}`);
-  assert.equal(textRaw.doc.pages[0].children[0].name, "label", "native SVG layer retains its source id as the name");
+  const nativeText = textRaw.doc.pages[0].children[0];
+  // .x omits the redundant name when it equals id. Never reconstruct it from TS.
+  assert.equal(nativeText.name ?? nativeText.id, "label", "native SVG layer retains its source id as the name");
   assert.equal(textCandidate.nodes[0].name, "label", "the adapter must not borrow a name from TS");
   assert.equal(textCandidate.nodes[0].textAlign, "center");
   assert.deepEqual([textCandidate.nodes[0].x, textCandidate.nodes[0].y, textCandidate.nodes[0].w, textCandidate.nodes[0].h], [10, 10, 168, 28]);
