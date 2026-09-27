@@ -52,18 +52,27 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 function exactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []): void {
-  const keys = Object.keys(value);
+  const keys = Reflect.ownKeys(value);
   if (required.some(k => !Object.prototype.hasOwnProperty.call(value, k)) ||
-      keys.some(k => !required.includes(k) && !optional.includes(k))) throw new Error("Unsupported document fields");
+      keys.some(k => typeof k !== "string" || !required.includes(k) && !optional.includes(k))) {
+    throw new Error("Unsupported document fields");
+  }
+}
+/** Array holes, custom fields and non-enumerable/symbol keys must not pass as
+ * equal: JSON.stringify would discard them at the Rust boundary. */
+function arraySize(value: unknown, size: number): value is unknown[] {
+  return Array.isArray(value) && value.length === size &&
+    Reflect.ownKeys(value).length === size + 1 &&
+    Array.from({ length: size }, (_, i) => Object.prototype.hasOwnProperty.call(value, i)).every(Boolean);
 }
 function equal(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
-  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => equal(v, b[i]));
   if (a && b && typeof a === "object" && typeof b === "object" &&
-      !Array.isArray(a) && !Array.isArray(b)) {
-    const left = Object.keys(a), right = Object.keys(b);
+      Array.isArray(a) === Array.isArray(b)) {
+    const left = Reflect.ownKeys(a), right = Reflect.ownKeys(b);
     return left.length === right.length && left.every(k =>
-      Object.prototype.hasOwnProperty.call(b, k) && equal((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+      Object.prototype.hasOwnProperty.call(b, k) &&
+      equal((a as Record<PropertyKey, unknown>)[k], (b as Record<PropertyKey, unknown>)[k]));
   }
   return false;
 }
@@ -97,17 +106,17 @@ export function admitWebDocument(input: unknown): string | null {
     const d = object(input);
     exactKeys(d, DOC_KEYS, OPTIONAL_DOC_KEYS);
     if (d.version !== undefined && d.version !== 1) throw new Error("Unsupported persisted version");
-    if (!label(d.fileName) || !Array.isArray(d.pages) || d.pages.length !== 1 ||
-        !Array.isArray(d.components) || d.components.length || !Array.isArray(d.styles) || d.styles.length ||
+    if (!label(d.fileName) || !arraySize(d.pages, 1) ||
+        !arraySize(d.components, 0) || !arraySize(d.styles, 0) ||
         d.page !== 0 || !finite(d.zoom) || d.zoom <= 0 || !finite(d.panX) || !finite(d.panY) ||
         ![d.showRulers, d.showMinimap, d.showComments].every(v => typeof v === "boolean") ||
         (d.showFlows !== undefined && typeof d.showFlows !== "boolean") ||
-        [d.annotations, d.variables, d.variableCollections].some(v => v !== undefined && (!Array.isArray(v) || v.length !== 0)) ||
+        [d.annotations, d.variables, d.variableCollections].some(v => v !== undefined && !arraySize(v, 0)) ||
         (d.activeModes !== undefined && !equal(d.activeModes, {}))) throw new Error("Unsupported document metadata");
     const p = object(d.pages[0]);
     exactKeys(p, PAGE_KEYS);
     if (!label(p.id) || !p.id || !label(p.name) ||
-        !Array.isArray(p.comments) || p.comments.length || !Array.isArray(p.guides) || p.guides.length ||
+        !arraySize(p.comments, 0) || !arraySize(p.guides, 0) ||
         p.pixelGrid !== false || p.pixelGridColor !== "#cccccc" || p.pixelSnap !== true || p.flowStart !== "") {
       throw new Error("Unsupported page metadata");
     }
