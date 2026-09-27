@@ -14,6 +14,7 @@ import type { DocSeed } from "./files";
 import type { PersistedDoc } from "./persist";
 import type { Page, XNode } from "./types";
 import { openRustSession, type RustSessionClient } from "./rustSession";
+import { auditDecision } from "./bridgeRuntimeAudit";
 
 export const WEB_DOCUMENT_SESSION_VERSION = 1;
 export type WebDocument = DocSeed | PersistedDoc;
@@ -221,11 +222,20 @@ export class RustWebDocumentSession {
 export async function openWebDocumentSession(input: unknown, signal?: AbortSignal): Promise<RustWebDocumentSession | null> {
   if (signal?.aborted) return null;
   const x = admitWebDocument(input);
-  if (!x || signal?.aborted) return null;
+  if (!x) {
+    auditDecision({ bridge: "session", operation: "open", result: "none", guard: "blocked", candidate: false,
+      reason: "web schema not admissible (only one page, flat opaque solid rectangles)" });
+    return null;
+  }
+  if (signal?.aborted) return null;
   let rust: RustSessionClient | null = null;
   try {
     rust = await openRustSession(x, signal);
-    if (!rust) return null;
+    if (!rust) {
+      auditDecision({ bridge: "session", operation: "open", result: "none", guard: "not-run", candidate: false,
+        reason: signal?.aborted ? "route cancelled" : "module unavailable or session ABI incompatible" });
+      return null;
+    }
     const shell = input as WebDocument;
     // Round-trip the WHOLE document before handing out a Rust-owned session.
     // If native defaults, precision or metadata differ, MemoryEngine remains
@@ -233,8 +243,13 @@ export async function openWebDocumentSession(input: unknown, signal?: AbortSigna
     if (!equal(decodeWebDocument(rust.exportX(), shell), shell) || signal?.aborted) {
       throw new Error("Web/native round trip differs or open was cancelled");
     }
-    return RustWebDocumentSession.create(rust, shell);
+    const admitted = RustWebDocumentSession.create(rust, shell);
+    auditDecision({ bridge: "session", operation: "open", result: "rust", guard: "passed", candidate: true,
+      reason: "whole-document native/web checkpoint matched" });
+    return admitted;
   } catch {
+    auditDecision({ bridge: "session", operation: "open", result: "none", guard: "blocked", candidate: !!rust,
+      reason: "native session open or whole-document checkpoint failed" });
     rust?.close();
     return null;
   }

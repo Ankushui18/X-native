@@ -14,6 +14,7 @@
 
 import type { BooleanOp, PathPoint } from "./types";
 import { wasmAssetUrl } from "./wasmAssets";
+import { auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 /* -------------------------------------------------------------------------- */
 /* §5 wire format v1                                                           */
@@ -186,19 +187,19 @@ export function wrapGeoExports(e: GeoWasmExports): GeoModule {
   const view8 = () => new Uint8Array(e.memory.buffer);
   const viewDV = () => new DataView(e.memory.buffer);
   return {
-    version: e.xgeo_version(),
+    version: auditRustCall("x-geo.xgeo_version", () => e.xgeo_version()),
     call(req: Uint8Array): Uint8Array {
       let reqPtr = 0, outPtr = 0, rPtr = 0, rLen = 0;
       const valid = (ptr: number, len: number) => Number.isInteger(ptr) && ptr > 0 &&
         Number.isInteger(len) && len > 0 && ptr + len <= e.memory.buffer.byteLength;
       try {
-        reqPtr = e.xgeo_alloc(req.length) >>> 0;
+        reqPtr = auditRustCall("x-geo.xgeo_alloc", () => e.xgeo_alloc(req.length)) >>> 0;
         if (!valid(reqPtr, req.length)) throw new Error("geo: request allocation failed");
         view8().set(req, reqPtr);
-        outPtr = e.xgeo_alloc(8) >>> 0;
+        outPtr = auditRustCall("x-geo.xgeo_alloc", () => e.xgeo_alloc(8)) >>> 0;
         if (!valid(outPtr, 8)) throw new Error("geo: output allocation failed");
         view8().fill(0, outPtr, outPtr + 8);
-        const rc = e.xgeo_boolean(reqPtr, req.length, outPtr, outPtr + 4);
+        const rc = auditRustCall("x-geo.xgeo_boolean", () => e.xgeo_boolean(reqPtr, req.length, outPtr, outPtr + 4));
         const dv = viewDV();
         rPtr = dv.getUint32(outPtr, true);
         rLen = dv.getUint32(outPtr + 4, true);
@@ -209,10 +210,10 @@ export function wrapGeoExports(e: GeoWasmExports): GeoModule {
         return view8().slice(rPtr, rPtr + rLen);
       } finally {
         // Try every free even when a faulty module traps during cleanup.
-        try { if (rPtr && rPtr !== reqPtr && rPtr !== outPtr) e.xgeo_free(rPtr, rLen); }
+        try { if (rPtr && rPtr !== reqPtr && rPtr !== outPtr) auditRustCall("x-geo.xgeo_free", () => e.xgeo_free(rPtr, rLen)); }
         finally {
-          try { if (reqPtr) e.xgeo_free(reqPtr, req.length); }
-          finally { if (outPtr && outPtr !== reqPtr) e.xgeo_free(outPtr, 8); }
+          try { if (reqPtr) auditRustCall("x-geo.xgeo_free", () => e.xgeo_free(reqPtr, req.length)); }
+          finally { if (outPtr && outPtr !== reqPtr) auditRustCall("x-geo.xgeo_free", () => e.xgeo_free(outPtr, 8)); }
         }
       }
     },
@@ -222,6 +223,26 @@ export function wrapGeoExports(e: GeoWasmExports): GeoModule {
 let cached: GeoModule | null = null;
 let pending: Promise<GeoModule | null> | null = null;
 let warned = false;
+let geoStatus: "idle" | "loading" | "ready" | "unavailable" | "test-injected" = "idle";
+let geoFailure: string | null = null;
+let geoExports: string[] = [];
+let geoSource: "public URL" | "override" | "test-injected" | null = null;
+
+registerAuditProbe("geometry", {
+  snapshot: () => ({
+    asset: GEO_WASM_URL,
+    mode: getGeoMode(),
+    status: getGeoMode() === "ts" ? "disabled by geo=ts" : geoStatus,
+    instantiated: !!cached,
+    source: geoSource,
+    abiVersion: cached?.version ?? null,
+    availableFunctions: geoExports,
+    lastFailure: geoFailure,
+    guard: getGeoMode() === "auto" ? "compare to TS oracle on every candidate" :
+      getGeoMode() === "wasm" ? "bypassed for diagnostics; not a parity claim" : "TS only",
+  }),
+  load: () => ensureGeo(),
+});
 
 /** Loud in `wasm` mode (a debugging flag), once-per-session otherwise. */
 function geoWarn(e: unknown): void {
@@ -242,12 +263,20 @@ function geoWarn(e: unknown): void {
 export function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<GeoModule | null> {
   if (getGeoMode() === "ts" || typeof WebAssembly === "undefined") return Promise.resolve(null);
   if (pending) return pending;
+  geoStatus = "loading";
+  geoSource = source === undefined ? "public URL" : "override";
+  geoFailure = null;
+  geoExports = [];
   pending = (async () => {
   try {
     let bytes: ArrayBuffer;
     if (typeof source === "string" || source === undefined) {
       const resp = await fetch(source ?? GEO_WASM_URL).catch(() => null);
-      if (!resp || !resp.ok) return null;
+      if (!resp || !resp.ok) {
+        geoStatus = "unavailable";
+        geoFailure = resp ? `HTTP ${resp.status}` : "network/fetch failure";
+        return null;
+      }
       bytes = await resp.arrayBuffer();
     } else if (source instanceof Uint8Array) {
       bytes = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
@@ -256,6 +285,7 @@ export function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<G
     }
     const mod = await WebAssembly.instantiate(bytes, {});
     const exp = mod.instance.exports as Partial<GeoWasmExports>;
+    geoExports = Object.keys(exp).filter(key => typeof exp[key as keyof GeoWasmExports] === "function");
     if (
       !(exp.memory instanceof WebAssembly.Memory) ||
       typeof exp.xgeo_version !== "function" ||
@@ -263,16 +293,24 @@ export function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<G
       typeof exp.xgeo_free !== "function" ||
       typeof exp.xgeo_boolean !== "function"
     ) {
+      geoStatus = "unavailable";
+      geoFailure = "required ABI exports missing";
       return null;
     }
     const wrapped = wrapGeoExports(exp as GeoWasmExports);
     if (wrapped.version !== GEO_VERSION) {
+      geoStatus = "unavailable";
+      geoFailure = "ABI version mismatch";
       geoWarn(`version mismatch (wasm=${wrapped.version} ts=${GEO_VERSION})`);
       return null;
     }
     cached = wrapped;
+    geoStatus = "ready";
     return cached;
   } catch (e) {
+    geoStatus = "unavailable";
+    geoFailure = e instanceof WebAssembly.CompileError ? "invalid WASM bytes (possible HTML fallback)" :
+      e instanceof WebAssembly.LinkError ? "module link failed" : "module fetch/instantiation failed";
     geoWarn(e);
     cached = null;
     return null;
@@ -311,11 +349,19 @@ export function tryGeoBoolean(op: BooleanOp, shapes: GeoShape[]): GeoContours | 
 export function __setGeoModuleForTests(mod: GeoModule | null): void {
   cached = mod;
   pending = Promise.resolve(mod);
+  geoStatus = "test-injected";
+  geoSource = "test-injected";
+  geoExports = [];
+  geoFailure = null;
 }
 export function __resetGeoForTests(): void {
   cached = null;
   pending = null;
   warned = false;
+  geoStatus = "idle";
+  geoSource = null;
+  geoExports = [];
+  geoFailure = null;
 }
 export function notifyGeoFallback(e: unknown): void {
   geoWarn(e);

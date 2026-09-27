@@ -4,12 +4,14 @@ import App from "./App";
 import { DialogHost } from "./ui/DialogHost";
 import { ThemeProvider } from "./ui/theme";
 import { installTooltipBridge } from "./ui/tooltipBridge";
+import { installBrowserBridgeAudit } from "./engine/bridgeRuntimeAudit";
 import "./styles.css";
 
 // One tooltip surface for the whole app, above the router: controls that
 // still label themselves with the native `title` attribute get the shared
 // pill (and the accessible name they were missing) instead of the browser's box.
 installTooltipBridge();
+installBrowserBridgeAudit(); // Only installs when the real URL contains ?bridgeAudit=1.
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

@@ -16,7 +16,11 @@ import { docFromTemplate } from "../../src/engine/files.ts";
 import { node } from "../../src/engine/memory.ts";
 import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
 import { booleanPath, booleanPathTs } from "../../src/engine/geometry.ts";
+import { __enableBridgeAuditForTests, bridgeAuditSnapshot } from "../../src/engine/bridgeRuntimeAudit.ts";
 
+// The audit's counters must observe the REAL generated modules in CI, not only
+// the mock-based web unit suite. No console command is installed in this runner.
+__enableBridgeAuditForTests(true);
 const gluePath = path.resolve("public/wasm/x_wasm.js");
 const importBytes = fs.readFileSync("public/wasm/x_wasm_bg.wasm");
 const geoBytes = fs.readFileSync("public/x_geo.wasm");
@@ -502,3 +506,18 @@ try {
     delete globalThis[key];
   }
 }
+
+// These are wrapper-level counters. The tests above sourced both binaries from
+// public/, initialized actual bindgen glue and instantiated actual x-geo WASM.
+// This proves the diagnostic observed real calls in CI, not in a deployment.
+const audit = bridgeAuditSnapshot();
+assert.equal(audit.modules.imports.instantiated, true);
+assert.equal(audit.modules.geometry.instantiated, true);
+assert.equal(audit.modules.geometry.source, "override");
+assert.ok(audit.functions["x-wasm.importSvgToX"]?.calls >= 1);
+assert.ok(audit.functions["x-wasm.RustDocumentSession.resizeNode"]?.calls >= 2);
+assert.ok(audit.functions["x-geo.xgeo_boolean"]?.calls >= 4);
+assert.ok(audit.decisions["geometry.union"]?.attempts >= 1);
+assert.ok(audit.decisions["session.open"]?.rust >= 1);
+console.log("PASS real WASM audit: bindgen import, Rust resize, x-geo Boolean and guarded decisions observed at production call sites");
+__enableBridgeAuditForTests(false);

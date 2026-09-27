@@ -1,6 +1,7 @@
 import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VariableWidthPoint, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
 import { hasVariableWidth, normalizeWidthProfile, sampleVariableWidth } from "./strokeModel";
 import { compareBooleanResults, getGeoMode, notifyGeoFallback, tryGeoBoolean } from "./geoBridge";
+import { auditDecision } from "./bridgeRuntimeAudit";
 
 /**
  * Corner geometry.
@@ -451,15 +452,19 @@ export function shapeBooleanResult(
   };
 }
 
-/** Choke point: the wasm accelerator when ready, else the TS authority.
- *  Only a complete contour set is accepted from wasm — emptiness, errors,
- *  version skew, and an absent module all defer to `booleanPathTs`, so the
- *  bridge can never change a result, only its provenance. Never throws. */
+/** Choke point: optionally execute x-geo; in auto compare the *shaped* result
+ *  (including emptiness) to the TS authority before selecting it. Missing or
+ *  failing modules use TS. Only the explicit wasm diagnostic mode can bypass
+ *  the equivalence guard and change the output. */
 export function booleanPath(
   op: BooleanOp,
   shapes: { poly: PathPoint[]; ox: number; oy: number }[],
 ): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
-  if (shapes.length < 2) return null;
+  if (shapes.length < 2) {
+    auditDecision({ bridge: "geometry", operation: op, result: "none", guard: "not-run", candidate: false,
+      reason: "fewer than two operands" });
+    return null;
+  }
   if (getGeoMode() !== "ts") {
     try {
       const raw = tryGeoBoolean(op, shapes);
@@ -473,17 +478,33 @@ export function booleanPath(
         // Native and web raster grids intentionally differ. Until promotion
         // passes the real-module corpus, auto must not alter shipped geometry.
         // Explicit wasm mode is for differential testing, never a parity claim.
-        if (getGeoMode() === "wasm") return candidate;
+        if (getGeoMode() === "wasm") {
+          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "bypassed", candidate: true,
+            reason: "forced diagnostic mode; equivalence NOT checked" });
+          return candidate;
+        }
         const authority = booleanPathTs(op, shapes);
         const diff = compareBooleanResults(candidate, authority);
-        if (diff.ok) return candidate;
+        if (diff.ok) {
+          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "passed", candidate: true,
+            reason: "emptiness, contours, bounds and area matched TS" });
+          return candidate;
+        }
+        // The comparator describes coordinates; the audit logs only check names.
+        auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "blocked", candidate: true,
+          reason: `differential mismatch: ${diff.reasons.map(r => r.split(":")[0]).join(", ")}` });
         notifyGeoFallback(diff.reasons.join("; "));
         return authority;
       }
     } catch (e) {
+      auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "blocked", candidate: true,
+        reason: "candidate request, response or WASM call failed" });
       notifyGeoFallback(e);
+      return booleanPathTs(op, shapes);
     }
   }
+  auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "not-run", candidate: false,
+    reason: getGeoMode() === "ts" ? "geo=ts" : "geo module unavailable/not loaded" });
   return booleanPathTs(op, shapes);
 }
 
