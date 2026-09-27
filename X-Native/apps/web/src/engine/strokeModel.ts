@@ -204,13 +204,20 @@ export function isBranchingNetwork(net: VectorNetwork | undefined): boolean {
   return false;
 }
 
+/** A shared restriction for the inspector and every variable-width renderer. */
+export function variableWidthBlockReason(n: XNode): string | null {
+  if (isBranchingNetwork(n.vectorNetwork)) return "Split vector to use variable width";
+  if (n.strokeDash > 0 || n.strokeDashPattern?.length) return "Remove dashes to use variable width";
+  return null;
+}
+
 /** Whether `n` paints its base stroke through the variable-width outline. */
 export function usesVariableWidth(n: XNode): boolean {
   if (n.kind !== "vector" && n.kind !== "line" && n.kind !== "arrow") return false;
   if (!(n.strokeWidth > 0) || !n.strokeVisible || !n.strokePaint || isNonePaint(n.strokePaint)) return false;
   // A profiled outline follows one centerline; on a branching network it
   // would swallow the branches' strokes, so branching stays uniform.
-  if (isBranchingNetwork(n.vectorNetwork)) return false;
+  if (variableWidthBlockReason(n)) return false;
   return hasVariableWidth(n.strokeWidthProfile);
 }
 

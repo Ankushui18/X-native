@@ -1,6 +1,6 @@
 import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VariableWidthPoint, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
 import { hasVariableWidth, normalizeWidthProfile, sampleVariableWidth } from "./strokeModel";
-import { getGeoMode, notifyGeoFallback, tryGeoBoolean } from "./geoBridge";
+import { compareBooleanResults, getGeoMode, notifyGeoFallback, tryGeoBoolean } from "./geoBridge";
 
 /**
  * Corner geometry.
@@ -463,15 +463,22 @@ export function booleanPath(
   if (getGeoMode() !== "ts") {
     try {
       const raw = tryGeoBoolean(op, shapes);
-      if (raw && raw.status === 0 && raw.contours.length) {
-        const curved = hasCurveHandles(shapes);
-        // Same scale semantics as the TS grid (160 cells across the long side).
-        return shapeBooleanResult(
+      if (raw) {
+        const candidate = raw.contours.length ? shapeBooleanResult(
           op,
           raw.contours.map((c) => c.map((p) => ({ x: p.x, y: p.y }))),
           (Math.max(raw.w, raw.h) / 160) * 0.85,
-          curved,
-        );
+          hasCurveHandles(shapes),
+        ) : null;
+        // Native and web raster grids intentionally differ. Until promotion
+        // passes the real-module corpus, auto must not alter shipped geometry.
+        // Explicit wasm mode is for differential testing, never a parity claim.
+        if (getGeoMode() === "wasm") return candidate;
+        const authority = booleanPathTs(op, shapes);
+        const diff = compareBooleanResults(candidate, authority);
+        if (diff.ok) return candidate;
+        notifyGeoFallback(diff.reasons.join("; "));
+        return authority;
       }
     } catch (e) {
       notifyGeoFallback(e);
@@ -766,31 +773,39 @@ export function pathBounds(
 }
 
 export function normalizeVectorNode(n: {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  kind?: string;
-  closed?: boolean;
-  path: PathPoint[];
-  vectorNetwork?: VectorNetwork;
+  x: number; y: number; w: number; h: number;
+  kind?: string; closed?: boolean; rotation?: number; flipH?: boolean; flipV?: boolean;
+  path: PathPoint[]; vectorNetwork?: VectorNetwork;
 }) {
-  if (!n.path.length) return;
-  const pb = pathBounds(n.path, !!n.closed);
-  if (Math.abs(pb.minX) > 0.001 || Math.abs(pb.minY) > 0.001) {
-    const dx = pb.minX;
-    const dy = pb.minY;
-    n.x += dx;
-    n.y += dy;
-    n.path = n.path.map((p) => ({
-      ...p,
-      x: p.x - dx,
-      y: p.y - dy,
-    }));
-    n.vectorNetwork = pathToVectorNetwork(n.path, !!n.closed);
-  }
-  n.w = pb.w;
-  n.h = pb.h;
+  const net = n.vectorNetwork;
+  if (!n.path.length && !net?.vertices.length) return;
+  // A legacy path is only one walk through a network. Include every branch,
+  // isolated anchor and Bézier extremum; never rebuild the graph from that walk.
+  const boxes = net?.vertices.length ? [
+    ...net.vertices.map((v) => ({ minX: v.x, maxX: v.x, minY: v.y, maxY: v.y })),
+    ...net.segments.flatMap((s) => {
+      const a = net.vertices[s.start], b = net.vertices[s.end];
+      return a && b ? [pathBounds([
+        { ...a, ox: s.tangentStart?.x, oy: s.tangentStart?.y },
+        { ...b, ix: s.tangentEnd?.x, iy: s.tangentEnd?.y },
+      ], false)] : [];
+    }),
+  ] : [pathBounds(n.path, !!n.closed)];
+  const dx = Math.min(...boxes.map((b) => b.minX)), dy = Math.min(...boxes.map((b) => b.minY));
+  const w = Math.max(1, Math.max(...boxes.map((b) => b.maxX)) - dx);
+  const h = Math.max(1, Math.max(...boxes.map((b) => b.maxY)) - dy);
+  // Changing dimensions changes the rotation/flip center. Compensate in the
+  // parent's coordinates so normalization leaves every world-space point fixed.
+  const cx = (n.w - w) / 2, cy = (n.h - h) / 2;
+  const lx = (dx - cx) * (n.flipH ? -1 : 1), ly = (dy - cy) * (n.flipV ? -1 : 1);
+  const rad = (n.rotation ?? 0) * Math.PI / 180;
+  n.x += cx + lx * Math.cos(rad) - ly * Math.sin(rad);
+  n.y += cy + lx * Math.sin(rad) + ly * Math.cos(rad);
+  n.path = n.path.map((p) => ({ ...p, x: p.x - dx, y: p.y - dy }));
+  if (net) n.vectorNetwork = { ...net, vertices: net.vertices.map((v) => ({ ...v, x: v.x - dx, y: v.y - dy })) };
+  else n.vectorNetwork = pathToVectorNetwork(n.path, !!n.closed);
+  n.w = w;
+  n.h = h;
 }
 
 /**
@@ -936,6 +951,7 @@ export function pathToVectorNetwork(path: PathPoint[], closed: boolean): VectorN
   const vertices: VectorVertex[] = path.map((p) => ({
     x: p.x,
     y: p.y,
+    ...(p.mirrorMode != null ? { mirrorMode: p.mirrorMode } : {}),
     ...(p.cornerRadius != null ? { cornerRadius: p.cornerRadius } : {}),
   }));
   const segments: VectorSegment[] = [];
@@ -1075,50 +1091,69 @@ export function vectorNetworkToSvgPath(vn: VectorNetwork): string {
 /**
  * Converts a simple (degree <= 2) VectorNetwork back to a `PathPoint[]` array.
  */
+/** The legacy editable path is a walk, never the whole arbitrary graph. */
+export function networkPathWalk(vn: VectorNetwork): { vertices: number[]; segments: number[]; closed: boolean } {
+  if (!vn.segments.length) return { vertices: vn.vertices.map((_, i) => i), segments: [], closed: false };
+  const vertices = [vn.segments[0].start], segments: number[] = [];
+  const seen = new Set(vertices);
+  for (;;) {
+    const cur = vertices[vertices.length - 1];
+    const next = vn.segments.findIndex((s) => s.start === cur && !seen.has(s.end));
+    if (next < 0) break;
+    segments.push(next);
+    vertices.push(vn.segments[next].end);
+    seen.add(vn.segments[next].end);
+  }
+  const closing = vn.segments.findIndex((s) => s.start === vertices[vertices.length - 1] && s.end === vertices[0]);
+  if (closing >= 0) segments.push(closing);
+  return { vertices, segments, closed: closing >= 0 };
+}
+
 export function vectorNetworkToPath(vn: VectorNetwork): { path: PathPoint[]; closed: boolean } {
   if (!vn.vertices.length) return { path: [], closed: false };
-  if (!vn.segments.length) {
-    return { path: vn.vertices.map((v) => ({ x: v.x, y: v.y })), closed: false };
-  }
+  const walk = networkPathWalk(vn);
+  const path: PathPoint[] = walk.vertices.map((i) => {
+    const v = vn.vertices[i];
+    return { x: v.x, y: v.y, ...(v.cornerRadius != null ? { cornerRadius: v.cornerRadius } : {}),
+      ...(v.mirrorMode != null ? { mirrorMode: v.mirrorMode } : {}) };
+  });
+  walk.segments.forEach((index, i) => {
+    const s = vn.segments[index], a = path[i], b = path[(i + 1) % path.length];
+    if (s.tangentStart) { a.ox = s.tangentStart.x; a.oy = s.tangentStart.y; }
+    if (s.tangentEnd) { b.ix = s.tangentEnd.x; b.iy = s.tangentEnd.y; }
+  });
+  return { path, closed: walk.closed };
+}
 
-  // Follow segments
-  const path: PathPoint[] = [];
-  const visited = new Set<number>();
-  let cur = vn.segments[0].start;
-  let closed = false;
+/** Update an existing walk in-place without discarding branches, disconnected
+ * vertices, endpoint metadata, or region paints. Connectivity edits are not
+ * guessed from coordinates: callers must use a graph-aware command for those. */
+export function patchNetworkPath(vn: VectorNetwork, path: PathPoint[]): VectorNetwork | null {
+  const walk = networkPathWalk(vn);
+  if (path.length !== walk.vertices.length) return null;
+  const vertices = vn.vertices.map((v) => ({ ...v }));
+  const segments = vn.segments.map((s) => ({ ...s }));
+  walk.vertices.forEach((index, i) => {
+    const p = path[i];
+    vertices[index] = { ...vertices[index], x: p.x, y: p.y,
+      ...(p.cornerRadius != null ? { cornerRadius: p.cornerRadius } : {}),
+      ...(p.mirrorMode != null ? { mirrorMode: p.mirrorMode } : {}) };
+  });
+  walk.segments.forEach((index, i) => {
+    const a = path[i], b = path[(i + 1) % path.length];
+    segments[index] = { ...segments[index],
+      tangentStart: a.ox != null || a.oy != null ? { x: a.ox ?? 0, y: a.oy ?? 0 } : undefined,
+      tangentEnd: b.ix != null || b.iy != null ? { x: b.ix ?? 0, y: b.iy ?? 0 } : undefined };
+  });
+  return { ...vn, vertices, segments };
+}
 
-  path.push({ x: vn.vertices[cur].x, y: vn.vertices[cur].y });
-  visited.add(cur);
-
-  let advanced = true;
-  while (advanced) {
-    advanced = false;
-    const seg = vn.segments.find((s) => s.start === cur && !visited.has(s.end));
-    if (seg) {
-      const lastPoint = path[path.length - 1];
-      if (seg.tangentStart) {
-        lastPoint.ox = seg.tangentStart.x;
-        lastPoint.oy = seg.tangentStart.y;
-      }
-      const nextV = vn.vertices[seg.end];
-      path.push({
-        x: nextV.x,
-        y: nextV.y,
-        ix: seg.tangentEnd?.x,
-        iy: seg.tangentEnd?.y,
-      });
-      visited.add(seg.end);
-      cur = seg.end;
-      advanced = true;
-    }
-  }
-
-  // Check if closed
-  if (vn.segments.some((s) => s.start === cur && s.end === vn.segments[0].start)) {
-    closed = true;
-  }
-
-  return { path, closed };
+/** Legacy topology-rebuilding tools must never flatten an arbitrary network. */
+export function hasExtraNetworkGeometry(vn: VectorNetwork | undefined): boolean {
+  if (!vn) return false;
+  const walk = networkPathWalk(vn);
+  return walk.vertices.length !== vn.vertices.length || walk.segments.length !== vn.segments.length ||
+    (vn.regions?.length ?? 0) > 1 || !!vn.regions?.some((r) => r.fill != null || r.fillOpacity != null || r.loops.length > 1);
 }
 
 /**

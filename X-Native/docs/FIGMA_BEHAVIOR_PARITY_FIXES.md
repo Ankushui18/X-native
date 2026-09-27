@@ -1,3 +1,121 @@
+# X-Native — Figma behavior parity fixes and verification
+
+**2026-09-27 · `arena/01a0e1ff-x-native` · base `c3afa0dfcde95e29e8067c349b021cd0f583ce6e`**
+
+## Current re-audit batch: five fixes, not complete parity
+
+Companion: [current audit, feature matrix and open findings](FIGMA_BEHAVIOR_PARITY_AUDIT.md).
+Prior authorized Batches 1–3 are preserved; see `MICRO_PARITY_BATCH{1,2,3}_2026-09-27.md` for their exact evidence. Their changes are still uncommitted in this checkout. Historical 224-fix claims below are not current-batch counts.
+
+| ID | Severity | Before → change | Exact current implementation | Regression evidence |
+|---|---|---|---|---|
+| R01 | P1 | Canvas ordinary-click selection branch recreated a single-id array. Preserve the current set when the hit is already selected; retain Shift toggle and unselected replacement. | `apps/web/src/ui/Canvas.tsx:4589` | Mounted Canvas suite + targeted Chromium; details below |
+| R02 | P1 | The start pointer was client-space while the selection center was canvas-local. Subtract the canvas rect before atan2; later moves already use the local frame. | `apps/web/src/ui/Canvas.tsx:4063` | Mounted Canvas suite + targeted Chromium; details below |
+| R03 | P1 | Both could accept the same corner press although the cursor promised resize. Exclude the inner radius <8px from rotation in single and multi hit paths. | `apps/web/src/ui/canvasSelection.ts:44` | Mounted Canvas suite + targeted Chromium; details below |
+| R04 | P1 | Share canvasTextFont across painter, text metrics and list gutter; apply text case before measuring/wrapping. This does not add shaping or export-layout support. | `apps/web/src/ui/textLayout.ts:52` | Mounted Canvas suite + targeted Chromium; details below |
+| R06 | P1 | Selected ancestor already carries descendants; normalize both move/nudge target sets instead of applying local deltas twice. | `apps/web/src/engine/memory.ts:2219,2233,5253–5262` | `parityReaudit.dom.test.mjs:134–169`; browser real drag/undo and nudge command |
+
+### Test evidence
+
+- `apps/web/src/ui/__tests__/parityReaudit.dom.test.mjs`: **76/0**, registered at the end of `package.json`'s existing test command. No old tests removed.
+- Interaction red→green: **17 passed / 21 failed → 38 / 0**. Typography assertions then demonstrated **41 / 9 → 50 / 0**.
+- Scenarios: zoom 0.5/1/2; pan and canvas offset; stationary and Shift-15° multi-rotation; single/multi corner cursor and command identity; ordinary selected-member multi-drag; Shift toggle/unselected replacement; movement uses move, not resize/constraints; transaction undo/redo; normal/italic × ordinary/upper/small-caps font and list measurements.
+- `apps/web/e2e/parity-audit.mjs`: **12/0** real Chromium assertions; physical drag, modifier/undo/redo behavior, computed resize cursor, and actual Canvas2D text metrics. It mounts the actual source components in a controlled shell, not the full application layout.
+- `AUDIT_DIAGNOSTICS=1` prints **OPEN** vector branch-loss and rotated-fit reproductions separately. They are deliberately not scored as passing parity tests. This is a diagnostic aid, not regression protection for those unfixed defects.
+- Hierarchy red→green: **63/9 → 72/0**, then **76/0** with additional Auto Layout checks. Covers nested selection order, independent peers, undo/redo, lock protection, duplicate IDs and child reorder avoidance. Global unit/TypeScript/build gates were rerun after this follow-up fix.
+- `AUDIT_PERF=1` adds seven deterministic load fixtures. Two-RAF pan timing is not FPS. See audit addendum for measured results.
+
+### Production diff scope
+
+Only these production paths changed in this re-audit phase (prior batch diffs remain separately):
+
+- `apps/web/src/engine/memory.ts:2219,2233,5253–5262`: normalize move/nudge targets to selected roots, preserve input order, deduplicate IDs, and retain lock/instance checks.
+- `apps/web/src/ui/Canvas.tsx`: local multi-rotation start coordinates, disjoint multi-corner ring, preserve selected set on ordinary press, use shared text font helper.
+- `apps/web/src/ui/canvasSelection.ts`: single-selection rotation hit zone excludes inner resize radius.
+- `apps/web/src/ui/textLayout.ts`: `canvasTextFont`, font-aware list metrics, transformed-case measurement/wrapping.
+
+No model schema/persistence migration, theme/color/spacing/icon changes, HTML-driven UI reconstruction, Auto Layout rewrite, or speculative native change.
+
+### Harness corrections (not production fixes)
+
+`e2e/behaviour.mjs` no longer assumes the Agent must name a created frame “Agent frame”; it checks the selected frame's real name and dimensions against the reply and layer tree. Missing nudge dialogs no longer crash nullable DOM traversal; the assertions still fail instead of silently passing. Later harness fixes search the capped Actions list before choosing Export/Nudge/Radial and pair radial mouseup with mousedown. These change test setup, not production behavior or expected assertions. The final full suite completed all 51 sections: **363 passed / 16 failed, no page errors**. It is not green; detailed failure-group triage is in the audit.
+
+### Verification gates
+
+| Gate | Result |
+|---|---|
+| `npm run test` | **2,737 passed / 0 failed, 42 suites** |
+| `npx tsc -b` | **PASS, 0 errors** |
+| `npm run build` | **PASS**; 1,077.36 kB JS / 325.90 kB gzip, chunk warning |
+| New mounted regression | **76/0** |
+| New targeted Chromium | **12/0**, no page errors |
+| Isolated existing rename §31 | **33/0** |
+| Full E2E first attempt | **FAILED/ABORTED**, 24 FAIL lines then null dereference |
+| Second full E2E attempt | **348 passed / 23 failed**, aborted on unpaired mouseup in radial test |
+| Final full E2E | **FAILED: 363 passed / 16 failed, exit 1; no page errors** |
+| `cargo check --workspace` | **UNAVAILABLE**: cargo not found, exit 127 |
+| Native runtime / full Figma-client comparison | **NOT VERIFIED — requires runtime/manual verification** |
+
+Reproduce from `X-Native/apps/web` with Vite serving the actual app:
+
+```sh
+npm run test
+npx tsc -b
+npm run build
+CHROMIUM_PATH=/tmp/chromium CHROMIUM_LIBS=/tmp/al2023/lib \
+  APP_URL=http://127.0.0.1:5173 npm run test:e2e
+CHROMIUM_PATH=/tmp/chromium CHROMIUM_LIBS=/tmp/al2023/lib \
+  APP_URL=http://127.0.0.1:5173 AUDIT_DIAGNOSTICS=1 AUDIT_PERF=1 \
+  AUDIT_RESULT=/home/user/parity-targeted.json node e2e/parity-audit.mjs
+```
+
+The loopback URL above is for the **in-sandbox test runner**, not browser-facing application requests. Vite remains bound to 0.0.0.0 for the user's proxied preview.
+
+### Remaining issues and counts
+
+This batch fixes **5 P1** findings. Newly reproduced outstanding: **1 P0 + 1 P1** (R05 and R07). Carry-forward: **3 P1** (R08–R10). Additional **1 P2** build warning (R11). Untriaged browser assertion failures are not arbitrarily counted as additional product defects. See the audit for exact sources, diagnostic values and safe-fix prerequisites.
+
+The task is **not complete**: exhaustive source→UI→render/persistence, every popup lifecycle, all-major-category undo/redo combinations, native runtime, text/export equivalence and complete current-documentation coverage remain open. Do not infer complete behavioral parity from the global unit pass.
+
+## Files changed / preserved
+
+**Current phase (10 paths):** `apps/web/src/engine/memory.ts`, `apps/web/src/ui/{Canvas.tsx,canvasSelection.ts,textLayout.ts}`, `apps/web/src/ui/__tests__/parityReaudit.dom.test.mjs`, `apps/web/e2e/{behaviour.mjs,parity-audit.mjs}`, `apps/web/package.json`, and these two reports. Prior batches share some of these paths; they are not reverted or claimed as new work here.
+
+Cumulative working-tree paths (including prior Batches 1–3):
+
+- `X-Native/apps/web/e2e/behaviour.mjs`
+- `X-Native/apps/web/package.json`
+- `X-Native/apps/web/src/engine/__tests__/parity.test.mjs`
+- `X-Native/apps/web/src/engine/geometry.ts`
+- `X-Native/apps/web/src/engine/layout.ts`
+- `X-Native/apps/web/src/engine/memory.ts`
+- `X-Native/apps/web/src/engine/strokeModel.ts`
+- `X-Native/apps/web/src/engine/svgExport.ts`
+- `X-Native/apps/web/src/engine/textVector.ts`
+- `X-Native/apps/web/src/engine/types.ts`
+- `X-Native/apps/web/src/styles.css`
+- `X-Native/apps/web/src/ui/Canvas.tsx`
+- `X-Native/apps/web/src/ui/chrome.tsx`
+- `X-Native/apps/web/src/ui/inspector.tsx`
+- `X-Native/apps/web/src/ui/textLayout.ts`
+- `X-Native/docs/FIGMA_BEHAVIOR_PARITY_AUDIT.md`
+- `X-Native/docs/FIGMA_BEHAVIOR_PARITY_FIXES.md`
+- `X-Native/apps/web/e2e/parity-audit.mjs`
+- `X-Native/apps/web/src/engine/__tests__/glyphOutline.test.mjs`
+- `X-Native/apps/web/src/ui/__tests__/batch2.dom.test.mjs`
+- `X-Native/apps/web/src/ui/__tests__/batch3.dom.test.mjs`
+- `X-Native/apps/web/src/ui/__tests__/canvasSelection.test.mjs`
+- `X-Native/apps/web/src/ui/__tests__/parityReaudit.dom.test.mjs`
+- `X-Native/apps/web/src/ui/canvasSelection.ts`
+- `X-Native/apps/web/src/ui/pointBox.ts`
+- `X-Native/docs/MICRO_PARITY_BATCH1_2026-09-27.md`
+- `X-Native/docs/MICRO_PARITY_BATCH2_2026-09-27.md`
+- `X-Native/docs/MICRO_PARITY_BATCH3_2026-09-27.md`
+
+## Historical archive — NOT this batch's verification
+
+<details><summary>Archived 2026-09-26 fixes report</summary>
+
 # Figma Behavior Parity Fixes — X-Native (TS)
 
 - Date: 2026-09-26. Branch: `arena/01a0d904-x-native`, HEAD `6e0e90d` (base `c7c6d34`).
@@ -352,3 +470,5 @@ well as this audit. Audit-fix code is concentrated in:
 3. Tidy-up gap readout surface (P2, §20) — engine computes, no UI surface.
 4. E2E NOT VERIFIED — run `npm run test:e2e` in a browser environment.
 5. Live-pointer feel NOT VERIFIED for drag/cursor/motion paths.
+
+</details>

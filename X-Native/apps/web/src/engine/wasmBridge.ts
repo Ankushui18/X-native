@@ -1,128 +1,128 @@
-/**
- * WebAssembly bridge interface connecting the Rust engine (crates/x-wasm)
- * with the TypeScript web product.
- *
- * Implements the architecture boundary described in docs/ARCHITECTURE_BOUNDARY.md:
- * when the WASM binary is present and loaded, format imports are processed
- * by the native Rust parsers; otherwise, it gracefully falls back to the
- * built-in pure TypeScript implementations.
- */
-
+/** wasm-bindgen import boundary. The web engine remains TypeScript; this
+ * module loads GENERATED JS glue, never casts raw wasm exports to JS functions.
+ * Until native import equivalence is proven broadly, TS is the per-file oracle:
+ * a converted native result is used only if it matches the TS result. */
 import { importFig as importFigTs } from "./figImport";
 import { importSketch as importSketchTs } from "./sketchImport";
-import { importSvg as importSvgTs, type ImportResult } from "./svgImport";
+import { importSvg as importSvgTs, type ImportResult, type ImportedNode } from "./svgImport";
+import { wasmAssetUrl } from "./wasmAssets";
+import { decodeRustImport } from "./wasmImportAdapter";
 
+export const IMPORT_BRIDGE_VERSION = 1;
+export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
+export interface WasmImportModule {
+  default: () => Promise<unknown>;
+  bridgeVersion: () => number;
+  engineVersion: () => string;
+  importFigToX: (bytes: Uint8Array) => string;
+  importSketchToX: (bytes: Uint8Array) => string;
+  importSvgToX: (text: string) => string;
+}
 export interface EngineInfo {
   name: string;
   version: string;
   hasWasm: boolean;
+  importBackend: "ts" | "wasm";
+  importStatus: "idle" | "loading" | "ready" | "unavailable";
+  lastImportFallback: string | null;
 }
+let loaded: WasmImportModule | null = null;
+let loading: Promise<boolean> | null = null;
+let status: EngineInfo["importStatus"] = "idle";
+let backend: EngineInfo["importBackend"] = "ts";
+let version = "0.1.0-ts";
+let fallback: string | null = null;
 
-interface WasmExports {
-  importFigToX?: (bytes: Uint8Array) => string;
-  importSketchToX?: (bytes: Uint8Array) => string;
-  importSvgToX?: (text: string) => string;
-  engineVersion?: () => string;
+function disabled(): boolean {
+  try { return typeof location !== "undefined" && new URLSearchParams(location.search).get("imports") === "ts"; }
+  catch { return false; }
 }
-
-let wasmInstance: WasmExports | null = null;
-let wasmAttempted = false;
-
-export async function initWasmBridge(): Promise<boolean> {
-  if (wasmAttempted) return wasmInstance !== null;
-  wasmAttempted = true;
-  try {
-    if (typeof WebAssembly === "undefined") return false;
-    // Attempt to fetch and compile x_wasm.wasm if exposed by the dev server or assets
-    const resp = await fetch("/x_wasm.wasm").catch(() => null);
-    if (!resp || !resp.ok) return false;
-    const bytes = await resp.arrayBuffer();
-    const module = await WebAssembly.instantiate(bytes, {});
-    wasmInstance = module.instance.exports as WasmExports;
-    return true;
-  } catch {
-    wasmInstance = null;
-    return false;
-  }
+async function loadGenerated(): Promise<WasmImportModule> {
+  // Vite must leave this optional deployed asset outside its static module graph.
+  const url = IMPORT_GLUE_URL;
+  return import(/* @vite-ignore */ url);
+}
+export function initWasmBridge(load = loadGenerated): Promise<boolean> {
+  if (disabled() || typeof WebAssembly === "undefined") return Promise.resolve(false);
+  if (loading) return loading;
+  status = "loading";
+  loading = (async () => {
+    try {
+      const glue = await load();
+      for (const key of ["default", "bridgeVersion", "engineVersion", "importFigToX", "importSketchToX", "importSvgToX"] as const) {
+        if (typeof glue[key] !== "function") throw new Error(`Missing wasm-bindgen export: ${key}`);
+      }
+      await glue.default();
+      if (glue.bridgeVersion() !== IMPORT_BRIDGE_VERSION) throw new Error("Import bridge ABI version mismatch");
+      const build = glue.engineVersion();
+      if (typeof build !== "string" || !build.startsWith("x-wasm ")) throw new Error("Invalid Rust build identifier");
+      loaded = glue; version = build; status = "ready"; fallback = null;
+      return true;
+    } catch (e) {
+      loaded = null; status = "unavailable";
+      fallback = e instanceof Error ? e.message : String(e);
+      return false;
+    }
+  })();
+  return loading;
 }
 
 export function getEngineInfo(): EngineInfo {
-  if (wasmInstance && wasmInstance.engineVersion) {
-    try {
-      return {
-        name: "X-Native Engine (Rust WASM)",
-        version: wasmInstance.engineVersion(),
-        hasWasm: true,
-      };
-    } catch {
-      // Fall through to TS
-    }
-  }
   return {
-    name: "X-Native Engine (TypeScript)",
-    version: "0.1.0-ts",
-    hasWasm: false,
+    name: loaded ? "X-Native Engine (TypeScript; Rust import bridge ready)" : "X-Native Engine (TypeScript)",
+    version, hasWasm: !!loaded, importBackend: backend, importStatus: status, lastImportFallback: fallback,
   };
 }
 
+/** Compare the render/import contract, including every optional property in
+ * either result. Defaults are expanded, not arbitrary properties discarded. */
+export function importsEquivalent(a: ImportResult, b: ImportResult): boolean {
+  const normalizeNode = (n: ImportedNode): unknown => canonical({
+    hidden: false, locked: false, ...n,
+    children: (n.children ?? []).map(normalizeNode),
+  });
+  function canonical(v: unknown): unknown {
+    if (Array.isArray(v)) return v.map(canonical);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v)
+      .filter(([, x]) => x !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => [k, canonical(x)]));
+    return v;
+  }
+  const norm = (r: ImportResult) => canonical({
+    ...r, nodes: r.nodes.map(normalizeNode),
+    pages: r.pages?.map((p) => ({ name: p.name, nodes: p.nodes.map(normalizeNode) })),
+  });
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+}
+function choose(ts: ImportResult, native: () => string): ImportResult {
+  backend = "ts";
+  if (!loaded || disabled()) return ts;
+  try {
+    const candidate = decodeRustImport(native());
+    // SVG has an interchange root, not a named design page. Preserve the
+    // existing importer's absence of page metadata; never discard extra pages.
+    if (!ts.pages && candidate.pages?.length === 1) delete candidate.pages;
+    if (!importsEquivalent(ts, candidate)) throw new Error("Native import differs from TypeScript; kept the complete TypeScript result");
+    backend = "wasm"; fallback = null;
+    return candidate;
+  } catch (e) {
+    fallback = e instanceof Error ? e.message : String(e);
+    return ts;
+  }
+}
 export async function importFig(buf: ArrayBuffer): Promise<ImportResult> {
-  if (wasmInstance?.importFigToX) {
-    try {
-      const bytes = new Uint8Array(buf);
-      const res = JSON.parse(wasmInstance.importFigToX(bytes));
-      if (res.ok && res.doc) {
-        const page = res.doc.pages?.[0]?.root;
-        return {
-          nodes: page?.children ?? [],
-          width: page?.w ?? 800,
-          height: page?.h ?? 600,
-          skipped: 0,
-        };
-      }
-    } catch (e) {
-      console.warn("WASM importFig failed, falling back to TS:", e);
-    }
-  }
-  return importFigTs(buf);
+  void initWasmBridge();
+  return choose(await importFigTs(buf), () => loaded!.importFigToX(new Uint8Array(buf)));
 }
-
 export async function importSketch(buf: ArrayBuffer): Promise<ImportResult> {
-  if (wasmInstance?.importSketchToX) {
-    try {
-      const bytes = new Uint8Array(buf);
-      const res = JSON.parse(wasmInstance.importSketchToX(bytes));
-      if (res.ok && res.doc) {
-        const page = res.doc.pages?.[0]?.root;
-        return {
-          nodes: page?.children ?? [],
-          width: page?.w ?? 800,
-          height: page?.h ?? 600,
-          skipped: 0,
-        };
-      }
-    } catch (e) {
-      console.warn("WASM importSketch failed, falling back to TS:", e);
-    }
-  }
-  return importSketchTs(buf);
+  void initWasmBridge();
+  return choose(await importSketchTs(buf), () => loaded!.importSketchToX(new Uint8Array(buf)));
 }
-
+/** Existing canvas/clipboard callers are synchronous. Startup preload makes
+ * wasm available when ready; the first early SVG import still works via TS. */
 export function importSvg(text: string): ImportResult {
-  if (wasmInstance?.importSvgToX) {
-    try {
-      const res = JSON.parse(wasmInstance.importSvgToX(text));
-      if (res.ok && res.doc) {
-        const page = res.doc.pages?.[0]?.root;
-        return {
-          nodes: page?.children ?? [],
-          width: page?.w ?? 800,
-          height: page?.h ?? 600,
-          skipped: 0,
-        };
-      }
-    } catch (e) {
-      console.warn("WASM importSvg failed, falling back to TS:", e);
-    }
-  }
-  return importSvgTs(text);
+  void initWasmBridge();
+  return choose(importSvgTs(text), () => loaded!.importSvgToX(text));
+}
+export function __resetWasmForTests(): void {
+  loaded = null; loading = null; status = "idle"; backend = "ts"; version = "0.1.0-ts"; fallback = null;
 }

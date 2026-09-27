@@ -130,7 +130,7 @@ if [[ $QUICK == 0 ]]; then
         # half that says why. The raw step log lives in blob storage that some
         # tooling cannot reach, so for a failure diagnosed through the PR
         # comment these lines are the only evidence there is.
-        grep -E "panicked at|^assertion|assertion .*failed|^ *(left|right):" "$TEST_LOG" |
+        grep -E "panicked at|^assertion|assertion .*failed|^ *(left|right):|process didn.t exit|signal:|Caused by:" "$TEST_LOG" |
             head -40 | sed 's/^/      /'
     fi
     rm -f "$TEST_LOG"

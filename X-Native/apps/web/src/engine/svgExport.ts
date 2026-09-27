@@ -423,8 +423,8 @@ function textLayout(n: XNode): {
 } {
   const text = applyTextCase(n.text, n.textCase);
   let lines = text.split("\n");
-  if (n.truncate && lines.length > Math.max(1, n.maxLines || 1)) {
-    lines = lines.slice(0, Math.max(1, n.maxLines || 1));
+  if (n.truncate && n.maxLines > 0 && lines.length > Math.max(1, n.maxLines)) {
+    lines = lines.slice(0, Math.max(1, n.maxLines));
     lines[lines.length - 1] = `${lines[lines.length - 1].replace(/\s+$/, "")}…`;
   }
   const anchor = n.textAlign === "center" ? "middle" : n.textAlign === "right" ? "end" : "start";

@@ -240,8 +240,16 @@ fn paints_json(list: Option<&[V]>, w: f64, h: f64, diags: &mut Vec<String>) -> V
     let mut out = vec![];
     for p in list.unwrap_or(&[]) {
         match paint_json(p, w, h) {
-            Some((v, _)) => out.push(v),
+            Some((mut v, _)) => {
+                if let (V::Obj(fields), Some(mode)) = (&mut v, p.get("blendMode")) {
+                    fields.push(("blendMode".into(), mode.clone()));
+                }
+                out.push(v);
+            }
             None => {
+                // Keep presence visible to source-fidelity reporting. The REST
+                // paint reader still declines this marker, as it did before.
+                out.push(obj(vec![("type".into(), V::Str("UNSUPPORTED".into()))]));
                 if let Some(t) = gstr(p, "type") {
                     if t != "SOLID" && t != "IMAGE" && !t.starts_with("GRADIENT") {
                         diags.push(format!("dropped unsupported paint type {t}"));
@@ -257,14 +265,19 @@ fn effects_json(nc: &V) -> Vec<V> {
     garr(nc, "effects")
         .map(|es| {
             es.iter()
-                .filter_map(|e| {
-                    let ty = match gstr(e, "type")? {
-                        "DROP_SHADOW" | "INNER_SHADOW" => gstr(e, "type")?.to_string(),
-                        "FOREGROUND_BLUR" => "LAYER_BLUR".to_string(),
+                .map(|e| {
+                    let ty = match gstr(e, "type").unwrap_or("") {
+                        "DROP_SHADOW" | "INNER_SHADOW" => gstr(e, "type").unwrap_or("").to_string(),
+                        "FOREGROUND_BLUR" | "LAYER_BLUR" => "LAYER_BLUR".to_string(),
                         "BACKGROUND_BLUR" => "BACKGROUND_BLUR".to_string(),
-                        _ => return None,
+                        _ => "UNSUPPORTED".to_string(),
                     };
                     let mut pairs = vec![("type".into(), V::Str(ty))];
+                    for key in ["blendMode", "showShadowBehindNode"] {
+                        if let Some(value) = e.get(key) {
+                            pairs.push((key.into(), value.clone()));
+                        }
+                    }
                     if let Some(c) = e.get("color") {
                         pairs.push((
                             "color".into(),
@@ -295,7 +308,7 @@ fn effects_json(nc: &V) -> Vec<V> {
                         "visible".into(),
                         V::Bool(gbool(e, "visible").unwrap_or(true)),
                     ));
-                    Some(obj(pairs))
+                    obj(pairs)
                 })
                 .collect()
         })
@@ -311,15 +324,22 @@ fn number_val(v: Option<&V>) -> Option<(f64, String)> {
 }
 
 fn text_json(nc: &V, diags: &mut Vec<String>) -> Vec<(String, V)> {
-    let Some(td) = nc.get("textData") else {
-        return vec![];
-    };
+    // Modern files nest characters in textData; older/partial writers put
+    // characters on NodeChange itself. Both layouts already exist in the web
+    // reader. Do not drop the root-level text or its fontSize/style fields.
+    let td = nc.get("textData").unwrap_or(nc);
     let mut out = vec![];
-    let chars = gstr(td, "characters").unwrap_or("").to_string();
+    let chars = gstr(td, "characters")
+        .or_else(|| gstr(nc, "characters"))
+        .unwrap_or("")
+        .to_string();
     out.push(("characters".into(), V::Str(chars)));
     // Base style lives on the NodeChange itself (Figma's UI style fields
     // were hoisted onto the node in .fig; REST nests them under "style").
     let mut style: Vec<(String, V)> = vec![];
+    if let Some(align) = gstr(nc, "textAlignHorizontal") {
+        style.push(("textAlignHorizontal".into(), V::Str(align.into())));
+    }
     if let Some(fs) = gnum(nc, "fontSize").filter(|v| *v > 0.0) {
         style.push(("fontSize".into(), V::Num(fs)));
     }
@@ -479,6 +499,65 @@ fn stack_json(nc: &V) -> Vec<(String, V)> {
 }
 
 // ------------------------------------------------------------- main mapping
+
+/// Preserve ordered document children, but also recover canvases and layers
+/// whose parent record is absent (older/partial archives). A layer attached to
+/// a KNOWN parent is never promoted: in particular, hidden component canvases
+/// must not leak their internals onto a visible page.
+fn canvas_children(
+    nodes: &[V],
+    kids: &HashMap<String, Vec<usize>>,
+    known: &HashMap<String, usize>,
+    doc_id: &str,
+) -> Vec<(usize, Vec<usize>)> {
+    let parent = |n: &V| {
+        n.get("parentIndex")
+            .and_then(|p| p.get("guid"))
+            .and_then(gid)
+    };
+    let orphan = |n: &V| parent(n).is_none_or(|id| !known.contains_key(&id));
+    let mut page_ids = kids.get(doc_id).cloned().unwrap_or_default();
+    let mut seen: std::collections::HashSet<usize> = page_ids.iter().copied().collect();
+    for (i, n) in nodes.iter().enumerate() {
+        if gstr(n, "type") == Some("CANVAS") && orphan(n) && seen.insert(i) {
+            page_ids.push(i);
+        }
+    }
+    let mut pages: Vec<(usize, Vec<usize>)> = page_ids
+        .into_iter()
+        .filter_map(|i| {
+            let n = &nodes[i];
+            if gstr(n, "type") != Some("CANVAS")
+                || gbool(n, "internalOnly") == Some(true)
+                || gbool(n, "visible") == Some(false)
+            {
+                return None;
+            }
+            let children = guid_of(n)
+                .and_then(|id| kids.get(&id))
+                .cloned()
+                .unwrap_or_default();
+            Some((i, children))
+        })
+        .collect();
+    let orphans: Vec<usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| {
+            (!matches!(gstr(n, "type"), Some("DOCUMENT" | "CANVAS")) && orphan(n)).then_some(i)
+        })
+        .collect();
+    // Match the web reader: first otherwise-empty page consumes orphans;
+    // if all pages already have children, append them to the first page.
+    let target = pages
+        .iter()
+        .position(|(_, children)| children.is_empty())
+        .unwrap_or(0);
+    if let Some((_, children)) = pages.get_mut(target) {
+        children.extend(orphans);
+    }
+    pages
+}
 
 /// Import a `.fig` file's bytes (the ZIP container, not the raw canvas).
 pub fn import_fig_bytes(bytes: &[u8]) -> Result<Document, String> {
@@ -686,6 +765,10 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
                 "visible".into(),
                 V::Bool(gbool(nc, "visible").unwrap_or(true)),
             ),
+            (
+                "locked".into(),
+                V::Bool(gbool(nc, "locked").unwrap_or(false)),
+            ),
             ("opacity".into(), V::Num(gnum(nc, "opacity").unwrap_or(1.0))),
             (
                 "absoluteBoundingBox".into(),
@@ -713,8 +796,19 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
                 pairs.push(("strokeWeight".into(), V::Num(swt)));
             }
         }
+        for key in ["strokeAlign", "strokeCap", "strokeJoin", "blendMode"] {
+            if let Some(value) = gstr(nc, key) {
+                pairs.push((key.into(), V::Str(value.into())));
+            }
+        }
+        if let Some(dashes) = garr(nc, "strokeDashes") {
+            pairs.push(("strokeDashes".into(), V::Arr(dashes.to_vec())));
+        }
         if let Some(cr) = gnum(nc, "cornerRadius").filter(|v| *v > 0.0) {
             pairs.push(("cornerRadius".into(), V::Num(cr)));
+        }
+        if let Some(radii) = nc.get("rectangleCornerRadii") {
+            pairs.push(("rectangleCornerRadii".into(), radii.clone()));
         }
         let fx = effects_json(nc);
         if !fx.is_empty() {
@@ -761,8 +855,7 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
     }
 
     let mut pages = Vec::new();
-    let page_list: Vec<usize> = kids.get(&doc_id).cloned().unwrap_or_default();
-    for &pi in &page_list {
+    for (pi, child_list) in canvas_children(&nodes, &kids, &index, &doc_id) {
         let nc = &nodes[pi];
         if gstr(nc, "type") != Some("CANVAS") {
             continue;
@@ -781,8 +874,8 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
             ("children".into(), V::Arr(vec![])),
         ]);
         let mut kidsout = Vec::new();
-        if let Some(list) = kids.get(&pid) {
-            for &c in list {
+        {
+            for c in child_list {
                 if let Some(cn) = emit_node(
                     c,
                     &nodes,
@@ -917,5 +1010,142 @@ fn write_v(v: &V, s: &mut String) {
             }
             s.push('}');
         }
+    }
+}
+
+#[cfg(test)]
+mod orphan_page_tests {
+    use super::*;
+
+    fn record(kind: &str, id: usize, parent: Option<usize>, internal: bool) -> V {
+        let guid = |n| {
+            obj(vec![
+                ("sessionID".into(), V::Num(0.0)),
+                ("localID".into(), V::Num(n as f64)),
+            ])
+        };
+        let mut fields = vec![
+            ("type".into(), V::Str(kind.into())),
+            ("guid".into(), guid(id)),
+            ("internalOnly".into(), V::Bool(internal)),
+        ];
+        if let Some(p) = parent {
+            fields.push(("parentIndex".into(), obj(vec![("guid".into(), guid(p))])));
+        }
+        obj(fields)
+    }
+
+    #[test]
+    fn recovers_missing_parents_without_leaking_hidden_canvas_children() {
+        let nodes = vec![
+            record("DOCUMENT", 0, None, false),
+            record("CANVAS", 1, Some(0), false),
+            record("CANVAS", 2, Some(0), true),
+            record("RECTANGLE", 3, Some(2), false),
+            record("RECTANGLE", 4, Some(99), false),
+            record("RECTANGLE", 5, Some(1), false),
+            record("CANVAS", 6, None, false),
+        ];
+        let known = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (guid_of(n).unwrap(), i))
+            .collect();
+        let kids = HashMap::from([
+            ("0:0".into(), vec![1, 2]),
+            ("0:1".into(), vec![5]),
+            ("0:2".into(), vec![3]),
+        ]);
+        assert_eq!(
+            canvas_children(&nodes, &kids, &known, "0:0"),
+            vec![(1, vec![5]), (6, vec![4])]
+        );
+    }
+
+    #[test]
+    fn document_page_order_is_kept_and_orphans_are_not_duplicated() {
+        let nodes = vec![
+            record("DOCUMENT", 0, None, false),
+            record("CANVAS", 1, Some(0), false),
+            record("CANVAS", 2, Some(0), false),
+            record("RECTANGLE", 3, None, false),
+        ];
+        let known = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (guid_of(n).unwrap(), i))
+            .collect();
+        let kids = HashMap::from([("0:0".into(), vec![2, 1])]);
+        assert_eq!(
+            canvas_children(&nodes, &kids, &known, "0:0"),
+            vec![(2, vec![3]), (1, vec![])]
+        );
+    }
+}
+
+#[cfg(test)]
+mod text_source_tests {
+    use super::*;
+
+    #[test]
+    fn nested_characters_take_precedence_but_root_style_is_retained() {
+        let source = obj(vec![
+            ("characters".into(), V::Str("legacy".into())),
+            ("fontSize".into(), V::Num(24.0)),
+            (
+                "textData".into(),
+                obj(vec![("characters".into(), V::Str("nested λ".into()))]),
+            ),
+        ]);
+        let result = obj(text_json(&source, &mut vec![]));
+        assert_eq!(gstr(&result, "characters"), Some("nested λ"));
+        assert_eq!(gnum(result.get("style").unwrap(), "fontSize"), Some(24.0));
+    }
+
+    #[test]
+    fn partial_text_data_falls_back_to_root_characters() {
+        let source = obj(vec![
+            ("characters".into(), V::Str("legacy λ".into())),
+            ("textData".into(), obj(vec![])),
+        ]);
+        let result = obj(text_json(&source, &mut vec![]));
+        assert_eq!(gstr(&result, "characters"), Some("legacy λ"));
+    }
+}
+
+#[cfg(test)]
+mod source_paint_presence_tests {
+    use super::*;
+
+    #[test]
+    fn unrepresentable_paint_is_not_reported_as_absent() {
+        let paints = [obj(vec![("type".into(), V::Str("VIDEO".into()))])];
+        let mut diagnostics = vec![];
+        let converted = paints_json(Some(&paints), 100.0, 50.0, &mut diagnostics);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(gstr(&converted[0], "type"), Some("UNSUPPORTED"));
+        assert!(!diagnostics.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod source_effect_tests {
+    use super::*;
+
+    #[test]
+    fn shim_preserves_source_fields_and_unsupported_effect_presence() {
+        let source = crate::json::parse(r#"{"effects":[
+            {"type":"FOREGROUND_BLUR","radius":3,"visible":false,"spread":2,"blendMode":"SCREEN","showShadowBehindNode":true},
+            {"type":"FUTURE_EFFECT"},{}
+        ]}"#).unwrap();
+        let effects = effects_json(&source);
+        assert_eq!(effects.len(), 3);
+        assert_eq!(gstr(&effects[0], "type"), Some("LAYER_BLUR"));
+        assert_eq!(gbool(&effects[0], "visible"), Some(false));
+        assert_eq!(gnum(&effects[0], "spread"), Some(2.0));
+        assert_eq!(gstr(&effects[0], "blendMode"), Some("SCREEN"));
+        assert_eq!(gbool(&effects[0], "showShadowBehindNode"), Some(true));
+        assert_eq!(gstr(&effects[1], "type"), Some("UNSUPPORTED"));
+        assert_eq!(gstr(&effects[2], "type"), Some("UNSUPPORTED"));
     }
 }

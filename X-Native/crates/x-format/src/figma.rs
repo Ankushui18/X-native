@@ -492,7 +492,8 @@ fn collect_component_names(v: &V, out: &mut HashMap<String, String>) {
 }
 
 /// Layer effects (shadows/blurs): DROP_SHADOW, INNER_SHADOW, LAYER_BLUR,
-/// BACKGROUND_BLUR — Figma's full effect set maps 1:1 onto our `Effect`.
+/// BACKGROUND_BLUR. Native effects are only a projection: source visibility,
+/// spread, blend and show-behind live in import-only metadata.
 fn figma_effects(node: &V) -> Vec<x_core::Effect> {
     let Some(arr) = node.get("effects").and_then(V::arr) else {
         return vec![];
@@ -654,6 +655,145 @@ fn image_ref(node: &V) -> Option<&str> {
         .filter(|f| f.get("visible").and_then(V::boolean).unwrap_or(true))
         .filter(|f| s(f, "type") == Some("IMAGE"))
         .find_map(|f| s(f, "imageRef"))
+}
+
+fn figma_source_effects(node: &V) -> Vec<crate::import_ir::FigmaSourceEffect> {
+    node.get("effects")
+        .and_then(V::arr)
+        .into_iter()
+        .flatten()
+        .map(|e| {
+            let kind = match s(e, "type") {
+                Some("DROP_SHADOW") => "drop-shadow",
+                Some("INNER_SHADOW") => "inner-shadow",
+                Some("LAYER_BLUR") => "layer-blur",
+                Some("BACKGROUND_BLUR") => "background-blur",
+                _ => "unsupported",
+            };
+            let blur = matches!(kind, "layer-blur" | "background-blur");
+            let offset = e.get("offset");
+            crate::import_ir::FigmaSourceEffect {
+                kind,
+                color: e.get("color").map(figma_color).unwrap_or(Color::BLACK),
+                x: if blur {
+                    0.0
+                } else {
+                    offset.map(|o| n_or(o, "x", 0.0)).unwrap_or(0.0)
+                },
+                y: if blur {
+                    0.0
+                } else {
+                    offset.map(|o| n_or(o, "y", 0.0)).unwrap_or(0.0)
+                },
+                blur: n_or(e, "radius", 0.0),
+                spread: n_or(e, "spread", 0.0),
+                visible: e.get("visible").and_then(V::boolean).unwrap_or(true),
+                blend: s(e, "blendMode").map(str::to_string),
+                show_behind: e
+                    .get("showShadowBehindNode")
+                    .and_then(V::boolean)
+                    .unwrap_or(false),
+            }
+        })
+        .collect()
+}
+
+fn figma_appearance(node: &V) -> crate::import_ir::FigmaAppearance {
+    let fills = node
+        .get("fills")
+        .and_then(V::arr)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let fill = match fills {
+        [] => "none",
+        [f] if s(f, "type") == Some("SOLID")
+            && f.get("visible").and_then(V::boolean).unwrap_or(true)
+            && n_or(f, "opacity", 1.0) == 1.0
+            && f.get("color").is_some()
+            && f.get("color")
+                .map(|c| n_or(c, "a", 1.0) == 1.0)
+                .unwrap_or(false)
+            && f.get("blendMode").is_none() =>
+        {
+            "solid"
+        }
+        _ => "unsupported",
+    };
+    crate::import_ir::FigmaAppearance {
+        fill,
+        blend: s(node, "blendMode").map(str::to_string),
+        effects: figma_source_effects(node),
+        effect_count: node
+            .get("effects")
+            .and_then(V::arr)
+            .map(Vec::len)
+            .unwrap_or(0),
+        uniform_corners: s(node, "type") == Some("RECTANGLE")
+            && node.get("rectangleCornerRadii").is_none(),
+    }
+}
+
+fn figma_blend(node: &V) -> Option<x_core::BlendKind> {
+    use x_core::BlendKind;
+    Some(match s(node, "blendMode")? {
+        "NORMAL" => BlendKind::Normal,
+        "DARKEN" => BlendKind::Darken,
+        "MULTIPLY" => BlendKind::Multiply,
+        "COLOR_BURN" => BlendKind::ColorBurn,
+        "LIGHTEN" => BlendKind::Lighten,
+        "SCREEN" => BlendKind::Screen,
+        "COLOR_DODGE" => BlendKind::ColorDodge,
+        "OVERLAY" => BlendKind::Overlay,
+        "SOFT_LIGHT" => BlendKind::SoftLight,
+        "HARD_LIGHT" => BlendKind::HardLight,
+        "DIFFERENCE" => BlendKind::Difference,
+        "EXCLUSION" => BlendKind::Exclusion,
+        "HUE" => BlendKind::Hue,
+        "SATURATION" => BlendKind::Saturation,
+        "COLOR" => BlendKind::Color,
+        "LUMINOSITY" => BlendKind::Luminosity,
+        "PLUS_DARKER" => BlendKind::PlusDarker,
+        "PLUS_LIGHTER" => BlendKind::PlusLighter,
+        "PASS_THROUGH" => BlendKind::PassThrough,
+        _ => return None,
+    })
+}
+
+fn figma_stroke_options(node: &V) -> x_core::StrokeOptions {
+    use x_core::{StrokeAlign, StrokeCap, StrokeJoin, StrokeOptions};
+    let cap = match s(node, "strokeCap") {
+        Some("ROUND") => StrokeCap::Round,
+        Some("SQUARE") => StrokeCap::Square,
+        Some("LINE_ARROW") => StrokeCap::Arrow,
+        Some("TRIANGLE_ARROW") => StrokeCap::Triangle,
+        _ => StrokeCap::None,
+    };
+    StrokeOptions {
+        align: match s(node, "strokeAlign") {
+            Some("CENTER") => StrokeAlign::Center,
+            Some("OUTSIDE") => StrokeAlign::Outside,
+            _ => StrokeAlign::Inside,
+        },
+        cap_start: cap,
+        cap_end: cap,
+        join: match s(node, "strokeJoin") {
+            Some("ROUND") => StrokeJoin::Round,
+            Some("BEVEL") => StrokeJoin::Bevel,
+            _ => StrokeJoin::Miter,
+        },
+        dash: node
+            .get("strokeDashes")
+            .and_then(V::arr)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(V::num)
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        ..StrokeOptions::default()
+    }
 }
 
 fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<ImportNode> {
@@ -841,7 +981,22 @@ fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<Impor
     }
     ir.rotation = rotation;
     ir.opacity = opacity;
+    ir.blend = figma_blend(node);
     ir.visible = visible;
+    ir.locked = node.get("locked").and_then(V::boolean).unwrap_or(false);
+    if ty == "TEXT" {
+        ir.text_align = node
+            .get("style")
+            .and_then(|st| s(st, "textAlignHorizontal"))
+            .and_then(|align| match align {
+                "LEFT" => Some(x_core::TextAlign::Left),
+                "CENTER" => Some(x_core::TextAlign::Center),
+                "RIGHT" => Some(x_core::TextAlign::Right),
+                "JUSTIFIED" => Some(x_core::TextAlign::Justified),
+                _ => None,
+            });
+    }
+    ir.figma_appearance = Some(figma_appearance(node));
     ir.fill = fill;
     ir.layout = figma_auto_layout(node);
     if let Some(strokes) = node.get("strokes").and_then(V::arr) {
@@ -853,6 +1008,7 @@ fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<Impor
         let weight = n_or(node, "strokeWeight", 1.0);
         if let Some(p) = paints.next() {
             ir.stroke = Some((p, weight));
+            ir.stroke_options = Some(figma_stroke_options(node));
         }
         // any additional stroke paints stack on top (same weight — Figma
         // only exposes one strokeWeight per node regardless of stack depth)
@@ -940,6 +1096,9 @@ fn import_figma_json_with_report_impl(
                 miny = 0.0;
             }
             for mut k in kids {
+                // Preserve exact values, not an offset that could lose precision
+                // when a web consumer reverses this native-only normalization.
+                k.source_position = Some((k.x, k.y));
                 k.x -= minx - 40.0;
                 k.y -= miny - 40.0;
                 page_ir.children.push(k);
@@ -1467,5 +1626,131 @@ mod tests {
         assert_eq!(runs[0].weight, Some(700));
         assert_eq!(runs[1].size, Some(30.0));
         assert_eq!(runs[1].italic, Some(true));
+    }
+}
+
+#[cfg(test)]
+mod blend_import_tests {
+    use super::*;
+
+    #[test]
+    fn all_explicit_native_blends_are_mapped_without_guessing_unknown_names() {
+        for name in [
+            "NORMAL",
+            "DARKEN",
+            "MULTIPLY",
+            "COLOR_BURN",
+            "LIGHTEN",
+            "SCREEN",
+            "COLOR_DODGE",
+            "OVERLAY",
+            "SOFT_LIGHT",
+            "HARD_LIGHT",
+            "DIFFERENCE",
+            "EXCLUSION",
+            "HUE",
+            "SATURATION",
+            "COLOR",
+            "LUMINOSITY",
+            "PLUS_DARKER",
+            "PLUS_LIGHTER",
+            "PASS_THROUGH",
+        ] {
+            let node = json::parse(&format!(r#"{{"blendMode":"{name}"}}"#)).unwrap();
+            assert_eq!(
+                figma_blend(&node)
+                    .unwrap()
+                    .label()
+                    .to_uppercase()
+                    .replace(' ', "_"),
+                name
+            );
+        }
+        assert_eq!(
+            figma_blend(&json::parse(r#"{"blendMode":"FUTURE_MODE"}"#).unwrap()),
+            None
+        );
+        assert_eq!(figma_blend(&json::parse("{}").unwrap()), None);
+    }
+}
+
+#[cfg(test)]
+mod appearance_import_tests {
+    use super::*;
+
+    #[test]
+    fn source_effects_preserve_fields_missing_from_native_projection() {
+        let node = crate::json::parse(r#"{"effects":[
+            {"type":"DROP_SHADOW","radius":6,"offset":{"x":5,"y":-3},"spread":7,"visible":false,"blendMode":"MULTIPLY","showShadowBehindNode":true},
+            {"type":"LAYER_BLUR","radius":8,"offset":{"x":9,"y":9}},
+            {"type":"FUTURE_EFFECT"}
+        ]}"#).unwrap();
+        let facts = figma_appearance(&node);
+        assert_eq!(facts.effect_count, 3);
+        assert_eq!(facts.effects.len(), 3);
+        let shadow = &facts.effects[0];
+        assert_eq!(shadow.kind, "drop-shadow");
+        assert_eq!(
+            (shadow.x, shadow.y, shadow.blur, shadow.spread),
+            (5.0, -3.0, 6.0, 7.0)
+        );
+        assert!(!shadow.visible);
+        assert!(shadow.show_behind);
+        assert_eq!(shadow.blend.as_deref(), Some("MULTIPLY"));
+        assert_eq!(shadow.color, Color::BLACK);
+        assert_eq!((facts.effects[1].x, facts.effects[1].y), (0.0, 0.0));
+        assert_eq!(facts.effects[2].kind, "unsupported");
+        assert_eq!(figma_effects(&node).len(), 1, "native projection unchanged");
+    }
+
+    #[test]
+    fn only_absent_or_single_opaque_unblended_fills_are_classified_simple() {
+        for (json, expected) in [
+            (r#"{"type":"RECTANGLE"}"#, "none"),
+            (r#"{"fills":[]}"#, "none"),
+            (r#"{"fills":[{"type":"SOLID","color":{"a":1}}]}"#, "solid"),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{"a":0.5}}]}"#,
+                "unsupported",
+            ),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{},"opacity":0.5}]}"#,
+                "unsupported",
+            ),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{},"visible":false}]}"#,
+                "unsupported",
+            ),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{},"blendMode":"NORMAL"}]}"#,
+                "unsupported",
+            ),
+            (r#"{"fills":[{"type":"SOLID"}]}"#, "unsupported"),
+            (r#"{"fills":[{"type":"GRADIENT_LINEAR"}]}"#, "unsupported"),
+            (r#"{"fills":[{"type":"UNSUPPORTED"}]}"#, "unsupported"),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{}},{"type":"SOLID","color":{}}]}"#,
+                "unsupported",
+            ),
+        ] {
+            assert_eq!(
+                figma_appearance(&crate::json::parse(json).unwrap()).fill,
+                expected
+            );
+        }
+        let node =
+            crate::json::parse(r#"{"type":"RECTANGLE","blendMode":"NORMAL","effects":[{},{}]}"#)
+                .unwrap();
+        let source = figma_appearance(&node);
+        assert_eq!(source.blend.as_deref(), Some("NORMAL"));
+        assert_eq!(source.effect_count, 2);
+        assert!(source.uniform_corners);
+        assert!(
+            !figma_appearance(
+                &crate::json::parse(r#"{"type":"RECTANGLE","rectangleCornerRadii":[1,2,3,4]}"#)
+                    .unwrap()
+            )
+            .uniform_corners
+        );
     }
 }

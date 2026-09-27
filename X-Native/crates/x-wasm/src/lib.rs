@@ -25,26 +25,70 @@ use x_format::{figbinary, serialize::save_x, sketch, svg_import};
 fn envelope(result: Result<String, String>) -> String {
     match result {
         Ok(doc) => format!("{{\"ok\":true,\"doc\":{doc}}}"),
-        Err(e) => {
-            // The message is user-visible, so escape it rather than trusting
-            // importer text to be JSON-safe.
-            let msg = e
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', " ");
-            format!("{{\"ok\":false,\"error\":\"{msg}\"}}")
+        Err(e) => format!("{{\"ok\":false,\"error\":{}}}", serde_json::json!(e)),
+    }
+}
+
+/// Additive, independently versioned import metadata. The persisted .x schema
+/// and native document remain unchanged. Older clients still decline text;
+/// newer clients require these original dimensions rather than guessing.
+fn import_envelope(
+    result: Result<(x_core::Document, x_format::ImportReport), String>,
+    source: &str,
+) -> String {
+    match result {
+        Err(e) => envelope(Err(e)),
+        Ok((doc, report)) => {
+            let metrics: serde_json::Map<String, serde_json::Value> = report.text_metrics.iter().map(|(id, m)| {
+                (id.clone(), serde_json::json!({ "width": m.width, "height": m.height, "fontSize": m.font_size }))
+            }).collect();
+            let metadata = serde_json::json!({ "version": 1, "nodes": metrics });
+            let coordinates = if source == "fig" {
+                let nodes: serde_json::Map<String, serde_json::Value> = report
+                    .source_positions
+                    .iter()
+                    .map(|(id, (x, y))| (id.clone(), serde_json::json!({ "x": x, "y": y })))
+                    .collect();
+                let appearance: serde_json::Map<String, serde_json::Value> = report.figma_appearance.iter().map(|(id, a)| {
+                    (id.clone(), serde_json::json!({ "fill": a.fill, "blend": a.blend, "effectCount": a.effect_count, "uniformCorners": a.uniform_corners }))
+                }).collect();
+                let effects: serde_json::Map<String, serde_json::Value> = report
+                    .figma_appearance
+                    .iter()
+                    .map(|(id, a)| {
+                        let values: Vec<_> = a.effects.iter().map(|e| serde_json::json!({
+                        "kind": e.kind, "color": x_core::color_to_hex(e.color), "x": e.x, "y": e.y,
+                        "blur": e.blur, "spread": e.spread, "visible": e.visible,
+                        "blend": e.blend, "showBehind": e.show_behind
+                    })).collect();
+                        (id.clone(), serde_json::json!(values))
+                    })
+                    .collect();
+                format!(
+                    ",\"figmaCoordinates\":{},\"figmaAppearance\":{},\"figmaEffects\":{}",
+                    serde_json::json!({ "version": 1, "nodes": nodes }),
+                    serde_json::json!({ "version": 1, "images": report.assets_imported, "nodes": appearance }),
+                    serde_json::json!({ "version": 1, "nodes": effects })
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                "{{\"ok\":true,\"doc\":{},\"textMetrics\":{metadata}{coordinates}}}",
+                save_x(&doc)
+            )
         }
     }
 }
 
 /// Import a  `.fig` archive and return it as `.x` JSON.
 pub fn import_fig_to_x(bytes: &[u8]) -> String {
-    envelope(figbinary::import_fig_bytes(bytes).map(|d| save_x(&d)))
+    import_envelope(figbinary::import_fig_bytes_with_report(bytes), "fig")
 }
 
 /// Import a  archive and return it as `.x` JSON.
 pub fn import_sketch_to_x(bytes: &[u8]) -> String {
-    envelope(sketch::import_sketch(bytes).map(|d| save_x(&d)))
+    import_envelope(sketch::import_sketch_with_report(bytes), "sketch")
 }
 
 /// Import an SVG document and return it as `.x` JSON.
@@ -53,13 +97,16 @@ pub fn import_sketch_to_x(bytes: &[u8]) -> String {
 /// wrapped here. `Document::default()` supplies the empty variable/style/asset
 /// stores, which is what an SVG carries anyway.
 pub fn import_svg_to_x(text: &str) -> String {
-    envelope(svg_import::import_svg(text).map(|page| {
-        let doc = x_core::Document {
-            pages: vec![page],
-            ..Default::default()
-        };
-        save_x(&doc)
-    }))
+    import_envelope(
+        svg_import::import_svg_with_report(text).map(|(page, report)| {
+            let doc = x_core::Document {
+                pages: vec![page],
+                ..Default::default()
+            };
+            (doc, report)
+        }),
+        "svg",
+    )
 }
 
 /// Build identifier, so the web app can report which engine answered and a
@@ -87,6 +134,11 @@ mod bindings {
     #[wasm_bindgen(js_name = importSvgToX)]
     pub fn import_svg_to_x(text: &str) -> String {
         super::import_svg_to_x(text)
+    }
+
+    #[wasm_bindgen(js_name = bridgeVersion)]
+    pub fn bridge_version() -> u32 {
+        1
     }
 
     #[wasm_bindgen(js_name = engineVersion)]
@@ -124,10 +176,119 @@ mod tests {
     }
 
     #[test]
+    fn svg_text_exports_the_same_source_box_metrics_as_the_web_importer() {
+        let out = import_svg_to_x(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["textMetrics"]["version"], 1);
+        let page = &value["doc"]["pages"][0];
+        let text = &page["children"][0];
+        let id = text["id"].as_str().unwrap();
+        assert_eq!(text["name"], "Keep this text");
+        assert_eq!(text["h"], 20.0, "persisted native text h remains font size");
+        assert_eq!(value["textMetrics"]["nodes"][id]["width"], 168.0);
+        assert_eq!(value["textMetrics"]["nodes"][id]["height"], 28.0);
+        assert_eq!(value["textMetrics"]["nodes"][id]["fontSize"], 20.0);
+        assert!(value.get("figmaCoordinates").is_none());
+        assert!(value.get("figmaAppearance").is_none());
+    }
+
+    #[test]
     fn error_text_is_json_safe() {
         // A message containing a quote must not break the envelope.
         let out = envelope(Err("bad \"thing\" here".into()));
         assert!(out.contains("\\\"thing\\\""), "got: {out}");
+    }
+
+    #[test]
+    fn all_control_characters_round_trip() {
+        let message = "quote \" slash \\ tab \t cr \r nul \0 unicode λ";
+        let value: serde_json::Value =
+            serde_json::from_str(&envelope(Err(message.into()))).unwrap();
+        assert_eq!(value["error"], message);
+        assert_eq!(value["ok"], false);
+    }
+
+    #[test]
+    fn file_imports_include_versioned_original_text_metrics() {
+        for out in [
+            import_fig_to_x(include_bytes!("../../../apps/web/e2e/fixtures/sample.fig")),
+            import_sketch_to_x(include_bytes!(
+                "../../../apps/web/e2e/fixtures/sample.sketch"
+            )),
+        ] {
+            let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(value["ok"], true);
+            assert_eq!(value["doc"]["version"], 1, "persisted .x schema unchanged");
+            assert_eq!(value["textMetrics"]["version"], 1);
+            let nodes = value["textMetrics"]["nodes"].as_object().unwrap();
+            assert_eq!(nodes.len(), 1);
+            let metrics = nodes.values().next().unwrap();
+            assert_eq!(metrics["width"], 200.0);
+            assert_eq!(metrics["height"], 24.0);
+            assert_eq!(metrics["fontSize"], 18.0);
+        }
+    }
+
+    #[test]
+    fn fig_coordinates_are_versioned_import_only_metadata() {
+        let out = import_fig_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/coordinates.fig"
+        ));
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["figmaCoordinates"]["version"], 1);
+        assert_eq!(value["figmaAppearance"]["version"], 1);
+        assert_eq!(value["figmaAppearance"]["images"], 0);
+        assert!(value["doc"].get("figmaAppearance").is_none());
+        let outer = &value["doc"]["pages"][1]["children"][0];
+        let id = outer["id"].as_str().unwrap();
+        assert_eq!(outer["x"], 40.0);
+        assert_eq!(
+            value["figmaCoordinates"]["nodes"][id],
+            serde_json::json!({ "x": -120.0, "y": -80.0 })
+        );
+        assert!(
+            value["doc"].get("figmaCoordinates").is_none(),
+            "persisted .x unchanged"
+        );
+        let sketch: serde_json::Value = serde_json::from_str(&import_sketch_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/sample.sketch"
+        )))
+        .unwrap();
+        assert!(sketch.get("figmaAppearance").is_none());
+        assert!(
+            sketch.get("figmaCoordinates").is_none(),
+            "do not apply FIG coordinate semantics to Sketch"
+        );
+    }
+
+    #[test]
+    fn fig_effect_metadata_is_versioned_and_not_persisted_or_shared_with_sketch() {
+        let value: serde_json::Value = serde_json::from_str(&import_fig_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/effect-source.fig"
+        )))
+        .unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["figmaEffects"]["version"], 1);
+        assert!(value["doc"].get("figmaEffects").is_none());
+        let id = value["doc"]["pages"][0]["children"][0]["id"]
+            .as_str()
+            .unwrap();
+        let facts = &value["figmaEffects"]["nodes"][id];
+        assert_eq!(facts.as_array().unwrap().len(), 4);
+        assert_eq!(facts[0]["spread"], 7.0);
+        assert_eq!(facts[0]["blend"], "MULTIPLY");
+        assert_eq!(facts[0]["showBehind"], true);
+        assert_eq!(facts[1]["visible"], false);
+        assert_eq!(facts[2]["color"], "#000000");
+        let sketch: serde_json::Value = serde_json::from_str(&import_sketch_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/sample.sketch"
+        )))
+        .unwrap();
+        assert!(sketch.get("figmaEffects").is_none());
     }
 
     #[test]

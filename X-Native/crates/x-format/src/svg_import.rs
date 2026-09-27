@@ -1,4 +1,4 @@
-use crate::import_ir::{lower, ImportDoc, ImportKind, ImportNode};
+use crate::import_ir::{ImportDoc, ImportKind, ImportNode};
 #[allow(unused_imports)]
 use crate::*;
 use std::collections::HashMap;
@@ -18,8 +18,13 @@ use x_core::*;
 const MAX_SVG_DEPTH: usize = 512;
 
 pub fn import_svg(svg: &str) -> Result<Node, String> {
-    // parse -> shared Import IR -> lower() (ONE set of import semantics
-    // across svg///png), then unwrap the single page.
+    import_svg_with_report(svg).map(|(node, _)| node)
+}
+
+/// Import SVG with the shared fidelity report used by the optional web bridge.
+pub fn import_svg_with_report(svg: &str) -> Result<(Node, crate::ImportReport), String> {
+    // parse -> shared Import IR -> lower_with_report() (ONE set of import
+    // semantics), then unwrap the single page and retain source text metrics.
     let mut lexer = XmlLexer {
         s: svg.as_bytes(),
         i: 0,
@@ -40,16 +45,17 @@ pub fn import_svg(svg: &str) -> Result<Node, String> {
                     "svg",
                 );
                 parse_children(&mut lexer, &mut root, root_style, css_rules)?;
-                let doc = lower(ImportDoc {
+                let (doc, report) = crate::lower_with_report(ImportDoc {
                     source: "svg",
                     pages: vec![root],
                     ..Default::default()
                 });
-                return doc
+                let page = doc
                     .pages
                     .into_iter()
                     .next()
-                    .ok_or_else(|| "empty svg".into());
+                    .ok_or_else(|| "empty svg".to_string())?;
+                return Ok((page, report));
             }
             XmlTag::Eof => return Err("no <svg> element found".into()),
             _ => {}
@@ -1292,12 +1298,14 @@ fn parse_children(
         node: ImportNode,
         pending_text: Option<ImportNode>,
         style: SvgStyle,
+        flatten_on_close: bool,
     }
     let base = std::mem::replace(root, ImportNode::new(ImportKind::Frame));
     let mut stack: Vec<Frame> = vec![Frame {
         node: base,
         pending_text: None,
         style: root_style,
+        flatten_on_close: false,
     }];
     let mut gradients: HashMap<String, SvgPaint> = HashMap::new();
     loop {
@@ -1309,6 +1317,9 @@ fn parse_children(
                         f.node.children.push(t);
                     }
                     match stack.last_mut() {
+                        Some(top) if f.flatten_on_close => {
+                            top.node.children.append(&mut f.node.children);
+                        }
                         Some(top) => top.node.children.push(f.node),
                         None => {
                             *root = f.node;
@@ -1323,6 +1334,9 @@ fn parse_children(
                     f.node.children.push(t);
                 }
                 match stack.last_mut() {
+                    Some(top) if f.flatten_on_close => {
+                        top.node.children.append(&mut f.node.children);
+                    }
                     Some(top) => top.node.children.push(f.node),
                     None => {
                         *root = f.node;
@@ -1333,10 +1347,22 @@ fn parse_children(
             XmlTag::Text(content) => {
                 if let Some(top) = stack.last_mut() {
                     if let Some(mut t) = top.pending_text.take() {
-                        if let ImportKind::Text { content: c, .. } = &mut t.kind {
-                            *c = content;
+                        let content = content.trim();
+                        if !content.is_empty() {
+                            if let ImportKind::Text {
+                                content: c,
+                                size: Some(size),
+                                ..
+                            } = &mut t.kind
+                            {
+                                *c = content.to_string();
+                                t.w =
+                                    (content.encode_utf16().count() as f64 * *size * 0.6).max(8.0);
+                                t.h = *size * 1.4;
+                            }
+                            t.name = content.chars().take(40).collect();
+                            top.node.children.push(t);
                         }
-                        top.node.children.push(t);
                     }
                 }
             }
@@ -1363,23 +1389,32 @@ fn parse_children(
                     SvgStyle::from_parent(&inherited, &attrs, &gradients, &css_rules, &name);
                 match name.as_str() {
                     "g" => {
-                        let mut g = with_id(ImportNode::new(ImportKind::Group));
-                        g.opacity = current_style.opacity;
-                        apply_transform_attr(&mut g, &attrs);
+                        // The web SVG importer flattens ordinary groups into
+                        // their children. Match that contract when no transform
+                        // has to be represented structurally. Inherited paints,
+                        // stroke options and opacity already live in current_style.
+                        let flatten = attr(&attrs, "transform").is_none();
                         if self_closed {
-                            stack.last_mut().unwrap().node.children.push(g);
-                        } else {
-                            if stack.len() >= MAX_SVG_DEPTH {
-                                return Err(format!(
-                                    "SVG nesting deeper than {MAX_SVG_DEPTH} levels"
-                                ));
-                            }
-                            stack.push(Frame {
-                                node: g,
-                                pending_text: None,
-                                style: current_style.clone(),
-                            });
+                            continue;
                         }
+                        if stack.len() >= MAX_SVG_DEPTH {
+                            return Err(format!("SVG nesting deeper than {MAX_SVG_DEPTH} levels"));
+                        }
+                        let mut g = if flatten {
+                            ImportNode::new(ImportKind::Group)
+                        } else {
+                            with_id(ImportNode::new(ImportKind::Group))
+                        };
+                        if !flatten {
+                            g.opacity = current_style.opacity;
+                            apply_transform_attr(&mut g, &attrs);
+                        }
+                        stack.push(Frame {
+                            node: g,
+                            pending_text: None,
+                            style: current_style.clone(),
+                            flatten_on_close: flatten,
+                        });
                     }
                     "rect" => {
                         let mut n = with_id(ImportNode::new(ImportKind::Rect {
@@ -1494,10 +1529,20 @@ fn parse_children(
                         stack.last_mut().unwrap().node.children.push(n);
                     }
                     "text" => {
-                        let size = attr_num(&attrs, "font-size").unwrap_or(16.0);
+                        if self_closed {
+                            continue;
+                        }
+                        let size = attr_num(&attrs, "font-size")
+                            .filter(|size| *size != 0.0)
+                            .unwrap_or(16.0);
+                        let content = String::new();
+                        // Match the existing web SVG import estimate in UTF-16
+                        // code units (JavaScript String.length), not UTF-8 bytes.
+                        let width = (content.encode_utf16().count() as f64 * size * 0.6).max(8.0);
+                        let height = size * 1.4;
                         let mut n = with_id(ImportNode::new(ImportKind::Text {
-                            content: String::new(),
-                            size: None,
+                            content,
+                            size: Some(size),
                             font: None,
                             line_height: None,
                             letter_spacing: None,
@@ -1505,17 +1550,19 @@ fn parse_children(
                         }))
                         .at(
                             attr_num(&attrs, "x").unwrap_or(0.0),
-                            attr_num(&attrs, "y").unwrap_or(0.0) - size * 0.8,
+                            attr_num(&attrs, "y").unwrap_or(0.0) - size,
                         )
-                        .size(10.0 * size, size * 1.25)
-                        .fill(current_style.fill_paint(10.0 * size, size * 1.25));
+                        .size(width, height)
+                        .fill(current_style.fill_paint(width, height));
+                        n.name.clear();
+                        n.text_align = Some(match attr(&attrs, "text-anchor") {
+                            Some("middle") => TextAlign::Center,
+                            Some("end") => TextAlign::Right,
+                            _ => TextAlign::Left,
+                        });
                         n.opacity = current_style.opacity;
                         apply_transform_attr(&mut n, &attrs);
-                        if self_closed {
-                            stack.last_mut().unwrap().node.children.push(n);
-                        } else {
-                            stack.last_mut().unwrap().pending_text = Some(n);
-                        }
+                        stack.last_mut().unwrap().pending_text = Some(n);
                     }
                     "defs" => {
                         if !self_closed {
@@ -1587,6 +1634,45 @@ mod tests {
     }
 
     #[test]
+    fn svg_text_metrics_match_web_baseline_width_name_and_anchor_contract() {
+        let (page, report) = import_svg_with_report(r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##).unwrap();
+        let text = &page.children[0];
+        assert_eq!(text.id, "label");
+        assert_eq!(text.name, "Keep this text");
+        assert_eq!((text.transform.x, text.transform.y), (10.0, 10.0));
+        assert_eq!((text.w, text.h), (168.0, 20.0));
+        assert_eq!(text.text_align, TextAlign::Center);
+        let metrics = &report.text_metrics[&text.id];
+        assert_eq!(
+            (metrics.width, metrics.height, metrics.font_size),
+            (168.0, 28.0, Some(20.0))
+        );
+    }
+
+    #[test]
+    fn svg_import_flattens_untransformed_groups_and_inherits_group_style() {
+        let page = import_svg(r##"<svg xmlns="http://www.w3.org/2000/svg">
+          <g id="outer" fill="#123456" opacity=".5"><g id="inner"><rect id="box" width="20" height="10"/></g></g>
+          <g id="empty"/>
+        </svg>"##).unwrap();
+        assert_eq!(page.children.len(), 1);
+        let rect = &page.children[0];
+        assert_eq!(rect.id, "box");
+        assert_eq!(rect.opacity, 0.5);
+        assert!(
+            matches!(rect.fill, Paint::Solid(c) if c.to_rgba8() == Color::from_rgb8(0x12, 0x34, 0x56).to_rgba8())
+        );
+    }
+
+    #[test]
+    fn svg_import_keeps_transformed_groups_structural() {
+        let page = import_svg(r##"<svg xmlns="http://www.w3.org/2000/svg"><g id="rotated" transform="rotate(15)"><rect width="20" height="10"/></g></svg>"##).unwrap();
+        assert_eq!(page.children.len(), 1);
+        assert_eq!(page.children[0].id, "rotated");
+        assert_eq!(page.children[0].children.len(), 1);
+    }
+
+    #[test]
     fn svg_import_preserves_css_style_inheritance_and_gradients() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120">
           <defs>
@@ -1601,8 +1687,12 @@ mod tests {
           </g>
         </svg>"##;
         let page = import_svg(svg).expect("SVG should import");
-        let group = &page.children[0];
-        let rect = &group.children[0];
+        assert_eq!(
+            page.children.len(),
+            2,
+            "untransformed SVG group is transparent to the imported tree"
+        );
+        let rect = &page.children[0];
         assert!(
             matches!(&rect.fill, Paint::Solid(color) if color.to_rgba8() == Color::from_rgba8(255, 0, 0, 102).to_rgba8())
         );
@@ -1611,7 +1701,7 @@ mod tests {
             rect.stroke_layers.first().unwrap().options.cap_start,
             StrokeCap::Round
         );
-        let path = &group.children[1];
+        let path = &page.children[1];
         match &path.fill {
             Paint::LinearGradient {
                 start, end, stops, ..

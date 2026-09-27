@@ -11,13 +11,16 @@ members = [
     "crates/x-ui",
     "crates/x-board",
     "crates/x-wasm",
+    "crates/x-geo",
     "apps/x-designer",
 ]
 
 # Project-wide lint policy. Crates opt in with `[lints] workspace = true`.
 # `unsafe_code` is denied rather than forbidden because one benchmark binary
 # (`apps/x-designer/src/bin/bench_scale.rs`) implements a counting global
-# allocator; that file carries a documented `#![allow(unsafe_code)]`. Anything
+# allocator; that file carries a documented `#![allow(unsafe_code)]`. The x-geo
+# wasm ABI also allows its uniquely prefixed no_mangle declarations (which this
+# lint classifies as unsafe); it contains no unsafe blocks or dereferences. Anything
 # else that grows an `unsafe` block fails the gate in `scripts/check.sh`.
 [workspace.lints.rust]
 unsafe_code = "deny"

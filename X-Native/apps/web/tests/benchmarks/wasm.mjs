@@ -28,6 +28,8 @@ import {
   tryGeoBoolean,
 } from "../../src/engine/geoBridge.ts";
 
+globalThis.location = { search: "?geo=wasm" };
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const flag = (name, def) => {

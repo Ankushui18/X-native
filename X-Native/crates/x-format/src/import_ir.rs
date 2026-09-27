@@ -78,6 +78,10 @@ pub struct ImportNode {
     /// represented by the legacy rotation-only field. Lowering composes this
     /// with the node's placement and decomposes it into the native transform.
     pub source_transform: Option<Affine>,
+    /// Exact top-level translation before source-specific page normalization.
+    /// Import-only metadata, not persisted in the native document.
+    pub source_position: Option<(f64, f64)>,
+    pub figma_appearance: Option<FigmaAppearance>,
     /// None = "source specified nothing" -> lower() picks the kind default
     pub fill: Option<Paint>,
     /// Primary (first) stroke — (paint, width); Paint so gradient strokes
@@ -103,7 +107,11 @@ pub struct ImportNode {
     /// default; importers only set it when the source is explicit.
     pub pin: Option<(x_core::HPin, x_core::VPin)>,
     pub opacity: f32,
+    pub blend: Option<BlendKind>,
     pub visible: bool,
+    pub locked: bool,
+    /// Explicit source horizontal alignment; None keeps the native default.
+    pub text_align: Option<TextAlign>,
     pub children: Vec<ImportNode>,
 }
 
@@ -119,6 +127,8 @@ impl ImportNode {
             h: 0.0,
             rotation: 0.0,
             source_transform: None,
+            source_position: None,
+            figma_appearance: None,
             fill: None,
             stroke: None,
             stroke_options: None,
@@ -127,7 +137,10 @@ impl ImportNode {
             layout: None,
             pin: None,
             opacity: 1.0,
+            blend: None,
             visible: true,
+            locked: false,
+            text_align: None,
             children: vec![],
         }
     }
@@ -178,9 +191,50 @@ pub struct ImportDoc {
     pub diagnostics: Vec<String>,
 }
 
+/// Source text box and explicit font size, before the native model repurposes
+/// Node.h as the font size. Interop consumers must not infer a bounding box
+/// from that native rendering convention. Keys are final, deduplicated IDs.
+#[derive(Debug, Clone)]
+pub struct ImportTextMetrics {
+    pub width: f64,
+    pub height: f64,
+    pub font_size: Option<f64>,
+}
+
+/// Full source effect facts, including hidden entries omitted by the native
+/// effect projection. Unsupported kinds are marked rather than silently dropped.
+/// Import-only: these fields do not change native rendering or persisted .x.
+#[derive(Debug, Clone)]
+pub struct FigmaSourceEffect {
+    pub kind: &'static str,
+    pub color: Color,
+    pub x: f64,
+    pub y: f64,
+    pub blur: f64,
+    pub spread: f64,
+    pub visible: bool,
+    pub blend: Option<String>,
+    pub show_behind: bool,
+}
+
+/// Source facts distinguishing absent paints/defaults from native fallbacks.
+/// Unsupported paints/effects remain explicit. Not part of persisted .x.
+#[derive(Debug, Clone)]
+pub struct FigmaAppearance {
+    pub fill: &'static str,
+    pub blend: Option<String>,
+    pub effect_count: usize,
+    pub effects: Vec<FigmaSourceEffect>,
+    pub uniform_corners: bool,
+}
+
 /// Import result with per-file fidelity diagnostics.
 #[derive(Debug, Clone, Default)]
 pub struct ImportReport {
+    pub text_metrics: HashMap<String, ImportTextMetrics>,
+    pub figma_appearance: HashMap<String, FigmaAppearance>,
+    /// Final deduplicated node IDs -> pre-normalization top-level positions.
+    pub source_positions: HashMap<String, (f64, f64)>,
     pub nodes_imported: usize,
     pub assets_imported: usize,
     pub diagnostics: Vec<String>,
@@ -246,7 +300,14 @@ pub fn lower_with_report(doc: ImportDoc) -> (Document, ImportReport) {
     };
     report.assets_imported = asset_ids.len();
     for (pi, page_ir) in doc.pages.into_iter().enumerate() {
-        let mut page = lower_node(page_ir, &mut used, &mut counter, true, &asset_ids);
+        let mut page = lower_node(
+            page_ir,
+            &mut used,
+            &mut counter,
+            true,
+            &asset_ids,
+            &mut report,
+        );
         // shared page semantics: a page is always a Frame, auto-sized to
         // its content envelope when the source gave no/zero size
         if page.w <= 0.0 || page.h <= 0.0 {
@@ -285,7 +346,28 @@ fn lower_node(
     counter: &mut usize,
     is_page: bool,
     asset_ids: &HashMap<String, String>,
+    report: &mut ImportReport,
 ) -> Node {
+    // Keep the large construction frame off the stack during recursion.
+    // ImportNode metadata can grow without multiplying every constructor
+    // temporary by the source tree depth (including non-FIG imports).
+    let (mut node, children) = lower_single_node(ir, used, counter, is_page, asset_ids, report);
+    for child in children {
+        node.children
+            .push(lower_node(child, used, counter, false, asset_ids, report));
+    }
+    node
+}
+
+#[inline(never)]
+fn lower_single_node(
+    ir: ImportNode,
+    used: &mut HashSet<String>,
+    counter: &mut usize,
+    is_page: bool,
+    asset_ids: &HashMap<String, String>,
+    report: &mut ImportReport,
+) -> (Node, Vec<ImportNode>) {
     // ---- id: sanitize source id or generate; dedupe globally
     let base = match &ir.id {
         Some(raw) => sanitize_id(raw),
@@ -307,6 +389,23 @@ fn lower_node(
         clean(ir.w).max(0.0),
         clean(ir.h).max(0.0),
     );
+
+    if let Some(position) = ir.source_position {
+        report.source_positions.insert(id.clone(), position);
+    }
+    if let Some(appearance) = ir.figma_appearance {
+        report.figma_appearance.insert(id.clone(), appearance);
+    }
+    if let ImportKind::Text { size, .. } = &ir.kind {
+        report.text_metrics.insert(
+            id.clone(),
+            ImportTextMetrics {
+                width: w,
+                height: h,
+                font_size: size.filter(|v| v.is_finite() && *v > 0.0),
+            },
+        );
+    }
 
     // ---- kind + kind-default fills (THE shared defaults table)
     let mut node = match ir.kind {
@@ -453,7 +552,12 @@ fn lower_node(
             };
         }
     }
-    if let Some(options) = ir.stroke_options {
+    // Materialization snapshots the legacy effects into the active stack.
+    // Populate effects first or strokes would make imported effects invisible.
+    if !ir.effects.is_empty() {
+        node.effects = ir.effects;
+    }
+    if let Some(options) = ir.stroke_options.clone() {
         node.materialize_visual_stacks();
         if let Some(layer) = node.stroke_layers.first_mut() {
             layer.options = options;
@@ -463,15 +567,16 @@ fn lower_node(
         node.materialize_visual_stacks();
         for (paint, sw) in &ir.extra_strokes {
             if *sw > 0.0 {
-                node.stroke_layers.push(StrokeLayer::new(Stroke {
+                let mut layer = StrokeLayer::new(Stroke {
                     paint: paint.clone(),
                     width: clean(*sw),
-                }));
+                });
+                if let Some(options) = &ir.stroke_options {
+                    layer.options = options.clone();
+                }
+                node.stroke_layers.push(layer);
             }
         }
-    }
-    if !ir.effects.is_empty() {
-        node.effects = ir.effects;
     }
     if let Some((h, v)) = ir.pin {
         node.pin = (h, v);
@@ -494,18 +599,208 @@ fn lower_node(
     } else {
         1.0
     };
-    node.visible = ir.visible;
-
-    for c in ir.children {
-        let cn = lower_node(c, used, counter, false, asset_ids);
-        node.children.push(cn);
+    if let Some(blend) = ir.blend {
+        node.blend = blend;
     }
-    node
+    node.visible = ir.visible;
+    node.locked = ir.locked;
+    if matches!(node.kind, NodeKind::Text { .. }) {
+        if let Some(align) = ir.text_align {
+            node.text_align = align;
+        }
+    }
+
+    (node, ir.children)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_lowering_fits_normal_stack_and_keeps_preorder_ids() {
+        std::thread::Builder::new()
+            .name("metadata-lowering-normal-stack".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let mut tree = ImportNode::new(ImportKind::Text {
+                    content: "leaf".into(),
+                    size: Some(16.0),
+                    font: None,
+                    line_height: None,
+                    letter_spacing: None,
+                    runs: vec![],
+                });
+                for level in 0..=64 {
+                    tree.id = Some("layer".into());
+                    tree.w = 40.0;
+                    tree.h = 20.0;
+                    tree.source_position = Some((level as f64, 0.0));
+                    tree.figma_appearance = Some(FigmaAppearance {
+                        fill: "none",
+                        blend: None,
+                        effect_count: 0,
+                        effects: vec![],
+                        uniform_corners: false,
+                    });
+                    if level < 64 {
+                        tree = ImportNode::new(ImportKind::Frame).child(tree);
+                    }
+                }
+                let (doc, report) = lower_with_report(ImportDoc {
+                    pages: vec![tree],
+                    ..Default::default()
+                });
+                assert_eq!(report.nodes_imported, 65);
+                assert_eq!(report.source_positions.len(), 65);
+                assert_eq!(report.figma_appearance.len(), 65);
+                let mut node = &doc.pages[0];
+                for index in 1..=65 {
+                    let id = if index == 1 {
+                        "layer".to_string()
+                    } else {
+                        format!("layer-{index}")
+                    };
+                    assert_eq!(node.id, id);
+                    assert_eq!(report.source_positions[&id], ((65 - index) as f64, 0.0));
+                    assert_eq!(report.figma_appearance[&id].fill, "none");
+                    if index < 65 {
+                        assert_eq!(node.children.len(), 1);
+                        node = &node.children[0];
+                    }
+                }
+                assert_eq!(node.fill, Paint::Solid(Color::BLACK));
+                assert_eq!(report.text_metrics[&node.id].height, 20.0);
+                assert_eq!(report.text_metrics[&node.id].font_size, Some(16.0));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn source_positions_follow_final_ids_without_changing_native_geometry() {
+        let make = |position| {
+            let mut n = ImportNode::new(ImportKind::Rect { radius: 0.0 })
+                .id("same id")
+                .at(40.0, 40.0)
+                .size(10.0, 20.0);
+            n.source_position = Some(position);
+            n
+        };
+        let (doc, report) = lower_with_report(ImportDoc {
+            pages: vec![ImportNode::new(ImportKind::Frame)
+                .child(make((1e-12, -5.0)))
+                .child(make((-30.0, 100.0)))],
+            ..Default::default()
+        });
+        assert_eq!(report.source_positions.len(), 2);
+        assert_eq!(report.source_positions["same-id"], (1e-12, -5.0));
+        assert_eq!(report.source_positions["same-id-2"], (-30.0, 100.0));
+        for child in &doc.pages[0].children {
+            assert_eq!((child.transform.x, child.transform.y), (40.0, 40.0));
+        }
+    }
+
+    #[test]
+    fn stroke_materialization_preserves_effects_and_shared_options() {
+        for explicit in [false, true] {
+            let mut shape = ImportNode::new(ImportKind::Rect { radius: 0.0 }).size(100.0, 50.0);
+            shape.stroke = Some((Paint::Solid(Color::BLACK), 2.0));
+            shape.extra_strokes = vec![(Paint::Solid(Color::WHITE), 3.0)];
+            shape.effects = vec![Effect::LayerBlur { radius: 3.0 }];
+            if explicit {
+                shape.stroke_options = Some(StrokeOptions {
+                    align: StrokeAlign::Outside,
+                    dash: vec![8.0, 4.0],
+                    ..StrokeOptions::default()
+                });
+            }
+            let doc = lower(ImportDoc {
+                pages: vec![ImportNode::new(ImportKind::Frame).child(shape)],
+                ..Default::default()
+            });
+            let reloaded = crate::load_x(&crate::save_x(&doc)).unwrap();
+            for document in [&doc, &reloaded] {
+                let node = &document.pages[0].children[0];
+                assert_eq!(
+                    node.active_effects().len(),
+                    1,
+                    "materialization must not hide imported effects"
+                );
+                assert!(
+                    matches!(node.active_effects()[0].effect, Effect::LayerBlur { radius } if radius == 3.0)
+                );
+                let strokes = node.active_strokes();
+                assert_eq!(strokes.len(), 2);
+                assert_eq!(strokes[0].options, strokes[1].options);
+                if explicit {
+                    assert_eq!(strokes[1].options.align, StrokeAlign::Outside);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn locks_are_per_layer_and_alignment_only_applies_to_text() {
+        let mut parent = ImportNode::new(ImportKind::Frame);
+        parent.locked = true;
+        parent.text_align = Some(TextAlign::Right);
+        parent
+            .children
+            .push(ImportNode::new(ImportKind::Rect { radius: 0.0 }));
+        let doc = lower(ImportDoc {
+            pages: vec![parent],
+            ..Default::default()
+        });
+        assert!(doc.pages[0].locked);
+        assert!(
+            !doc.pages[0].children[0].locked,
+            "do not bake inherited locks into children"
+        );
+        assert_eq!(
+            doc.pages[0].text_align,
+            TextAlign::Left,
+            "non-text nodes retain their default"
+        );
+    }
+
+    #[test]
+    fn text_metrics_use_final_ids_and_preserve_source_boxes() {
+        let make = |h, size| {
+            ImportNode::new(ImportKind::Text {
+                content: "text".into(),
+                size,
+                font: None,
+                line_height: None,
+                letter_spacing: None,
+                runs: vec![],
+            })
+            .id("same id")
+            .size(100.0, h)
+        };
+        let input = ImportDoc {
+            pages: vec![ImportNode::new(ImportKind::Frame)
+                .child(make(40.0, Some(16.0)))
+                .child(make(60.0, None))],
+            ..Default::default()
+        };
+        let (doc, report) = lower_with_report(input);
+        assert_eq!(report.text_metrics.len(), 2);
+        let a = &doc.pages[0].children[0];
+        let b = &doc.pages[0].children[1];
+        assert_eq!(a.id, "same-id");
+        assert_eq!(b.id, "same-id-2");
+        assert_eq!(a.h, 16.0);
+        assert_eq!(b.h, 60.0);
+        assert_eq!(report.text_metrics[&a.id].height, 40.0);
+        assert_eq!(report.text_metrics[&a.id].font_size, Some(16.0));
+        assert_eq!(report.text_metrics[&b.id].height, 60.0);
+        assert_eq!(
+            report.text_metrics[&b.id].font_size, None,
+            "unknown font size must not be invented"
+        );
+    }
 
     #[test]
     fn lower_dedupes_colliding_and_sanitizes_ids() {

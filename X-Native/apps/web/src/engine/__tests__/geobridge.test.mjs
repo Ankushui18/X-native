@@ -80,7 +80,7 @@ const shapes2 = () => [
 /* -------------------------------------------------------------------------- */
 function cannedResponse(status, msg = "") {
   const tri = [0, 0, 30, 0, 0, 40];
-  const bodyLen = status === 2 ? 8 + msg.length : 8 + tri.length * 8;
+  const bodyLen = status === 2 ? 8 + msg.length : status === 1 ? 0 : 8 + tri.length * 8;
   const buf = new Uint8Array(52 + bodyLen);
   const dv = new DataView(buf.buffer);
   dv.setUint32(0, 0x58475231, true);
@@ -197,12 +197,16 @@ t("real wasm loads, version 1", (await ensureGeo(stubMod))?.version === 1);
     !!raw && raw.status === 0 && raw.contours.length === 1 && eq(raw.contours[0][1], { x: 30, y: 0 }));
 }
 {
+  // Explicit diagnostic mode exercises the native choke without auto's oracle.
+  const priorLocation = globalThis.location;
+  globalThis.location = { search: "?geo=wasm" };
   // The choke shapes stub contours exactly like a direct shaper call.
   const via = booleanPath("union", shapes2());
   const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
     (Math.max(30, 40) / 160) * 0.85, false);
   t("choke shapes wasm contours via shared shaper", eq(via, direct));
   t("shaped result has network + bbox", !!via && !!via.network && via.w === 30 && via.h === 40);
+  if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
 }
 __resetGeoForTests();
 t("version-0 module rejected", (await ensureGeo(assembleGeoModule({ versionConst: 0, response: stubResp }))) === null);
@@ -271,6 +275,8 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   __resetGeoForTests();
 }
 {
+  const priorLocation = globalThis.location;
+  globalThis.location = { search: "?geo=wasm" };
   // Curved inputs smooth through the shared shaper on the wasm path too.
   const curved = () => [
     { poly: [{ x: 0, y: 0, ox: 5, oy: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], ox: 0, oy: 0 },
@@ -281,6 +287,7 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
     (Math.max(30, 40) / 160) * 0.85, true);
   t("curved flag flows to shaper on wasm path", eq(via, direct));
+  if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
   __resetGeoForTests();
 }
 

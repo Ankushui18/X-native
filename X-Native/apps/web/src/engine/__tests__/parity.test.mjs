@@ -2868,12 +2868,12 @@ console.log("the alignment box, through the engine:");
 console.log("auto layout: a text layer's max height and max lines:");
 {
   const both = textDimensionRule({ maxH: 40, maxLines: 3 });
-  t("a patch that sets both keeps both, because the caller said so", both.maxH === 40 && both.maxLines === 3);
+  t("an explicit positive max height wins when both limits are supplied", both.maxH === 40 && both.maxLines === 0);
   const height = textDimensionRule({ maxH: 40 });
   t("adding a max height sets max lines to auto", height.maxLines === 0);
   const lines = textDimensionRule({ maxLines: 3 });
-  t("setting a max line count removes the max height", lines.maxH === 0);
-  t("setting max lines to auto does not touch a max height", textDimensionRule({ maxLines: 0 }).maxH === undefined);
+  t("setting a max line count removes the max height", lines.maxH === undefined);
+  t("clearing max lines also clears max height", textDimensionRule({ maxLines: 0 }).maxH === undefined);
   const other = textDimensionRule({ maxW: 100 });
   t("an unrelated patch is passed through untouched", other.maxW === 100 && other.maxH === undefined);
   t("and is not the same object", other !== undefined);
@@ -3054,11 +3054,11 @@ console.log("auto layout, through the engine:");
   const text = addRect(100, 40);
   e.dispatch({ type: "patch", id: text, patch: { kind: "text", text: "Hello", maxLines: 2, maxH: 60 } });
   const textNode = () => find(page().root, text);
-  t("the text layer keeps both when the patch sets both", textNode().maxH === 60 && textNode().maxLines === 2);
+  t("conversion to text also enforces exclusive limits", textNode().maxH === 60 && textNode().maxLines === 0);
   e.dispatch({ type: "patch", id: text, patch: { maxH: 50 } });
   t("a new max height zeroes the max line count", textNode().maxLines === 0);
   e.dispatch({ type: "patch", id: text, patch: { maxLines: 3 } });
-  t("a new max line count clears the max height", textNode().maxH === 0);
+  t("a new max line count clears the max height", textNode().maxH === undefined);
 }
 
 console.log("the three ways in to auto layout, from \"Toggle on auto layout in designs\":");

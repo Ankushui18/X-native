@@ -1,3 +1,4 @@
+import { allowTopologyEdit } from "./vectorCapabilities";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
@@ -1525,7 +1526,7 @@ export function Actions({
     // unbound, so the old sc labels pointed at chords that do other things.
     { label: "Zen Mode (full canvas HUD)", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-zen-mode")) },
     { label: "Marking / Radial menu", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-radial-menu")) },
-    { label: "Clean up vector (sketch to Bézier)", sc: "", run: () => engine.dispatch({ type: "vectorCleanup" }) },
+    { label: "Clean up vector (sketch to Bézier)", sc: "", run: () => { if (allowTopologyEdit(engine)) engine.dispatch({ type: "vectorCleanup" }); } },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
     { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
@@ -1994,10 +1995,37 @@ export function bindHotkeys(
       if (e.key === "2") extra.onNav("assets");
       if (e.key === "3") extra.onNav("variables");
     }
+    // ⌥⇧U/S/I/E create booleans (as the Arrange menu advertises) and ⌥⇧F
+    // flattens. e.code, not e.key: with ⌥ held macOS types dead-key
+    // characters instead of letters. The Ctrl form rides along for Windows;
+    // ⌘ stays excluded.
+    if (e.altKey && e.shiftKey && !e.metaKey) {
+      const code = e.code || `Key${e.key.toUpperCase()}`;
+      const op =
+        code === "KeyU"
+          ? "union"
+          : code === "KeyS"
+            ? "subtract"
+            : code === "KeyI"
+              ? "intersect"
+              : code === "KeyE"
+                ? "exclude"
+                : null;
+      if (op) {
+        e.preventDefault();
+        engine.dispatch({ type: "boolean", op });
+        return;
+      }
+      if (code === "KeyF") {
+        e.preventDefault();
+        engine.dispatch({ type: "flatten" });
+        return;
+      }
+    }
     // ⌥W/A/S/D/H/V align. e.code, not e.key: with ⌥ held macOS types dead-key
     // characters (å, ∑) instead of letters, which left these chords working on
-    // Windows/Linux but dead on Mac. With ⇧ added the selection aligns to its
-    // parent instead — the keyboard twin of ⇧-clicking an align button.
+    // Windows/Linux but dead on Mac. With ⇧ added the other align chords target
+    // the parent; ⌥⇧S is reserved for Subtract and must be handled first.
     if (e.altKey && !meta) {
       const am: Record<
         string,
@@ -2403,32 +2431,6 @@ export function bindHotkeys(
       engine.dispatch({ type: "select", ids: [] });
       engine.dispatch({ type: "setTool", tool: "select" });
       return;
-    }
-    // ⌥⇧U/S/I/E create booleans (as the Arrange menu advertises) and ⌥⇧F
-    // flattens. e.code, not e.key: with ⌥ held macOS types dead-key
-    // characters instead of letters. The Ctrl form rides along for Windows;
-    // ⌘ stays excluded.
-    if (e.altKey && e.shiftKey && !e.metaKey) {
-      const op =
-        e.code === "KeyU"
-          ? "union"
-          : e.code === "KeyS"
-            ? "subtract"
-            : e.code === "KeyI"
-              ? "intersect"
-              : e.code === "KeyE"
-                ? "exclude"
-                : null;
-      if (op) {
-        e.preventDefault();
-        engine.dispatch({ type: "boolean", op });
-        return;
-      }
-      if (e.code === "KeyF") {
-        e.preventDefault();
-        engine.dispatch({ type: "flatten" });
-        return;
-      }
     }
     if ((meta || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "u") {
       e.preventDefault();

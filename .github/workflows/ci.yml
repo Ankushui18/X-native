@@ -106,18 +106,88 @@ jobs:
       #
       # Runs after the Gate so a wasm failure can never be mistaken for, or
       # mask, a workspace failure.
-      - name: Wasm bridge
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: X-Native/apps/web/package-lock.json
+
+      - name: Package both WASM bridges (matching bindgen glue)
+        id: package-wasm
         run: |
           rustup target add wasm32-unknown-unknown --toolchain 1.98.1
-          cargo build -p x-wasm --target wasm32-unknown-unknown --release --locked
-          ls -la target/wasm32-unknown-unknown/release/*.wasm
+          cargo install wasm-bindgen-cli --version 0.2.127 --locked
+          bash scripts/build-wasm.sh
 
-      - name: Upload wasm artifact
+      - name: Real WASM bridge smoke tests (no mocks or replay)
+        id: wasm-smoke
+        run: |
+          cd apps/web
+          npm ci --no-audit --no-fund
+          set +e
+          npm run test:wasm > /tmp/wasm-smoke.log 2>&1
+          status=$?
+          cat /tmp/wasm-smoke.log
+          if [ "$status" -ne 0 ]; then
+            # Logs live behind a separate CDN. Annotations remain API-readable.
+            tail -60 /tmp/wasm-smoke.log | while IFS= read -r line; do
+              line=${line//%/%25}
+              printf '::error::%s\n' "$line"
+            done
+            exit "$status"
+          fi
+          node -e 'const fs = require("fs"); const text = "Native smoke PASS\n" + fs.readFileSync("/tmp/wasm-smoke.log", "utf8").slice(-15000); console.log("::notice::" + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));'
+          npm run build
+
+      # This measures promotion readiness, not just ABI connectivity. Until the
+      # native/web grids agree, auto mode retains its TS oracle. A diagnostic
+      # failure is explicit and must not be described as native parity passing.
+      - name: Native geometry promotion diagnostic (real corpus, no replay)
+        id: wasm-differential
+        continue-on-error: true
+        run: |
+          cd apps/web
+          set +e
+          npm run bench:wasm -- --module public/x_geo.wasm --repeat 2 --out /tmp/geo-native.json > /tmp/geo-native.log 2>&1
+          status=$?
+          cat /tmp/geo-native.log
+          # API annotations truncate at 4096 chars and at ten warnings/step.
+          # Publish a compact complete-case summary, not the first few log lines.
+          node -e '
+            const fs = require("fs");
+            let text = fs.readFileSync("/tmp/geo-native.log", "utf8").slice(-3500);
+            if (fs.existsSync("/tmp/geo-native.json")) {
+              const r = JSON.parse(fs.readFileSync("/tmp/geo-native.json", "utf8"));
+              const sum = (k) => r.rows.reduce((n, row) => n + row[k], 0).toFixed(2);
+              text = `${r.mode}: ${r.rows.length - r.fails}/${r.rows.length} equivalent; failures=${r.fails}; repeat=${r.repeat}; TS total=${sum("tsMs")}ms; native total=${sum("modMs")}ms\n` + r.rows.map(row => `${row.sanityOk && row.diffOk ? "PASS" : "FAIL"} ${row.name}: ${row.reasons.map(x => x.split(":")[0]).join(",")}`).join("\n");
+            }
+            const failed = Number(process.argv[1]) !== 0;
+            text = (failed ? "Native promotion NOT approved\n" : "Native corpus passed\n") + text;
+            console.log((failed ? "::warning::" : "::notice::") + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));
+          ' "$status"
+          cat /tmp/geo-native.log >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload browser-ready wasm assets
+        if: always() && steps.package-wasm.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: x-wasm
-          path: X-Native/target/wasm32-unknown-unknown/release/x_wasm.wasm
+          path: |
+            X-Native/apps/web/public/wasm
+            X-Native/apps/web/public/x_geo.wasm
           if-no-files-found: error
+
+      - name: Upload native verification logs and differential data
+        if: always() && steps.package-wasm.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-verification
+          path: |
+            /tmp/wasm-smoke.log
+            /tmp/geo-native.log
+            /tmp/geo-native.json
+          if-no-files-found: warn
 
       # scripts/check.sh is deliberately opaque: cargo writes into temp files it
       # greps, the CLI build sends stderr to /dev/null, and the clippy branch
@@ -179,9 +249,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Keep panic/assertion details API-readable even without an open PR.
+          # Emit this first: GitHub caps error annotations per step.
+          python3 -c '
+          import pathlib, re
+          p = pathlib.Path("/tmp/tests.log")
+          if p.exists():
+              raw = p.read_text(errors="replace")
+              failures = re.findall(r"---- .*? stdout ----.*?(?=\nfailures:|\n---- |\Z)", raw, re.S)
+              failures += [raw[max(0, m.start() - 1600):m.end() + 300] for m in re.finditer(r"[^\n]*(?:overflowed its stack|fatal runtime error|memory allocation)[^\n]*", raw)]
+              if failures:
+                  text = ("Rust test failure detail:\n" + "\n".join(failures))[:3500]
+                  print("::error::" + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
+          '
+          if [ -f /tmp/report.txt ]; then
+            printf '::notice::%s\n' "$(head -1 /tmp/report.txt)"
+          fi
           esc=$(printf '\033')
           if [ -f /tmp/gate.log ]; then
-            grep -aE '==>|FAIL|error|warning|Diff|panicked|\.rs:[0-9]+' /tmp/gate.log |
+            grep -aE '==>|FAIL|error|warning|Diff|panicked|process didn.t exit|signal:|Caused by:|\.rs:[0-9]+' /tmp/gate.log |
               sed -e "s/${esc}\[[0-9;]*m//g" -e 's/%/%25/g' -e 's/\r//g' |
               cut -c1-350 | head -35 |
               while IFS= read -r line; do printf '::error::%s\n' "$line"; done

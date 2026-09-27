@@ -31,6 +31,7 @@ import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
 import { DEMO_ID, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
+import { initWasmBridge } from "./engine/wasmBridge";
 import { preloadGeo } from "./engine/geoBridge";
 
 /** The dashboard is the app's front door; a file opens at `#/file/<id>`. The
@@ -41,6 +42,8 @@ function readRoute(): { view: "home" } | { view: "file"; id: string } {
 }
 
 export default function App() {
+  // Preload on the dashboard too, before the first file import.
+  useEffect(() => { void initWasmBridge(); }, []);
   const [route, setRoute] = useState(readRoute);
   // The document is resolved before the editor mounts: seeding the engine is
   // synchronous, so the canvas never paints half a file. Large documents live in
