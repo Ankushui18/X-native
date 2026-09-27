@@ -265,14 +265,19 @@ fn effects_json(nc: &V) -> Vec<V> {
     garr(nc, "effects")
         .map(|es| {
             es.iter()
-                .filter_map(|e| {
-                    let ty = match gstr(e, "type")? {
-                        "DROP_SHADOW" | "INNER_SHADOW" => gstr(e, "type")?.to_string(),
+                .map(|e| {
+                    let ty = match gstr(e, "type").unwrap_or("") {
+                        "DROP_SHADOW" | "INNER_SHADOW" => gstr(e, "type").unwrap_or("").to_string(),
                         "FOREGROUND_BLUR" | "LAYER_BLUR" => "LAYER_BLUR".to_string(),
                         "BACKGROUND_BLUR" => "BACKGROUND_BLUR".to_string(),
-                        _ => return None,
+                        _ => "UNSUPPORTED".to_string(),
                     };
                     let mut pairs = vec![("type".into(), V::Str(ty))];
+                    for key in ["blendMode", "showShadowBehindNode"] {
+                        if let Some(value) = e.get(key) {
+                            pairs.push((key.into(), value.clone()));
+                        }
+                    }
                     if let Some(c) = e.get("color") {
                         pairs.push((
                             "color".into(),
@@ -303,7 +308,7 @@ fn effects_json(nc: &V) -> Vec<V> {
                         "visible".into(),
                         V::Bool(gbool(e, "visible").unwrap_or(true)),
                     ));
-                    Some(obj(pairs))
+                    obj(pairs)
                 })
                 .collect()
         })
@@ -1120,5 +1125,27 @@ mod source_paint_presence_tests {
         assert_eq!(converted.len(), 1);
         assert_eq!(gstr(&converted[0], "type"), Some("UNSUPPORTED"));
         assert!(!diagnostics.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod source_effect_tests {
+    use super::*;
+
+    #[test]
+    fn shim_preserves_source_fields_and_unsupported_effect_presence() {
+        let source = crate::json::parse(r#"{"effects":[
+            {"type":"FOREGROUND_BLUR","radius":3,"visible":false,"spread":2,"blendMode":"SCREEN","showShadowBehindNode":true},
+            {"type":"FUTURE_EFFECT"},{}
+        ]}"#).unwrap();
+        let effects = effects_json(&source);
+        assert_eq!(effects.len(), 3);
+        assert_eq!(gstr(&effects[0], "type"), Some("LAYER_BLUR"));
+        assert_eq!(gbool(&effects[0], "visible"), Some(false));
+        assert_eq!(gnum(&effects[0], "spread"), Some(2.0));
+        assert_eq!(gstr(&effects[0], "blendMode"), Some("SCREEN"));
+        assert_eq!(gbool(&effects[0], "showShadowBehindNode"), Some(true));
+        assert_eq!(gstr(&effects[1], "type"), Some("UNSUPPORTED"));
+        assert_eq!(gstr(&effects[2], "type"), Some("UNSUPPORTED"));
     }
 }

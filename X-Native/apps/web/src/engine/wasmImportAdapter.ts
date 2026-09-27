@@ -65,6 +65,34 @@ function figmaAppearance(n: Obj, out: ImportedNode, value: unknown) {
   }
 }
 
+/** Source-only fields are restored only after the visible native projection
+ * agrees exactly. Hidden source entries have no native enum counterpart. */
+function sourceEffects(value: unknown, native: Effect[]): Effect[] {
+  if (!Array.isArray(value) || value.length > 10_000) throw new Error("Invalid FIG source effects");
+  const result = value.map((value): Effect => {
+    const e = object(value);
+    keys(e, ["kind", "color", "x", "y", "blur", "spread", "visible", "blend", "showBehind"]);
+    if (e.kind !== "drop-shadow" && e.kind !== "inner-shadow" && e.kind !== "layer-blur" && e.kind !== "background-blur") throw new Error("Unsupported FIG source effect");
+    const color = paint({ t: "solid", c: e.color }), x = number(e.x), y = number(e.y), blur = number(e.blur), spread = number(e.spread);
+    if (blur < 0 || typeof e.visible !== "boolean" || typeof e.showBehind !== "boolean") throw new Error("Invalid FIG source effect values");
+    if ((e.kind === "layer-blur" || e.kind === "background-blur") && (x !== 0 || y !== 0)) throw new Error("Invalid FIG blur offset");
+    let blend: string | undefined;
+    if (e.blend !== null) {
+      const mode = text(e.blend).toLowerCase().replaceAll("_", "-");
+      if (!Object.prototype.hasOwnProperty.call(blendLabels, mode)) throw new Error("Unsupported FIG effect blend");
+      blend = blendLabels[mode];
+    }
+    return { kind: e.kind, color, x, y, blur, spread, visible: e.visible, blend, showBehind: e.showBehind };
+  });
+  const projection = result.filter(e => e.visible);
+  if (projection.length !== native.length || projection.some((e, i) => {
+    const n = native[i], isBlur = e.kind === "layer-blur" || e.kind === "background-blur";
+    return n.kind !== e.kind || n.color !== (isBlur ? "#00000000" : e.color)
+      || n.x !== e.x || n.y !== e.y || n.blur !== e.blur || n.spread !== 0 || n.visible !== true;
+  })) throw new Error("FIG source/native effect projection mismatch");
+  return result;
+}
+
 function effects(v: unknown): Effect[] {
   if (!Array.isArray(v) || v.length > 10_000) throw new Error("Invalid Rust effect list");
   return v.map((value): Effect => {
@@ -219,6 +247,13 @@ export function decodeRustImport(payload: string): ImportResult {
     if (metadata.version !== 1 || metadata.images !== 0 || figmaPositions === null) throw new Error("Unsupported FIG appearance metadata");
     appearanceNodes = object(metadata.nodes);
   }
+  let effectNodes: Obj | null = null;
+  if (envelope.figmaEffects !== undefined) {
+    const metadata = object(envelope.figmaEffects); keys(metadata, ["version", "nodes"]);
+    if (metadata.version !== 1 || appearanceNodes === null) throw new Error("Unsupported FIG effects metadata");
+    effectNodes = object(metadata.nodes);
+  }
+  const usedEffects = new Set<string>();
   const usedAppearance = new Set<string>();
   const usedPositions = new Set<string>();
   const usedMetrics = new Set<string>();
@@ -322,6 +357,11 @@ export function decodeRustImport(payload: string): ImportResult {
       const id = text(n.id);
       if (!Object.prototype.hasOwnProperty.call(appearanceNodes, id) || usedAppearance.has(id)) throw new Error("Missing or duplicate FIG appearance metadata");
       usedAppearance.add(id);
+      if (effectNodes !== null) {
+        if (!Object.prototype.hasOwnProperty.call(effectNodes, id) || usedEffects.has(id)) throw new Error("Missing or duplicate FIG effect metadata");
+        usedEffects.add(id);
+        out.effects = sourceEffects(effectNodes[id], out.effects ?? []);
+      }
       figmaAppearance(n, out, appearanceNodes[id]);
     }
     if (n.children != null) {
@@ -331,6 +371,7 @@ export function decodeRustImport(payload: string): ImportResult {
     return out;
   }
   const roots = doc.pages.map((p) => convert(p));
+  if (effectNodes !== null && usedEffects.size !== Object.keys(effectNodes).length) throw new Error("Unused FIG effect metadata");
   if (appearanceNodes !== null && usedAppearance.size !== Object.keys(appearanceNodes).length) throw new Error("Unused FIG appearance metadata");
   if (usedMetrics.size !== Object.keys(textMetrics).length) throw new Error("Unused Rust source text metrics");
   const pages = roots.map((p) => ({ name: p.name, nodes: p.children ?? [] }));

@@ -201,14 +201,30 @@ pub struct ImportTextMetrics {
     pub font_size: Option<f64>,
 }
 
-/// Source facts needed to distinguish absent paints and source defaults from
-/// native rendering fallbacks. Unsupported paints are explicitly marked, never
-/// reclassified as absent after a lossy native parse. Not part of persisted .x.
+/// Full source effect facts, including hidden entries omitted by the native
+/// effect projection. Unsupported kinds are marked rather than silently dropped.
+/// Import-only: these fields do not change native rendering or persisted .x.
+#[derive(Debug, Clone)]
+pub struct FigmaSourceEffect {
+    pub kind: &'static str,
+    pub color: Color,
+    pub x: f64,
+    pub y: f64,
+    pub blur: f64,
+    pub spread: f64,
+    pub visible: bool,
+    pub blend: Option<String>,
+    pub show_behind: bool,
+}
+
+/// Source facts distinguishing absent paints/defaults from native fallbacks.
+/// Unsupported paints/effects remain explicit. Not part of persisted .x.
 #[derive(Debug, Clone)]
 pub struct FigmaAppearance {
     pub fill: &'static str,
     pub blend: Option<String>,
     pub effect_count: usize,
+    pub effects: Vec<FigmaSourceEffect>,
     pub uniform_corners: bool,
 }
 
@@ -624,6 +640,7 @@ mod tests {
                         fill: "none",
                         blend: None,
                         effect_count: 0,
+                        effects: vec![],
                         uniform_corners: false,
                     });
                     if level < 64 {

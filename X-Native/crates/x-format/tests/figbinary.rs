@@ -353,3 +353,36 @@ fn fig_source_appearance_does_not_replace_native_rendering_defaults() {
     );
     assert!(report.figma_appearance[&label.id].blend.is_none());
 }
+
+#[test]
+fn source_effect_metadata_preserves_hidden_fields_without_changing_native_effects() {
+    let (doc, report) = import_fig_bytes_with_report(include_bytes!(
+        "../../../apps/web/e2e/fixtures/effect-source.fig"
+    ))
+    .unwrap();
+    let nodes = &doc.pages[0].children;
+    let facts = &report.figma_appearance[&nodes[0].id];
+    assert_eq!(facts.effect_count, 4);
+    assert_eq!(facts.effects.len(), 4);
+    assert_eq!(facts.effects[0].spread, 7.0);
+    assert_eq!(facts.effects[0].blend.as_deref(), Some("MULTIPLY"));
+    assert!(facts.effects[0].show_behind);
+    assert!(!facts.effects[1].visible);
+    assert_eq!(facts.effects[1].spread, -2.0);
+    assert_eq!(facts.effects[1].blend.as_deref(), Some("NORMAL"));
+    assert_eq!(facts.effects[2].color, x_core::Color::BLACK);
+    assert_eq!(
+        report.figma_appearance[&nodes[1].id].effects[0].kind,
+        "layer-blur"
+    );
+    let roundtrip = x_format::load_x(&x_format::save_x(&doc)).unwrap();
+    for doc in [&doc, &roundtrip] {
+        let nodes = &doc.pages[0].children;
+        assert_eq!(
+            nodes[0].active_effects().len(),
+            3,
+            "native hidden effect stays excluded"
+        );
+        assert!(nodes[1].active_effects().is_empty());
+    }
+}

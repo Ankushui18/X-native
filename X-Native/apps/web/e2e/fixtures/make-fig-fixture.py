@@ -42,6 +42,8 @@ FIELDS={
                ("cornerRadius","float",11),("characters","string",12),("fontSize","float",13),("phase","string",14),("locked","bool",15),("textAlignHorizontal","string",16),("strokeAlign","string",17),("strokeCap","string",18),("strokeJoin","string",19),("strokeDashes","float",20),("blendMode","string",21),("effects","Effect",22),("parentIndex","ParentIndex",23)],
  "Message":[("nodeChanges","NodeChange",1)],
 }
+if "--effect-source" in sys.argv:
+    FIELDS["Effect"] += [("spread","float",6),("blendMode","string",7),("showShadowBehindNode","bool",8)]
 ARRAY={("NodeChange","effects"),("NodeChange","strokeDashes"),("NodeChange","fillPaints"),("NodeChange","strokePaints"),("Message","nodeChanges")}
 
 sch=bytearray(); sch+=varuint(len(defs))
@@ -115,13 +117,18 @@ if strokes:
             ("OUTSIDE","NONE","MITER",[]),
         ])
     ]
-effect_case = "--effects" in sys.argv
+source_effect_case = "--effect-source" in sys.argv
+effect_case = "--effects" in sys.argv or source_effect_case
 if effect_case:
-    def effect(ty,radius,c=None,x=0,y=0):
+    def effect(ty,radius,c=None,x=0,y=0,spread=None,blend=None,behind=None,visible=True):
         out=varuint(1)+s(ty)
         if c is not None: out+=varuint(2)+c
         out+=varuint(3)+varfloat(x)+varfloat(y)
-        return out+varuint(4)+varfloat(radius)+varuint(5)+bytes([1])+varuint(0)
+        out+=varuint(4)+varfloat(radius)+varuint(5)+bytes([int(visible)])
+        if spread is not None: out+=varuint(6)+varfloat(spread)
+        if blend is not None: out+=varuint(7)+s(blend)
+        if behind is not None: out+=varuint(8)+bytes([int(behind)])
+        return out+varuint(0)
     nodes = [
         node(1,1,"CANVAS","Effects",0,0,0,0),
         node(1,2,"RECTANGLE","BlendedEffects",100,50,20,40,fill=color(1,1,1),stroke=color(0,0,0),sw=2,blend="MULTIPLY",effects=[
@@ -131,6 +138,18 @@ if effect_case:
         ]),
         node(1,3,"RECTANGLE","ForegroundAlias",100,50,140,40,fill=color(1,1,1),blend="SOFT_LIGHT",effects=[effect("FOREGROUND_BLUR",3)]),
         node(1,4,"FRAME","Passthrough",100,50,260,40,fill=color(1,1,1),blend="PASS_THROUGH"),
+    ]
+if source_effect_case:
+    nodes = [
+        node(1,1,"CANVAS","Source effects",0,0,0,0),
+        node(1,2,"RECTANGLE","SourceShadows",100,50,20,40,fill=color(1,1,1),stroke=color(0,0,0),sw=2,effects=[
+            effect("DROP_SHADOW",6,color(1,0,0,0.5),5,-3,spread=7,blend="MULTIPLY",behind=True),
+            effect("INNER_SHADOW",2,color(0,0,1),-2,4,spread=-2,blend="NORMAL",visible=False),
+            effect("LAYER_BLUR",8),effect("BACKGROUND_BLUR",4,color(0,1,0,0.5)),
+        ]),
+        node(1,3,"RECTANGLE","HiddenOnly",100,50,140,40,fill=color(1,1,1),effects=[
+            effect("FOREGROUND_BLUR",3,visible=False),
+        ]),
     ]
 coordinate_case = "--coordinates" in sys.argv
 if coordinate_case:
@@ -155,7 +174,7 @@ canvas=bytearray(b"fig-kiwi"+struct.pack("<I",1))
 for chunk in (raw_deflate(bytes(sch)), raw_deflate(bytes(msg))):
     canvas+=struct.pack("<I",len(chunk))+chunk
 
-target = Path(__file__).with_name("coordinates.fig") if coordinate_case else Path(__file__).with_name("effects-blend.fig") if effect_case else Path(__file__).with_name("stroke-options.fig") if strokes else Path(__file__).with_name("state-text.fig") if state else Path("/tmp/test.fig")
+target = Path(__file__).with_name("effect-source.fig") if source_effect_case else Path(__file__).with_name("coordinates.fig") if coordinate_case else Path(__file__).with_name("effects-blend.fig") if effect_case else Path(__file__).with_name("stroke-options.fig") if strokes else Path(__file__).with_name("state-text.fig") if state else Path("/tmp/test.fig")
 z=zipfile.ZipFile(target,"w",zipfile.ZIP_DEFLATED)
 entry = zipfile.ZipInfo("canvas.fig", date_time=(2026,9,27,0,0,0))
 entry.compress_type = zipfile.ZIP_DEFLATED

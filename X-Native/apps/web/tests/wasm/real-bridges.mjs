@@ -161,12 +161,16 @@ try {
   assert.deepEqual(effectCandidate.nodes[0].effects, [
     { kind: "drop-shadow", color: "#ff000080", x: 5, y: -3, blur: 6, spread: 0, visible: true },
     { kind: "inner-shadow", color: "#0000ff", x: -2, y: 4, blur: 2, spread: 0, visible: true },
-    { kind: "layer-blur", color: "#00000000", x: 0, y: 0, blur: 8, spread: 0, visible: true },
-    { kind: "background-blur", color: "#00000000", x: 0, y: 0, blur: 4, spread: 0, visible: true },
-  ]);
+    { kind: "layer-blur", color: "#000000", x: 0, y: 0, blur: 8, spread: 0, visible: true },
+    { kind: "background-blur", color: "#000000", x: 0, y: 0, blur: 4, spread: 0, visible: true },
+  ].map(e => ({ ...e, blend: undefined, showBehind: false })));
   assert.equal(effectCandidate.nodes[1].effects[0].blur, 3);
   const effectData = effectBytes.buffer.slice(effectBytes.byteOffset, effectBytes.byteOffset + effectBytes.byteLength);
-  assert.ok(importsEquivalent(await importFig(effectData), await figTs(effectData)));
+  const effectExpected = await figTs(effectData);
+  console.log(`DIFF FIG effects: ${differencePaths(effectCandidate, effectExpected).join(", ") || "none"}`);
+  assert.ok(importsEquivalent(effectCandidate, effectExpected), "complete source-backed effect candidate must match");
+  assert.ok(importsEquivalent(await importFig(effectData), effectExpected));
+  assert.equal(getEngineInfo().importBackend, "wasm");
   assert.equal(calls.fig, 4);
   console.log(`PASS native FIG effects/blends: four ordered effects, materialized+legacy lists, blur aliases, layer modes; wrapper=${getEngineInfo().importBackend}`);
   const coordinateBytes = fs.readFileSync("e2e/fixtures/coordinates.fig");
@@ -186,6 +190,21 @@ try {
   assert.ok(importsEquivalent(await importFig(coordinateData), coordinateTs));
   assert.equal(calls.fig, 5);
   console.log(`PASS native FIG source placement: negative+positive pages, empty first page, nested local coordinates, content bounds; wrapper=${getEngineInfo().importBackend}`);
+  const sourceBytes = fs.readFileSync("e2e/fixtures/effect-source.fig");
+  const sourceData = sourceBytes.buffer.slice(sourceBytes.byteOffset, sourceBytes.byteOffset + sourceBytes.byteLength);
+  const sourceRaw = JSON.parse(glue.importFigToX(sourceBytes));
+  assert.equal(sourceRaw.figmaEffects.version, 1);
+  const sourceCandidate = decodeRustImport(JSON.stringify(sourceRaw)), sourceExpected = await figTs(sourceData);
+  console.log(`DIFF FIG source effects: ${differencePaths(sourceCandidate, sourceExpected).join(", ") || "none"}`);
+  assert.ok(importsEquivalent(sourceCandidate, sourceExpected), "hidden effects, spread, blend, color and show-behind must match");
+  assert.ok(importsEquivalent(await importFig(sourceData), sourceExpected));
+  assert.equal(getEngineInfo().importBackend, "wasm");
+  assert.equal(sourceCandidate.nodes[0].effects[0].spread, 7);
+  assert.equal(sourceCandidate.nodes[0].effects[1].visible, false);
+  assert.equal(sourceCandidate.nodes[1].effects[0].kind, "layer-blur");
+  assert.equal(sourceCandidate.nodes[1].effects[0].visible, false);
+  console.log("PASS native FIG source effects: hidden entries, spread, blend, show-behind; full candidate equivalent; wrapper=wasm");
+  assert.equal(calls.fig, 6);
   assert.equal(calls.svg, 2);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");

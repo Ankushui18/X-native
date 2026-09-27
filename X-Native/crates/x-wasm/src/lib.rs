@@ -52,10 +52,23 @@ fn import_envelope(
                 let appearance: serde_json::Map<String, serde_json::Value> = report.figma_appearance.iter().map(|(id, a)| {
                     (id.clone(), serde_json::json!({ "fill": a.fill, "blend": a.blend, "effectCount": a.effect_count, "uniformCorners": a.uniform_corners }))
                 }).collect();
+                let effects: serde_json::Map<String, serde_json::Value> = report
+                    .figma_appearance
+                    .iter()
+                    .map(|(id, a)| {
+                        let values: Vec<_> = a.effects.iter().map(|e| serde_json::json!({
+                        "kind": e.kind, "color": x_core::color_to_hex(e.color), "x": e.x, "y": e.y,
+                        "blur": e.blur, "spread": e.spread, "visible": e.visible,
+                        "blend": e.blend, "showBehind": e.show_behind
+                    })).collect();
+                        (id.clone(), serde_json::json!(values))
+                    })
+                    .collect();
                 format!(
-                    ",\"figmaCoordinates\":{},\"figmaAppearance\":{}",
+                    ",\"figmaCoordinates\":{},\"figmaAppearance\":{},\"figmaEffects\":{}",
                     serde_json::json!({ "version": 1, "nodes": nodes }),
-                    serde_json::json!({ "version": 1, "images": report.assets_imported, "nodes": appearance })
+                    serde_json::json!({ "version": 1, "images": report.assets_imported, "nodes": appearance }),
+                    serde_json::json!({ "version": 1, "nodes": effects })
                 )
             } else {
                 String::new()
@@ -227,6 +240,32 @@ mod tests {
             sketch.get("figmaCoordinates").is_none(),
             "do not apply FIG coordinate semantics to Sketch"
         );
+    }
+
+    #[test]
+    fn fig_effect_metadata_is_versioned_and_not_persisted_or_shared_with_sketch() {
+        let value: serde_json::Value = serde_json::from_str(&import_fig_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/effect-source.fig"
+        )))
+        .unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["figmaEffects"]["version"], 1);
+        assert!(value["doc"].get("figmaEffects").is_none());
+        let id = value["doc"]["pages"][0]["children"][0]["id"]
+            .as_str()
+            .unwrap();
+        let facts = &value["figmaEffects"]["nodes"][id];
+        assert_eq!(facts.as_array().unwrap().len(), 4);
+        assert_eq!(facts[0]["spread"], 7.0);
+        assert_eq!(facts[0]["blend"], "MULTIPLY");
+        assert_eq!(facts[0]["showBehind"], true);
+        assert_eq!(facts[1]["visible"], false);
+        assert_eq!(facts[2]["color"], "#000000");
+        let sketch: serde_json::Value = serde_json::from_str(&import_sketch_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/sample.sketch"
+        )))
+        .unwrap();
+        assert!(sketch.get("figmaEffects").is_none());
     }
 
     #[test]

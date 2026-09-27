@@ -365,7 +365,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
   };
 
   /** Kiwi effects: offsets and radii are already in our units; only
-   *  the names differ. */
+   *  the names differ. FOREGROUND_BLUR is the binary alias of LAYER_BLUR. */
   const effectsOf = (nc: J): Effect[] => {
     const out: Effect[] = [];
     for (const raw of arr(nc.effects)) {
@@ -377,7 +377,7 @@ export async function importFigContainer(canvas: Uint8Array, archive?: Zip): Pro
           ? "drop-shadow"
           : type === "INNER_SHADOW"
             ? "inner-shadow"
-            : type === "LAYER_BLUR"
+            : type === "LAYER_BLUR" || type === "FOREGROUND_BLUR"
               ? "layer-blur"
               : type === "BACKGROUND_BLUR"
                 ? "background-blur"

@@ -492,7 +492,8 @@ fn collect_component_names(v: &V, out: &mut HashMap<String, String>) {
 }
 
 /// Layer effects (shadows/blurs): DROP_SHADOW, INNER_SHADOW, LAYER_BLUR,
-/// BACKGROUND_BLUR — Figma's full effect set maps 1:1 onto our `Effect`.
+/// BACKGROUND_BLUR. Native effects are only a projection: source visibility,
+/// spread, blend and show-behind live in import-only metadata.
 fn figma_effects(node: &V) -> Vec<x_core::Effect> {
     let Some(arr) = node.get("effects").and_then(V::arr) else {
         return vec![];
@@ -656,6 +657,47 @@ fn image_ref(node: &V) -> Option<&str> {
         .find_map(|f| s(f, "imageRef"))
 }
 
+fn figma_source_effects(node: &V) -> Vec<crate::import_ir::FigmaSourceEffect> {
+    node.get("effects")
+        .and_then(V::arr)
+        .into_iter()
+        .flatten()
+        .map(|e| {
+            let kind = match s(e, "type") {
+                Some("DROP_SHADOW") => "drop-shadow",
+                Some("INNER_SHADOW") => "inner-shadow",
+                Some("LAYER_BLUR") => "layer-blur",
+                Some("BACKGROUND_BLUR") => "background-blur",
+                _ => "unsupported",
+            };
+            let blur = matches!(kind, "layer-blur" | "background-blur");
+            let offset = e.get("offset");
+            crate::import_ir::FigmaSourceEffect {
+                kind,
+                color: e.get("color").map(figma_color).unwrap_or(Color::BLACK),
+                x: if blur {
+                    0.0
+                } else {
+                    offset.map(|o| n_or(o, "x", 0.0)).unwrap_or(0.0)
+                },
+                y: if blur {
+                    0.0
+                } else {
+                    offset.map(|o| n_or(o, "y", 0.0)).unwrap_or(0.0)
+                },
+                blur: n_or(e, "radius", 0.0),
+                spread: n_or(e, "spread", 0.0),
+                visible: e.get("visible").and_then(V::boolean).unwrap_or(true),
+                blend: s(e, "blendMode").map(str::to_string),
+                show_behind: e
+                    .get("showShadowBehindNode")
+                    .and_then(V::boolean)
+                    .unwrap_or(false),
+            }
+        })
+        .collect()
+}
+
 fn figma_appearance(node: &V) -> crate::import_ir::FigmaAppearance {
     let fills = node
         .get("fills")
@@ -680,6 +722,7 @@ fn figma_appearance(node: &V) -> crate::import_ir::FigmaAppearance {
     crate::import_ir::FigmaAppearance {
         fill,
         blend: s(node, "blendMode").map(str::to_string),
+        effects: figma_source_effects(node),
         effect_count: node
             .get("effects")
             .and_then(V::arr)
@@ -1634,6 +1677,31 @@ mod blend_import_tests {
 #[cfg(test)]
 mod appearance_import_tests {
     use super::*;
+
+    #[test]
+    fn source_effects_preserve_fields_missing_from_native_projection() {
+        let node = crate::json::parse(r#"{"effects":[
+            {"type":"DROP_SHADOW","radius":6,"offset":{"x":5,"y":-3},"spread":7,"visible":false,"blendMode":"MULTIPLY","showShadowBehindNode":true},
+            {"type":"LAYER_BLUR","radius":8,"offset":{"x":9,"y":9}},
+            {"type":"FUTURE_EFFECT"}
+        ]}"#).unwrap();
+        let facts = figma_appearance(&node);
+        assert_eq!(facts.effect_count, 3);
+        assert_eq!(facts.effects.len(), 3);
+        let shadow = &facts.effects[0];
+        assert_eq!(shadow.kind, "drop-shadow");
+        assert_eq!(
+            (shadow.x, shadow.y, shadow.blur, shadow.spread),
+            (5.0, -3.0, 6.0, 7.0)
+        );
+        assert!(!shadow.visible);
+        assert!(shadow.show_behind);
+        assert_eq!(shadow.blend.as_deref(), Some("MULTIPLY"));
+        assert_eq!(shadow.color, Color::BLACK);
+        assert_eq!((facts.effects[1].x, facts.effects[1].y), (0.0, 0.0));
+        assert_eq!(facts.effects[2].kind, "unsupported");
+        assert_eq!(figma_effects(&node).len(), 1, "native projection unchanged");
+    }
 
     #[test]
     fn only_absent_or_single_opaque_unblended_fills_are_classified_simple() {

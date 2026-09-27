@@ -596,3 +596,47 @@ Evidence: `/home/user/wasm-appearance-{red,focused,unit,tsc,build,browser,ci,ci-
 `/home/user/wasm-appearance-stack-{unit,tsc,build}.log`,
 `/home/user/wasm-appearance-ci-red-3.json` (named stack abort),
 `/home/user/wasm-appearance-annotations.json` (genuine artifact results).
+
+## 14. Source-backed FIG effect fidelity (2026-09-27)
+
+Import-only continuation. The complete-result comparator, geometry kernels/guard,
+and native `.x` rendering/persistence remain unchanged. Unlike §13, this batch
+also fixes a demonstrated omission in the existing TS FIG importer: the binary
+`FOREGROUND_BLUR` alias must not silently disappear while `LAYER_BLUR` survives.
+The native binary shim already treats both as layer blur. No oracle relaxation.
+
+### Fixes
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W24 — web FIG importer drops binary foreground blur | Recognize both existing blur spellings as the existing layer-blur effect | Binary tests exercise both aliases, including a hidden alias; the original effects fixture is unchanged |
+| W25 — source effect fields lost at native boundary | Capture complete ordered source facts, including hidden entries, spread, blend, show-behind and source color; emit FIG-only `figmaEffects.version1` keyed by final IDs | New native shim/IR/fixture/envelope tests; source-effects fixture carries materialized shadows, negative spread, explicit/absent blends, hidden entries and source blur color |
+| W26 — restoring source fields could hide inconsistent native effects | Validate the entire visible native projection and active materialized stack before applying metadata; require exact node coverage, version, field types, effect count and known kinds/blends | 32-test source-effects suite covers native contradictions, unsupported data, malformed metadata, missing/unused records, limits, legacy behavior and unchanged complete comparison |
+
+The source facts are not values borrowed from the TS result. Native visible
+shadow offsets/colors/radii and blur radii must agree, in order, with the facts;
+hidden entries must have no corresponding native effect. Source-only fields are
+then restored. Native rendering still excludes hidden effects and retains its
+existing reduced effect model, including after `.x` persistence. Old envelopes
+without the sidecar keep their previous adapter semantics, not guessed defaults.
+Unknown source effect kinds survive the binary shim as unsupported markers and
+force fallback rather than becoming a false empty list.
+
+The new deterministic `effect-source.fig` fixture (797 bytes) is generated with
+`e2e/fixtures/make-fig-fixture.py --effect-source`. Existing fixture binaries are
+unchanged. Real-artifact smoke now requires complete candidate equivalence AND
+`backend=wasm` for both the original effects fixture and the new source-effects
+fixture. Synthetic fixture coverage is not general real-world or visual signoff.
+
+### Verification
+
+- Regression first: **25 passed / 7 failed**; implemented suite **32/0**.
+- Serial full npm suite: **3,081/0**, 51 summaries. `tsc -b` and production build
+  pass (existing chunk-size warning).
+- Native Rust checks, regenerated modules and stricter actual-artifact assertions
+  are **pending CI**. Local cargo/rustc remain unavailable; no new native promotion
+  is claimed until those assertions execute successfully.
+- Broad rich-import parity, native-browser visual fidelity and performance remain
+  **NOT VERIFIED**. Geometry remains guarded as requested.
+
+Evidence: `/home/user/wasm-source-effects-{red,focused,unit,tsc,build}.log`.
