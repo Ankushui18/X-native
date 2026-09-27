@@ -6,9 +6,9 @@
 > A strictly gated web-document V1 adapter now powers an explicit
 > `#/file/<id>?engine=rust` rectangle preview when genuine WASM is available.
 > The ordinary editor, production history and persistence remain TypeScript-owned.
-> The first narrow preview passed generated-WASM
-> [CI 36342756975](https://github.com/Ankushui18/X-native/actions/runs/36342756975);
-> the version-2 resize command is a separate verification slice in §23.
+> The narrow preview and version-2 resize command passed the Rust workspace,
+> web and generated-WASM
+> [CI 36344250983](https://github.com/Ankushui18/X-native/actions/runs/36344250983).
 > Native geometry promotion **failed** its comparator. See
 > [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
 > The baseline inventory below is historical, not a claim that the bridges are inert.

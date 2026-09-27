@@ -1021,3 +1021,12 @@ host, the `x-wasm` bridge, the strict TS transport, the web document adapter and
 the opt-in mounted view. `npm run test:wasm` exercises the **real generated**
 V2 artifact's resize/undo and view paint path when CI builds it. The import
 parity gates and native geometry NOT APPROVED guard are unchanged.
+
+**Verified:** [CI 36344250983](https://github.com/Ankushui18/X-native/actions/runs/36344250983)
+passed on `7145cfa`: Rust formatting/clippy/workspace tests (including native
+resize undo), full web tests/build, matched WASM packages, genuine-artifact
+command/web-document/React smoke, and screenshots. The first V2 run caught an
+actual Rust undo-ID omission for `Resize` as well as formatting; the same Rust
+history inspection now reports resized nodes on undo/redo. Green CI does **not**
+promote native geometry (still NOT APPROVED), general web file schemas, or the
+default production editor.
