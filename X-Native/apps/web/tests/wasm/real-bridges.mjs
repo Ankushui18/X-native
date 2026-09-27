@@ -12,8 +12,9 @@ import { booleanPath, booleanPathTs } from "../../src/engine/geometry.ts";
 const gluePath = path.resolve("public/wasm/x_wasm.js");
 const importBytes = fs.readFileSync("public/wasm/x_wasm_bg.wasm");
 const geoBytes = fs.readFileSync("public/x_geo.wasm");
-// Native Node import, not a Vite transform of generated wasm-bindgen glue.
-const glue = await Function("url", "return import(url)")(pathToFileURL(gluePath).href);
+// Use the runner-supported dynamic import. A Function("return import(...)")
+// bypasses vite-node's transform and has no VM dynamic-import callback.
+const glue = await import(/* @vite-ignore */ pathToFileURL(gluePath).href);
 __resetWasmForTests();
 assert.equal(await initWasmBridge(async () => ({ ...glue,
   default: () => glue.default({ module_or_path: importBytes }),
