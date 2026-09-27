@@ -21,7 +21,7 @@
 import { ReactNode, forwardRef, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
-import { useEscape } from "./escape";
+import { useEscape, useFocusTrap } from "./escape";
 import { evalField } from "./fieldExpr";
 import type { XNode } from "../engine/types";
 
@@ -583,6 +583,9 @@ export function XDialog({
   // whenever an App sheet was open, and a dialog on top of one is exactly when
   // a press has to reach the dialog.
   useEscape("dialog", onClose);
+  // PM-U7: and the keyboard does not leave it while it is open.
+  const box = useRef<HTMLDivElement>(null);
+  useFocusTrap(true, box);
 
   return createPortal(
     <div
@@ -591,7 +594,15 @@ export function XDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="x-dialog" style={{ width }} role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        ref={box}
+        className="x-dialog"
+        style={{ width }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+      >
         <div className="x-dialog-head">
           <span className="x-dialog-title">{title}</span>
           <button className="icon-btn" aria-label="Close" onClick={onClose}>

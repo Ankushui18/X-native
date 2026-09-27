@@ -3445,6 +3445,104 @@ for (const [label, payload] of [
     !landed.sheet && landed.tag !== "BODY");
   t(`it lands on the editor's focus home (${landed.home ? "canvas column" : landed.where})`, landed.home);
 
+  /* ── PM-U7: the veil is a wall ───────────────────────────────────────── */
+  // `aria-modal` says the page behind a modal is inert; these checks are the
+  // keyboard half of that claim. Tab at the end of the sheet used to walk out
+  // from under the veil into the toolbar behind it, where Enter did something
+  // the user could not see.
+  const paletteRun = async (text) => {
+    await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
+    await sleep(500);
+    const hit = await p.evaluate((want) => {
+      const b = [...document.querySelectorAll('.actions button, [role="dialog"] button')]
+        .find((x) => (x.textContent || "").includes(want));
+      if (!b) return false;
+      b.click();
+      return true;
+    }, text);
+    await sleep(650);
+    return hit;
+  };
+  // The same focusable set the trap uses, read in the browser so the check is on
+  // what a Tab press can actually reach.
+  const ringOf = (sel) => p.evaluate((rootSel) => {
+    const root = document.querySelector(rootSel);
+    if (!root) return null;
+    const items = [...root.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")]
+      .filter((el) => !el.disabled && !el.closest("[hidden]") && el.getAttribute("aria-hidden") !== "true" &&
+                      Number(el.getAttribute("tabindex") ?? 0) !== -1 && el !== root);
+    return {
+      count: items.length,
+      first: items[0]?.className || items[0]?.tagName,
+      last: items[items.length - 1]?.className || items[items.length - 1]?.tagName,
+      active: (() => { const i = items.indexOf(document.activeElement); return i < 0 ? null : i; })(),
+    };
+  }, sel);
+
+  const sheetRan = await paletteRun("Export assets");
+  const beforeTabs = await ringOf(".xmodal");
+  t(`the export sheet opens with the caret inside it (${beforeTabs?.count} Tab stops)`,
+    sheetRan && !!beforeTabs && beforeTabs.active === 0);
+
+  // Nothing selected for export: the button is disabled, so it is not a stop.
+  await p.evaluate(() => [...document.querySelectorAll(".xmodal-head button.link")]
+    .find((b) => b.textContent.trim() === "Clear")?.click());
+  await sleep(250);
+
+  let outOfSheet = 0;
+  let onDisabled = 0;
+  for (let i = 0; i < 24; i++) {
+    await p.keyboard.press("Tab");
+    const where = await p.evaluate(() => {
+      const a = document.activeElement;
+      const btn = a && a.classList?.contains("export-run") && a.disabled;
+      return { inSheet: !!a?.closest?.(".xmodal"), disabledRun: !!btn };
+    });
+    if (!where.inSheet) outOfSheet++;
+    if (where.disabledRun) onDisabled++;
+  }
+  t(`24 Tabs never leave the sheet (${outOfSheet} escape${outOfSheet === 1 ? "" : "s"})`, outOfSheet === 0);
+  t(`and never land on its disabled Export button (${onDisabled} hit${onDisabled === 1 ? "" : "s"})`, onDisabled === 0);
+
+  await p.evaluate(() => document.querySelector(".xmodal-filter")?.focus());
+  await p.keyboard.down("Shift"); await p.keyboard.press("Tab"); await p.keyboard.up("Shift");
+  await sleep(300);
+  const wrapped = await ringOf(".xmodal");
+  t(`Shift+Tab at the top of the sheet wraps to its last stop (index ${wrapped?.active} of ${wrapped?.count}, ${wrapped?.last})`,
+    !!wrapped && wrapped.active === wrapped.count - 1);
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  t("and Escape still closes it", await p.evaluate(() => !document.querySelector(".xmodal")));
+
+  // XDialog — the nudge dialog, and every queued question, renders through it.
+  const nudgeRan = await paletteRun("Nudge amount");
+  const nudgeStart = await p.evaluate(() => ({
+    open: !!document.querySelector(".x-dialog"),
+    focus: document.activeElement?.getAttribute?.("aria-label") || document.activeElement?.className || document.activeElement?.tagName,
+  }));
+  t(`the nudge dialog takes the caret to its first field (${nudgeStart.focus})`,
+    nudgeRan && nudgeStart.open && nudgeStart.focus === "Small nudge");
+
+  const nudgeRing = await ringOf(".x-dialog");
+  await p.evaluate(() => {
+    const root = document.querySelector(".x-dialog");
+    const items = [...root.querySelectorAll("button, input, [tabindex]")]
+      .filter((el) => !el.disabled && Number(el.getAttribute("tabindex") ?? 0) !== -1 && el !== root);
+    items[items.length - 1]?.focus();
+  });
+  await p.keyboard.press("Tab");
+  await sleep(300);
+  const nudgeBack = await ringOf(".x-dialog");
+  t(`Tab at the end of the dialog wraps to its first control (${nudgeBack?.first})`, nudgeBack?.active === 0);
+  await p.keyboard.press("Escape");
+  await sleep(400);
+  const nudgeGone = await p.evaluate(() => ({
+    open: !!document.querySelector(".x-dialog"),
+    where: document.activeElement?.className || document.activeElement?.tagName,
+  }));
+  t(`and Escape closes it without dropping the caret on <body> (${nudgeGone.where})`,
+    !nudgeGone.open && nudgeGone.where !== "BODY");
+
   await p.close();
 }
 

@@ -577,6 +577,10 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
    column is what e2e §47 checks the caret has landed on when the palette row
    that opened the export sheet is gone). */
 .canvas-col:focus { outline: none; }
+/* PM-U7: a modal that has no control to hand the caret to keeps it on its own
+   box, so the ring it draws would be the whole sheet. */
+.xmodal:focus,
+.x-dialog:focus { outline: none; }
 .canvas-wrap {
   position: absolute;
   inset: 0;

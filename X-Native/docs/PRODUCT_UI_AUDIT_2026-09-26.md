@@ -269,6 +269,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U3 | FIXED: one Escape owner. Every overlay registers in `ui/escape.ts` while it is open — the App's five sheets, the dock's flyouts, XDialog/XPopover, the dialog bus, the context menu, the fill picker, the radial menu, the shortcuts sheet and the inspector's zoom/language/property menus — and the topmost (opened most recently) closes on one press, which the central handler consumes. Order used to follow *registration*, not the screen: a dialog on top of the export sheet lost the press to the sheet behind it, and the shortcuts sheet could be starved outright. The old `popoverGuard` counter (which protected the selection but closed nothing) is deleted, and the presentation's second Escape implementation with it, so one press walks back one frame. The same registry hands the caret back: an overlay that closes unmounts the field it focused, and focus now returns to whatever opened it, or to the canvas column when that control is gone (a palette row), instead of falling to `<body>`. §4v, §4w | FIXED (P1) | — |
 | PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
+| PM-U7 | A modal did not hold the keyboard: `aria-modal="true"` was set but Tab from the last control in the export sheet walked out from under the veil into the toolbar behind it (where Enter operated chrome the user could not see), and the nudge dialog never took focus at all, so it opened with the caret still on whatever was behind it. FIXED: `useFocusTrap` (ui/escape.ts) — both modals take the caret on open (their first field if they have one) and ring Tab/Shift+Tab among their controls, skipping disabled ones; non-modal overlays are deliberately not trapped. §4x | FIXED (P2) | — |
 | PM-U6 | FIXED: the sheet focuses its filter field on open, which is both the first control in the sheet and the first thing worth doing in it — every other modal input in the app (shortcuts, find-in-page, the palette) already did. The dialog also says `aria-modal="true"`, which it did not, so a screen reader was not told the document behind the veil is inert. §46 types into it with no click first and watches the list filter. Focus *restore* on close was PM-U3's, and is answered there: the registry hands the caret back to the command that opened the sheet, or to the canvas column when that row is gone with the palette (no longer `<body>`, and e2e §47 checks it). | FIXED (P2) | — |
 
 ## §12. Left panel + states trace (prompts §§20, 23–25) — NavRail + LeftPanel + App screens
@@ -1201,6 +1202,47 @@ canvas column.
 that both closes a menu and focuses a control, and whether the two-row dock from
 §4u reads well with focus inside it. Both need eyes; the geometry and the
 attribute-level behaviour are asserted instead.
+
+## §4x. P2 round 11 — the veil is a wall (PM-U7)
+
+The modal family's third symptom, and the one the audit had not named. `aria-modal="true"` was set on
+both modals (the export sheet and `XDialog`), which tells assistive tech the document behind the veil is
+inert. Nothing held the **keyboard** there. Tab from the last control in the export sheet walked out from
+under the veil and into the toolbar behind it, where Enter operated chrome the user could not see, with no
+way back except Shift+Tab through the whole ring again. The nudge dialog was the mirror image: it never
+took focus at all, so it opened with the caret still on whatever was behind it — and the same was true of
+every queued question, since `DialogHost` renders through `XDialog`.
+
+`ui/escape.ts` — the registry that already owns Escape (PM-U3) and hands the caret back (round 10) — now
+also owns the trap. `focusablesIn(root)` is the browser's own focusable set minus what it skips: disabled
+controls, `tabindex="-1"` anchors, anything under `[hidden]`, and `aria-hidden` nodes. `useFocusTrap(open,
+root)` takes the caret on open when it is still outside (the first *field* if there is one — the thing
+worth doing — otherwise the first control, otherwise the box itself, which both modals now give
+`tabIndex={-1}` and an `outline: none` rule), and rings Tab and Shift+Tab among those controls, holding the
+press when the ring is empty so it cannot fall through to the document behind.
+
+**Deliberately modal-only.** A popover, menu or flyout is not modal; Tab leaving one is how a keyboard user
+gets out of it, so the trap is used exactly twice — `XDialog` and the export sheet — and `trap.test.mjs`
+asserts that nothing else calls it.
+
+**Where it is checked.** `trap.test.mjs` (27 checks): the focusable set on a synthetic tree (order, the
+four kinds of skip), then both modals mounted for real — the sheet takes the caret on open, `Clear`
+disables its Export button and the ring skips it, Tab at the last stop wraps to the first, Shift+Tab at the
+first wraps to the last, Tab from outside lands inside, and the ring never leaves the sheet; `XDialog`
+(the nudge dialog) takes the caret to "Small nudge" on open and wraps at its end. Source checks keep the
+trap to the two modals and the popover out of it. Unit suite **2,202 checks, 0 failed** (2,175 → 2,202);
+`tsc -b` clean; drift unmoved at 413/131/340/363/49.
+
+**Browser suite §48 — written, NOT RUN here** (8 checks, 341 total): the sheet opened from the palette with
+the caret in its filter, 24 Tabs that never leave it and never land on the disabled Export button,
+Shift+Tab wrapping from the filter to the last stop, Escape still closing it, the nudge dialog taking the
+caret to its first field, its ring wrapping at the end, and Escape closing it without dropping the caret on
+`<body>`.
+
+**Not verified here:** the visual ring on the controls as Tab moves through a modal — focus-visible
+styling needs eyes — and whether the wrap reads as expected when the sheet is scrolled (the trap moves
+focus, and the browser then scrolls the control into view; `preventScroll` is deliberately not passed on
+the Tab path).
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

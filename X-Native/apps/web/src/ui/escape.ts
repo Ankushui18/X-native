@@ -191,3 +191,79 @@ export function useEscape(id: string | null, close: () => void): void {
     return pushEscape(id, () => ref.current(), home.current);
   }, [id]);
 }
+
+/* ── the veil is a wall (PM-U7) ──────────────────────────────────────────── */
+
+/** Everything a `Tab` press can reach inside `root`, in document order: the
+ *  browser's own focusable set minus what it skips — disabled controls,
+ *  `tabindex="-1"` anchors, anything under `[hidden]`, and `aria-hidden` nodes
+ *  (the reveal/eye buttons the panels keep off. jsdom has no layout, so
+ *  `offsetParent` and computed `display` are not usable here; this is the
+ *  subset of the rule that both the browser and the headless DOM agree on. */
+const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
+
+export function focusablesIn(root: HTMLElement): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => {
+    if ((el as HTMLButtonElement).disabled) return false;
+    if (el.closest("[hidden]")) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    const tabindex = el.getAttribute("tabindex");
+    if (tabindex != null && Number(tabindex) < 0) return false;
+    return true;
+  });
+}
+
+/** Hold the keyboard inside a modal for as long as it is open.
+ *
+ *  `aria-modal="true"` tells assistive tech the rest of the document is inert,
+ *  but nothing held the *keyboard* there: `Tab` from the last control in the
+ *  export sheet walked out from under the veil and into the toolbar behind it,
+ *  and a keyboard user who then pressed Enter was operating chrome they could
+ *  not see. The trap closes the ring — `Tab` at the end goes back to the first
+ *  control, `Shift+Tab` at the first goes to the last — and takes the caret on
+ *  open when it is still outside, which is how a modal that does not autofocus a
+ *  field (the nudge dialog, a queued question) becomes reachable at all.
+ *
+ *  Deliberately modal-only: a popover, menu or flyout is not modal, and Tab
+ *  leaving it is how a keyboard user gets out of one. */
+export function useFocusTrap(open: boolean, root: { current: HTMLElement | null }): void {
+  useEffect(() => {
+    if (!open) return undefined;
+    const d = doc();
+    const el = root.current;
+    if (!d || !el) return undefined;
+
+    const active = d.activeElement as HTMLElement | null;
+    if (!active || !el.contains(active)) {
+      // The first *field* if there is one — the thing worth doing — otherwise the
+      // first control, otherwise the dialog itself (which its owner gives a
+      // `tabIndex` when it has nothing else to hand the caret to).
+      const items = focusablesIn(el);
+      const field = items.find((x) => /^(INPUT|SELECT|TEXTAREA)$/.test(x.tagName));
+      const target = field ?? items[0] ?? (el.tabIndex >= 0 ? el : null);
+      target?.focus({ preventScroll: true });
+    }
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const items = focusablesIn(el);
+      if (!items.length) {
+        // Nothing to move to: the ring is a point, so hold the press rather than
+        // let it fall through to the document behind the veil.
+        e.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const here = d.activeElement as HTMLElement | null;
+      const ix = here ? items.indexOf(here) : -1;
+      const next = ix < 0 ? (e.shiftKey ? last : first) : e.shiftKey ? items[ix - 1] ?? last : items[ix + 1] ?? first;
+      if (next === here) return;
+      e.preventDefault();
+      e.stopPropagation();
+      next.focus({ preventScroll: true });
+    };
+    d.addEventListener("keydown", onKey, true);
+    return () => d.removeEventListener("keydown", onKey, true);
+  }, [open, root]);
+}

@@ -106,7 +106,7 @@ import { askChoice, askPrompt } from "./dialog";
 import { buildPdf } from "../engine/pdf";
 import { contentBox, exportClipSvg, exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
-import { useEscape } from "./escape";
+import { useEscape, useFocusTrap } from "./escape";
 import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
 import { addAutoLayout, removeAutoLayout, setFlow, suggestAutoLayout } from "./layoutActions";
 import {
@@ -337,9 +337,15 @@ function ExportAssetsDialog({
     onClose();
   };
 
+  // PM-U7: `aria-modal` says the page behind the veil is inert; this is what
+  // makes that true for the keyboard too, so Tab cannot leave the sheet for the
+  // toolbar behind it.
+  const sheet = useRef<HTMLDivElement>(null);
+  useFocusTrap(true, sheet);
+
   return createPortal(
     <div className="xmodal-veil" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="xmodal" role="dialog" aria-modal="true" aria-label="Export assets">
+      <div ref={sheet} className="xmodal" role="dialog" aria-modal="true" aria-label="Export assets" tabIndex={-1}>
         <div className="xmodal-head">
           <h3>Export assets</h3>
           {/* PM-U6: the sheet opened with focus still on whatever launched it, so

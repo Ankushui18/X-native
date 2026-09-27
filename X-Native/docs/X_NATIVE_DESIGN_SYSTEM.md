@@ -96,6 +96,10 @@ sheet, colours from tokens, controls from the primitives.
 2. No hardcoded colors/geometry in chrome — tokens (or canvas-fed tokens) only.
 3. Every icon-only control: Tooltip label + shortcut, focus-visible, aria-label.
 4. Every popover: anchor + viewport clamp + Esc + outside-click + initial focus.
-5. Every dialog: `XDialog` (or pattern twin), focus in, Esc/outside-close, no native prompt/confirm.
+5. Every dialog: `XDialog` (or pattern twin), focus in, Esc/outside-close, no native prompt/confirm,
+   and the keyboard stays inside it while it is open (`useFocusTrap`, ui/escape.ts): Tab at the last
+   control wraps to the first, Shift+Tab at the first wraps to the last, disabled controls are not stops.
+   Non-modal overlays (popovers, menus, flyouts) are deliberately not trapped — Tab leaving them is how
+   a keyboard user gets out.
 6. Multi-select: Mixed-or-aggregate everywhere; first-layer values must never masquerade (IN-U1/TY-U3).
 7. Bound props: visible indicator + "explicit edit wins" (FS-U1/U5/U6).
