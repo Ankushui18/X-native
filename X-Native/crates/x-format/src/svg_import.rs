@@ -1641,8 +1641,12 @@ mod tests {
           </g>
         </svg>"##;
         let page = import_svg(svg).expect("SVG should import");
-        let group = &page.children[0];
-        let rect = &group.children[0];
+        assert_eq!(
+            page.children.len(),
+            2,
+            "untransformed SVG group is transparent to the imported tree"
+        );
+        let rect = &page.children[0];
         assert!(
             matches!(&rect.fill, Paint::Solid(color) if color.to_rgba8() == Color::from_rgba8(255, 0, 0, 102).to_rgba8())
         );
@@ -1651,7 +1655,7 @@ mod tests {
             rect.stroke_layers.first().unwrap().options.cap_start,
             StrokeCap::Round
         );
-        let path = &group.children[1];
+        let path = &page.children[1];
         match &path.fill {
             Paint::LinearGradient {
                 start, end, stops, ..
