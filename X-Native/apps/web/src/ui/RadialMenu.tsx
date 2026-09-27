@@ -1,3 +1,4 @@
+import { allowTopologyEdit } from "./vectorCapabilities";
 /**
  * Marking / Radial Menu (Phase 7 Leapfrog Differentiation)
  *
@@ -35,7 +36,7 @@ const SLICES: RadialSlice[] = [
   } },
   { id: "text", label: "Text", shortcut: "T", icon: "text", action: (e) => e.dispatch({ type: "setTool", tool: "text" }) },
   { id: "cleanup", label: "Clean Up", shortcut: "✨", icon: "visual-search", action: (e) => {
-    e.dispatch({ type: "vectorCleanup" });
+    if (allowTopologyEdit(e)) e.dispatch({ type: "vectorCleanup" });
   } },
 ];
 

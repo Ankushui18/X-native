@@ -1,5 +1,10 @@
 # Rust / TypeScript boundary
 
+> **2026-09-27 update:** optional import and geometry bridges are now wired, with
+> TypeScript equivalence guards and build/CI packaging. Native execution of these
+> changes is **NOT VERIFIED** here. See [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
+> The baseline inventory below is historical, not a claim that the new bridges are inert.
+
 Status: **provisional by design.** This document describes what the repository
 does today, not what earlier audits assumed it did.
 
@@ -14,7 +19,7 @@ would be a claim about the present tense, and it would be false: Rust is not
 currently connected to anything shipped. The rule constrains duplication
 without pre-judging which language wins each capability.
 
-## Current state, verified
+## Historical TypeScript baseline (before the bridge integration)
 
 **TypeScript is the production runtime engine for the web application. Rust is
 an unconnected headless codebase whose future role has not yet been proven.**
@@ -100,20 +105,25 @@ TYPESCRIPT PRODUCT              RUST MIGRATION TRACK
 
 Both tracks are live. Neither waits on the other.
 
-## Bridge status
+## Bridge status (2026-09-27)
 
-**Slice 1 is built.** `crates/x-wasm` compiles to `wasm32-unknown-unknown` in
-CI and uploads a ~298 KB `x_wasm.wasm` artifact on every run. It exposes
-`importFigToX`, `importSketchToX`, `importSvgToX` and `engineVersion`: bytes in,
-`.x` JSON out, via `x-format`'s existing importers and `save_x`. The crate owns
-no document logic, and the dependency-graph test declares it a leaf — it may
-depend on the engine, nothing may depend on it.
+The existing `x-wasm` import crate now has a generated-bindgen loader, explicit
+native `.x` → web import adapter, dashboard/editor preload, and UI routing.
+`x-geo` implements the previously specified binary boundary over the existing
+`x-core::booleans::boolean_with(RasterGuided)`; it introduces no geometry engine.
+Both bridge crates are leaves in the dependency graph.
 
-**It is not yet loaded by the web app.** Nothing in `apps/web` imports the
-artifact, so the shipped product still runs entirely on TypeScript. The next
-slice is to load it behind a flag and run the existing `.fig`/`.sketch`/SVG
-import checks against both paths; the behaviour suite already pins the expected
-output, which is why import was chosen as the first capability.
+`npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
+real generated artifacts (no mock/replay substitution). CI is configured to run
+both. **The changed Rust code and this CI job have not executed in this sandbox.**
+Prior successful CI runs establish the old x-wasm baseline, not these changes.
+
+TypeScript remains authoritative. Imports use a native result only after the
+whole converted contract agrees with TS; unsupported resources/typography/styles
+fall back, never partially import. Geometry `auto` compares against TS using the
+existing §8 comparator; `?geo=wasm` exposes native results for differential tests.
+Neither native equivalence across the corpus nor a speedup is claimed. See the
+linked implementation record for commands, checks, and remaining promotion gates.
 
 ## Migration sequence
 
@@ -168,7 +178,7 @@ currently the only implementation of `.fig` binary parsing, Sketch
 round-tripping, PDF *vector* export, HTML export and `.x` persistence that has
 ever been exercised by its own test suite.
 
-## Why the bridge does not exist yet
+## Historical toolchain investigation (before integration)
 
 An environment limit, not a decision. Every route to a toolchain was probed;
 the results are recorded here so nobody repeats the search.

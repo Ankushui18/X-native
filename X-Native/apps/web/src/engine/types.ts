@@ -209,6 +209,7 @@ export interface VectorVertex {
   strokeCap?: StrokeCap;
   strokeJoin?: StrokeJoin;
   cornerRadius?: number;
+  mirrorMode?: PathPoint["mirrorMode"];
 }
 
 export interface VectorSegment {
@@ -1069,7 +1070,7 @@ export type Command =
   | { type: "placeComponent"; id: string; x: number; y: number }
   | { type: "addPath"; points: PathPoint[]; closed: boolean }
   | { type: "patchPath"; id: string; path: PathPoint[]; closed?: boolean }
-  | { type: "patchVectorNetwork"; id: string; network: VectorNetwork }
+  | { type: "patchVectorNetwork"; id: string; network: VectorNetwork; preserveBounds?: boolean }
   | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
   | { type: "bendSegment"; id: string; segIndex: number; dragX: number; dragY: number }
   | { type: "insertPointOnPath"; id: string; x: number; y: number; maxDist?: number }

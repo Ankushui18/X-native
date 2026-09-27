@@ -6,6 +6,9 @@ export interface TextVectorResult {
   network: VectorNetwork;
   w: number;
   h: number;
+  /** Bearing retained when raster contours are normalized to a local origin. */
+  offsetX?: number;
+  offsetY?: number;
 }
 
 /**
@@ -168,6 +171,13 @@ const FALLBACK_GLYPHS: Record<string, { loops: { x: number; y: number }[][]; adv
     ],
     advance: 65,
   },
+  "i": {
+    loops: [
+      [{ x: 8, y: 35 }, { x: 22, y: 35 }, { x: 22, y: 100 }, { x: 8, y: 100 }],
+      [{ x: 8, y: 8 }, { x: 22, y: 8 }, { x: 22, y: 23 }, { x: 8, y: 23 }],
+    ],
+    advance: 30,
+  },
   "l": {
     loops: [
       [{ x: 8, y: 0 }, { x: 22, y: 0 }, { x: 22, y: 100 }, { x: 8, y: 100 }]
@@ -300,7 +310,7 @@ export function convertTextToVectorPaths(
 
         if (rawContours.length > 0) {
           // Normalize contours back to target size or font size
-          const normFactor = 1 / scale;
+          const normFactor = (fontSize || 16) / fontPx;
           const allVertices: VectorVertex[] = [];
           const allSegments: VectorSegment[] = [];
           const loops: number[][] = [];
@@ -356,7 +366,7 @@ export function convertTextToVectorPaths(
             regions: [{ windingRule: "EVENODD", loops }],
           };
 
-          return { path: combinedPath, network, w, h };
+          return { path: combinedPath, network, w, h, offsetX: minX, offsetY: minY };
         }
       }
     } catch {
@@ -374,8 +384,7 @@ export function convertTextToVectorPaths(
   const scale = (fontSize || 16) / 100;
   let globalVertIdx = 0;
 
-  for (let c = 0; c < content.length; c++) {
-    const ch = content[c];
+  for (const ch of content) {
     const glyph = FALLBACK_GLYPHS[ch] || FALLBACK_GLYPHS[ch.toUpperCase()] || {
       loops: [[{ x: 5, y: 0 }, { x: 70, y: 0 }, { x: 70, y: 100 }, { x: 5, y: 100 }]],
       advance: 75,
@@ -416,4 +425,65 @@ export function convertTextToVectorPaths(
   };
 
   return { path: combinedPath, network, w: finalW, h: finalH };
+}
+
+
+export interface TextGlyphResult extends TextVectorResult {
+  char: string;
+  /** Placement relative to the original text layer; path/network stay local. */
+  x: number;
+  y: number;
+}
+
+/** Outline, unlike Flatten, keeps all contours of each glyph in its own layer.
+ * A dot or counter is not another glyph. Whitespace advances the pen but does
+ * not produce an empty vector. The merged API above remains used by Flatten. */
+export function convertTextToGlyphPaths(
+  text: string,
+  fontSize: number,
+  fontFamily = "Inter",
+  fontWeight = "400",
+  letterSpacing = 0,
+  lineHeight = (fontSize || 16) * 1.2,
+): TextGlyphResult[] {
+  const size = fontSize || 16;
+  let ctx: CanvasRenderingContext2D | null = null;
+  if (typeof document !== "undefined") {
+    try {
+      ctx = document.createElement("canvas").getContext("2d");
+      if (ctx) ctx.font = `${fontWeight} ${size}px "${fontFamily}", Inter, system-ui, sans-serif`;
+    } catch { /* deterministic geometric advances outside the browser */ }
+  }
+  const chars = typeof Intl.Segmenter === "function"
+    ? Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text), (s) => s.segment)
+    : Array.from(text);
+  const results: TextGlyphResult[] = [];
+  let prefix = "", cursor = 0, y = 0, column = 0;
+  for (const char of chars) {
+    if (char === "\n" || char === "\r\n" || char === "\r") {
+      prefix = "";
+      cursor = column = 0;
+      y += lineHeight;
+      continue;
+    }
+    const glyph = FALLBACK_GLYPHS[char] || FALLBACK_GLYPHS[char.toUpperCase()];
+    const nextPrefix = prefix + char;
+    // Prefix measurement retains kerning advances, unlike summing ink bounds.
+    const x = (ctx ? ctx.measureText(nextPrefix).width - ctx.measureText(char).width : cursor) + column * letterSpacing;
+    cursor = ctx ? ctx.measureText(nextPrefix).width : cursor + (glyph?.advance ?? (/^\s+$/u.test(char) ? 30 : 75)) * size / 100;
+    prefix = nextPrefix;
+    column++;
+    if (/^\s+$/u.test(char)) continue;
+    const res = convertTextToVectorPaths(char, size, fontFamily, fontWeight);
+    if (!res.network.vertices.length) continue;
+    const xs = res.network.vertices.map((v) => v.x), ys = res.network.vertices.map((v) => v.y);
+    const minX = Math.min(...xs), minY = Math.min(...ys);
+    const w = Math.max(1, Math.max(...xs) - minX), h = Math.max(1, Math.max(...ys) - minY);
+    results.push({
+      ...res, char, x: x + minX + (res.offsetX ?? 0), y: y + minY + (res.offsetY ?? 0), w, h,
+      path: res.path.map((p) => ({ ...p, x: p.x - minX, y: p.y - minY })),
+      network: { ...res.network, vertices: res.network.vertices.map((v) => ({ ...v, x: v.x - minX, y: v.y - minY })) },
+    });
+  }
+  return results;
 }

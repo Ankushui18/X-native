@@ -48,6 +48,11 @@ export function listMarker(style: XNode["listStyle"], index: number): string {
   return "";
 }
 
+/** Same font shorthand for painting, measuring text, and measuring list gutters. */
+export function canvasTextFont(n: XNode, size = n.fontSize): string {
+  return `${n.textCase === "small-caps" ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${n.fontWeight} ${Math.max(1, size)}px ${n.fontFamily}, Inter, system-ui`;
+}
+
 /**
  * Width the markers of a list need, in world units. The editor overlay indents
  * by this much so the caret starts where the text will be painted; the marker
@@ -55,7 +60,7 @@ export function listMarker(style: XNode["listStyle"], index: number): string {
  */
 export function listGutter(ctx: CanvasRenderingContext2D | null, n: XNode): number {
   if (!ctx || !n.listStyle || n.listStyle === "none") return 0;
-  ctx.font = `${n.fontWeight} ${n.fontSize}px ${n.fontFamily}, Inter, system-ui`;
+  ctx.font = canvasTextFont(n);
   return measureCached(ctx, `${listMarker(n.listStyle, 9)} `);
 }
 
@@ -101,7 +106,8 @@ export function fitLineCount(boxH: number, lineH: number, paraGap: number): numb
 }
 
 export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: string) {
-  ctx.font = `${n.fontWeight} ${n.fontSize}px ${n.fontFamily}, Inter, system-ui`;
+  ctx.font = canvasTextFont(n);
+  text = applyTextCase(text, n.textCase);
   const wrap = n.sizingW !== "hug";
   const ls = n.letterSpacing || 0;
   const widthOf = (line: string) =>
@@ -109,7 +115,7 @@ export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: strin
   const indent = indentOf(n);
   // Truncation cuts the taken rows at max lines, exactly like the painter;
   // the gaps counted are the paragraph breaks that survive the cut.
-  const limit = n.truncate ? Math.max(1, n.maxLines || 1) : Infinity;
+  const limit = n.truncate && n.maxLines > 0 ? Math.max(1, n.maxLines) : Infinity;
   let lines = 0;
   let completeParas = 0;
   let partialTake = false;

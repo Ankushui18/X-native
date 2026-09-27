@@ -1,15 +1,20 @@
 # TS↔Rust geometry bridge — design 2026-09-25 (perf track Task 2, reframed)
 
-**Status: TS side implemented 2026-09-25; Rust side specified, awaiting a
-Rust-capable environment.** There is no Rust toolchain in this sandbox (and
-none installable), so the `x-geo` crate itself is still §6 prose — adding
-unverified Rust would break `scripts/check.sh` for everyone else. The full
-TypeScript surface (§5 codec, §7 loader/choke/fallback/`?geo=` flag) is
-implemented and verified with mock + hand-assembled real wasm modules (see
-"Implementation status" at the end). Task 2 was reframed from "profile the
-bridge" to this design because no geometry bridge exists to profile (see §1).
+**Implementation update, 2026-09-27:** `crates/x-geo` now implements the binary
+ABI over the existing RasterGuided backend. Both bridges have packaging and a
+real-artifact CI smoke gate. TypeScript tests/build and browser fallback pass;
+Rust compilation, native execution and true corpus equivalence remain **NOT
+VERIFIED** in this toolchain-less sandbox. See
+[implementation record](WASM_BRIDGES_2026-09-27.md) for the exact verification ledger.
 
-## 1. What actually exists (corrections to the brief's premises)
+`auto` now checks native results against the TS oracle before using them. Explicit
+`?geo=wasm` exposes native output for differential testing. The different grids
+are not assumed equivalent, and replay timing is not a native speedup.
+
+The original investigation and 2026-09-25 implementation history below are retained;
+§1 is the pre-integration baseline, superseded by the update above.
+
+## 1. Historical baseline (2026-09-25, before integration)
 
 - `apps/web/src/engine/wasmBridge.ts` exists but is **inert four ways**:
   (1) `initWasmBridge()` is never called, (2) no build step emits the
@@ -71,14 +76,14 @@ rings. A synchronous FFI needs no signature changes anywhere.
 - **ADR-5 — synchronous calls, no worker.** Ops are ms-scale; revisit if
   real inputs exceed ~8ms.
 - **ADR-6 — TS authoritative, wasm opt-out-able.** `auto` (default) uses
-  wasm when present and version-matched, else TS; `?geo=ts|wasm` plus a
+  wasm when present, version-matched AND equivalent to the per-call TS oracle, else TS; `?geo=ts|wasm` plus a
   localStorage override for debugging. Any wasm failure degrades to TS
   with a `console.warn`, never a throw.
 
 ## 5. Wire format v1 (normative)
 
-Little-endian (wasm is LE-only). All f64 fields 8-aligned; readers use
-explicit offsets, never packed-struct casts. Limits: ≤16 operands,
+Little-endian (wasm is LE-only). Readers use explicit byte offsets, never
+packed-struct casts; response bbox f64s at offset 12 are not naturally aligned. Limits: ≤16 operands,
 ≤100k points per operand, response ≤16MB; beyond that the TS side uses
 the TS implementation without calling wasm.
 
@@ -133,15 +138,18 @@ u32 reserved, msg_len UTF-8 bytes (no NUL). Status=1 carries bbox only.
 
 ```rust
 xgeo_version() -> u32;                          // 1
-xgeo_alloc(len: u32) -> *mut u8;                // bump/growable; zeroed?
+xgeo_alloc(len: u32) -> *mut u8;                // owned, zeroed; 0 on failure
 xgeo_free(ptr: *mut u8, len: u32);
 xgeo_boolean(req: *const u8, req_len: u32,
              out_ptr: *mut u32, out_len: *mut u32) -> u32; // status
 ```
 
 `xgeo_boolean` validates magic/version/lengths before touching anything
-and returns 2 (with an error response) rather than trapping on malformed
-input. TS re-acquires all `DataView`s after every call (`memory.grow`
+and returns the response status (0 success, 1 empty, 2 protocol error). Invalid
+allocation arguments return 3, allocation failure returns 4, without a response.
+The host allocates one eight-byte output slot: `out_len == out_ptr + 4`. All
+pointers must identify owned allocations of the exact declared size. Free is
+checked/idempotent; no Rust pointer dereference or unsafe block is used. TS re-acquires all `DataView`s after every call (`memory.grow`
 invalidates views; v1 copies buffers out, so views are short-lived).
 
 ## 6. Rust sketch (`crates/x-geo`, ~150 lines + tests)
@@ -158,8 +166,9 @@ must fold pairwise in operand order, not balance the tree.
 
 Grid note: TS uses a fixed 160-wide grid + edge-chaining; Rust uses
 `MAX_CELLS=360`, ≥0.75px cells + marching squares. These must NOT be
-"unified" in v1 — changing either grid alters shipped output. The
-epsilon in §8 absorbs the difference; converging grids is a P4+ task.
+"unified" in v1 — changing either grid alters shipped output. Whether the
+§8 tolerance absorbs any given difference is unproven; auto checks it per call.
+Converging grids is a separate task, not part of exposing this bridge.
 
 ## 7. TypeScript sketch (`wasmBridge.ts` + `geometry.ts`)
 

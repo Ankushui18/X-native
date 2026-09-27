@@ -20,6 +20,19 @@ let pass = 0, fail = 0;
 const t = (name, cond) => { cond ? pass++ : fail++; console.log(`${cond ? "ok  " : "FAIL"} ${name}`); };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Quick Open caps the unfiltered command group. Search before selecting a
+// command; absence from the initial 20 rows is not failure to implement it.
+async function filterPalette(p, text) {
+  const input = await p.$(".actions input");
+  if (!input) return false;
+  await input.focus();
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await p.keyboard.type(text);
+  await sleep(200);
+  return true;
+}
+
+
 const b = await puppeteer.launch(LAUNCH);
 const allErrors = [];
 
@@ -436,6 +449,13 @@ for (const [label, payload] of [
   await p.keyboard.type("add a frame");
   await p.keyboard.press("Enter");
   await sleep(900);
+  const created = await p.evaluate(async () => {
+    const api = window.__xNativeDesignApi;
+    const id = (await api.call("getSelection", {})).data.ids[0];
+    const full = id ? (await api.call("getNode", { id, full: true })).data.full : null;
+    const reply = [...document.querySelectorAll('.agent-row[data-who="agent"] .name')].at(-1)?.textContent ?? "";
+    return { node: full, reply };
+  });
   await p.evaluate(() => {
     const b = [...document.querySelectorAll("button")]
       .find(x => (x.getAttribute("aria-label") || x.textContent).trim() === "File");
@@ -443,7 +463,9 @@ for (const [label, payload] of [
   });
   await sleep(550);
   t("Agent request creates the layer it promises",
-    (await rows(p)).some(r => /Agent frame/.test(r)));
+    created.node?.kind === "frame" && created.reply.includes(created.node.name) &&
+    created.reply.includes(`${created.node.w} × ${created.node.h}`) &&
+    (await rows(p)).some(r => r.includes(created.node.name)));
   await p.close();
 }
 
@@ -3310,6 +3332,7 @@ for (const [label, payload] of [
   /* ── PM-U6: the export sheet opens with the keyboard already inside it ── */
   await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
   await sleep(500);
+  await filterPalette(p, "Export assets");
   const ran = await p.evaluate(() => {
     const b = [...document.querySelectorAll(".actions button, [role=\"dialog\"] button")]
       .find((x) => (x.textContent || "").includes("Export assets"));
@@ -3427,6 +3450,7 @@ for (const [label, payload] of [
   // canvas column carries.
   await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
   await sleep(500);
+  await filterPalette(p, "Export assets");
   await p.evaluate(() => [...document.querySelectorAll(".actions button")]
     .find((x) => (x.textContent || "").includes("Export assets"))?.click());
   await sleep(600);
@@ -3453,6 +3477,7 @@ for (const [label, payload] of [
   const paletteRun = async (text) => {
     await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
     await sleep(500);
+    await filterPalette(p, text);
     const hit = await p.evaluate((want) => {
       const b = [...document.querySelectorAll('.actions button, [role="dialog"] button')]
         .find((x) => (x.textContent || "").includes(want));
@@ -3526,7 +3551,7 @@ for (const [label, payload] of [
   const nudgeRing = await ringOf(".x-dialog");
   await p.evaluate(() => {
     const root = document.querySelector(".x-dialog");
-    const items = [...root.querySelectorAll("button, input, [tabindex]")]
+    const items = [...(root?.querySelectorAll("button, input, [tabindex]") ?? [])]
       .filter((el) => !el.disabled && Number(el.getAttribute("tabindex") ?? 0) !== -1 && el !== root);
     items[items.length - 1]?.focus();
   });
@@ -3679,6 +3704,7 @@ for (const [label, payload] of [
   // sheet's registration is the one the App makes in real use.
   await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
   await sleep(500);
+  await filterPalette(p, "Export assets");
   await p.evaluate(() => {
     [...document.querySelectorAll('.actions button, [role="dialog"] button')]
       .find((x) => (x.textContent || "").includes("Export assets"))?.click();
@@ -3775,7 +3801,7 @@ for (const [label, payload] of [
   await p.mouse.move(cx - 100, cy);
   await sleep(250);
   const hovered = await state();
-  await p.mouse.up();
+  await p.mouse.down(); await p.mouse.up();
   await sleep(500);
   const refused = await state();
   t(`hovering the Bend slice selects it (${hovered.active ?? "no readout"})`,
@@ -3798,6 +3824,7 @@ for (const [label, payload] of [
   await sleep(150);
   await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
   await sleep(500);
+  await filterPalette(p, "Radial menu");
   const ran = await p.evaluate(() => {
     const row = [...document.querySelectorAll(".actions button, [role='dialog'] button")]
       .find((x) => /Radial menu/i.test(x.textContent || ""));
@@ -3810,7 +3837,7 @@ for (const [label, payload] of [
 
   await p.mouse.move(cx - 100, cy);
   await sleep(250);
-  await p.mouse.up();
+  await p.mouse.down(); await p.mouse.up();
   await sleep(600);
   const bent = await state();
   t(`now the Bend slice activates the tool ("${bent.toast.slice(0, 48)}")`,

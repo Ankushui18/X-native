@@ -25,15 +25,7 @@ use x_format::{figbinary, serialize::save_x, sketch, svg_import};
 fn envelope(result: Result<String, String>) -> String {
     match result {
         Ok(doc) => format!("{{\"ok\":true,\"doc\":{doc}}}"),
-        Err(e) => {
-            // The message is user-visible, so escape it rather than trusting
-            // importer text to be JSON-safe.
-            let msg = e
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', " ");
-            format!("{{\"ok\":false,\"error\":\"{msg}\"}}")
-        }
+        Err(e) => format!("{{\"ok\":false,\"error\":{}}}", serde_json::json!(e)),
     }
 }
 
@@ -89,6 +81,11 @@ mod bindings {
         super::import_svg_to_x(text)
     }
 
+    #[wasm_bindgen(js_name = bridgeVersion)]
+    pub fn bridge_version() -> u32 {
+        1
+    }
+
     #[wasm_bindgen(js_name = engineVersion)]
     pub fn engine_version() -> String {
         super::engine_version()
@@ -128,6 +125,15 @@ mod tests {
         // A message containing a quote must not break the envelope.
         let out = envelope(Err("bad \"thing\" here".into()));
         assert!(out.contains("\\\"thing\\\""), "got: {out}");
+    }
+
+    #[test]
+    fn all_control_characters_round_trip() {
+        let message = "quote \" slash \\ tab \t cr \r nul \0 unicode λ";
+        let value: serde_json::Value =
+            serde_json::from_str(&envelope(Err(message.into()))).unwrap();
+        assert_eq!(value["error"], message);
+        assert_eq!(value["ok"], false);
     }
 
     #[test]

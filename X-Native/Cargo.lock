@@ -1954,6 +1954,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "x-geo"
+version = "0.1.0"
+dependencies = [
+ "x-core",
+]
+
+[[package]]
 name = "x-native"
 version = "0.34.0"
 dependencies = [
@@ -2008,6 +2015,7 @@ dependencies = [
 name = "x-wasm"
 version = "0.34.0"
 dependencies = [
+ "serde_json",
  "wasm-bindgen",
  "x-core",
  "x-format",

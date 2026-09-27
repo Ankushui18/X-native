@@ -106,17 +106,32 @@ jobs:
       #
       # Runs after the Gate so a wasm failure can never be mistaken for, or
       # mask, a workspace failure.
-      - name: Wasm bridge
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: X-Native/apps/web/package-lock.json
+
+      - name: Package both WASM bridges (matching bindgen glue)
         run: |
           rustup target add wasm32-unknown-unknown --toolchain 1.98.1
-          cargo build -p x-wasm --target wasm32-unknown-unknown --release --locked
-          ls -la target/wasm32-unknown-unknown/release/*.wasm
+          cargo install wasm-bindgen-cli --version 0.2.127 --locked
+          bash scripts/build-wasm.sh
 
-      - name: Upload wasm artifact
+      - name: Real WASM bridge smoke tests (no mocks or replay)
+        run: |
+          cd apps/web
+          npm ci --no-audit --no-fund
+          npm run test:wasm
+          npm run build
+
+      - name: Upload browser-ready wasm assets
         uses: actions/upload-artifact@v4
         with:
           name: x-wasm
-          path: X-Native/target/wasm32-unknown-unknown/release/x_wasm.wasm
+          path: |
+            X-Native/apps/web/public/wasm
+            X-Native/apps/web/public/x_geo.wasm
           if-no-files-found: error
 
       # scripts/check.sh is deliberately opaque: cargo writes into temp files it

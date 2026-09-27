@@ -5332,3 +5332,8 @@ html[data-theme="dark"] .x-btn-danger {
 .dlg-error {
   color: var(--red);
 }
+
+/* Restricted width profiles remain visible and explain how to enable them. */
+.width-profile { min-width: 0; margin: 0; padding: 0; border: 0; }
+.width-profile:disabled svg { opacity: 0.4; }
+.width-profile-reason { margin: 4px 0; font-size: 10px; color: var(--dim); }

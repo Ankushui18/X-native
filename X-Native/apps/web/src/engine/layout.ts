@@ -1026,8 +1026,10 @@ export function wraps(layout: AutoLayout | undefined): boolean {
  * into the same dispatch, and so the rule is testable on its own.
  */
 export function textDimensionRule(patch: Partial<XNode>): Partial<XNode> {
-  const out: Partial<XNode> = { ...patch };
-  if (patch.maxH != null && patch.maxLines == null) out.maxLines = 0;
-  if (patch.maxLines != null && patch.maxLines > 0 && patch.maxH == null) out.maxH = 0;
-  return out;
+  const height = Object.prototype.hasOwnProperty.call(patch, "maxH");
+  const lines = Object.prototype.hasOwnProperty.call(patch, "maxLines");
+  if (!height && !lines) return patch;
+  const maxH = Number.isFinite(patch.maxH) && (patch.maxH ?? 0) > 0 ? patch.maxH : undefined;
+  const maxLines = Number.isFinite(patch.maxLines) ? Math.max(0, Math.round(patch.maxLines ?? 0)) : 0;
+  return { ...patch, maxH: height && maxH ? maxH : undefined, maxLines: height && maxH ? 0 : lines ? maxLines : 0 };
 }

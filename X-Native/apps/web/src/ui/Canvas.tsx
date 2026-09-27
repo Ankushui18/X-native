@@ -1,3 +1,4 @@
+import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Effect, Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
@@ -5,7 +6,9 @@ import { resolveAllForMode, resolveVariable } from "../engine/variables";
 import { evaluateExpression } from "../engine/expressions";
 import { prefersReducedMotion } from "./a11y";
 import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
+import { pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork } from "./pointBox";
 import { layersAt } from "./selectSame";
+import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit } from "./canvasSelection";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { rotateAboutOrigin } from "./scaleModel";
 import {
@@ -53,12 +56,12 @@ import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
-import { applyTextCase, fitLineCount, hugSize, indentOf, listGutter, listMarker, measureCached, textMetrics, valignApplies, wrapLines } from "./textLayout";
+import { applyTextCase, canvasTextFont, fitLineCount, hugSize, indentOf, listGutter, listMarker, measureCached, textMetrics, valignApplies, wrapLines } from "./textLayout";
 import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
-import { importSvg, type ImportedNode } from "../engine/svgImport";
-import { importSketch } from "../engine/sketchImport";
-import { importFig, importFigContainer } from "../engine/figImport";
+import type { ImportedNode } from "../engine/svgImport";
+import { importSvg, importSketch, importFig } from "../engine/wasmBridge";
+import { importFigContainer } from "../engine/figImport";
 import {
   markPasteEvent,
   parseClipboard,
@@ -167,6 +170,7 @@ type Drag =
         | "marquee"
         | "rotate"
         | "vec"
+        | "vecResize"
         | "bend"
         | "grad"
         | "multiResize"
@@ -232,6 +236,8 @@ type Drag =
       bounds?: { x: number; y: number; w: number; h: number };
       origs?: MultiOrigin[];
       origPts?: PathPoint[];
+      origNetwork?: VectorNetwork;
+      networkIndices?: number[];
       startAngle?: number;
       origRotation?: number;
       cx?: number;
@@ -983,6 +989,7 @@ export function Canvas({
             e.stopImmediatePropagation();
             return;
           }
+          if (!allowTopologyEdit(engine, n.id)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
           const selectedSet = new Set<number>(selList);
           const isHeal = e.shiftKey;
           const closed = effClosed(n);
@@ -2160,18 +2167,19 @@ export function Canvas({
     // stays the same size as the canvas zooms. Selected or hovered, it takes
     // the accent colour indicating the name belongs to the frame you
     // are about to act on.
-    const labelNames = (n: XNode, parentIsFrame: boolean, px: number, py: number) => {
+    const labelNames = (n: XNode, parentIsFrame: boolean, px: number, py: number, selectedAncestor = false) => {
+      if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
       const screenX = snap.panX + x * z;
       const screenY = snap.panY + y * z;
+      const selected = snap.selection.includes(n.id);
       if (
         n.kind === "frame" &&
         n.showName !== false &&
-        // A frame nested in another frame lives in the content flow: its tag
-        // would float over sibling layers (the demo card's "Card" sat 4px
-        // under body text). Top-level frames, sections and groups keep theirs.
-        !parentIsFrame &&
+        // Nested names stay out of the content flow unless explicitly selected.
+        // A selected ancestor suppresses unselected descendant names only.
+        (selected || (!parentIsFrame && !selectedAncestor)) &&
         // Skip names whose frame is off-screen: at any zoom a page can hold
         // hundreds of them, and fillText for each is the one thing on this
         // canvas that runs per layer rather than per visible pixel.
@@ -2180,7 +2188,7 @@ export function Canvas({
         screenY > -40 &&
         screenY < h + 400
       ) {
-        const active = snap.selection.includes(n.id) || hoverId === n.id || panelHover === n.id;
+        const active = selected || hoverId === n.id || panelHover === n.id;
         ctx.save();
         ctx.font = active ? "600 11px Inter, system-ui" : "500 11px Inter, system-ui";
         ctx.fillStyle = active ? SEL : canvasLabel;
@@ -2188,7 +2196,9 @@ export function Canvas({
         ctx.fillText(n.name, screenX, screenY - 8);
         ctx.restore();
       }
-      for (const c of n.children) labelNames(c, n.kind === "frame", x, y);
+      for (const c of n.children) {
+        labelNames(c, n.kind === "frame", x, y, selectedAncestor || selected);
+      }
     };
     if (!snap.presentFrame) {
       for (const ch of root.children) labelNames(ch, false, 0, 0);
@@ -2688,6 +2698,19 @@ export function Canvas({
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }
+      }
+      const rotateHandle = frameRotationHandle(kind, sx, sy, sw);
+      if (rotateHandle && !lockedSel) {
+        ctx.beginPath();
+        // Detached curved arrow: visually distinct from square resize handles.
+        ctx.arc(rotateHandle.x, rotateHandle.y, 5, Math.PI / 2, Math.PI * 2);
+        ctx.strokeStyle = accent;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(rotateHandle.x + 3, rotateHandle.y - 1);
+        ctx.lineTo(rotateHandle.x + 5, rotateHandle.y + 2);
+        ctx.lineTo(rotateHandle.x + 7, rotateHandle.y - 1);
+        ctx.stroke();
       }
       // Dynamic rotation angle readout badge when rotating
       const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
@@ -3261,6 +3284,22 @@ export function Canvas({
           }
         }
         ctx.restore();
+        const box = vecSubTool === "select" ? pointBox(root, vecEdit, snap.vecPoints ?? []) : null;
+        if (box) {
+          const hs = pointBoxHandles(box.bounds, z);
+          ctx.save();
+          ctx.strokeStyle = SEL;
+          ctx.fillStyle = INK;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.strokeRect(snap.panX + hs[0][0] * z, snap.panY + hs[0][1] * z, (hs[4][0] - hs[0][0]) * z, (hs[4][1] - hs[0][1]) * z);
+          ctx.setLineDash([]);
+          for (const [x, y] of hs) {
+            ctx.fillRect(snap.panX + x * z - 3, snap.panY + y * z - 3, 6, 6);
+            ctx.strokeRect(snap.panX + x * z - 3, snap.panY + y * z - 3, 6, 6);
+          }
+          ctx.restore();
+        }
       }
     }
 
@@ -3552,7 +3591,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, hoverId, panelHover, ghost, guides, gapBadges, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -3593,6 +3632,7 @@ export function Canvas({
       const root = engine.snapshot().pages[engine.snapshot().page].root;
       const hit = hitTest(root, wx, wy, { deep: true });
       if (!hit || hit.locked) return;
+      if (!allowTopologyEdit(engine, hit.id)) return;
       const radius = ERASER_PX / engine.snapshot().zoom;
       // Vector paths get true partial erasure via erasePath; any other
       // drawable shape (rect, ellipse, line, poly, star, boolean) is first
@@ -3810,6 +3850,7 @@ export function Canvas({
           if (!onVertex) {
             const res = insertPointOnPath(epts, elocal.x, elocal.y, effClosed(loc.node), 10 / snap.zoom);
             if (res) {
+              if (!allowTopologyEdit(engine, loc.node.id)) return;
               engine.dispatch({
                 type: "insertPointOnPath",
                 id: loc.node.id,
@@ -3988,9 +4029,20 @@ export function Canvas({
       };
       return;
     }
+    // Point-box resize is separate from anchor movement and layer resize.
+    if (vecEdit && vecSubTool === "select" && snap.tool === "select") {
+      const box = pointBox(root, vecEdit, snap.vecPoints ?? []);
+      const corner = box ? pointBoxHit(box.bounds, wpt.x, wpt.y, snap.zoom) : -1;
+      if (box && corner >= 0) {
+        engine.dispatch({ type: "begin" });
+        drag.current = { mode: "vecResize", id: vecEdit, corner, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+          bounds: box.bounds, origNetwork: box.network, networkIndices: box.indices };
+        return;
+      }
+    }
     // Multi-selection: hit-test the combined bounding box's handles first, so a
     // group of layers can be scaled and rotated as one.
-    if (snap.selection.length > 1 && snap.tool === "select") {
+    if (snap.selection.length > 1 && (snap.tool === "select" || snap.tool === "scale")) {
       const bb = selectionBounds(root, snap.selection);
       if (bb) {
         const z = snap.zoom;
@@ -4006,13 +4058,13 @@ export function Canvas({
         const hs = handles(bsx, bsy, bsw, bsh);
         for (let i = 0; i < hs.length; i += 2) {
           const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
-          if (d >= 6 && d <= 22) {
+          if (d >= 8 && d <= 22) {
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
               toast("Locked · ⇧⌘L to unlock");
               return;
             }
             engine.dispatch({ type: "begin" });
-            const startAngle = Math.atan2(e.clientY - bcy, e.clientX - bcx);
+            const startAngle = Math.atan2(py - bcy, px - bcx);
             drag.current = {
               mode: "multiRotate",
               sx: e.clientX,
@@ -4030,6 +4082,10 @@ export function Canvas({
         }
         for (let i = 0; i < hs.length; i++) {
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
+            if (snap.tool === "scale" && snap.selection.some((id) => insideInstance(root, id))) {
+              toast("Not scalable · this layer is inside an instance");
+              return;
+            }
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
               toast("Locked · ⇧⌘L to unlock");
               return;
@@ -4312,12 +4368,12 @@ export function Canvas({
             const p = pts[i];
             const vx = snap.panX + (wp.x + p.x) * z;
             const vy = snap.panY + (wp.y + p.y) * z;
-            if (Math.hypot(px - (vx + (p.ix || 0) * z), py - (vy + (p.iy || 0) * z)) < 7) {
+            if ((p.ix || p.iy) && Math.hypot(px - (vx + (p.ix || 0) * z), py - (vy + (p.iy || 0) * z)) < 7) {
               engine.dispatch({ type: "begin" });
               drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i, handle: "in" };
               return;
             }
-            if (Math.hypot(px - (vx + (p.ox || 0) * z), py - (vy + (p.oy || 0) * z)) < 7) {
+            if ((p.ox || p.oy) && Math.hypot(px - (vx + (p.ox || 0) * z), py - (vy + (p.oy || 0) * z)) < 7) {
               engine.dispatch({ type: "begin" });
               drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i, handle: "out" };
               return;
@@ -4381,6 +4437,7 @@ export function Canvas({
           } else {
             const res = insertPointOnPath(pts, local.x, local.y, effClosed(wp.node), 10 / snap.zoom);
             if (res) {
+              if (!allowTopologyEdit(engine, wp.node.id)) return;
               engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y, maxDist: 10 / snap.zoom });
               vecPt.current = res.insertedIndex;
               setVecEdit(wp.node.id, res.insertedIndex);
@@ -4417,32 +4474,34 @@ export function Canvas({
         const hs = handles(sx, sy, nb.w * z, nb.h * z);
         const cx = sx + (nb.w * z) / 2;
         const cy = sy + (nb.h * z) / 2;
-        // Corner rotation zone: outside any of the 4 corner handles
-        for (let i = 0; i < hs.length; i += 2) {
-          const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
-          if (d >= 6 && d <= 22) {
-            const startAngle = Math.atan2(rawY - cy, rawX - cx);
-            engine.dispatch({ type: "begin" });
-            drag.current = {
-              mode: "rotate",
-              sx: e.clientX,
-              sy: e.clientY,
-              wx: wpt.x,
-              wy: wpt.y,
-              orig: { x: nb.x, y: nb.y, w: nb.w, h: nb.h, rotation: wp.node.rotation || 0 },
-              origLocal: { x: wp.node.x, y: wp.node.y },
-              id: wp.node.id,
-              startAngle,
-              origRotation: wp.node.rotation || 0,
-              cx,
-              cy,
-            };
+        // Frames rotate only from the detached top-center handle; their
+        // corners remain resize-only. Other layer kinds keep corner rotation.
+        if (!vecEdit && rotationHandleHit(wp.node.kind, px, py, sx, sy, nb.w * z, nb.h * z)) {
+          if (isEffectivelyLocked(root, wp.node.id)) {
+            toast("Locked · ⇧⌘L to unlock");
             return;
           }
+          const startAngle = Math.atan2(rawY - cy, rawX - cx);
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "rotate",
+            sx: e.clientX,
+            sy: e.clientY,
+            wx: wpt.x,
+            wy: wpt.y,
+            orig: { x: nb.x, y: nb.y, w: nb.w, h: nb.h, rotation: wp.node.rotation || 0 },
+            origLocal: { x: wp.node.x, y: wp.node.y },
+            id: wp.node.id,
+            startAngle,
+            origRotation: wp.node.rotation || 0,
+            cx,
+            cy,
+          };
+          return;
         }
         const isLine = wp.node.kind === "line" || wp.node.kind === "arrow";
         const isTextHug = wp.node.kind === "text" && wp.node.sizingW === "hug" && wp.node.sizingH === "hug";
-        for (let i = 0; i < hs.length; i++) {
+        for (let i = 0; !vecEdit && i < hs.length; i++) {
           if (isLine && i !== 3 && i !== 7) continue;
           if (isTextHug && i % 2 === 0) continue;
           if (Math.hypot(px - hs[i][0], py - hs[i][1]) < 8) {
@@ -4522,16 +4581,17 @@ export function Canvas({
       }
     }
 
-    const hit = hitTest(root, wpt.x, wpt.y, {
-      deep: e.metaKey || e.ctrlKey,
-      selection: snap.selection,
-    });
+    const hit = e.metaKey || e.ctrlKey
+      ? hitTest(root, wpt.x, wpt.y, { deep: true })
+      : canvasClickTarget(root, wpt.x, wpt.y, snap.selection);
     if (hit) {
       const ids = e.shiftKey
         ? snap.selection.includes(hit.id)
           ? snap.selection.filter((i) => i !== hit.id)
           : [...snap.selection, hit.id]
-        : [hit.id];
+        // Pressing a member starts moving the existing selection, not just
+        // that member. Shift remains the explicit membership toggle.
+        : snap.selection.includes(hit.id) ? [...snap.selection] : [hit.id];
       if (snap.tool === "scale" && ids.some((id) => insideInstance(root, id))) {
         toast("Not scalable · this layer is inside an instance");
         return;
@@ -4612,16 +4672,21 @@ export function Canvas({
     if (!drag.current && !penDrag.current && !pencil.current && snap.tool === "select") {
       if (e.altKey !== altMeasure) setAltMeasure(e.altKey);
       const wpt = toWorld(e.clientX, e.clientY);
-      const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { selection: snap.selection });
+      const hit = e.metaKey || e.ctrlKey
+        ? hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true })
+        : canvasClickTarget(snap.pages[snap.page].root, wpt.x, wpt.y, snap.selection);
       const id = hit && !snap.selection.includes(hit.id) ? hit.id : "";
       if (id !== hoverId) setHoverId(id);
       // Mirror the mousedown hit-test so the cursor advertises what a press
-      // would actually do: resize on a handle, rotate just outside a corner,
+      // would actually do: resize on a handle, rotate on the rotation target,
       // move over the selection itself.
       const root0 = snap.pages[snap.page].root;
       const r0 = wrap.current?.getBoundingClientRect();
       let next: string | null = null;
-      if (r0 && snap.selection.length) {
+      const pointBounds = vecEdit && vecSubTool === "select" ? pointBox(root0, vecEdit, snap.vecPoints ?? []) : null;
+      const pointHandle = pointBounds ? pointBoxHit(pointBounds.bounds, wpt.x, wpt.y, snap.zoom) : -1;
+      if (pointHandle >= 0) next = resizeCursor(pointHandle);
+      if (r0 && snap.selection.length && !vecEdit) {
         const z = snap.zoom;
         const px0 = e.clientX - r0.left;
         const py0 = e.clientY - r0.top;
@@ -4645,15 +4710,17 @@ export function Canvas({
             hx = u.x;
             hy = u.y;
           }
+          if (bb?.node.flipH) hx = 2 * sx0 + box.w * z - hx;
+          if (bb?.node.flipV) hy = 2 * sy0 + box.h * z - hy;
           const hs = handles(sx0, sy0, box.w * z, box.h * z);
+          const locked = bb && isEffectivelyLocked(root0, bb.node.id);
+          if (!locked && rotationHandleHit(bb?.node.kind ?? "group", hx, hy, sx0, sy0, box.w * z, box.h * z)) {
+            next = ROT_CURSOR;
+          }
           for (let i = 0; i < hs.length; i++) {
             if (Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 8) {
               next = resizeCursor(i, box.rot);
               break;
-            }
-            // Just outside a corner is the rotate zone.
-            if (i % 2 === 0 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) <= 22 && Math.hypot(hx - hs[i][0], hy - hs[i][1]) >= 6) {
-              next = ROT_CURSOR;
             }
           }
           if (!next && bb?.node.layout) {
@@ -4866,7 +4933,7 @@ export function Canvas({
     } else if (d.mode === "multiResize" && d.bounds && d.origs && d.corner != null) {
       const b = toWorld(e.clientX, e.clientY);
       const next = resizeFrom(d.bounds, d.corner, b.x, b.y, {
-        aspect: e.shiftKey,
+        aspect: e.shiftKey || snap.tool === "scale",
         fromCenter: e.altKey,
       });
       const sxScale = next.w / Math.max(1e-6, d.bounds.w);
@@ -5050,6 +5117,12 @@ export function Canvas({
           engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
         }
       }
+    } else if (d.mode === "vecResize" && d.id && d.corner != null && d.bounds && d.origNetwork && d.networkIndices) {
+      const p = toWorld(e.clientX, e.clientY);
+      const root = snap.pages[snap.page].root;
+      engine.dispatch({ type: "patchVectorNetwork", id: d.id, preserveBounds: true,
+        network: resizePointNetwork(root, d.id, d.origNetwork, d.networkIndices, d.bounds, d.corner,
+          p.x - d.wx, p.y - d.wy, e.shiftKey, e.altKey) });
     } else if (d.mode === "vec" && d.id != null && d.point != null) {
       const wpt = toWorld(e.clientX, e.clientY);
       const loc = worldPos(snap.pages[snap.page].root, d.id);
@@ -5456,6 +5529,7 @@ export function Canvas({
       d.mode === "move" ||
       d.mode === "resize" ||
       d.mode === "vec" ||
+      d.mode === "vecResize" ||
       d.mode === "grad" ||
       d.mode === "multiResize" ||
       d.mode === "multiRotate" ||
@@ -5884,10 +5958,12 @@ export function Canvas({
         const my = e.clientY - r.top;
         const z = snap.zoom;
         let hitFrame: XNode | null = null;
-        const walk = (n: XNode, parentIsFrame: boolean, px: number, py: number) => {
+        const walk = (n: XNode, parentIsFrame: boolean, px: number, py: number, selectedAncestor = false) => {
+          if (!n.visible) return;
           const x = px + n.x;
           const y = py + n.y;
-          if (n.kind === "frame" && n.showName !== false && !parentIsFrame) {
+          const selected = snap.selection.includes(n.id);
+          if (n.kind === "frame" && n.showName !== false && (selected || (!parentIsFrame && !selectedAncestor))) {
             const sx = snap.panX + x * z;
             const sy = snap.panY + y * z;
             const nameW = Math.max(40, n.name.length * 6.5);
@@ -5895,7 +5971,10 @@ export function Canvas({
               hitFrame = n;
             }
           }
-          for (const c of n.children) walk(c, n.kind === "frame", x, y);
+          // Match labelNames: an invisible/culled label cannot start rename.
+          for (const c of n.children) {
+            walk(c, n.kind === "frame", x, y, selectedAncestor || selected);
+          }
         };
         for (const ch of root.children) walk(ch, false, 0, 0);
         frameLabelHit = hitFrame;
@@ -5911,7 +5990,15 @@ export function Canvas({
         return;
       }
     }
-    const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
+    const root = snap.pages[snap.page].root;
+    const hit = canvasClickTarget(root, wpt.x, wpt.y, snap.selection);
+    // Resolve the selected container BEFORE text/crop/vector entry. A deep
+    // hit here used to edit the leaf immediately and bypass one-level drilling.
+    if (hit && (hit.kind === "frame" || hit.kind === "group" || hit.kind === "boolean" || hit.kind === "component" || hit.kind === "instance") && hit.children.length) {
+      const child = drillChild(root, hit, wpt.x, wpt.y);
+      if (child) engine.dispatch({ type: "select", ids: [child.id] });
+      return;
+    }
     if (hit?.kind === "text") setEdit({ id: hit.id, text: hit.text });
     else if (vecEdit && hit && hit.id === vecEdit && hit.path.length) {
       const loc = worldPos(snap.pages[snap.page].root, hit.id);
@@ -5964,8 +6051,7 @@ export function Canvas({
       }
       engine.dispatch({ type: "select", ids: [hit.id] });
       // Basic shapes edit in place (first edit converts kind); only a
-      // childless boolean bakes down. Booleans with children fall through to
-      // the drill-into-child branch below, as in Figma.
+      // childless boolean bakes down. Booleans with children drill above.
       if (hit.kind === "boolean") {
         engine.dispatch({ type: "flatten" });
         const newId = engine.snapshot().selection[0];
@@ -5973,21 +6059,6 @@ export function Canvas({
       } else {
         setVecEdit(hit.id);
       }
-    } else if (hit && (hit.kind === "frame" || hit.kind === "group" || hit.kind === "boolean") && hit.children.length) {
-      // Double-click drills one level: the child under the cursor if there
-      // is one, else the first visible child, like the Enter key does.
-      const root = snap.pages[snap.page].root;
-      let pick: XNode | null = null;
-      for (const c of hit.children) {
-        if (!c.visible || c.locked) continue;
-        const loc = worldPos(root, c.id);
-        if (loc && wpt.x >= loc.x && wpt.x <= loc.x + c.w && wpt.y >= loc.y && wpt.y <= loc.y + c.h) {
-          pick = c;
-          break;
-        }
-      }
-      const child = pick ?? hit.children.find((c) => c.visible && !c.locked) ?? hit.children[0];
-      engine.dispatch({ type: "select", ids: [child.id] });
     } else if (hit) {
       engine.dispatch({ type: "select", ids: [hit.id] });
     } else if (vecEdit) {
@@ -6938,24 +7009,26 @@ export function Canvas({
           <button
             className="tool-btn"
             onClick={() => {
-              if (vecEdit) {
+              if (vecEdit && allowTopologyEdit(engine, vecEdit)) {
                 engine.dispatch({ type: "simplifyPath", id: vecEdit });
                 toast("Simplified path");
               }
             }}
-            title="Simplify path"
+            disabled={!!vecEdit && topologyEditBlocked(find(snap.pages[snap.page].root, vecEdit))}
+            title={vecEdit && topologyEditBlocked(find(snap.pages[snap.page].root, vecEdit)) ? NETWORK_EDIT_LIMIT : "Simplify path"}
           >
             <Icon name="scissors" size={14} />
           </button>
           <button
             className="tool-btn"
             onClick={() => {
-              if (vecEdit) {
+              if (vecEdit && allowTopologyEdit(engine, vecEdit)) {
                 engine.dispatch({ type: "vectorCleanup", id: vecEdit });
                 toast("Cleaned up vector (sketch to perfect Bézier)");
               }
             }}
-            title="Clean up vector (sketch to perfect Bézier)"
+            disabled={!!vecEdit && topologyEditBlocked(find(snap.pages[snap.page].root, vecEdit))}
+            title={vecEdit && topologyEditBlocked(find(snap.pages[snap.page].root, vecEdit)) ? NETWORK_EDIT_LIMIT : "Clean up vector (sketch to perfect Bézier)"}
           >
             <Icon name="visual-search" size={14} />
             Clean up
@@ -6968,7 +7041,7 @@ export function Canvas({
                 toast("Point deleted");
               } else if (vecPt.current != null && vecEdit) {
                 const wp = worldPos(snap.pages[snap.page].root, vecEdit);
-                if (wp && wp.node.path.length > 2) {
+                if (wp && wp.node.path.length > 2 && allowTopologyEdit(engine, vecEdit)) {
                   const newPath = wp.node.path.filter((_, i) => i !== vecPt.current);
                   engine.dispatch({ type: "patchPath", id: vecEdit, path: newPath, closed: wp.node.closed });
                   setVecEdit(vecEdit, null, []);
@@ -6976,7 +7049,8 @@ export function Canvas({
                 }
               }
             }}
-            title="Delete point (⌫)"
+            disabled={!!vecEdit && topologyEditBlocked(find(snap.pages[snap.page].root, vecEdit))}
+            title={vecEdit && topologyEditBlocked(find(snap.pages[snap.page].root, vecEdit)) ? NETWORK_EDIT_LIMIT : "Delete point (⌫)"}
           >
             <Icon name="eraser" size={14} />
           </button>
@@ -7490,8 +7564,7 @@ function paintText(
   const size = Math.max(1, n.fontSize * z);
   // Small caps rides the font's own small-cap glyphs (with the copy lowered
   // so every letter takes part), not full-height capitals.
-  const smallCaps = n.textCase === "small-caps";
-  ctx.font = `${smallCaps ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${n.fontWeight} ${size}px ${n.fontFamily}, Inter, system-ui`;
+  ctx.font = canvasTextFont(n, size);
   ctx.textBaseline = "top";
   ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
   const clipped = n.truncate;
@@ -7543,9 +7616,9 @@ function paintText(
   if (n.truncate) {
     // Fixed-size layers have no max-lines setting: the box itself decides
     // how many rows survive, with the ellipsis on the last one that fits.
-    const limit = valignApplies(n)
+    const limit = valignApplies(n) || (n.maxH ?? 0) > 0
       ? fitLineCount(sh / Math.max(1e-6, z), n.lineHeight || n.fontSize * 1.2, n.paragraphSpacing || 0)
-      : Math.max(1, n.maxLines || 1);
+      : n.maxLines > 0 ? Math.max(1, n.maxLines) : Infinity;
     if (lines.length > limit) {
       const clipped = lines.slice(0, limit);
       const last = clipped[clipped.length - 1];

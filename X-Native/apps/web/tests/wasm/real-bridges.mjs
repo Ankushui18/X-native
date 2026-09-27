@@ -1,0 +1,58 @@
+/** REAL artifact gate: missing binaries and failed handshakes are failures.
+ * Separate from npm test, which also has to pass in TS-only checkouts. */
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { initWasmBridge, getEngineInfo, __resetWasmForTests } from "../../src/engine/wasmBridge.ts";
+import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
+import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
+import { booleanPath, booleanPathTs } from "../../src/engine/geometry.ts";
+
+const gluePath = path.resolve("public/wasm/x_wasm.js");
+const importBytes = fs.readFileSync("public/wasm/x_wasm_bg.wasm");
+const geoBytes = fs.readFileSync("public/x_geo.wasm");
+// Native Node import, not a Vite transform of generated wasm-bindgen glue.
+const glue = await Function("url", "return import(url)")(pathToFileURL(gluePath).href);
+__resetWasmForTests();
+assert.equal(await initWasmBridge(async () => ({ ...glue,
+  default: () => glue.default({ module_or_path: importBytes }),
+})), true, "generated glue must initialize the actual Rust artifact");
+assert.equal(getEngineInfo().hasWasm, true);
+assert.equal(glue.bridgeVersion(), 1);
+assert.match(glue.engineVersion(), /^x-wasm /);
+const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect id="λ-box" x="10" y="10" width="80" height="50" fill="#ff0000"/></svg>';
+const imported = decodeRustImport(glue.importSvgToX(svg));
+assert.ok(imported.nodes.length > 0, "native pages are direct nodes, not Page.root");
+assert.equal(JSON.parse(glue.importFigToX(new Uint8Array([1, 2, 3]))).ok, false);
+assert.equal(JSON.parse(glue.importSketchToX(new Uint8Array([1, 2, 3]))).ok, false);
+console.log("PASS real wasm-bindgen: version, UTF-8 SVG/schema, binary error envelopes");
+
+const geo = await ensureGeo(geoBytes);
+assert.ok(geo, "native geometry module must load, not silently fall back");
+const rect = (ox, oy) => ({ ox, oy, poly: [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }] });
+const shapes = [rect(-20, -10), rect(0, -10)];
+for (const op of ["union", "subtract", "intersect", "exclude"]) {
+  const out = decodeGeoResponse(geo.call(encodeGeoRequest(op, shapes)));
+  assert.ok(out.contours.length > 0, `${op} must produce real native contours`);
+  assert.ok(out.w > 0 && out.h > 0 && out.x < 10 && out.y < 0);
+  // Auto's oracle must protect the shipped result even if native raster differs.
+  assert.ok(compareBooleanResults(booleanPath(op, shapes), booleanPathTs(op, shapes)).ok);
+}
+assert.equal(decodeGeoResponse(geo.call(encodeGeoRequest("intersect", [rect(0, 0), rect(500, 0)]))).contours.length, 0);
+const req = encodeGeoRequest("union", shapes);
+const invalid = req.slice(); invalid[0] ^= 255;
+assert.throws(() => decodeGeoResponse(geo.call(invalid)), /wasm error/);
+for (const n of [0, 1, 15, 16, req.length - 1]) {
+  // Zero-length allocations intentionally fail before entering the module.
+  assert.throws(() => decodeGeoResponse(geo.call(req.slice(0, n))));
+}
+for (let i = 0; i < 50; i++) assert.ok(decodeGeoResponse(geo.call(req)).contours.length);
+const { instance } = await WebAssembly.instantiate(geoBytes, {});
+const e = instance.exports;
+assert.ok(e.xgeo_boolean(0, 0, 0, 4) >= 3, "unowned pointers rejected without dereference");
+e.xgeo_free(0, 100); e.xgeo_free(1234, 100);
+const p = e.xgeo_alloc(8); assert.ok(p);
+e.xgeo_free(p, 8); e.xgeo_free(p, 8); // double free is harmless
+console.log("PASS real x-geo: four operations, empty, invalid input/pointers, repeated ownership cycles");
+console.log("NOTE: smoke is NOT corpus equivalence or a performance/promotion signoff; run bench:wasm --module public/x_geo.wasm separately.");

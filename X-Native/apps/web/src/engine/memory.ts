@@ -64,6 +64,8 @@ import {
   transformedPoly,
   addVectorBranch,
   pathToVectorNetwork,
+  patchNetworkPath,
+  hasExtraNetworkGeometry,
   vectorNetworkToPath,
   bendSegment,
   insertPointOnPath,
@@ -73,7 +75,7 @@ import {
   outlineVariableStroke,
 } from "./geometry";
 import { maxWidthMultiplier, strokeSpill, usesVariableWidth } from "./strokeModel";
-import { convertTextToVectorPaths } from "./textVector";
+import { convertTextToGlyphPaths, convertTextToVectorPaths } from "./textVector";
 import {
   type Transaction,
   type Operation,
@@ -1668,6 +1670,47 @@ export class MemoryEngine implements Engine {
     this.listeners.forEach((f) => f());
   }
 
+  /** Replace one text layer at its existing paint-order slot, not at the end.
+   * Called inside one command, so all glyphs share one undo/redo transaction. */
+  private outlineText(n: XNode): void {
+    const root = this.root();
+    const parent = findParent(root, n.id);
+    if (!parent || isEffectivelyLocked(root, n.id) || isInstanceMember(root, n.id)) return;
+    const results = convertTextToGlyphPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || 400), n.letterSpacing, n.lineHeight || n.fontSize * 1.2);
+    // Empty/whitespace-only text has no drawable glyphs; don't destroy it.
+    if (!results.length) return;
+    // Replacing one flow item with N siblings would introduce N layout gaps.
+    // Keep that item's box as a group only when its parent owns its placement.
+    const keepFlowSlot = !!parent.layout && !n.absolutePosition;
+    const glyphs = results.map((res): XNode => {
+      const center = applyMatrix(nodeMatrix(n), res.x + res.w / 2, res.y + res.h / 2);
+      return {
+        ...clone(n), id: uid("vector"), kind: "vector", name: `Glyph "${res.char}"`,
+        x: keepFlowSlot ? res.x : center.x - res.w / 2,
+        y: keepFlowSlot ? res.y : center.y - res.h / 2,
+        w: res.w, h: res.h, path: res.path, vectorNetwork: res.network,
+        closed: true, text: "", children: [], layout: null, booleanOp: null,
+        componentId: "", isComponent: false, sizingW: "fixed", sizingH: "fixed",
+        ...(keepFlowSlot ? { rotation: 0, flipH: false, flipV: false, opacity: 1, effects: [], interactions: [] } : {}),
+      };
+    });
+    if (keepFlowSlot) {
+      n.kind = "group";
+      n.text = "";
+      n.children = glyphs;
+      n.fillVisible = n.strokeVisible = false;
+      n.sizingW = n.sizingH = "fixed";
+    } else {
+      const index = parent.children.findIndex((child) => child.id === n.id);
+      parent.children.splice(index, 1, ...glyphs);
+    }
+    const ids = glyphs.map((g) => g.id);
+    this.state.selection = this.state.selection.includes(n.id)
+      ? this.state.selection.flatMap((id) => id === n.id ? ids : [id])
+      : ids;
+    this.publishIfMasterEdit(glyphs[0].id);
+  }
+
   private root(): XNode {
     return this.state.pages[this.state.page].root;
   }
@@ -2175,7 +2218,7 @@ export class MemoryEngine implements Engine {
           this.lastDupDelta = { dx: cmd.dx, dy: cmd.dy };
           this.justDuplicated = false;
         }
-        for (const id of cmd.ids) {
+        for (const id of transformRoots(this.root(), cmd.ids)) {
           const n = find(this.root(), id);
           if (n && !isEffectivelyLocked(this.root(), id) && !isInstanceMember(this.root(), id)) {
             n.x += cmd.dx;
@@ -2189,7 +2232,7 @@ export class MemoryEngine implements Engine {
         }
         break;
       case "nudge":
-        for (const id of s.selection) {
+        for (const id of transformRoots(this.root(), s.selection)) {
           const n = find(this.root(), id);
           if (!n || isEffectivelyLocked(this.root(), id) || isInstanceMember(this.root(), id)) continue;
           const parent = findParent(this.root(), id);
@@ -2466,7 +2509,7 @@ export class MemoryEngine implements Engine {
           // refused keys never reach the node or its override record.
           // (A local, not a cmd reassign: reassigning the switch discriminant
           // invalidates narrowing for every other case in this dispatch.)
-          let incoming = cmd.patch;
+          let incoming = n.kind === "text" || cmd.patch.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
           if (isInstanceMember(this.root(), cmd.id)) {
             const stripped = stripMemberPatch(incoming);
             if (!stripped) break;
@@ -2532,7 +2575,7 @@ export class MemoryEngine implements Engine {
           // Text rule: a text layer cannot hold a max height and a max
           // line count at once - setting either clears the other - so the pair
           // is resolved here rather than in whichever panel did the writing.
-          const patch = n.kind === "text" ? textDimensionRule(incoming) : incoming;
+          const patch = incoming;
           // Turning the aspect lock on remembers the ratio it was taken at, so
           // a later size that clamps to a pixel cannot leave the box square.
           if (patch.aspectLocked === true && patch.aspectRatio === undefined && n.w > 0 && n.h > 0) {
@@ -2928,25 +2971,30 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "resizeToFit": {
-        // One-shot redraw of each selected frame around the outermost bounds
-        // of its visible children; children keep their absolute positions.
-        for (const id of s.selection) {
-          const n = find(this.root(), id);
-          if (!n || (n.kind !== "frame" && n.kind !== "group") || isEffectivelyLocked(this.root(), id)) continue;
-          const kids = n.children.filter((c) => c.visible && !c.absolutePosition);
+        // Fit descendants before ancestors, independently of selection order.
+        const selected = new Set(s.selection), frames: XNode[] = [];
+        const visit = (n: XNode) => { n.children.forEach(visit); if (selected.has(n.id)) frames.push(n); };
+        visit(this.root());
+        for (const n of frames) {
+          if ((n.kind !== "frame" && n.kind !== "group") || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) continue;
+          const kids = n.children.filter((c) => c.visible && (!n.layout || !c.absolutePosition));
           if (!kids.length) continue;
-          const x0 = Math.min(...kids.map((c) => c.x));
-          const y0 = Math.min(...kids.map((c) => c.y));
-          const x1 = Math.max(...kids.map((c) => c.x + c.w));
-          const y1 = Math.max(...kids.map((c) => c.y + c.h));
-          for (const c of kids) {
-            c.x -= x0;
-            c.y -= y0;
-          }
-          n.x += x0;
-          n.y += y0;
-          n.w = Math.max(1, x1 - x0);
-          n.h = Math.max(1, y1 - y0);
+          const corners = kids.flatMap((c) => [[0, 0], [c.w, 0], [c.w, c.h], [0, c.h]]
+            .map(([x, y]) => applyMatrix(nodeMatrix(c), x, y)));
+          const x0 = Math.min(...corners.map((p) => p.x)), y0 = Math.min(...corners.map((p) => p.y));
+          const w = Math.max(1, Math.max(...corners.map((p) => p.x)) - x0);
+          const h = Math.max(1, Math.max(...corners.map((p) => p.y)) - y0);
+          // A changed box changes the rotation/flip center. Compensate in the
+          // parent's coordinates; every child (including hidden) stays put.
+          const cx = (n.w - w) / 2, cy = (n.h - h) / 2;
+          const lx = (x0 - cx) * (n.flipH ? -1 : 1), ly = (y0 - cy) * (n.flipV ? -1 : 1);
+          const rad = n.rotation * Math.PI / 180;
+          n.x += cx + lx * Math.cos(rad) - ly * Math.sin(rad);
+          n.y += cy + lx * Math.sin(rad) + ly * Math.cos(rad);
+          for (const c of n.children) { c.x -= x0; c.y -= y0; }
+          n.w = w;
+          n.h = h;
+          this.publishIfMasterEdit(n.id);
         }
         break;
       }
@@ -3455,20 +3503,26 @@ export class MemoryEngine implements Engine {
       }
       case "patchPath": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
+        if (!n || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
+        const closed = cmd.closed ?? n.closed;
+        const network = n.vectorNetwork && closed === n.closed ? patchNetworkPath(n.vectorNetwork, cmd.path) : null;
+        if (!network && hasExtraNetworkGeometry(n.vectorNetwork)) break;
+        const preserveBounds = hasExtraNetworkGeometry(n.vectorNetwork) || s.vecEdit === n.id;
         n.path = cmd.path;
-        if (cmd.closed != null) n.closed = cmd.closed;
+        n.closed = closed;
         n.kind = "vector";
-        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
-        const pb = pathBounds(n.path, n.closed);
-        n.w = pb.w;
-        n.h = pb.h;
+        n.vectorNetwork = network ?? pathToVectorNetwork(n.path, n.closed);
+        if (!preserveBounds) {
+          const pb = pathBounds(n.path, n.closed);
+          n.w = pb.w;
+          n.h = pb.h;
+        }
         this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "patchVectorNetwork": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked) break;
+        if (!n || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
         n.vectorNetwork = cmd.network;
         n.kind = "vector";
         const res = vectorNetworkToPath(cmd.network);
@@ -3476,10 +3530,11 @@ export class MemoryEngine implements Engine {
         if (res.closed) n.closed = true;
         const xs = cmd.network.vertices.map((v) => v.x);
         const ys = cmd.network.vertices.map((v) => v.y);
-        if (xs.length) {
+        if (xs.length && !cmd.preserveBounds) {
           n.w = Math.max(1, Math.max(...xs) - Math.min(0, ...xs));
           n.h = Math.max(1, Math.max(...ys) - Math.min(0, ...ys));
         }
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "addVectorBranch": {
@@ -3531,7 +3586,7 @@ export class MemoryEngine implements Engine {
       }
       case "bendSegment": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
+        if (!n || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
         // In-place vector edit: a basic shape carries no path until the first
         // edit, so seed from its outline and convert on write, like patchPath.
         const src = n.path.length >= 2 ? n.path : shapePoly(n);
@@ -3541,46 +3596,49 @@ export class MemoryEngine implements Engine {
         this.publishIfMasterEdit(cmd.id);
         n.closed = effClosed;
         n.kind = "vector";
-        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
-        const pb = pathBounds(n.path, n.closed);
-        n.w = pb.w;
-        n.h = pb.h;
+        n.vectorNetwork = (n.vectorNetwork && patchNetworkPath(n.vectorNetwork, n.path)) || pathToVectorNetwork(n.path, n.closed);
+        if (!hasExtraNetworkGeometry(n.vectorNetwork) && s.vecEdit !== n.id) {
+          const pb = pathBounds(n.path, n.closed);
+          n.w = pb.w;
+          n.h = pb.h;
+        }
         break;
       }
       case "insertPointOnPath": {
         const n = find(this.root(), cmd.id);
-        if (!n || n.locked || isInstanceMember(this.root(), cmd.id)) break;
+        if (!n || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
         const src = n.path.length >= 2 ? n.path : shapePoly(n);
         if (src.length < 2) break;
         const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+        if (hasExtraNetworkGeometry(n.vectorNetwork)) break;
         const res = insertPointOnPath(src, cmd.x, cmd.y, effClosed, cmd.maxDist ?? 12);
         if (res) {
           n.path = res.newPath;
           n.closed = effClosed;
           n.kind = "vector";
-          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+          n.vectorNetwork = (n.vectorNetwork && patchNetworkPath(n.vectorNetwork, n.path)) || pathToVectorNetwork(n.path, n.closed);
           this.publishIfMasterEdit(cmd.id);
         }
         break;
       }
       case "setPointMirror": {
         const n = find(this.root(), cmd.id);
-        if (!n || !n.path[cmd.pointIndex] || isInstanceMember(this.root(), cmd.id)) break;
+        if (!n || !n.path[cmd.pointIndex] || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
         const pt = n.path[cmd.pointIndex];
         pt.mirrorMode = cmd.mode;
         if (cmd.mode === "angleAndLength" && (pt.ox || pt.oy)) {
           pt.ix = -(pt.ox || 0);
           pt.iy = -(pt.oy || 0);
         }
-        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        n.vectorNetwork = (n.vectorNetwork && patchNetworkPath(n.vectorNetwork, n.path)) || pathToVectorNetwork(n.path, n.closed);
         this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "setPointCornerRadius": {
         const n = find(this.root(), cmd.id);
-        if (!n || !n.path[cmd.pointIndex] || isInstanceMember(this.root(), cmd.id)) break;
+        if (!n || !n.path[cmd.pointIndex] || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
         n.path[cmd.pointIndex].cornerRadius = Math.max(0, cmd.radius);
-        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        n.vectorNetwork = (n.vectorNetwork && patchNetworkPath(n.vectorNetwork, n.path)) || pathToVectorNetwork(n.path, n.closed);
         this.publishIfMasterEdit(cmd.id);
         break;
       }
@@ -3764,13 +3822,7 @@ export class MemoryEngine implements Engine {
           const n = find(this.root(), id);
           if (!n) continue;
           if (n.kind === "text") {
-            const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
-            n.kind = "vector";
-            n.path = res.path;
-            n.vectorNetwork = res.network;
-            n.closed = true;
-            n.w = res.w;
-            n.h = res.h;
+            this.outlineText(n);
             continue;
           }
           if (n.strokeWidth <= 0 && n.kind !== "line" && n.kind !== "arrow") continue;
@@ -3811,7 +3863,7 @@ export class MemoryEngine implements Engine {
         const targetIds = cmd.id ? [cmd.id] : [...s.selection];
         for (const id of targetIds) {
           const n = find(this.root(), id);
-          if (!n) continue;
+          if (!n || hasExtraNetworkGeometry(n.vectorNetwork) || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) continue;
           const src = n.path.length ? n.path : shapePoly(n);
           n.path = offsetPath(src, cmd.distance, n.closed || (n.kind !== "line" && n.kind !== "arrow"), cmd.join || "round");
           n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
@@ -3822,7 +3874,7 @@ export class MemoryEngine implements Engine {
       case "simplifyPath": {
         const targetId = cmd.id || s.vecEdit || s.selection[0];
         const n = targetId ? find(this.root(), targetId) : null;
-        if (!n || !n.path.length) break;
+        if (!n || !n.path.length || hasExtraNetworkGeometry(n.vectorNetwork) || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) break;
         const tol = cmd.tolerance ?? 1.5;
         n.path = simplifyPath(n.path, tol);
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
@@ -3831,7 +3883,7 @@ export class MemoryEngine implements Engine {
       case "vectorCleanup": {
         const targetId = cmd.id || s.vecEdit || s.selection[0];
         const n = targetId ? find(this.root(), targetId) : null;
-        if (!n || !n.path.length) break;
+        if (!n || !n.path.length || hasExtraNetworkGeometry(n.vectorNetwork) || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) break;
         n.path = vectorCleanup(n.path, n.closed);
         n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
         normalizeVectorNode(n);
@@ -3840,14 +3892,7 @@ export class MemoryEngine implements Engine {
       case "convertTextToVector": {
         const targetId = cmd.id || s.selection[0];
         const n = targetId ? find(this.root(), targetId) : null;
-        if (!n || n.kind !== "text") break;
-        const res = convertTextToVectorPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || "400"), n.w, n.h);
-        n.kind = "vector";
-        n.path = res.path;
-        n.vectorNetwork = res.network;
-        n.closed = true;
-        n.w = res.w;
-        n.h = res.h;
+        if (n?.kind === "text") this.outlineText(n);
         break;
       }
       case "shapeBuilder": {
@@ -3883,7 +3928,7 @@ export class MemoryEngine implements Engine {
       case "vectorAlign": {
         const vecId = s.vecEdit || s.selection[0];
         const n = vecId ? find(this.root(), vecId) : null;
-        if (!n || !n.path.length) break;
+        if (!n || !n.path.length || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) break;
         const ptIndices = s.vecPoints && s.vecPoints.length > 0
           ? s.vecPoints
           : (s.vecPoint !== null && s.vecPoint !== undefined ? [s.vecPoint] : n.path.map((_, i) => i));
@@ -3911,7 +3956,7 @@ export class MemoryEngine implements Engine {
             case "bottom": pt.y = maxY; break;
           }
         }
-        n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+        n.vectorNetwork = (n.vectorNetwork && patchNetworkPath(n.vectorNetwork, n.path)) || pathToVectorNetwork(n.path, n.closed);
         break;
       }
       case "addVariant": {
@@ -5216,3 +5261,18 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
 /* The default auto layout frame lives in `layout.ts` with the rest of the
  * auto layout rules; this re-export keeps the existing imports working. */
 export { defaultLayout } from "./layout";
+
+/** Moving a selected ancestor already carries its selected descendants.
+ * Retain input order (important for layout nudges), but never apply a local
+ * delta twice, including when callers supply duplicate ids. Lock/instance
+ * checks remain in the command handlers; this only normalizes the target set. */
+function transformRoots(root: XNode, ids: readonly string[]): string[] {
+  const wanted = new Set(ids), roots = new Set<string>();
+  const visit = (n: XNode, carried: boolean) => {
+    const selected = wanted.has(n.id);
+    if (selected && !carried) roots.add(n.id);
+    for (const child of n.children) visit(child, carried || selected);
+  };
+  visit(root, false);
+  return [...wanted].filter((id) => roots.has(id));
+}

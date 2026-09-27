@@ -1,5 +1,6 @@
+import { importFig } from "../engine/wasmBridge";
 import React, { useState, useEffect } from "react";
-import { inspectFigFile, importFig, type FigInspectionReport } from "../engine/figImport";
+import { inspectFigFile, type FigInspectionReport } from "../engine/figImport";
 import { Icon } from "./icons";
 import { toast } from "./toast";
 import { copyText } from "../engine/clipboard";

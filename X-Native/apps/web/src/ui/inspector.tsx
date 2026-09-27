@@ -1,3 +1,4 @@
+import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
 import {
   useEffect,
   useMemo,
@@ -49,7 +50,7 @@ import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from 
 import { evalField, evalFieldMany, hasExpression } from "./fieldExpr";
 import {
   SIDES,
-  isBranchingNetwork,
+  variableWidthBlockReason,
   normalizeWidthProfile,
   parseDashPattern,
   sampleVariableWidth,
@@ -122,7 +123,7 @@ import {
 } from "./exportModel";
 import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
 import { roundToPixel } from "./round";
-import { XButton, XPopover, XSegmentedControl, XTabs } from "./x-ui";
+import { XButton, XPopover, XSegmentedControl, XSelect, XTabs } from "./x-ui";
 
 /** "Round to Pixel" is only shown when rounding can actually do something. */
 function isFractional(n: XNode) {
@@ -3495,7 +3496,7 @@ function Design({
       p[sib] = Math.max(1, Math.round((wide ? v * ratio : v / ratio) * 100) / 100);
     }
     patch(p);
-    refitHug({ [key]: v });
+    refitHug(p);
   };
   const parent = findParent(snap.pages[snap.page].root, n.id);
   // A member of a boolean group cannot own fill, stroke, effects or opacity -
@@ -3832,12 +3833,14 @@ function Design({
                 >
                   <Field
                     label="L"
+                    aria="Max lines"
+                    invalidValue={0}
                     value={n.maxLines}
                     disabled={n.sizingW !== "hug" && n.sizingH !== "hug"}
                     onChange={(v) =>
                       // Maximum lines and maximum height are exclusive: setting
                       // either clears the other, in both directions.
-                      patchType({ maxLines: Math.max(1, Math.round(v)), maxH: undefined })
+                      patchType({ maxLines: Math.max(0, Math.round(v)), maxH: undefined })
                     }
                   />
                 </div>
@@ -4379,6 +4382,7 @@ function Design({
             <Field label="Min H" value={n.minH || 0} onChange={(v) => setMinMax("minH", v)} />
             <Field
               label="Max H"
+              invalidValue={n.kind === "text" ? 0 : undefined}
               value={n.maxH || 0}
               onChange={(v) => setMinMax("maxH", v, n.kind === "text" ? { maxLines: 0 } : {})}
             />
@@ -4640,7 +4644,8 @@ function Design({
                     variant="secondary"
                     size="sm"
                     active={showSimplifyControls}
-                    title="Reduce redundant anchor points with tolerance control"
+                    disabled={topologyEditBlocked(n)}
+                    title={topologyEditBlocked(n) ? NETWORK_EDIT_LIMIT : "Reduce redundant anchor points with tolerance control"}
                     onClick={() => {
                       setShowSimplifyControls((v) => !v);
                       setShowOffsetControls(false);
@@ -4664,7 +4669,8 @@ function Design({
                     variant="secondary"
                     size="sm"
                     active={showOffsetControls}
-                    title="Expand or contract outline path with offset distance"
+                    disabled={topologyEditBlocked(n)}
+                    title={topologyEditBlocked(n) ? NETWORK_EDIT_LIMIT : "Expand or contract outline path with offset distance"}
                     onClick={() => {
                       setShowOffsetControls((v) => !v);
                       setShowSimplifyControls(false);
@@ -4688,6 +4694,8 @@ function Design({
                     Outline stroke
                   </XButton>
                 </div>
+
+                {topologyEditBlocked(n) && <p className="muted" role="note">{NETWORK_EDIT_LIMIT}</p>}
 
                 {/* Inline Simplify form */}
                 {showSimplifyControls && (
@@ -4722,7 +4730,9 @@ function Design({
                       variant="primary"
                       size="sm"
                       className="vec-apply"
+                      disabled={topologyEditBlocked(n)}
                       onClick={() => {
+                        if (!allowTopologyEdit(engine, n.id)) return;
                         engine.dispatch({ type: "simplifyPath", id: n.id, tolerance: simplifyTol });
                         toast(`Simplified path with tolerance ${simplifyTol}`);
                         setShowSimplifyControls(false);
@@ -4775,7 +4785,9 @@ function Design({
                       variant="primary"
                       size="sm"
                       className="vec-apply"
+                      disabled={topologyEditBlocked(n)}
                       onClick={() => {
+                        if (!allowTopologyEdit(engine, n.id)) return;
                         engine.dispatch({ type: "offsetPath", id: n.id, distance: offsetDist, join: offsetJoin });
                         toast(`Offset path by ${offsetDist > 0 ? "+" : ""}${offsetDist}px`);
                         setShowOffsetControls(false);
@@ -6126,22 +6138,21 @@ function Design({
               }
             />
             {(n.kind !== "line" && n.kind !== "arrow") && (
-            <div className="seg icons" title="Stroke position">
-              {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
-                <button
-                  key={a}
-                  className={n.strokeAlign === a ? "on" : ""}
-                  title={`${a} (hover to preview)`}
-                  onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { strokeAlign: a } })}
-                  onMouseEnter={() => engine.dispatch({ type: "previewStroke", id: n.id, align: a })}
-                  onMouseLeave={() => engine.dispatch({ type: "previewStroke", id: null })}
-                  onFocus={() => engine.dispatch({ type: "previewStroke", id: n.id, align: a })}
-                  onBlur={() => engine.dispatch({ type: "previewStroke", id: null })}
-                >
-                  <Icon name={`stroke-${a}`} size={14} />
-                </button>
-              ))}
-            </div>
+            <XSelect
+              ariaLabel="Stroke alignment"
+              value={mixedProp((m) => m.strokeAlign) ? "mixed" : n.strokeAlign}
+              options={[
+                ...(mixedProp((m) => m.strokeAlign) ? [{ value: "mixed", label: "Mixed" }] : []),
+                { value: "inside", label: "Inside" },
+                { value: "center", label: "Center" },
+                { value: "outside", label: "Outside" },
+              ]}
+              onChange={(value) => {
+                if (value !== "inside" && value !== "center" && value !== "outside") return;
+                if (multi) patchMany((m) => m.kind === "line" || m.kind === "arrow" ? {} : { strokeAlign: value });
+                else patch({ strokeAlign: value });
+              }}
+            />
             )}
           </div>
           {sidesSupported(n.kind) && (
@@ -6311,8 +6322,7 @@ function Design({
             </div>
           )}
           {(n.kind === "vector" || n.kind === "line" || n.kind === "arrow") &&
-            n.strokeWidth > 0 &&
-            !isBranchingNetwork(n.vectorNetwork) && <WidthProfileEditor node={n} patch={patch} />}
+            n.strokeWidth > 0 && <WidthProfileEditor node={n} patch={patch} />}
           {strokeMore && (
             <div className="adv-stroke">
               <div className="grid2">
@@ -7647,6 +7657,7 @@ function WidthProfileEditor({
   node: XNode;
   patch: (p: Partial<XNode>) => void;
 }) {
+  const reason = variableWidthBlockReason(n);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<{ t: number } | null>(null);
   const W = 208;
@@ -7673,7 +7684,7 @@ function WidthProfileEditor({
   }
   const envelope = `${top.join(" ")} ${bot.reverse().join(" ")} Z`;
   const commit = (next: VariableWidthPoint[]) => {
-    patch({ strokeWidthProfile: normalizeWidthProfile(next) });
+    if (!reason) patch({ strokeWidthProfile: normalizeWidthProfile(next) });
   };
   const local = (e: React.PointerEvent) => {
     const box = svgRef.current?.getBoundingClientRect();
@@ -7681,7 +7692,8 @@ function WidthProfileEditor({
     return { x: ((e.clientX - box.left) / box.width) * W, y: ((e.clientY - box.top) / box.height) * H };
   };
   return (
-    <div>
+    <fieldset className="width-profile" disabled={!!reason} aria-label="Variable width" title={reason ?? undefined}>
+      {reason && <p className="width-profile-reason">{reason}</p>}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
         <span style={{ fontSize: 10, color: "var(--dim)" }}>Variable width</span>
         <span style={{ flex: 1 }} />
@@ -7689,7 +7701,8 @@ function WidthProfileEditor({
           <button
             className="link"
             title="Remove the width profile (uniform stroke)"
-            onClick={() => patch({ strokeWidthProfile: undefined })}
+            disabled={!!reason}
+            onClick={() => { if (!reason) patch({ strokeWidthProfile: undefined }); }}
           >
             Reset
           </button>
@@ -7708,9 +7721,10 @@ function WidthProfileEditor({
           touchAction: "none",
         }}
         role="img"
+        aria-disabled={!!reason}
         aria-label="Stroke width profile. Click to add a width point, drag to move it, double-click to delete."
         onPointerDown={(e) => {
-          if (e.button !== 0 || e.altKey) return;
+          if (reason || e.button !== 0 || e.altKey) return;
           const { x } = local(e);
           const t = tOfX(x);
           const next = normalizeWidthProfile([...prof, { position: t, widthMultiplier: sampleVariableWidth(prof, t) }]);
@@ -7720,7 +7734,7 @@ function WidthProfileEditor({
         }}
         onPointerMove={(e) => {
           const d = dragRef.current;
-          if (!d) return;
+          if (reason || !d) return;
           const { x, y } = local(e);
           // The dragged point is the one nearest the drag's last position.
           let bi = 0;
@@ -7758,7 +7772,7 @@ function WidthProfileEditor({
             style={{ cursor: "move" }}
             onPointerDown={(e) => {
               e.stopPropagation();
-              if (e.button !== 0) return;
+              if (reason || e.button !== 0) return;
               if (e.altKey) {
                 commit(prof.filter((_, j) => j !== i));
                 return;
@@ -7776,7 +7790,7 @@ function WidthProfileEditor({
           </circle>
         ))}
       </svg>
-    </div>
+    </fieldset>
   );
 }
 
@@ -7949,6 +7963,7 @@ function Field({
   values,
   onChangeMany,
   bind,
+  invalidValue,
 }: {
   label?: string;
   icon?: IconName;
@@ -7981,6 +7996,8 @@ function Field({
   disabledTitle?: string;
   /** Property-first binding affordance (BindControl) trailing the value. */
   bind?: ReactNode;
+  /** Opt-in empty/invalid input fallback for clearable text limits. */
+  invalidValue?: number;
 }) {
   const [draft, setDraft] = useState(() => mixed ?? fmt(value));
   const focused = useRef(false);
@@ -8021,12 +8038,13 @@ function Field({
           ? null
           : hasExpression(draft)
             ? evalField(draft, value)
-            : parseFloat(draft);
+            : invalidValue != null ? (draft.trim() ? Number(draft) : null) : parseFloat(draft);
     if (parsed != null && Number.isFinite(parsed)) {
       onChange(parsed);
       setDraft(fmt(parsed));
     } else {
-      setDraft(mixed ?? fmt(value));
+      if (invalidValue != null) onChange(invalidValue);
+      setDraft(invalidValue != null ? fmt(invalidValue) : mixed ?? fmt(value));
     }
   };
   // Dragging a field's label or icon scrubs its value, 1 unit per pixel and

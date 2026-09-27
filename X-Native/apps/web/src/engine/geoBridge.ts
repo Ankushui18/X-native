@@ -2,23 +2,24 @@
  * TypeScript side of the TS↔Rust geometry bridge (docs/GEO_BRIDGE_DESIGN_2026-09-25.md).
  *
  * The Rust module (`x_geo.wasm`, built from `crates/x-geo` in a Rust-capable
- * environment) accelerates `booleanPath`; until it exists — and whenever it
- * fails, mismatches versions, or is disabled — every call degrades to the
+ * environment) is a candidate accelerator for `booleanPath`. Auto mode checks
+ * its result against TS; unavailable/invalid/unequal results degrade to the
  * pure-TS implementation. Nothing here may ever throw past the choke point in
  * `geometry.ts`: the bridge is an accelerator, not a dependency.
  *
  * Lives apart from `wasmBridge.ts` deliberately: that module imports the file
  * importers (which import `geometry.ts`), so geometry calling into it would be
- * an import cycle. This module imports types only.
+ * an import cycle. This module does not import document logic.
  */
 
 import type { BooleanOp, PathPoint } from "./types";
+import { wasmAssetUrl } from "./wasmAssets";
 
 /* -------------------------------------------------------------------------- */
 /* §5 wire format v1                                                           */
 /* -------------------------------------------------------------------------- */
 
-export const GEO_WASM_URL = "/x_geo.wasm";
+export const GEO_WASM_URL = wasmAssetUrl("x_geo.wasm");
 export const GEO_VERSION = 1;
 const REQ_MAGIC = 0x58474f31; // "XGO1"
 const RESP_MAGIC = 0x58475231; // "XGR1"
@@ -50,6 +51,10 @@ export function encodeGeoRequest(op: BooleanOp, shapes: GeoShape[]): Uint8Array 
   if (shapes.length > MAX_OPERANDS) throw new Error(`geo: ${shapes.length} operands exceeds ${MAX_OPERANDS}`);
   let total = 16;
   for (const s of shapes) {
+    if (![s.ox, s.oy].every(Number.isFinite) || s.poly.some((p) =>
+      ![p.x, p.y, p.ix ?? 0, p.iy ?? 0, p.ox ?? 0, p.oy ?? 0].every(Number.isFinite))) {
+      throw new Error("geo: non-finite input");
+    }
     if (s.poly.length > MAX_POINTS) throw new Error(`geo: operand exceeds ${MAX_POINTS} points`);
     total += 24 + s.poly.length * 56;
   }
@@ -91,12 +96,17 @@ export function decodeGeoResponse(buf: Uint8Array): GeoContours {
     if (buf.length < n) throw new Error(`geo: truncated response (${buf.length} < ${n})`);
   };
   need(52);
+  if (buf.length > MAX_RESPONSE) throw new Error("geo: response too large");
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   if (dv.getUint32(0, true) !== RESP_MAGIC) throw new Error("geo: bad response magic");
   if (dv.getUint16(8, true) !== GEO_VERSION) throw new Error("geo: response version mismatch");
+  if (dv.getUint32(4, true) !== buf.length) throw new Error("geo: response length mismatch");
+  if (dv.getUint8(11) !== 0 || dv.getUint32(48, true) !== 0) throw new Error("geo: nonzero reserved field");
   const status = dv.getUint8(10);
   if (status === 2) {
+    need(60);
     const mlen = dv.getUint32(52, true);
+    if (60 + mlen !== buf.length || dv.getUint32(56, true) !== 0) throw new Error("geo: invalid error length");
     need(60 + mlen);
     const msg = new TextDecoder().decode(buf.subarray(60, 60 + mlen));
     throw new Error(`geo: wasm error: ${msg}`);
@@ -110,20 +120,28 @@ export function decodeGeoResponse(buf: Uint8Array): GeoContours {
     h: dv.getFloat64(36, true),
     contours: [],
   };
-  if (status === 1) return out;
+  if (![out.x, out.y, out.w, out.h].every(Number.isFinite) || out.w < 0 || out.h < 0) throw new Error("geo: invalid bounds");
+  if (status === 1) {
+    if (buf.length !== 52 || dv.getUint32(44, true) !== 0) throw new Error("geo: invalid empty response");
+    return out;
+  }
   const n = dv.getUint32(44, true);
   let o = 52;
   for (let c = 0; c < n; c++) {
     need(o + 8);
     const np = dv.getUint32(o, true);
+    if (dv.getUint32(o + 4, true) !== 0) throw new Error("geo: invalid contour header");
     o += 8;
     need(o + np * 16);
     const ring: { x: number; y: number }[] = [];
     for (let i = 0; i < np; i++, o += 16) {
-      ring.push({ x: dv.getFloat64(o, true), y: dv.getFloat64(o + 8, true) });
+      const x = dv.getFloat64(o, true), y = dv.getFloat64(o + 8, true);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("geo: non-finite point");
+      ring.push({ x, y });
     }
     out.contours.push(ring);
   }
+  if (o !== buf.length || n === 0) throw new Error("geo: trailing bytes or missing contours");
   return out;
 }
 
@@ -163,37 +181,46 @@ interface GeoWasmExports {
   xgeo_boolean: (req: number, reqLen: number, outPtr: number, outLen: number) => number;
 }
 
-function wrapExports(e: GeoWasmExports): GeoModule {
+export function wrapGeoExports(e: GeoWasmExports): GeoModule {
   // Views are re-acquired around every call: allocator growth detaches them.
   const view8 = () => new Uint8Array(e.memory.buffer);
   const viewDV = () => new DataView(e.memory.buffer);
   return {
     version: e.xgeo_version(),
     call(req: Uint8Array): Uint8Array {
-      const reqPtr = e.xgeo_alloc(req.length);
-      view8().set(req, reqPtr);
-      const outPtr = e.xgeo_alloc(8);
+      let reqPtr = 0, outPtr = 0, rPtr = 0, rLen = 0;
+      const valid = (ptr: number, len: number) => Number.isInteger(ptr) && ptr > 0 &&
+        Number.isInteger(len) && len > 0 && ptr + len <= e.memory.buffer.byteLength;
       try {
-        e.xgeo_boolean(reqPtr, req.length, outPtr, outPtr + 4);
+        reqPtr = e.xgeo_alloc(req.length) >>> 0;
+        if (!valid(reqPtr, req.length)) throw new Error("geo: request allocation failed");
+        view8().set(req, reqPtr);
+        outPtr = e.xgeo_alloc(8) >>> 0;
+        if (!valid(outPtr, 8)) throw new Error("geo: output allocation failed");
+        view8().fill(0, outPtr, outPtr + 8);
+        const rc = e.xgeo_boolean(reqPtr, req.length, outPtr, outPtr + 4);
         const dv = viewDV();
-        const rPtr = dv.getUint32(outPtr, true);
-        const rLen = dv.getUint32(outPtr + 4, true);
-        if (rLen > MAX_RESPONSE || rPtr + rLen > e.memory.buffer.byteLength) {
+        rPtr = dv.getUint32(outPtr, true);
+        rLen = dv.getUint32(outPtr + 4, true);
+        if (![0, 1, 2].includes(rc)) throw new Error(`geo: call failed (${rc})`);
+        if (rLen > MAX_RESPONSE || !valid(rPtr, rLen)) {
           throw new Error(`geo: response out of bounds (ptr=${rPtr} len=${rLen})`);
         }
-        const out = view8().slice(rPtr, rPtr + rLen);
-        e.xgeo_free(rPtr, rLen);
-        return out;
+        return view8().slice(rPtr, rPtr + rLen);
       } finally {
-        e.xgeo_free(reqPtr, req.length);
-        e.xgeo_free(outPtr, 8);
+        // Try every free even when a faulty module traps during cleanup.
+        try { if (rPtr && rPtr !== reqPtr && rPtr !== outPtr) e.xgeo_free(rPtr, rLen); }
+        finally {
+          try { if (reqPtr) e.xgeo_free(reqPtr, req.length); }
+          finally { if (outPtr && outPtr !== reqPtr) e.xgeo_free(outPtr, 8); }
+        }
       }
     },
   };
 }
 
 let cached: GeoModule | null = null;
-let attempted = false;
+let pending: Promise<GeoModule | null> | null = null;
 let warned = false;
 
 /** Loud in `wasm` mode (a debugging flag), once-per-session otherwise. */
@@ -212,12 +239,11 @@ function geoWarn(e: unknown): void {
  * Load and handshake the module (memoized). `source` overrides the fetch, so
  * tests can pass bytes; `null` result means "use TS" and is never an error.
  */
-export async function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<GeoModule | null> {
-  if (attempted) return cached;
-  attempted = true;
+export function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<GeoModule | null> {
+  if (getGeoMode() === "ts" || typeof WebAssembly === "undefined") return Promise.resolve(null);
+  if (pending) return pending;
+  pending = (async () => {
   try {
-    if (getGeoMode() === "ts") return null;
-    if (typeof WebAssembly === "undefined") return null;
     let bytes: ArrayBuffer;
     if (typeof source === "string" || source === undefined) {
       const resp = await fetch(source ?? GEO_WASM_URL).catch(() => null);
@@ -239,7 +265,7 @@ export async function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Pro
     ) {
       return null;
     }
-    const wrapped = wrapExports(exp as GeoWasmExports);
+    const wrapped = wrapGeoExports(exp as GeoWasmExports);
     if (wrapped.version !== GEO_VERSION) {
       geoWarn(`version mismatch (wasm=${wrapped.version} ts=${GEO_VERSION})`);
       return null;
@@ -251,6 +277,8 @@ export async function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Pro
     cached = null;
     return null;
   }
+  })();
+  return pending;
 }
 
 /** Fire-and-forget preload for app idle. Never throws, never blocks. */
@@ -282,11 +310,11 @@ export function tryGeoBoolean(op: BooleanOp, shapes: GeoShape[]): GeoContours | 
 /* Test seams (nothing outside __tests__ touches these). */
 export function __setGeoModuleForTests(mod: GeoModule | null): void {
   cached = mod;
-  attempted = true;
+  pending = Promise.resolve(mod);
 }
 export function __resetGeoForTests(): void {
   cached = null;
-  attempted = false;
+  pending = null;
   warned = false;
 }
 export function notifyGeoFallback(e: unknown): void {
@@ -307,7 +335,7 @@ export interface BooleanShapeResult {
   h: number;
   network?: {
     vertices: { x: number; y: number }[];
-    regions: { loops: number[][] }[];
+    regions?: { loops: number[][] }[];
   };
 }
 

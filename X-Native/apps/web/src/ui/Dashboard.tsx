@@ -25,9 +25,7 @@ import {
   type TemplateId,
 } from "../engine/files";
 import { hydrateDoc } from "../engine/assets";
-import { importSvg } from "../engine/svgImport";
-import { importSketch } from "../engine/sketchImport";
-import { importFig } from "../engine/figImport";
+import { importSvg, importSketch, importFig } from "../engine/wasmBridge";
 
 /**
  * The file browser the product opens with — Recents, Drafts, Trash — instead of
