@@ -11,9 +11,10 @@ The earlier work was committed on `arena/01a0e1ff-x-native`; this import-only
 continuation is on `arena/01a0e36f-x-native`. No generated binaries are checked
 in; the local preview still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `dbacb2c`, [CI run 36334336133](https://github.com/Ankushui18/X-native/actions/runs/36334336133).
+Latest verified code/CI checkpoint: `acb24b3`, [CI run 36336138062](https://github.com/Ankushui18/X-native/actions/runs/36336138062).
 The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`;
-plain/numeric-weight SVG text and SVG viewport defaults now do too (see §§13–18).
+plain/numeric-weight SVG text, SVG viewport defaults, and standalone group
+translations now do too (see §§13–19).
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -798,3 +799,41 @@ complete-result check retains TS rather than dropping its value.
   geometry promotion diagnostic is still **NOT APPROVED: 1/30 equivalent**;
   `auto` keeps the TS comparator. Wider SVG and browser-visual parity and
   native import speedup are **NOT VERIFIED**.
+
+## 19. Standalone SVG group translations and text siblings (2026-09-27)
+
+Import-only continuation. The Rust importer now matches the existing web
+importer's flat layer contract for a bounded group-transform subset. This
+supersedes §15's transform-free-only boundary **only** for single translations.
+TypeScript remains the complete-result oracle; this does not promote general
+SVG transforms.
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W34 — native `<g transform="translate(...)">` kept an extra group layer, while the web importer applied its offset to each child | Flatten only a **single complete `translate()`** with one or two finite numeric arguments. Apply its offset to child positions, or precompose it before an existing child affine; nested offsets retain source order. Do not flatten ambiguous/compound/rotated groups; they remain structural candidates behind the TS guard | Rust regressions for nested offsets, inherited style and child matrix composition, plus real generated-WASM whole-result checks with `Diff translated SVG group with text and siblings: none` and `Diff translated SVG group with child matrix: none`. Both production wrappers select WASM; rotated and compound groups remain on TS |
+| W35 — `</text>` popped the current `<g>` or root frame and could discard subsequent siblings | Close only the group/root frames actually pushed by the importer. Clear pending empty text on `</text>`; nonempty text is already appended when read. An empty or unsupported child is not an excuse to close its parent early | Web-oracle regression pins the four sibling names/positions; Rust importer and WASM envelope tests pin following shapes; the real module matches the entire text-plus-shapes import |
+
+The earlier generic native test expected a `grp` wrapper for a pure translation;
+that expectation was replaced with the web-compatible absence of the wrapper.
+Dedicated importer tests now assert its children's actual coordinates. The `.x`
+schema, WASM ABI, TypeScript parser, whole-result comparator, and geometry kernels
+are unchanged. General group matrices/rotation/scale/skew, rich text and
+resource imports are not declared equivalent by this slice.
+
+### Verification
+
+- Local TS oracle/focused bridge test: **50/0**; full `npm test`, `npm run build`,
+  `node --check` of real-module smoke and `git diff --check` pass. Local Cargo
+  and generated WASM assets remain unavailable.
+- CI first caught the outdated legacy-group expectation, then Rust-formatting
+  differences in that updated assertion. The expected group contract was
+  corrected; the assertion was kept in the dedicated offset regression. No
+  comparator was loosened and no unsupported group transform was promoted.
+- **CI [36336138062](https://github.com/Ankushui18/X-native/actions/runs/36336138062) SUCCESS**
+  on `acb24b3`: Rust fmt/clippy/workspace tests, both WASM packages, genuine
+  module smoke, web tests/build and screenshot job passed. Annotations show
+  both translated-group diffs as `none`, production WASM selection, and TS
+  fallback for rotation/compound transforms.
+- Native geometry promotion remains **NOT APPROVED (1/30 equivalent, 29 failed)**.
+  `auto` retains the TS comparator. Browser-visual parity, broad SVG coverage
+  and import speedup are **NOT VERIFIED**.

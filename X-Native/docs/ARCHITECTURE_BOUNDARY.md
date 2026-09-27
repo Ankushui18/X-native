@@ -117,7 +117,7 @@ Both bridge crates are leaves in the dependency graph.
 `npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
 real generated artifacts (no mock/replay substitution). CI is configured to run
 both. **The current import-only continuation and real modules passed CI at
-`dbacb2c`** ([run 36334336133](https://github.com/Ankushui18/X-native/actions/runs/36334336133));
+`acb24b3`** ([run 36336138062](https://github.com/Ankushui18/X-native/actions/runs/36336138062));
 the local sandbox still cannot run Cargo. The separate native geometry promotion
 diagnostic failed 29 of 30 cases; auto retains its per-call TS guard, as requested.
 
@@ -129,7 +129,9 @@ pass complete native candidate equivalence and select WASM**; FIG state,
 stroke-options and coordinate fixtures do too. Simple SVG shapes, plain text
 (with and without an id), explicit numeric text `font-weight`, viewport-only
 and unsized SVGs also select WASM when the complete import agrees with TS.
-Sketch fixtures, transformed SVG groups, rich text and resources still fall back
+Standalone translated SVG groups (including nested offsets and a tested child
+matrix) now do too; `</text>` no longer discards following siblings. Sketch
+fixtures, rotated/compound SVG groups, rich text and resources still fall back
 to the complete TS result. Unsupported partial-numeric text weight remains
 behind that guard. Unknown document-level fields now decline instead of silently
 disappearing. This is not broad native import parity.
