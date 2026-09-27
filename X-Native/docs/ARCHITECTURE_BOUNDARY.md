@@ -115,9 +115,12 @@ Both bridge crates are leaves in the dependency graph.
 
 `npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
 real generated artifacts (no mock/replay substitution). CI is configured to run
-both. **The changed Rust code and real modules passed CI at `7532f05`** (run
-`36314867997`); the local sandbox still cannot run Cargo. The separate native
+both. **The changed Rust code and real modules passed CI at `1d9fe9e`** (run
+`36315979388`); the local sandbox still cannot run Cargo. The separate native
 geometry promotion diagnostic failed 29 of 30 cases; auto retains its per-call TS guard.
+The user selected keeping geometry guarded. Import follow-up fixes radians/pivots,
+parentless FIG recovery and Sketch names; rich text/binding conversion still falls
+back. See §7 of the implementation record.
 
 TypeScript remains authoritative. Imports use a native result only after the
 whole converted contract agrees with TS; unsupported resources/typography/styles

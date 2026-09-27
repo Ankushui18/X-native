@@ -11,7 +11,8 @@ After user authorization, the current work was committed and pushed only to
 `arena/01a0e1ff-x-native`. No generated binaries are checked in; the local preview
 still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `7532f05`, [CI run 36314867997](https://github.com/Ankushui18/X-native/actions/runs/36314867997).
+Latest verified code/CI checkpoint: `1d9fe9e`, [CI run 36315979388](https://github.com/Ankushui18/X-native/actions/runs/36315979388).
+The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
 its oracle: **a green CI conclusion does not mean native geometry parity passed**.
@@ -123,9 +124,9 @@ as NOT approved on mismatch; the strict benchmark command itself exits nonzero.
 
 | Check | Verified result / environment |
 | --- | --- |
-| Full `npm test` | **2,906 passed, 0 failed**, 45 suites |
+| Full `npm test` | **2,911 passed, 0 failed**, 45 suites |
 | Existing geometry bridge suite | **92 passed, 0 failed** (includes synthetic wasm, NOT native Rust geometry) |
-| New import bridge suite | **34 passed, 0 failed** (injected bindgen interface + real TS importers) |
+| New import bridge suite | **39 passed, 0 failed** (injected bindgen interface + real TS importers) |
 | New geometry safety suite | **37 passed, 0 failed** |
 | `npx tsc -b` | **PASS**, no diagnostics |
 | `npm run build` | **PASS**; existing >500 kB chunk warning remains |
@@ -133,14 +134,15 @@ as NOT approved on mismatch; the strict benchmark command itself exits nonzero.
 | `node e2e/wasm-fallback.mjs` | **PASS**: real dashboard SVG upload, editor layer persistence and reload with assets deliberately 404; zero uncaught browser errors |
 | Shell syntax, manifest/lockfile declaration consistency, `git diff --check` | **PASS** (not a substitute for Cargo resolution) |
 | `build:wasm` local preflight | **BLOCKED**: reports missing Rust toolchain, exit 1 |
-| Host Rust tests/clippy and pinned `cargo fmt` gate | **PASS in CI**, `scripts/check.sh` at `7532f05`; unavailable locally |
+| Host Rust tests/clippy and pinned `cargo fmt` gate | **PASS in CI**, `scripts/check.sh` at `1d9fe9e`; unavailable locally |
 | WASM release build and matched bindgen packaging | **PASS in CI**, both crates; browser-ready `x-wasm` artifact uploaded |
 | Real generated bindgen/native x-geo smoke | **PASS in CI**, real exports and production wrappers, not mock/replay |
 | Real 30-case differential/performance | **1/30 equivalent, 29 failures** in CI; bounds, area, topology and emptiness mismatches; native promotion NOT approved |
 | Full application E2E | **NOT RERUN**; prior failures remain recorded in parity reports |
 
 Local logs: `/home/user/wasm-{unit,tsc,build,replay,browser}.log`.
-CI evidence: `/home/user/wasm-ci-5-annotations.json` (complete 30-case summary) and the linked run/artifacts.
+CI evidence: `/home/user/wasm-import-next-annotations.json` for the latest batch;
+`/home/user/wasm-ci-5-annotations.json` retains the initial complete 30-case summary.
 
 ### Native results that were actually exercised
 
@@ -149,9 +151,11 @@ CI evidence: `/home/user/wasm-ci-5-annotations.json` (complete 30-case summary) 
 - **Simple SVG uses the actual Rust result** (`importBackend === "wasm"`), checked
   against the TS import contract. Text safely retains the TS result.
 - Real `sample.fig` and `sample.sketch` production wrappers invoke the native
-  functions and retain complete TS results. Native FIG declines this fixture with
-  `figma file contains no canvases`; Sketch conversion declines unmapped native
-  properties. This is verified fallback, NOT successful native FIG/Sketch parity.
+  functions and retain complete TS results. At the initial `7532f05` checkpoint,
+  native FIG declined with `figma file contains no canvases`. The import-only
+  batch below fixes that parser failure and preserves Sketch names. Both native
+  parsers now succeed, but conversion still declines unmapped `text`/`bindings`.
+  This is verified fallback, NOT full native FIG/Sketch rendering parity.
 - Native union/subtract/intersect/exclude, disjoint empty intersection, malformed
   requests, bad pointers, double-free and 50 repeated allocation/free cycles pass.
 - Real geometry differs from TS: e.g. overlapping rectangles yield native bbox
@@ -187,9 +191,54 @@ This was a real failing gate, not a mocked success or a waived smoke assertion.
 1. Resolve measured native geometry differences before removing the TS oracle.
    Preserve existing web behavior and keep the strict comparator; do not loosen
    tolerances to manufacture a pass or describe diagnostic-mode output as parity.
-2. Improve FIG fixture handling and extend the native schema mapping for Sketch,
-   typography, resources and layered paints, with real fixture equivalence gates.
+2. Extend native schema mapping for typography, bindings, resources and layered
+   paints, with real fixture equivalence gates. Parentless FIG handling and
+   Sketch display-name preservation are fixed in the batch below.
 3. Measure broader native timing and browser main-thread cost separately from the
    TS oracle. Successful ABI smoke is not a production performance signoff.
 4. Native-asset browser E2E and broad import fidelity remain unverified; current
    browser smoke covers the actual UI with native assets deliberately unavailable.
+
+
+## 7. Import-only follow-up (2026-09-27)
+
+Scope decision: the user chose **keep geometry guarded for now**, rather than
+introduce a web-compatible Rust kernel. No boolean algorithm, tolerance or
+geometry promotion policy changed in this batch.
+
+### Fixes
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W01 — native radians treated as web degrees | `wasmImportAdapter.ts` converts radians to degrees, rejects conversion overflow | Existing angle test first failed (`1.570796…` instead of `90`); positive/negative/half-turn tests now pass |
+| W02 — native SVG pivot was unsupported | Rebase native pivot translation to the web's center pivot while preserving the complete affine, not ignoring the origin | 16 angle/pivot combinations checked at all four corners; malformed/overflow pivots rejected; real native rotated SVG passes |
+| W03 — parentless FIG records disappeared | `x-format/src/figbinary.rs` recovers orphan canvases/layers, retains ordered document children and prevents hidden-canvas children leaking onto visible pages | Native web fixture imports all four named layers; missing-parent/hidden-page and ordering/deduplication regressions pass |
+| W04 — Sketch display names replaced with IDs | `x-format/src/sketch.rs` carries source page and nested layer names into the existing import IR; IDs unchanged | Native fixture retains Page 1, Home, Card, Dot, Label, Grp and Inner; stable `ab-1` ID asserted |
+
+Unknown-property diagnostics now name the rejected keys, without discarding them.
+This exposes remaining text/binding mapping work rather than silently dropping it.
+
+### Verified gates
+
+- Local full suite: **2,911 passed / 0 failed**, 45 suites; `tsc -b` clean; build
+  passes with the pre-existing chunk-size warning. Bridge suite: **39/0**.
+- Browser fallback smoke: dashboard import, editable persisted rectangle and
+  reload pass; zero uncaught browser errors. Native browser E2E is still unverified.
+- CI `36315979388` at `1d9fe9e`: Rust workspace gate, both wasm packages, real
+  bindgen/geometry smoke, native FIG/Sketch parser assertions and web checks pass.
+- The native FIG parser now returns a page and all expected names. The production
+  FIG wrapper still uses TS because the native `text` kind payload is unmapped.
+  Sketch similarly parses correctly and retains names, but `bindings` remain
+  unmapped. Guards retain the complete TS results in both cases.
+- The unchanged geometry diagnostic again reports **1/30 equivalent, 29 failures**.
+  Its non-blocking CI status is not a promotion approval.
+
+CI caught two issues during this batch: the first new FIG regression incorrectly
+expected raw canvas x=120, whereas the existing native lowering normalizes the
+page envelope to (40,40). The test now explicitly asserts native x=40/60 and
+preserved relative spacing—production placement was not altered. The next real
+WASM check exposed the unsupported SVG `origin`, addressed by W02. Neither smoke
+assertion nor equivalence tolerance was waived.
+
+Local logs: `/home/user/wasm-import-next-{red,focused,unit,tsc,build,browser}.log`;
+CI annotations: `/home/user/wasm-import-next-annotations.json`.
