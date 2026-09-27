@@ -26,7 +26,7 @@ async function test(label, fn) {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 2, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 3, RustDocumentSession: Session,
 });
 
 await test("one-page rect document and persisted v1 metadata round-trip exactly", () => {
@@ -129,6 +129,39 @@ await test("strict native checkpoint refuses extra fields and metadata instead o
   }
 });
 
+await test("explicit vector checkpoint preserves all Boolean contours, including empty results", () => {
+  const seed = fixture(), original = JSON.parse(admitWebDocument(seed));
+  for (const loops of [
+    [],
+    [["M", 0, 0], ["L", 10, 0], ["L", 10, 10], ["L", 0, 10], ["Z"],
+      ["M", 2, 2], ["L", 8, 2], ["L", 8, 8], ["L", 2, 8], ["Z"]],
+  ]) {
+    const native = clone(original), result = native.pages[0].children[0];
+    result.kind = { t: "vector", path: loops };
+    result.id = "rust-result";
+    result.name = "Exclude";
+    result.w = 10; result.h = 10;
+    const exported = decodeWebDocument(JSON.stringify(native), seed);
+    const vector = exported.pages[0].root.children[0];
+    assert.equal(vector.id, "rust-result");
+    assert.equal(vector.kind, "vector");
+    assert.equal(vector.closed, true);
+    assert.equal(vector.vectorNetwork.regions[0].windingRule, "EVENODD");
+    assert.equal(vector.vectorNetwork.regions[0].loops.length, loops.length ? 2 : 0);
+    assert.equal(vector.vectorNetwork.vertices.length, loops.length ? 8 : 0);
+    assert.equal(admitWebDocument(exported), null, "vectors are outputs, not unproved initial inputs");
+  }
+  for (const path of [
+    [["M", 0, 0], ["C", 2, 2, 4, 4, 5, 5], ["Z"]],
+    [["M", 0, 0], ["L", 1, 1]],
+    [["M", 0, 0], ["L", 1, 1], ["L", 2, 2], ["Z", "extra"]],
+  ]) {
+    const native = clone(original);
+    native.pages[0].children[0].kind = { t: "vector", path };
+    assert.throws(() => decodeWebDocument(JSON.stringify(native), seed), /native|contour|path/i);
+  }
+});
+
 await test("open gates without wasm and rejects mismatched native round trip, freeing it", async () => {
   const doc = fixture();
   assert.equal(await openWebDocumentSession({ ...doc, components: [{ name: "unsupported" }] }), null);
@@ -144,6 +177,7 @@ await test("open gates without wasm and rejects mismatched native round trip, fr
     renameNode() { return "{}"; }
     moveNode() { return "{}"; }
     resizeNode() { return "{}"; }
+    booleanNode() { return "{}"; }
     undo() { return "{}"; }
     redo() { return "{}"; }
     exportX() { const v = JSON.parse(this.x); v.pages[0].children[0].x++; return JSON.stringify(v); }
@@ -187,6 +221,7 @@ await test("once admitted, small commands go straight to Rust; full data only on
     renameNode(id, name) { return this.edit(id, n => { n.name = name; }); }
     moveNode(id, dx, dy) { return this.edit(id, n => { n.x += dx; n.y += dy; }); }
     resizeNode(id, w, h) { return this.edit(id, n => { n.w = w; n.h = h; }); }
+    booleanNode() { throw Error("No mock Boolean geometry"); }
     undo() { return this.state(); }
     redo() { return this.state(); }
     exportX() { counters.exports++; return JSON.stringify(this.data); }

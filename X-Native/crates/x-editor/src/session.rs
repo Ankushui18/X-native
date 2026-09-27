@@ -8,7 +8,8 @@
 use std::collections::HashSet;
 
 use crate::{find, Editor};
-use x_core::{Document, Node};
+use x_core::booleans::BoolOp;
+use x_core::{Document, Node, NodeKind, Paint, PathCmd};
 
 /// The first bounded command slice. Further mutations need their own state
 /// delta and equivalence tests before they can be added to the bridge.
@@ -29,6 +30,13 @@ pub enum SessionCommand<'a> {
         w: f64,
         h: f64,
     },
+    /// Atomic two-layer Boolean. Only direct, plain rectangles are admitted
+    /// until other shapes have their own command-session proof of parity.
+    Boolean {
+        first: &'a str,
+        second: &'a str,
+        op: BoolOp,
+    },
     Undo,
     Redo,
 }
@@ -43,12 +51,33 @@ pub struct NodeDelta {
     pub h: f64,
 }
 
+/// A bounded per-layer projection for an atomic Boolean edit. The path is a
+/// list of NODE-LOCAL, already simplified contour anchors, not a page JSON.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryNodeDelta {
+    pub node: NodeDelta,
+    pub index: usize,
+    pub fill: String,
+    pub visible: bool,
+    pub locked: bool,
+    /// `None` = rectangle, `Some` = vector (possibly empty).
+    pub rings: Option<Vec<Vec<(f64, f64)>>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanDelta {
+    pub upsert: Vec<GeometryNodeDelta>,
+    pub removed: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionDelta {
     /// Increases only after a successful document edit, including undo/redo.
     pub revision: u64,
     /// `None` for a no-op/status read; never a whole-page snapshot.
     pub node: Option<NodeDelta>,
+    /// Only structural Boolean edits/undo/redo return this bounded change set.
+    pub boolean: Option<BooleanDelta>,
     pub can_undo: bool,
     pub can_redo: bool,
 }
@@ -107,8 +136,10 @@ impl DocumentSession {
         SessionDelta {
             revision: self.revision,
             node: None,
+            boolean: None,
             can_undo: self.editor.undo_depth() > 0,
-            can_redo: self.editor.next_redo_node().is_some(),
+            can_redo: self.editor.next_redo_node().is_some()
+                || self.editor.next_redo_boolean().is_some(),
         }
     }
 
@@ -119,7 +150,92 @@ impl DocumentSession {
         find(&self.editor.root, id).ok_or_else(|| format!("node not found: {id}"))
     }
 
+    fn boolean_operand(&self, id: &str) -> Result<(), String> {
+        let node = self.target(id)?;
+        if !self.editor.root.children.iter().any(|child| child.id == id)
+            || !matches!(&node.kind, NodeKind::Rect { radius } if *radius == 0.0)
+            || !node.children.is_empty()
+            || id.len() > 256
+            || node.name.len() > 1024
+            || !node.visible
+            || node.locked
+            || node.opacity != 1.0
+            || node.stroke.width != 0.0
+            || !node.fill_layers.is_empty()
+            || !node.stroke_layers.is_empty()
+            || !node.effects.is_empty()
+            || !node.effect_layers.is_empty()
+            || node.corner_radii.is_some()
+            || node.corner_smoothing != 0.0
+            || node.transform.rotation != 0.0
+            || node.transform.scale_x != 1.0
+            || node.transform.scale_y != 1.0
+            || node.transform.skew_x != 0.0
+            || node.transform.skew_y != 0.0
+            || ![node.transform.x, node.transform.y, node.w, node.h]
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 1e9)
+            || node.w <= 0.0
+            || node.h <= 0.0
+            || !matches!(&node.fill, Paint::Solid(color) if color.to_rgba8().a == 255)
+        {
+            return Err("Boolean session admits only plain visible, unlocked solid rectangles".into());
+        }
+        Ok(())
+    }
+
+    fn geometry_node(&self, id: &str) -> Result<GeometryNodeDelta, String> {
+        let node = self.target(id)?;
+        let index = self.editor.root.children.iter().position(|n| n.id == id)
+            .ok_or("Boolean delta target is not a page child")?;
+        let Paint::Solid(color) = &node.fill else {
+            return Err("Boolean delta requires a solid fill".into());
+        };
+        let rgba = color.to_rgba8();
+        let rings = match &node.kind {
+            NodeKind::Rect { radius } if *radius == 0.0 => None,
+            NodeKind::Vector { path } => {
+                let mut rings = Vec::new();
+                let mut ring = Vec::new();
+                for cmd in path {
+                    match *cmd {
+                        PathCmd::MoveTo(x, y) => {
+                            if !ring.is_empty() {
+                                return Err("unclosed Boolean path".into());
+                            }
+                            ring.push((x, y));
+                        }
+                        PathCmd::LineTo(x, y) => ring.push((x, y)),
+                        PathCmd::Close => {
+                            if ring.len() < 3 {
+                                return Err("degenerate Boolean contour".into());
+                            }
+                            rings.push(std::mem::take(&mut ring));
+                        }
+                        PathCmd::CurveTo(..) => return Err("unexpected Boolean curve".into()),
+                    }
+                }
+                if !ring.is_empty() {
+                    return Err("unclosed Boolean path".into());
+                }
+                Some(rings)
+            }
+            _ => return Err("unsupported Boolean delta layer".into()),
+        };
+        Ok(GeometryNodeDelta {
+            node: self.node(id).ok_or("Boolean node missing")?,
+            index,
+            fill: format!("#{:02x}{:02x}{:02x}", rgba.r, rgba.g, rgba.b),
+            visible: node.visible,
+            locked: node.locked,
+            rings,
+        })
+    }
+
     pub fn dispatch(&mut self, command: SessionCommand<'_>) -> Result<SessionDelta, String> {
+        // One structural edit can change three node identities. The editor's
+        // command stack remains the only history; this is just a delta hint.
+        let mut boolean: Option<([String; 2], String, bool)> = None;
         let changed = match command {
             SessionCommand::Rename { id, name } => {
                 self.target(id)?;
@@ -151,6 +267,9 @@ impl DocumentSession {
                     return Err("resize dimensions must be finite and at least one".into());
                 }
                 let node = self.target(id)?;
+                if matches!(&node.kind, NodeKind::Vector { .. }) {
+                    return Err("resizing Boolean vectors needs a proved contour transform".into());
+                }
                 if node.w == w && node.h == h {
                     None
                 } else {
@@ -159,9 +278,29 @@ impl DocumentSession {
                     (self.editor.undo_depth() > before).then(|| id.to_string())
                 }
             }
+            SessionCommand::Boolean { first, second, op } => {
+                if first == second {
+                    return Err("Boolean operands must be distinct".into());
+                }
+                self.boolean_operand(first)?;
+                self.boolean_operand(second)?;
+                let previous = std::mem::replace(
+                    &mut self.editor.selection,
+                    vec![first.to_string(), second.to_string()],
+                );
+                let result = self.editor.boolean_web_selected(op);
+                if result.is_err() {
+                    self.editor.selection = previous;
+                }
+                let result = result.map_err(str::to_string)?;
+                boolean = Some(([first.to_string(), second.to_string()], result, true));
+                None
+            }
             SessionCommand::Undo => {
                 let id = self.editor.next_undo_node().map(str::to_string);
-                if id.is_some() && self.editor.undo() {
+                let structural = self.editor.next_undo_boolean();
+                if self.editor.undo() {
+                    boolean = structural.map(|(ids, result)| (ids, result, false));
                     id
                 } else {
                     None
@@ -169,18 +308,40 @@ impl DocumentSession {
             }
             SessionCommand::Redo => {
                 let id = self.editor.next_redo_node().map(str::to_string);
-                if id.is_some() && self.editor.redo() {
+                let structural = self.editor.next_redo_boolean();
+                if self.editor.redo() {
+                    boolean = structural.map(|(ids, result)| (ids, result, true));
                     id
                 } else {
                     None
                 }
             }
         };
-        if changed.is_some() {
+        if let Some((sources, result, applied)) = &boolean {
+            self.editor.selection = if *applied {
+                vec![result.clone()]
+            } else {
+                sources.to_vec()
+            };
+        }
+        if changed.is_some() || boolean.is_some() {
             self.revision += 1;
         }
         let mut delta = self.state();
         delta.node = changed.and_then(|id| self.node(&id));
+        if let Some((sources, result, applied)) = boolean {
+            delta.boolean = Some(if applied {
+                BooleanDelta {
+                    upsert: vec![self.geometry_node(&result)?],
+                    removed: sources.into_iter().collect(),
+                }
+            } else {
+                BooleanDelta {
+                    upsert: sources.iter().map(|id| self.geometry_node(id)).collect::<Result<_, _>>()?,
+                    removed: vec![result],
+                }
+            });
+        }
         Ok(delta)
     }
 
@@ -297,6 +458,92 @@ mod tests {
         assert_eq!(redone.revision, 3);
         assert!(redone.can_undo);
         assert_eq!(session.snapshot().pages[0].children[0].w, 75.25);
+    }
+
+    #[test]
+    fn web_booleans_are_atomic_rust_commands_with_only_changed_layer_deltas() {
+        for (op, loop_sizes) in [
+            (BoolOp::Union, vec![11]),
+            (BoolOp::Subtract, vec![8]),
+            (BoolOp::Intersect, vec![5]),
+            (BoolOp::Exclude, vec![8, 8]),
+        ] {
+            let document = Document {
+                pages: vec![Node::frame("page", 400.0, 300.0)
+                    .child(Node::rect("a", 0.0, 0.0, 10.0, 10.0, Color::BLACK))
+                    .child(Node::rect("middle", 40.0, 40.0, 10.0, 10.0, Color::BLACK))
+                    .child(Node::rect("b", 5.0, 5.0, 10.0, 10.0, Color::BLACK))],
+                ..Default::default()
+            };
+            let mut session = DocumentSession::new(document).unwrap();
+            let changed = session.dispatch(SessionCommand::Boolean {
+                first: "a", second: "b", op,
+            }).unwrap();
+            assert_eq!(changed.revision, 1);
+            assert!(changed.node.is_none());
+            assert!(changed.can_undo);
+            let patch = changed.boolean.unwrap();
+            assert_eq!(patch.removed, vec!["a", "b"]);
+            assert_eq!(patch.upsert.len(), 1);
+            let result = &patch.upsert[0];
+            assert_eq!(result.index, 0);
+            assert_eq!(result.fill, "#000000");
+            assert_eq!(result.rings.as_ref().unwrap().iter().map(Vec::len).collect::<Vec<_>>(), loop_sizes);
+            let result_id = result.node.id.clone();
+            let saved = session.snapshot();
+            assert_eq!(saved.pages[0].children.len(), 2);
+            assert_eq!(saved.pages[0].children[0].id, result_id);
+            assert_eq!(saved.pages[0].children[1].id, "middle");
+            assert_eq!(session.editor.undo_depth(), 1);
+
+            let undo = session.dispatch(SessionCommand::Undo).unwrap();
+            assert!(undo.can_redo);
+            let undo_patch = undo.boolean.unwrap();
+            assert_eq!(undo_patch.removed, vec![result_id.as_str()]);
+            assert_eq!(undo_patch.upsert.iter().map(|n| n.index).collect::<Vec<_>>(), [0, 2]);
+            assert!(undo_patch.upsert.iter().all(|n| n.rings.is_none()));
+            assert_eq!(session.snapshot().pages[0].children.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["a", "middle", "b"]);
+            let redo = session.dispatch(SessionCommand::Redo).unwrap();
+            assert_eq!(redo.boolean.unwrap().upsert[0].node.id, result_id);
+            assert_eq!(session.state().revision, 3);
+        }
+    }
+
+    #[test]
+    fn empty_intersection_still_commits_an_undoable_empty_vector() {
+        let doc = Document {
+            pages: vec![Node::frame("page", 600.0, 300.0)
+                .child(Node::rect("a", 0.0, 0.0, 10.0, 10.0, Color::BLACK))
+                .child(Node::rect("b", 500.0, 0.0, 10.0, 10.0, Color::BLACK))],
+            ..Default::default()
+        };
+        let mut session = DocumentSession::new(doc).unwrap();
+        let result = session.dispatch(SessionCommand::Boolean {
+            first: "a", second: "b", op: BoolOp::Intersect,
+        }).unwrap();
+        assert!(result.boolean.unwrap().upsert[0].rings.as_ref().unwrap().is_empty());
+        assert_eq!(session.snapshot().pages[0].children.len(), 1);
+        assert_eq!(session.dispatch(SessionCommand::Undo).unwrap().boolean.unwrap().upsert.len(), 2);
+        assert_eq!(session.snapshot().pages[0].children.len(), 2);
+    }
+
+    #[test]
+    fn refused_boolean_keeps_both_nodes_and_history_unchanged() {
+        let mut doc = sample();
+        doc.pages[0].children.push(Node::rect("b", 12.0, 20.0, 20.0, 20.0, Color::BLACK));
+        let mut session = DocumentSession::new(doc).unwrap();
+        for (a, b) in [("box", "box"), ("box", "missing"), ("page", "b")] {
+            assert!(session.dispatch(SessionCommand::Boolean {
+                first: a, second: b, op: BoolOp::Union,
+            }).is_err());
+        }
+        session.editor.root.children[1].locked = true;
+        assert!(session.dispatch(SessionCommand::Boolean {
+            first: "box", second: "b", op: BoolOp::Union,
+        }).is_err());
+        assert_eq!(session.state().revision, 0);
+        assert!(!session.state().can_undo);
+        assert_eq!(session.snapshot().pages[0].children.len(), 2);
     }
 
     #[test]

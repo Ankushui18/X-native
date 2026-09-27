@@ -9,6 +9,7 @@ pub use x_core::booleans::{
 };
 
 use crate::{find, parent_id, Command, Editor};
+use x_core::web_raster::boolean_web_raster_shaped;
 use x_core::Node;
 use x_core::{NodeKind, PathCmd};
 
@@ -44,6 +45,86 @@ impl Editor {
         v.transform.x = origin.0;
         v.transform.y = origin.1;
         v.fill = na.fill.clone();
+        self.commit_boolean_result(&ida, &idb, v)
+    }
+
+    /// The promoted x-geo grid, scoped to two anchor-only shapes admitted by
+    /// DocumentSession. Unlike the general native curve-preserving Boolean
+    /// backend, this is the exact raster + simplifier matched by the web
+    /// oracle. The same single Rust editor history owns edit/undo/redo.
+    pub fn boolean_web_selected(&mut self, op: BoolOp) -> Result<String, &'static str> {
+        if self.selection.len() != 2 || self.selection[0] == self.selection[1] {
+            return Err("Boolean requires two distinct selected layers");
+        }
+        let (ida, idb) = (self.selection[0].clone(), self.selection[1].clone());
+        let na = find(&self.root, &ida).ok_or("first Boolean operand missing")?.clone();
+        let nb = find(&self.root, &idb).ok_or("second Boolean operand missing")?.clone();
+        let a = PositionedPath {
+            cmds: node_to_path(&na).ok_or("unsupported first Boolean operand")?,
+            offset: (na.transform.x, na.transform.y),
+        };
+        let b = PositionedPath {
+            cmds: node_to_path(&nb).ok_or("unsupported second Boolean operand")?,
+            offset: (nb.transform.x, nb.transform.y),
+        };
+        let rings = boolean_web_raster_shaped(op, &[a, b])?;
+        if rings.len() > 512 || rings.iter().any(|ring| ring.len() < 3) ||
+            rings.iter().map(Vec::len).sum::<usize>() > 4096 {
+            return Err("Boolean result exceeds the bounded vector dialect");
+        }
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+            f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY,
+        );
+        for &(x, y) in rings.iter().flatten() {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+        if !min_x.is_finite() {
+            // A real empty Boolean is a valid, undoable empty vector.
+            min_x = na.transform.x;
+            min_y = na.transform.y;
+            max_x = min_x;
+            max_y = min_y;
+        }
+        let mut path = Vec::new();
+        for ring in &rings {
+            for (i, &(x, y)) in ring.iter().enumerate() {
+                if i == 0 {
+                    path.push(PathCmd::MoveTo(x - min_x, y - min_y));
+                } else {
+                    path.push(PathCmd::LineTo(x - min_x, y - min_y));
+                }
+            }
+            path.push(PathCmd::Close);
+        }
+        // The editor serial is Rust-owned and monotonic. Unlike fresh_id it
+        // does not ask std::time/process for browser-unavailable host APIs.
+        // A bounded collision suffix handles documents that already contain
+        // the generated prefix (including a saved/reopened Boolean result).
+        let new_id = (0..2049)
+            .map(|suffix| format!("bool-{:x}-{suffix:x}", self.edit_serial))
+            .find(|id| find(&self.root, id).is_none())
+            .ok_or("cannot allocate unique Boolean result id")?;
+        let mut result = Node::vector(
+            &new_id, min_x, min_y, (max_x - min_x).max(1.0),
+            (max_y - min_y).max(1.0), path,
+        );
+        result.fill = na.fill.clone();
+        result.name = format!("{:?}", op);
+        // The admitted web dialect hides shape labels; preserve that native
+        // style on the new vector so an explicit web checkpoint stays exact.
+        result.show_name = false;
+        self.commit_boolean_result(&ida, &idb, result)
+            .ok_or("Boolean operands are not direct page siblings")
+    }
+
+    /// One structural command group: remove the two inputs and insert the
+    /// result at their previous position. This is shared by the native exact
+    /// backend and the web-compatible session backend, not a second history.
+    fn commit_boolean_result(&mut self, ida: &str, idb: &str, v: Node) -> Option<String> {
+        let new_id = v.id.clone();
         // undoable: delete both inputs, insert result (snapshot style)
         let parent_id = self.root.id.clone();
         let idx_a = self.root.children.iter().position(|c| c.id == ida)?;

@@ -1,17 +1,17 @@
 # Rust / TypeScript boundary
 
-> **2026-09-27 update:** optional import and geometry bridges are wired and
-> equivalence-guarded. A separate, stateful Rust command-session boundary now
-> exists for native `.x` documents; it is **not** the production web editor.
-> A strictly gated web-document V1 adapter now powers an explicit
-> `#/file/<id>?engine=rust` rectangle preview when genuine WASM is available.
-> The ordinary editor, production history and persistence remain TypeScript-owned.
-> The narrow preview and version-2 resize command passed the Rust workspace,
-> web and generated-WASM
-> [CI 36344250983](https://github.com/Ankushui18/X-native/actions/runs/36344250983).
-> Native geometry promotion **failed** its comparator. See
+> **2026-09-28 update:** the x-geo Boolean bridge returns Rust geometry by
+> default after a genuine-WASM 30/30 corpus pass; `?geo=audit` retains an
+> opt-in TS comparator and invalid/missing WASM still falls back safely.
+> A separate, stateful Rust `.x` command session is **not** the production web
+> editor. Its V3 ABI adds atomic Union/Subtract/Intersect/Exclude, small
+> changed-layer deltas, and the existing Rust undo/redo stack. The strict V1
+> web-document gate still admits only plain rectangles at open; the explicit
+> `#/file/<id>?engine=rust` preview can display and explicitly export their
+> Rust-owned vector results. The ordinary editor, its history, Auto Layout
+> and persistence remain TypeScript-owned. See
 > [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
-> The baseline inventory below is historical, not a claim that the bridges are inert.
+> The baseline inventory below is historical, not a claim that bridges are inert.
 
 Status: **provisional by design.** This document describes what the repository
 does today, not what earlier audits assumed it did.
@@ -33,11 +33,11 @@ before a lossless document boundary and behavior parity would lose user work.
 | --- | --- | --- |
 | `x-core` model, `x-editor` commands/undo, Rust layout | Engine authority shared across hosts | One-page native `.x` command session; live web engine not migrated |
 | TypeScript / UI | Application state, input and presentation only | `MemoryEngine` drives the default web editor; the explicit Rust preview is UI-only |
-| WASM | Web boundary | Guarded import bridge, optional `RustDocumentSession` and rectangle-only admission; explicit preview uses its command/state boundary |
+| WASM | Web boundary | Promoted Rust Boolean geometry (opt-in audit), guarded imports, and an optional Rust document session; strict rectangle-only admission at open |
 | Native desktop | Direct Rust boundary | Direct Rust session API and native-host test; no desktop UI yet |
 | Document, Auto Layout, undo duplicated in TS | **Avoid** in the destination | Existing duplication must be removed one proven slice at a time; no new TS engine in the bridge |
-| Rust ↔ TS per-frame full JSON | **Avoid** | Native `.x` read once at open / written on explicit export; command replies are one-node deltas |
-| Thin command/state bridge | **Use** | Version-2 `renameNode`, `moveNode`, `resizeNode`, `undo`, `redo`, node/status queries, revision + history flags |
+| Rust ↔ TS per-frame full JSON | **Avoid** | Native `.x` read at open / written on explicit export; normal replies are one-node deltas, Boolean edits send affected nodes/IDs only |
+| Thin command/state bridge | **Use** | Version-3 `renameNode`, `moveNode`, `resizeNode`, `booleanNode`, `undo`, `redo`, node/status queries, revision + history flags |
 
 `x-editor::DocumentSession` holds an `x-core::Document` and the existing Rust
 `Editor` history. `x-wasm` only exposes it; `apps/web/src/engine/rustSession.ts`
@@ -61,15 +61,18 @@ The shared Rust/native and real generated-WASM session tests passed
 [CI 36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226);
 the web-document V1 open/checkpoint smoke passed
 [CI 36340690212](https://github.com/Ankushui18/X-native/actions/runs/36340690212).
-The opt-in preview uses that same session to paint admitted rectangles, move,
-rename and resize individual layers, and call Rust undo/redo. `App.tsx` closes it
-synchronously before any other file/editor owner mounts; a dirty preview
-confirms navigation and browser unload. It has **no autosave**: download is an
-explicit copy, and the stored file is unchanged. Failed admission or unavailable
-WASM offers a switch back to the standard editor, never a silent engine swap.
-It is not a production editor, rendering or Auto Layout promotion. V1 web
-format admission is independent of the V2 command ABI: an old optional WASM
-artifact can still serve guarded imports but cannot open the newer preview.
+The opt-in preview uses that same session to paint admitted rectangles and
+bounded Boolean vectors; it can rename/move layers, resize rectangles, combine
+exactly two plain rectangles, and use Rust undo/redo for all edits. Vector resize
+is deliberately withheld pending separate contour-transform evidence. The
+first shape supplies the result fill. `App.tsx` closes the preview synchronously
+before any other editor owner mounts; dirty navigation/browser unload prompts.
+It has **no autosave**: vector checkpoint/download is an explicit copy, and the
+stored file is unchanged. Failed admission or unavailable WASM offers the
+standard editor, never a silent engine swap. This is not a production editor,
+rendering or Auto Layout promotion. V1 web format admission is independent of
+the V3 command ABI: an old WASM asset can still serve guarded imports but
+cannot open the newer preview.
 See §§20–23 in the WASM implementation record for the bounded scope and tests.
 
 ## Historical TypeScript baseline (before the bridge integration)

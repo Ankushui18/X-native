@@ -2,22 +2,42 @@
 //! Commands and undo live in Rust; only one changed node is encoded here.
 
 use serde_json::{json, Value};
-use x_editor::{DocumentSession, NodeDelta, SessionCommand, SessionDelta};
+use x_core::booleans::BoolOp;
+use x_editor::{DocumentSession, GeometryNodeDelta, NodeDelta, SessionCommand, SessionDelta};
 use x_format::{deserialize::load_x, serialize::save_x};
 
 fn node_value(node: NodeDelta) -> Value {
     json!({ "id": node.id, "name": node.name, "x": node.x, "y": node.y, "w": node.w, "h": node.h })
 }
 
+fn geometry_value(change: GeometryNodeDelta) -> Value {
+    let mut value = node_value(change.node);
+    value["index"] = json!(change.index);
+    value["kind"] = json!(if change.rings.is_some() { "vector" } else { "rect" });
+    value["fill"] = json!(change.fill);
+    value["visible"] = json!(change.visible);
+    value["locked"] = json!(change.locked);
+    if let Some(rings) = change.rings {
+        value["rings"] = json!(rings);
+    }
+    value
+}
+
 fn delta_json(delta: SessionDelta) -> String {
     let node = delta.node.map(node_value);
-    json!({
+    let mut value = json!({
         "revision": delta.revision,
         "node": node,
         "canUndo": delta.can_undo,
         "canRedo": delta.can_redo,
-    })
-    .to_string()
+    });
+    if let Some(boolean) = delta.boolean {
+        value["boolean"] = json!({
+            "upsert": boolean.upsert.into_iter().map(geometry_value).collect::<Vec<_>>(),
+            "removed": boolean.removed,
+        });
+    }
+    value.to_string()
 }
 
 /// Host-testable half of the WASM class. Native callers instead use the
@@ -56,6 +76,17 @@ impl CommandBridge {
 
     pub fn resize_node(&mut self, id: &str, w: f64, h: f64) -> Result<String, String> {
         self.dispatch(SessionCommand::Resize { id, w, h })
+    }
+
+    pub fn boolean_node(&mut self, first: &str, second: &str, name: &str) -> Result<String, String> {
+        let op = match name {
+            "union" => BoolOp::Union,
+            "subtract" => BoolOp::Subtract,
+            "intersect" => BoolOp::Intersect,
+            "exclude" => BoolOp::Exclude,
+            _ => return Err("unknown Boolean operation".into()),
+        };
+        self.dispatch(SessionCommand::Boolean { first, second, op })
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -153,6 +184,42 @@ mod tests {
             bridge.resize_node("box", 80.0, 24.5).unwrap(),
             bridge.state()
         );
+    }
+
+    #[test]
+    fn four_booleans_have_atomic_small_deltas_and_native_history() {
+        for name in ["union", "subtract", "intersect", "exclude"] {
+            let document = Document {
+                pages: vec![Node::frame("page", 400.0, 300.0)
+                    .child(Node::rect("first", 0.0, 0.0, 10.0, 10.0, Color::BLACK))
+                    .child(Node::rect("second", 5.0, 5.0, 10.0, 10.0, Color::BLACK))],
+                ..Default::default()
+            };
+            let mut bridge = CommandBridge::open(&save_x(&document)).unwrap();
+            let wire = bridge.boolean_node("first", "second", name).unwrap();
+            let changed: Value = serde_json::from_str(&wire).unwrap();
+            assert!(wire.len() < 2_048, "returned a full document, not a vector delta");
+            assert_eq!(changed["revision"], 1);
+            assert_eq!(changed["node"], Value::Null);
+            assert_eq!(changed["boolean"]["removed"], json!(["first", "second"]));
+            assert_eq!(changed["boolean"]["upsert"][0]["kind"], "vector");
+            let created = changed["boolean"]["upsert"][0]["id"].as_str().unwrap();
+            assert!(bridge.get_node("first") == "null");
+            let snapshot = load_x(&bridge.export_x()).unwrap();
+            assert_eq!(snapshot.pages[0].children.len(), 1);
+            assert_eq!(snapshot.pages[0].children[0].id, created);
+            let undo: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+            assert_eq!(undo["revision"], 2);
+            assert_eq!(undo["boolean"]["removed"], json!([created]));
+            assert_eq!(undo["boolean"]["upsert"].as_array().unwrap().len(), 2);
+            assert_eq!(undo["canRedo"], true);
+            let redo: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
+            assert_eq!(redo["boolean"]["upsert"][0]["id"], created);
+            assert!(bridge.boolean_node("missing", "second", name).is_err());
+            assert_eq!(bridge.state(), serde_json::json!({
+                "revision": 3, "node": null, "canUndo": true, "canRedo": false,
+            }).to_string());
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! A native host uses the same command session directly, without wasm-bindgen
 //! or a second document/undo implementation in the UI.
 
-use x_native::editor::{DocumentSession, SessionCommand};
+use x_native::editor::{BoolOp, DocumentSession, SessionCommand};
 use x_native::fileio::{load_x, save_x};
 use x_native::{Color, Document, Node};
 
@@ -43,4 +43,29 @@ fn native_host_edits_and_saves_the_same_rust_document() {
     assert_eq!(reopened.pages[0].children[0].transform.y, 20.0);
     let node = &reopened.pages[0].children[0];
     assert_eq!((node.w, node.h), (65.0, 48.0));
+}
+
+#[test]
+fn native_host_boolean_uses_the_same_atomic_session_and_edit_history() {
+    let page = Node::frame("page", 400.0, 300.0)
+        .child(Node::rect("a", 0.0, 0.0, 10.0, 10.0, Color::BLACK))
+        .child(Node::rect("b", 5.0, 5.0, 10.0, 10.0, Color::BLACK));
+    let doc = Document {
+        pages: vec![page],
+        ..Default::default()
+    };
+    let mut session = DocumentSession::new(doc).unwrap();
+    let result = session.dispatch(SessionCommand::Boolean {
+        first: "a", second: "b", op: BoolOp::Exclude,
+    }).unwrap();
+    let patch = result.boolean.unwrap();
+    assert_eq!(patch.removed, ["a", "b"]);
+    assert_eq!(patch.upsert[0].rings.as_ref().unwrap().len(), 2);
+    assert_eq!(session.snapshot().pages[0].children.len(), 1);
+    let undo = session.dispatch(SessionCommand::Undo).unwrap();
+    assert_eq!(undo.boolean.unwrap().upsert.len(), 2);
+    assert_eq!(session.snapshot().pages[0].children.len(), 2);
+    let redo = session.dispatch(SessionCommand::Redo).unwrap();
+    assert_eq!(redo.boolean.unwrap().upsert.len(), 1);
+    assert_eq!(load_x(&save_x(&session.into_document())).unwrap().pages[0].children.len(), 1);
 }

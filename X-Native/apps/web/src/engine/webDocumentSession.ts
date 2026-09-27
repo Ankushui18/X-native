@@ -12,7 +12,7 @@
 import { node } from "./memory";
 import type { DocSeed } from "./files";
 import type { PersistedDoc } from "./persist";
-import type { Page, XNode } from "./types";
+import type { BooleanOp, Page, XNode } from "./types";
 import { openRustSession, type RustSessionClient } from "./rustSession";
 import { auditDecision } from "./bridgeRuntimeAudit";
 
@@ -38,6 +38,7 @@ const NODE_KEYS_V1 = `
 `.trim().split(/\s+/);
 const ROOT = node("frame", "", 0, 0, 1, 1, { fill: "#00000000", overflow: "visible", showName: false });
 const RECT = node("rect", "", 0, 0, 1, 1);
+const VECTOR = node("vector", "", 0, 0, 1, 1);
 const DOC_KEYS = `fileName pages components styles page zoom panX panY showRulers showMinimap showComments`.split(" ");
 const OPTIONAL_DOC_KEYS = `version showFlows annotations variables variableCollections activeModes`.split(" ");
 const PAGE_KEYS = `id name root comments guides pixelGrid pixelGridColor pixelSnap flowStart`.split(" ");
@@ -81,21 +82,26 @@ function finite(n: unknown): n is number { return typeof n === "number" && Numbe
 function label(s: unknown): s is string { return typeof s === "string"; }
 const OPAQUE = /^#[0-9a-f]{6}$/;
 
-function admittedNode(value: unknown, root: boolean): XNode {
-  const n = object(value), base = root ? ROOT : RECT;
+function admittedNode(value: unknown, root: boolean, fromNative = false): XNode {
+  const n = object(value);
+  // Only a command result may add a vector. Initial web admission stays
+  // rectangle-only; arbitrary vector documents have not passed this gate.
+  const vector = fromNative && !root && n.kind === "vector";
+  const base = root ? ROOT : vector ? VECTOR : RECT;
   exactKeys(base as unknown as Record<string, unknown>, NODE_KEYS_V1);
-  exactKeys(n, NODE_KEYS_V1);
+  exactKeys(n, NODE_KEYS_V1, vector ? ["vectorNetwork"] : []);
   if (!label(n.id) || !n.id || !label(n.name) ||
       ![n.x, n.y, n.w, n.h].every(finite) || (n.w as number) <= 0 || (n.h as number) <= 0 ||
       typeof n.visible !== "boolean" || typeof n.locked !== "boolean" ||
       (root ? n.fill !== "#00000000" : !label(n.fill) || !OPAQUE.test(n.fill)) ||
       !Array.isArray(n.children) || (!root && n.children.length !== 0) ||
       (root && n.children.length > 2048)) throw new Error("Unsupported layer");
-  const children = root ? n.children.map(c => admittedNode(c, false)) : [];
+  const children = root ? n.children.map(c => admittedNode(c, false, fromNative)) : [];
   const expected: XNode = {
     ...base, id: n.id, name: n.name, x: n.x as number, y: n.y as number,
     w: n.w as number, h: n.h as number, fill: n.fill as string,
     visible: n.visible, locked: n.locked, children,
+    ...(vector ? { path: n.path as XNode["path"], vectorNetwork: n.vectorNetwork as NonNullable<XNode["vectorNetwork"]>, closed: true } : {}),
   };
   if (!equal(n, expected)) throw new Error("Unsupported layer properties");
   return expected;
@@ -129,9 +135,21 @@ export function admitWebDocument(input: unknown): string | null {
   } catch { return null; }
 }
 
+function nativePath(n: XNode): (string | number)[][] {
+  const net = n.vectorNetwork;
+  const loops = net?.regions?.[0]?.loops;
+  if (!net || !loops) throw new Error("Missing native vector contours");
+  return loops.flatMap(loop => loop.flatMap((i, j) => {
+    const p = net.vertices[i];
+    if (!p || !finite(p.x) || !finite(p.y)) throw new Error("Invalid native vector vertex");
+    return [[j === 0 ? "M" : "L", p.x, p.y]];
+  }).concat([["Z"]]));
+}
+
 function nativeNode(n: XNode, root: boolean): Record<string, unknown> {
   return {
-    id: n.id, kind: root ? { t: "frame" } : { t: "rect", radius: 0 },
+    id: n.id, kind: root ? { t: "frame" } : n.kind === "vector"
+      ? { t: "vector", path: nativePath(n) } : { t: "rect", radius: 0 },
     x: n.x, y: n.y, w: n.w, h: n.h, rotation: 0, opacity: 1,
     visible: n.visible, locked: n.locked, fill: { t: "solid", c: n.fill },
     ...(n.name === n.id ? {} : { name: n.name }),
@@ -147,23 +165,61 @@ function nativeDocument(root: XNode): Record<string, unknown> {
   };
 }
 
+function nativeVector(value: unknown): Pick<XNode, "path" | "vectorNetwork" | "closed"> {
+  const kind = object(value);
+  exactKeys(kind, ["t", "path"]);
+  if (kind.t !== "vector" || !Array.isArray(kind.path)) throw new Error("Invalid native vector");
+  const loops: number[][] = [];
+  const vertices: { x: number; y: number }[] = [];
+  const segments: { start: number; end: number }[] = [];
+  const path: XNode["path"] = [];
+  let loop: number[] = [];
+  for (const item of kind.path) {
+    if (!Array.isArray(item) || !["M", "L", "Z"].includes(item[0])) throw new Error("Unsupported native path command");
+    if (item[0] === "Z") {
+      if (item.length !== 1 || loop.length < 3) throw new Error("Degenerate native contour");
+      for (let i = 0; i < loop.length; i++) {
+        segments.push({ start: loop[i], end: loop[(i + 1) % loop.length] });
+      }
+      loops.push(loop);
+      loop = [];
+    } else {
+      if (item.length !== 3 || !finite(item[1]) || !finite(item[2]) ||
+          (item[0] === "M") !== (loop.length === 0) || vertices.length >= 4096) {
+        throw new Error("Invalid native vector anchor");
+      }
+      const p = { x: item[1], y: item[2] };
+      vertices.push(p);
+      path.push(p);
+      loop.push(vertices.length - 1);
+    }
+  }
+  if (loop.length || loops.length > 512 || (!loops.length && kind.path.length)) {
+    throw new Error("Unclosed native vector contour");
+  }
+  return { path, vectorNetwork: { vertices, segments, regions: [{ windingRule: "EVENODD", loops }] }, closed: true };
+}
+
 function decodedNode(value: unknown, root: boolean): XNode {
   const n = object(value), paint = object(n.fill);
   if (!label(n.id) || !n.id || (n.name !== undefined && !label(n.name)) ||
       ![n.x, n.y, n.w, n.h].every(finite) ||
       typeof n.visible !== "boolean" || typeof n.locked !== "boolean" ||
       !label(paint.c) || !Array.isArray(n.children ?? [])) throw new Error("Invalid native layer");
+  const kind = object(n.kind);
+  const vector = !root && kind.t === "vector";
   const children = root ? (n.children as unknown[] | undefined ?? []).map(c => decodedNode(c, false)) : [];
-  const base = root ? ROOT : RECT;
-  const candidate = {
+  const base = root ? ROOT : vector ? VECTOR : RECT;
+  const candidate: XNode = {
     ...base, id: n.id, name: n.name ?? n.id, x: n.x as number, y: n.y as number,
     w: n.w as number, h: n.h as number, fill: paint.c,
     visible: n.visible, locked: n.locked, children,
+    ...(vector ? nativeVector(kind) : {}),
   };
   // Checks *every* native field, including extra properties the lenient .x
   // parser might expose in a future build. Nothing is stripped on export.
   if (!equal(n, nativeNode(candidate, root))) throw new Error("Unsupported native layer fields");
-  return admittedNode(candidate, root);
+  return admittedNode(candidate, root, true);
 }
 
 // Only application/page metadata and root identity survive admission in JS.
@@ -212,6 +268,7 @@ export class RustWebDocumentSession {
   renameNode(id: string, name: string) { return this.rust.renameNode(id, name); }
   moveNode(id: string, dx: number, dy: number) { return this.rust.moveNode(id, dx, dy); }
   resizeNode(id: string, w: number, h: number) { return this.rust.resizeNode(id, w, h); }
+  booleanNode(first: string, second: string, op: BooleanOp) { return this.rust.booleanNode(first, second, op); }
   undo() { return this.rust.undo(); }
   redo() { return this.rust.redo(); }
   /** Whole document only on an explicit checkpoint; never per command/frame. */

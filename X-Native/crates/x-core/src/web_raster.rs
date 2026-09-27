@@ -25,6 +25,29 @@ pub fn boolean_web_raster(
     op: BoolOp,
     shapes: &[PositionedPath],
 ) -> Result<Vec<Vec<(f64, f64)>>, &'static str> {
+    raster_grid(op, shapes).map(|(rings, _)| rings)
+}
+
+/// The same raw contours, then the TS shaper's RDP reduction (for anchor-only
+/// operands). The x-geo ABI still sends RAW rings for shared TS shaping;
+/// a Rust-owned document session needs the shaped local path in Rust itself.
+/// Curved-input smoothing is not implemented here and must not be admitted by
+/// the session until it has its own parity coverage.
+pub fn boolean_web_raster_shaped(
+    op: BoolOp,
+    shapes: &[PositionedPath],
+) -> Result<Vec<Vec<(f64, f64)>>, &'static str> {
+    let (rings, cell_size) = raster_grid(op, shapes)?;
+    Ok(rings
+        .into_iter()
+        .map(|ring| simplify_web_ring(&ring, cell_size * 0.85))
+        .collect())
+}
+
+fn raster_grid(
+    op: BoolOp,
+    shapes: &[PositionedPath],
+) -> Result<(Vec<Vec<Point>>, f64), &'static str> {
     if !(2..=16).contains(&shapes.len()) {
         return Err("web raster expects 2 to 16 operands");
     }
@@ -155,7 +178,44 @@ pub fn boolean_web_raster(
             }
         }
     }
-    Ok(rings)
+    Ok((rings, sx.max(sy)))
+}
+
+/// TS `simplify` is an open-polyline RDP: it never implicitly closes the
+/// boundary walk. Iterative segments avoid unbounded recursion on long rings.
+fn simplify_web_ring(ring: &[Point], eps: f64) -> Vec<Point> {
+    if ring.len() <= 2 {
+        return ring.to_vec();
+    }
+    let mut keep = vec![false; ring.len()];
+    keep[0] = true;
+    keep[ring.len() - 1] = true;
+    let mut segments = vec![(0, ring.len() - 1)];
+    while let Some((start, end)) = segments.pop() {
+        let (x0, y0) = ring[start];
+        let (x1, y1) = ring[end];
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let length = dx.hypot(dy);
+        let length = if length == 0.0 { 1.0 } else { length };
+        let (mut max, mut index) = (0.0, 0);
+        for (i, &(x, y)) in ring.iter().enumerate().take(end).skip(start + 1) {
+            let distance = (dy * (x - x0) - dx * (y - y0)).abs() / length;
+            if distance > max {
+                max = distance;
+                index = i;
+            }
+        }
+        if max > eps {
+            keep[index] = true;
+            segments.push((index, end));
+            segments.push((start, index));
+        }
+    }
+    ring.iter()
+        .zip(keep)
+        .filter_map(|(&p, keep)| keep.then_some(p))
+        .collect()
 }
 
 #[inline]
@@ -239,6 +299,20 @@ mod tests {
         // Third operand widens the original grid to [-2,28] in x.
         assert_eq!(rings[0][0].0, 0.15625);
         assert!((rings[0][0].1 - (-2.0 + 11.5 * (14.0 / 75.0))).abs() < 1e-12);
+    }
+
+    #[test]
+    fn shaped_rectangles_match_oracle_loop_counts_without_ts_simplification() {
+        let shapes = [rect(0.0, 0.0, 10.0, 10.0), rect(5.0, 5.0, 10.0, 10.0)];
+        for (op, counts) in [
+            (BoolOp::Union, vec![11]),
+            (BoolOp::Subtract, vec![8]),
+            (BoolOp::Intersect, vec![5]),
+            (BoolOp::Exclude, vec![8, 8]),
+        ] {
+            let rings = boolean_web_raster_shaped(op, &shapes).unwrap();
+            assert_eq!(rings.iter().map(Vec::len).collect::<Vec<_>>(), counts);
+        }
     }
 
     #[test]

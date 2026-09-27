@@ -5,6 +5,7 @@
  * consume native .x yet and must not run in parallel with this session. */
 import { initWasmBridge, rustSessionConstructor, type WasmDocumentSession } from "./wasmBridge";
 import { auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
+import type { BooleanOp } from "./types";
 
 // Session status is an independent owner decision; the import loader being ready
 // alone says nothing about this schema/route's admission or command dispatch.
@@ -32,11 +33,26 @@ export interface RustNodeChange {
   w: number;
   h: number;
 }
+export interface RustGeometryChange extends RustNodeChange {
+  index: number;
+  kind: "rect" | "vector";
+  fill: string;
+  visible: boolean;
+  locked: boolean;
+  /** Present only on vector results; node-local contour anchors. */
+  rings?: [number, number][][];
+}
+export interface RustBooleanChange {
+  upsert: RustGeometryChange[];
+  removed: string[];
+}
 export interface RustStateChange {
   revision: number;
   node: RustNodeChange | null;
   canUndo: boolean;
   canRedo: boolean;
+  /** Only structural Boolean apply/undo/redo returns this bounded patch. */
+  boolean?: RustBooleanChange;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -59,16 +75,60 @@ function nodeValue(value: unknown): RustNodeChange | null {
       typeof obj.h !== "number" || !Number.isFinite(obj.h)) throw new Error("Invalid Rust node delta");
   return { id: obj.id, name: obj.name, x: obj.x, y: obj.y, w: obj.w, h: obj.h };
 }
+function geometryValue(value: unknown): RustGeometryChange {
+  const obj = record(value, "Boolean layer delta");
+  const vector = obj.kind === "vector";
+  keys(obj, ["id", "name", "x", "y", "w", "h", "index", "kind", "fill", "visible", "locked",
+    ...(vector ? ["rings"] : [])], "Boolean layer delta");
+  const node = nodeValue({ id: obj.id, name: obj.name, x: obj.x, y: obj.y, w: obj.w, h: obj.h });
+  if (!node || !node.id || node.id.length > 256 || node.name.length > 1024 ||
+      (obj.kind !== "rect" && !vector) ||
+      !Number.isSafeInteger(obj.index) || (obj.index as number) < 0 || (obj.index as number) > 2048 ||
+      !(node.w > 0 && node.h > 0) || typeof obj.fill !== "string" || !/^#[0-9a-f]{6}$/.test(obj.fill) ||
+      typeof obj.visible !== "boolean" || typeof obj.locked !== "boolean") throw new Error("Invalid Rust Boolean layer");
+  let rings: [number, number][][] | undefined;
+  if (vector) {
+    if (!Array.isArray(obj.rings) || obj.rings.length > 512) throw new Error("Invalid Rust Boolean contours");
+    let count = 0;
+    rings = obj.rings.map((ring) => {
+      if (!Array.isArray(ring) || ring.length < 3 || (count += ring.length) > 4096) {
+        throw new Error("Invalid Rust Boolean contour size");
+      }
+      return ring.map((p): [number, number] => {
+        if (!Array.isArray(p) || p.length !== 2 || !p.every(Number.isFinite)) {
+          throw new Error("Invalid Rust Boolean contour point");
+        }
+        return [p[0], p[1]];
+      });
+    });
+  }
+  return { ...node, index: obj.index as number, kind: vector ? "vector" : "rect", fill: obj.fill,
+    visible: obj.visible, locked: obj.locked, ...(vector ? { rings } : {}) };
+}
+function booleanValue(value: unknown): RustBooleanChange {
+  const obj = record(value, "Boolean delta");
+  keys(obj, ["upsert", "removed"], "Boolean delta");
+  if (!Array.isArray(obj.upsert) || !Array.isArray(obj.removed) ||
+      ![1, 2].includes(obj.upsert.length) || obj.upsert.length + obj.removed.length !== 3 ||
+      obj.removed.some(id => typeof id !== "string" || !id)) throw new Error("Invalid Rust Boolean delta");
+  const upsert = obj.upsert.map(geometryValue);
+  const removed = obj.removed as string[];
+  const ids = [...upsert.map(n => n.id), ...removed];
+  if (new Set(ids).size !== 3) throw new Error("Duplicate Rust Boolean identities");
+  return { upsert, removed };
+}
 function stateValue(json: string): RustStateChange {
   const obj = record(JSON.parse(json) as unknown, "session delta");
-  keys(obj, ["revision", "node", "canUndo", "canRedo"], "session delta");
+  keys(obj, ["revision", "node", "canUndo", "canRedo", ...(obj.boolean === undefined ? [] : ["boolean"])], "session delta");
   if (typeof obj.revision !== "number" || !Number.isSafeInteger(obj.revision) || obj.revision < 0 ||
-      typeof obj.canUndo !== "boolean" || typeof obj.canRedo !== "boolean") throw new Error("Invalid Rust session delta");
+      typeof obj.canUndo !== "boolean" || typeof obj.canRedo !== "boolean" ||
+      (obj.boolean !== undefined && obj.node !== null)) throw new Error("Invalid Rust session delta");
   return {
     revision: obj.revision,
     node: nodeValue(obj.node),
     canUndo: obj.canUndo,
     canRedo: obj.canRedo,
+    ...(obj.boolean === undefined ? {} : { boolean: booleanValue(obj.boolean) }),
   };
 }
 
@@ -78,7 +138,8 @@ export class RustSessionClient {
   constructor(binding: WasmDocumentSession) {
     // The version handshake alone is not enough if an optional asset was
     // partially deployed. Do not hand an incomplete Rust owner to the UI.
-    const methods = ["state", "getNode", "renameNode", "moveNode", "resizeNode", "undo", "redo", "exportX", "free"] as const;
+    const methods = ["state", "getNode", "renameNode", "moveNode", "resizeNode", "booleanNode",
+      "undo", "redo", "exportX", "free"] as const;
     if (methods.some(method => typeof binding[method] !== "function")) {
       if (typeof binding.free === "function") auditRustCall("x-wasm.RustDocumentSession.free", () => binding.free());
       throw new Error("Incomplete Rust command-session ABI");
@@ -99,6 +160,9 @@ export class RustSessionClient {
   renameNode(id: string, name: string): RustStateChange { return stateValue(this.native("renameNode", b => b.renameNode(id, name))); }
   moveNode(id: string, dx: number, dy: number): RustStateChange { return stateValue(this.native("moveNode", b => b.moveNode(id, dx, dy))); }
   resizeNode(id: string, w: number, h: number): RustStateChange { return stateValue(this.native("resizeNode", b => b.resizeNode(id, w, h))); }
+  booleanNode(first: string, second: string, op: BooleanOp): RustStateChange {
+    return stateValue(this.native("booleanNode", b => b.booleanNode(first, second, op)));
+  }
   undo(): RustStateChange { return stateValue(this.native("undo", b => b.undo())); }
   redo(): RustStateChange { return stateValue(this.native("redo", b => b.redo())); }
   /** A complete .x document is returned ONLY at an explicit save. */

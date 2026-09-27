@@ -137,11 +137,11 @@ mod bindings {
         JsValue::from_str(&error)
     }
 
-    /// Separate version from the import-only bridge; older optional bundles
-    /// still serve imports, but v1 sessions lacked the size delta/resize command.
+    /// Separate version from the import-only bridge: V3 adds bounded Boolean
+    /// mutations and multi-node structural deltas to the Rust-owned session.
     #[wasm_bindgen(js_name = sessionBridgeVersion)]
     pub fn session_bridge_version() -> u32 {
-        2
+        3
     }
 
     #[wasm_bindgen]
@@ -181,6 +181,11 @@ mod bindings {
         #[wasm_bindgen(js_name = resizeNode)]
         pub fn resize_node(&mut self, id: &str, w: f64, h: f64) -> Result<String, JsValue> {
             self.bridge.resize_node(id, w, h).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = booleanNode)]
+        pub fn boolean_node(&mut self, first: &str, second: &str, op: &str) -> Result<String, JsValue> {
+            self.bridge.boolean_node(first, second, op).map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

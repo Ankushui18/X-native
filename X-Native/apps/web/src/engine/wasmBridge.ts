@@ -10,9 +10,9 @@ import { decodeRustImport } from "./wasmImportAdapter";
 import { auditDecision, auditRustAsyncCall, auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 export const IMPORT_BRIDGE_VERSION = 1;
-// V2 adds absolute resize and width/height to every node delta. Never cast a
-// V1 bindgen class to V2: it would lack resize and paint stale dimensions.
-export const SESSION_BRIDGE_VERSION = 2;
+// V3 adds an atomic Boolean command and bounded structural layer deltas.
+// Older bindgen classes cannot acknowledge a vector result or its undo safely.
+export const SESSION_BRIDGE_VERSION = 3;
 export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
 /** wasm-bindgen owns this stateful instance; JS never mirrors its document or
  * undo stack. The only large payload is an explicit open/export of native .x. */
@@ -22,6 +22,7 @@ export interface WasmDocumentSession {
   renameNode: (id: string, name: string) => string;
   moveNode: (id: string, dx: number, dy: number) => string;
   resizeNode: (id: string, w: number, h: number) => string;
+  booleanNode: (first: string, second: string, op: string) => string;
   undo: () => string;
   redo: () => string;
   exportX: () => string;

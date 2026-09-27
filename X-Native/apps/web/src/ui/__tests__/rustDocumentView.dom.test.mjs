@@ -25,7 +25,7 @@ const fixture = () => {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 2, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 3, RustDocumentSession: Session,
 });
 const calls = { opens: 0, exports: 0, queries: 0, edits: 0, closes: 0 };
 class FakeRust {
@@ -55,16 +55,60 @@ class FakeRust {
   }
   renameNode(id, name) { return this.edit(id, n => { n.name = name.trim(); }); }
   resizeNode(id, w, h) { return this.edit(id, n => { n.w = w; n.h = h; }); }
+  booleanNode(first, second, name) {
+    // A predetermined fixture response exercises the DOM/ABI, NOT a JS
+    // implementation of Boolean geometry. Genuine contours are tested in CI.
+    const before = clone(this.doc.pages[0].children);
+    const a = this.get(first), b = this.get(second);
+    if (!a || !b || a === b) throw new Error("Invalid Boolean operands");
+    const left = Math.min(a.x, b.x), top = Math.min(a.y, b.y);
+    const right = Math.max(a.x + a.w, b.x + b.w), bottom = Math.max(a.y + a.h, b.y + b.h);
+    const w = right - left, h = bottom - top;
+    const ring = [[0, 0], [w, 0], [w, h], [0, h]];
+    const result = { ...clone(a), id: "rust-bool-result", name: name[0].toUpperCase() + name.slice(1),
+      x: left, y: top, w, h, kind: { t: "vector", path: [
+        ["M", 0, 0], ["L", w, 0], ["L", w, h], ["L", 0, h], ["Z"],
+      ] } };
+    const index = Math.min(before.findIndex(n => n.id === first), before.findIndex(n => n.id === second));
+    this.doc.pages[0].children = before.filter(n => n.id !== first && n.id !== second);
+    this.doc.pages[0].children.splice(index, 0, result);
+    const change = { id: result.id, name: result.name, x: left, y: top, w, h, index,
+      kind: "vector", fill: a.fill.c, visible: a.visible, locked: a.locked, rings: [ring] };
+    this.undos.push({ boolean: true, before, after: clone(this.doc.pages[0].children),
+      result: change, removed: [first, second] });
+    this.redos.length = 0; this.revision++; calls.edits++;
+    return JSON.stringify({ ...JSON.parse(this.state()),
+      boolean: { upsert: [change], removed: [first, second] } });
+  }
   undo() {
     const op = this.undos.pop();
     if (!op) return this.state();
-    this.redos.push(op); Object.assign(this.get(op.id), op.before); this.revision++;
+    this.redos.push(op); this.revision++;
+    if (op.boolean) {
+      this.doc.pages[0].children = clone(op.before);
+      return JSON.stringify({ ...JSON.parse(this.state()), boolean: {
+        removed: [op.result.id], upsert: op.removed.map(id => {
+          const n = this.get(id);
+          return { id, name: n.name, x: n.x, y: n.y, w: n.w, h: n.h,
+            index: op.before.findIndex(v => v.id === id), kind: "rect",
+            fill: n.fill.c, visible: n.visible, locked: n.locked };
+        }),
+      } });
+    }
+    Object.assign(this.get(op.id), op.before);
     return this.state({ id: op.id, ...op.before });
   }
   redo() {
     const op = this.redos.pop();
     if (!op) return this.state();
-    this.undos.push(op); Object.assign(this.get(op.id), op.after); this.revision++;
+    this.undos.push(op); this.revision++;
+    if (op.boolean) {
+      this.doc.pages[0].children = clone(op.after);
+      return JSON.stringify({ ...JSON.parse(this.state()), boolean: {
+        removed: op.removed, upsert: [op.result],
+      } });
+    }
+    Object.assign(this.get(op.id), op.after);
     return this.state({ id: op.id, ...op.after });
   }
   exportX() { calls.exports++; return JSON.stringify(this.doc); }
@@ -150,7 +194,7 @@ win.dispatchEvent(unsavedExit);
 assert.equal(unsavedExit.defaultPrevented, true, "browser unload prompts after Rust-owned edits");
 assert.equal(ui.host.querySelector(".rust-preview-rect").style.left, "20px");
 assert.equal(calls.exports, 1, "move responds with one-node delta; no .x per edit");
-assert.equal(ui.host.querySelector(".rust-preview-toolbar span").textContent, "Rust revision 1");
+assert.equal(ui.host.querySelector(".rust-preview-toolbar span:not([role])").textContent, "Rust revision 1");
 await ui.type("Renamed");
 await ui.click("Rename");
 assert.equal(ui.host.querySelector(".rust-preview-rect").getAttribute("aria-label"), "Renamed");
@@ -195,10 +239,43 @@ await ui.close();
 assert.equal(calls.closes, 1);
 console.log("  ok mounted Rust-only view: small rename/move/resize deltas, Rust history, explicit download and cleanup");
 
+const boolSeed = fixture();
+Object.assign(boolSeed.pages[0].root.children[1], { x: 30, y: 25, w: 40, h: 30,
+  name: "Second", visible: true, locked: false });
+const preview = mount(boolSeed);
+await preview.render();
+const exportsBeforeBool = calls.exports;
+assert.equal(preview.byText("Union").disabled, true, "must select two admitted rectangles");
+const second = [...preview.host.querySelectorAll(".rust-preview-layers button")].find(b => b.textContent.includes("Second"));
+await act(async () => second.dispatchEvent(new win.MouseEvent("click", { bubbles: true, shiftKey: true })));
+assert.equal(preview.byText("Union").disabled, false);
+await preview.click("Union");
+assert.equal(preview.host.querySelectorAll(".rust-preview-layers button").length, 1);
+assert.equal(preview.host.querySelector(".rust-preview-rect path").getAttribute("fill"), "#13aabb");
+assert.match(preview.host.querySelector(".rust-preview-rect path").getAttribute("d"), /M0 0 L70 0/);
+assert.equal(preview.byText("Wider 10").disabled, true, "unproved vector resize stays disabled");
+assert.equal(calls.exports, exportsBeforeBool, "Boolean returns structural delta, never full document");
+await preview.click("Undo");
+assert.equal(preview.host.querySelectorAll(".rust-preview-layers button").length, 2);
+assert.equal(preview.host.querySelector(".rust-preview-rect path"), null);
+await preview.click("Redo");
+assert.ok(preview.host.querySelector(".rust-preview-rect path"));
+assert.equal(calls.exports, exportsBeforeBool, "undo/redo also use structural deltas");
+await preview.click("Prepare download");
+const vectorLink = preview.host.querySelector("a[download]");
+assert.ok(vectorLink);
+const savedVector = JSON.parse(await urls.get(vectorLink.href).text()).pages[0].root.children[0];
+assert.equal(savedVector.kind, "vector");
+assert.equal(savedVector.vectorNetwork.regions[0].loops.length, 1);
+assert.equal(savedVector.vectorNetwork.vertices.length, 4);
+await preview.close();
+console.log("  ok Boolean preview: two-layer selection, vector paint, atomic history, explicit vector checkpoint");
+
+const openedBeforeInvalid = calls.opens;
 const invalid = fixture(); invalid.styles.push({ name: "outside subset" });
 const no = mount(invalid);
 await no.render();
-assert.equal(calls.opens, 1, "unsupported whole file never starts a second history");
+assert.equal(calls.opens, openedBeforeInvalid, "unsupported whole file never starts a second history");
 assert.ok(no.host.textContent.includes("outside the safe Rust subset"));
 assert.ok(no.byText("Standard editor"));
 await no.close();

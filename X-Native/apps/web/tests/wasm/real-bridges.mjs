@@ -72,7 +72,7 @@ try {
   assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "simple SVG must use native output");
   // Real stateful class, not a synthetic session/replayed patch. The Rust
   // document is opened once; each edit/undo returns one node, never .x JSON.
-  assert.equal(glue.sessionBridgeVersion(), 2);
+  assert.equal(glue.sessionBridgeVersion(), 3);
   const sessionX = JSON.stringify(JSON.parse(glue.importSvgToX(plain)).doc);
   const session = await openRustSession(sessionX);
   assert.ok(session, "generated bindgen must expose the shared Rust command session");
@@ -111,7 +111,7 @@ try {
   await assert.rejects(() => openRustSession("not a native document"));
   const multiPage = { ...savedSessionDoc, pages: [savedSessionDoc.pages[0], { ...savedSessionDoc.pages[0], id: "second" }] };
   await assert.rejects(() => openRustSession(JSON.stringify(multiPage)), "unsupported multi-page session must decline");
-  console.log("PASS real Rust command session V2: move/rename/resize deltas, Rust undo/redo, explicit .x export, isolation and refusals");
+  console.log("PASS real Rust command session V3: move/rename/resize deltas, Rust undo/redo, explicit .x export, isolation and refusals");
 
   // The web-document gate is separate from import conversion. Check a real
   // persisted web shape through x-format -> x-editor -> x-format and back,
@@ -152,6 +152,78 @@ try {
   webSession.close();
   assert.equal(await openWebDocumentSession({ ...web, styles: [{ name: "unsupported" }] }), null);
   console.log("PASS real WASM web-document admission: lossless rectangle resize/history, metadata and strict fallback");
+
+  // The command-session Boolean is NOT the imported x-geo function. This
+  // exercises the generated bindgen class and Rust editor history with real
+  // source rectangles, shaped path deltas and explicit native checkpoints.
+  const booleanSeed = docFromTemplate("blank");
+  booleanSeed.pages[0].root.children.push(
+    node("rect", "A", 0, 0, 10, 10, { fill: "#123456" }),
+    node("rect", "Untouched", 40, 40, 10, 10, { fill: "#abcdef" }),
+    node("rect", "B", 5, 5, 10, 10, { fill: "#654321" }),
+  );
+  const [operandA, untouched, operandB] = booleanSeed.pages[0].root.children;
+  const sourceShapes = [operandA, operandB].map(n => ({ ox: n.x, oy: n.y,
+    poly: [{ x: 0, y: 0 }, { x: n.w, y: 0 }, { x: n.w, y: n.h }, { x: 0, y: n.h }] }));
+  const originalBooleanDoc = JSON.parse(JSON.stringify(booleanSeed));
+  for (const op of ["union", "subtract", "intersect", "exclude"]) {
+    const owner = await openWebDocumentSession(booleanSeed);
+    assert.ok(owner, `real WASM ${op} session must open`);
+    assert.throws(() => owner.booleanNode(operandA.id, operandA.id, op), /distinct/);
+    assert.equal(owner.state().revision, 0);
+    const delta = owner.booleanNode(operandA.id, operandB.id, op);
+    assert.equal(delta.revision, 1);
+    assert.equal(delta.node, null);
+    assert.deepEqual(delta.boolean.removed, [operandA.id, operandB.id]);
+    assert.equal(delta.boolean.upsert.length, 1);
+    const created = delta.boolean.upsert[0];
+    assert.equal(created.kind, "vector");
+    assert.equal(created.fill, "#123456");
+    assert.equal(created.index, 0);
+    assert.ok(JSON.stringify(delta).length < 2048, `${op} sent the whole document instead of a patch`);
+    const firstSave = owner.exportDocument();
+    assert.deepEqual(firstSave.pages[0].root.children.map(n => n.id), [created.id, untouched.id]);
+    const vector = firstSave.pages[0].root.children[0];
+    assert.equal(vector.kind, "vector");
+    assert.equal(vector.fill, "#123456");
+    const expected = booleanPathTs(op, sourceShapes);
+    const actual = { x: vector.x, y: vector.y, w: vector.w, h: vector.h,
+      path: vector.path, network: vector.vectorNetwork };
+    const comparison = compareBooleanResults(actual, expected);
+    assert.ok(comparison.ok, `${op} native session contours differ: ${comparison.reasons.join(", ")}`);
+    assert.equal(vector.vectorNetwork.vertices.length, expected.network.vertices.length);
+    for (const [i, p] of vector.vectorNetwork.vertices.entries()) {
+      const q = expected.network.vertices[i];
+      assert.ok(Math.abs(p.x - q.x) < 1e-8 && Math.abs(p.y - q.y) < 1e-8,
+        `${op} native session contour anchor ${i} differs from oracle`);
+    }
+    const undo = owner.undo();
+    assert.equal(undo.revision, 2);
+    assert.deepEqual(undo.boolean.removed, [created.id]);
+    assert.deepEqual(undo.boolean.upsert.map(n => n.index), [0, 2]);
+    assert.deepEqual(owner.exportDocument(), originalBooleanDoc,
+      `${op} undo must restore original sources, paint, flags and sibling order`);
+    const redo = owner.redo();
+    assert.equal(redo.revision, 3);
+    assert.deepEqual(redo.boolean.removed, [operandA.id, operandB.id]);
+    assert.deepEqual(owner.exportDocument(), firstSave, `${op} redo must restore exact vector`);
+    assert.throws(() => owner.resizeNode(created.id, 20, 20), /vector/i);
+    assert.equal(owner.state().revision, 3);
+    owner.close();
+  }
+  const emptySeed = docFromTemplate("blank");
+  emptySeed.pages[0].root.children.push(
+    node("rect", "A", 0, 0, 10, 10), node("rect", "B", 500, 0, 10, 10));
+  const emptyOwner = await openWebDocumentSession(emptySeed);
+  assert.ok(emptyOwner);
+  const emptyChange = emptyOwner.booleanNode(emptySeed.pages[0].root.children[0].id,
+    emptySeed.pages[0].root.children[1].id, "intersect");
+  assert.deepEqual(emptyChange.boolean.upsert[0].rings, []);
+  assert.deepEqual(emptyOwner.exportDocument().pages[0].root.children[0].vectorNetwork.vertices, []);
+  assert.equal(emptyOwner.undo().boolean.upsert.length, 2);
+  emptyOwner.close();
+  assert.deepEqual(booleanSeed, originalBooleanDoc, "Rust command must never mutate the web caller");
+  console.log("PASS real WASM Rust Boolean V3: four shaped operations, TS anchor parity, atomic history, empty result, small deltas and explicit vector checkpoint");
 
   const extended = JSON.parse(glue.importSvgToX(plain));
   extended.doc.comments = [{ text: "do not discard me" }];
@@ -485,7 +557,7 @@ try {
   const action = label => [...host.querySelectorAll("button")].find(b => b.textContent.trim() === label);
   await React.act(async () => action("Move right 10").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
   assert.equal(host.querySelector(".rust-preview-rect")?.style.left, "20px");
-  assert.equal(host.querySelector(".rust-preview-toolbar span")?.textContent, "Rust revision 1");
+  assert.equal(host.querySelector(".rust-preview-toolbar span:not([role])")?.textContent, "Rust revision 1");
   await React.act(async () => action("Undo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
   assert.equal(host.querySelector(".rust-preview-rect")?.style.left, "10px");
   await React.act(async () => action("Wider 10").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
@@ -495,7 +567,35 @@ try {
   assert.ok(releases.some(owner => owner && typeof owner.close === "function" && owner.hasEdits()));
   await React.act(async () => root.unmount());
   host.remove();
-  console.log("PASS real WASM opt-in React host V2: move/resize paint from Rust deltas, native undo and safe unmount");
+
+  const uiBooleanDoc = docFromTemplate("blank");
+  uiBooleanDoc.pages[0].root.children.push(
+    node("rect", "First", 0, 0, 10, 10, { fill: "#123456" }),
+    node("rect", "Second", 5, 5, 10, 10, { fill: "#654321" }));
+  const booleanHost = uiWindow.document.createElement("div"); uiWindow.document.body.appendChild(booleanHost);
+  const booleanRoot = createRoot(booleanHost);
+  await React.act(async () => booleanRoot.render(React.createElement(RustDocumentView, {
+    fileId: "real-wasm-boolean", seed: uiBooleanDoc,
+    onHome: () => {}, onStandard: () => {}, onRelease: () => {},
+  })));
+  await React.act(async () => { await Promise.resolve(); });
+  const booleanButton = label => [...booleanHost.querySelectorAll("button")].find(b => b.textContent.trim() === label);
+  assert.equal(booleanButton("Union")?.disabled, true);
+  const otherLayer = [...booleanHost.querySelectorAll(".rust-preview-layers button")]
+    .find(b => b.textContent.includes("Second"));
+  await React.act(async () => otherLayer.dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true, shiftKey: true })));
+  assert.equal(booleanButton("Union")?.disabled, false);
+  await React.act(async () => booleanButton("Union").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(booleanHost.querySelectorAll(".rust-preview-layers button").length, 1);
+  assert.ok(booleanHost.querySelector(".rust-preview-rect svg path")?.getAttribute("d")?.startsWith("M"));
+  assert.equal(booleanButton("Wider 10")?.disabled, true);
+  await React.act(async () => booleanButton("Undo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(booleanHost.querySelectorAll(".rust-preview-layers button").length, 2);
+  await React.act(async () => booleanButton("Redo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.ok(booleanHost.querySelector(".rust-preview-rect svg path"));
+  await React.act(async () => booleanRoot.unmount());
+  booleanHost.remove();
+  console.log("PASS real WASM opt-in React host V3: Rust move/resize, Boolean vector paint, atomic undo/redo and safe unmount");
 } catch (error) {
   const detail = error instanceof Error ? error.stack ?? error.message : String(error);
   console.log(`::error::Real WASM Rust UI failed: ${detail.slice(0, 3000).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`);
@@ -516,8 +616,9 @@ assert.equal(audit.modules.geometry.instantiated, true);
 assert.equal(audit.modules.geometry.source, "override");
 assert.ok(audit.functions["x-wasm.importSvgToX"]?.calls >= 1);
 assert.ok(audit.functions["x-wasm.RustDocumentSession.resizeNode"]?.calls >= 2);
+assert.ok(audit.functions["x-wasm.RustDocumentSession.booleanNode"]?.calls >= 6);
 assert.ok(audit.functions["x-geo.xgeo_boolean"]?.calls >= 4);
 assert.ok(audit.decisions["geometry.union"]?.attempts >= 1);
 assert.ok(audit.decisions["session.open"]?.rust >= 1);
-console.log("PASS real WASM audit: bindgen import, Rust resize, x-geo Boolean and guarded decisions observed at production call sites");
+console.log("PASS real WASM audit: bindgen import, Rust resize/Boolean session, x-geo Boolean and guarded decisions observed at production call sites");
 __enableBridgeAuditForTests(false);

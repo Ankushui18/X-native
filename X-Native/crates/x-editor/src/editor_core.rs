@@ -2670,6 +2670,29 @@ impl Editor {
         }
     }
 
+    /// The next atomic Boolean edit's exact source/result ids. Session deltas
+    /// come from the real Rust command log, never a parallel JS undo stack.
+    pub(crate) fn next_undo_boolean(&self) -> Option<([String; 2], String)> {
+        Self::boolean_history_ids(self.undo_stack.last()?)
+    }
+
+    pub(crate) fn next_redo_boolean(&self) -> Option<([String; 2], String)> {
+        Self::boolean_history_ids(self.redo_stack.last()?)
+    }
+
+    fn boolean_history_ids(commands: &[Command]) -> Option<([String; 2], String)> {
+        match commands {
+            [Command::Delete { node: first, .. }, Command::Delete { node: second, .. },
+             Command::Insert { node: result, .. }]
+                if matches!(&result.kind, NodeKind::Vector { .. }) =>
+            {
+                // Deletes run back-to-front; restore/paint low-to-high.
+                Some(([second.id.clone(), first.id.clone()], result.id.clone()))
+            }
+            _ => None,
+        }
+    }
+
     /// Drop oldest undo groups together with their structural snapshots.
     /// Called by the session's bounded, cross-page history coordinator.
     pub fn discard_oldest_undo(&mut self, count: usize) {
