@@ -5,8 +5,9 @@
 > exists for native `.x` documents; it is **not** the production web editor.
 > A strictly gated, opt-in web-document V1 admission/checkpoint adapter now
 > covers a small rectangle-only subset; no production editor owner changed.
-> The import bridges and command-session ABI passed CI; native geometry
-> promotion **failed** its comparator. See [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
+> The import bridges, command-session ABI and narrow web-document gate passed
+> CI; native geometry promotion **failed** its comparator. See
+> [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
 > The baseline inventory below is historical, not a claim that the bridges are inert.
 
 Status: **provisional by design.** This document describes what the repository
@@ -54,8 +55,10 @@ Do not run two histories against the same document or silently rehydrate one
 from the other. The web UI continues using `MemoryEngine` until commands,
 layout, undo, persistence and rendering agree on observable behavior.
 The shared Rust/native and real generated-WASM session tests passed
-[CI 36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226).
-See §20 in the WASM implementation record for scope and tests.
+[CI 36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226);
+the web-document V1 open/checkpoint smoke passed
+[CI 36340690212](https://github.com/Ankushui18/X-native/actions/runs/36340690212).
+See §§20–21 in the WASM implementation record for scope and tests.
 
 ## Historical TypeScript baseline (before the bridge integration)
 

@@ -927,8 +927,11 @@ Sketch and SVG import adapters and geometry equivalence guards are unchanged.
 Local `npm test` (including negative document/node/native-field cases),
 `npm run build`, and `node --check tests/wasm/real-bridges.mjs` passed. The
 real-generated-WASM smoke now also exercises actual web-document admission,
-Rust rename/move/undo/redo, full metadata round trips and strict fallback; CI
-verification is recorded separately once it runs. Local Cargo/WASM builds are
-unavailable. This **does not** migrate production rendering, layout, file store,
+Rust rename/move/undo/redo, full metadata round trips and strict fallback.
+**CI [36340690212](https://github.com/Ankushui18/X-native/actions/runs/36340690212)
+SUCCESS** on `8252cf7`: the workspace gate, web tests/build, generated-WASM
+smoke and screenshot job all passed. Native geometry remains independently
+**NOT APPROVED** by the unchanged nonblocking diagnostic. Local Cargo/WASM
+builds are unavailable. This **does not** migrate production rendering, layout, file store,
 undo or `App.tsx` to Rust. Wider schemas and a single production document owner
 remain prerequisites before retiring the TS engine.
