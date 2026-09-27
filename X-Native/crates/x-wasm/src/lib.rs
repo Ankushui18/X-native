@@ -49,9 +49,13 @@ fn import_envelope(
                     .iter()
                     .map(|(id, (x, y))| (id.clone(), serde_json::json!({ "x": x, "y": y })))
                     .collect();
+                let appearance: serde_json::Map<String, serde_json::Value> = report.figma_appearance.iter().map(|(id, a)| {
+                    (id.clone(), serde_json::json!({ "fill": a.fill, "blend": a.blend, "effectCount": a.effect_count, "uniformCorners": a.uniform_corners }))
+                }).collect();
                 format!(
-                    ",\"figmaCoordinates\":{}",
-                    serde_json::json!({ "version": 1, "nodes": nodes })
+                    ",\"figmaCoordinates\":{},\"figmaAppearance\":{}",
+                    serde_json::json!({ "version": 1, "nodes": nodes }),
+                    serde_json::json!({ "version": 1, "images": report.assets_imported, "nodes": appearance })
                 )
             } else {
                 String::new()
@@ -200,6 +204,9 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(value["ok"], true);
         assert_eq!(value["figmaCoordinates"]["version"], 1);
+        assert_eq!(value["figmaAppearance"]["version"], 1);
+        assert_eq!(value["figmaAppearance"]["images"], 0);
+        assert!(value["doc"].get("figmaAppearance").is_none());
         let outer = &value["doc"]["pages"][1]["children"][0];
         let id = outer["id"].as_str().unwrap();
         assert_eq!(outer["x"], 40.0);
@@ -215,6 +222,7 @@ mod tests {
             "../../../apps/web/e2e/fixtures/sample.sketch"
         )))
         .unwrap();
+        assert!(sketch.get("figmaAppearance").is_none());
         assert!(
             sketch.get("figmaCoordinates").is_none(),
             "do not apply FIG coordinate semantics to Sketch"

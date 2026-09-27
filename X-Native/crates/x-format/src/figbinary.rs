@@ -240,8 +240,16 @@ fn paints_json(list: Option<&[V]>, w: f64, h: f64, diags: &mut Vec<String>) -> V
     let mut out = vec![];
     for p in list.unwrap_or(&[]) {
         match paint_json(p, w, h) {
-            Some((v, _)) => out.push(v),
+            Some((mut v, _)) => {
+                if let (V::Obj(fields), Some(mode)) = (&mut v, p.get("blendMode")) {
+                    fields.push(("blendMode".into(), mode.clone()));
+                }
+                out.push(v);
+            }
             None => {
+                // Keep presence visible to source-fidelity reporting. The REST
+                // paint reader still declines this marker, as it did before.
+                out.push(obj(vec![("type".into(), V::Str("UNSUPPORTED".into()))]));
                 if let Some(t) = gstr(p, "type") {
                     if t != "SOLID" && t != "IMAGE" && !t.starts_with("GRADIENT") {
                         diags.push(format!("dropped unsupported paint type {t}"));
@@ -794,6 +802,9 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
         if let Some(cr) = gnum(nc, "cornerRadius").filter(|v| *v > 0.0) {
             pairs.push(("cornerRadius".into(), V::Num(cr)));
         }
+        if let Some(radii) = nc.get("rectangleCornerRadii") {
+            pairs.push(("rectangleCornerRadii".into(), radii.clone()));
+        }
         let fx = effects_json(nc);
         if !fx.is_empty() {
             pairs.push(("effects".into(), V::Arr(fx)));
@@ -1094,5 +1105,20 @@ mod text_source_tests {
         ]);
         let result = obj(text_json(&source, &mut vec![]));
         assert_eq!(gstr(&result, "characters"), Some("legacy λ"));
+    }
+}
+
+#[cfg(test)]
+mod source_paint_presence_tests {
+    use super::*;
+
+    #[test]
+    fn unrepresentable_paint_is_not_reported_as_absent() {
+        let paints = [obj(vec![("type".into(), V::Str("VIDEO".into()))])];
+        let mut diagnostics = vec![];
+        let converted = paints_json(Some(&paints), 100.0, 50.0, &mut diagnostics);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(gstr(&converted[0], "type"), Some("UNSUPPORTED"));
+        assert!(!diagnostics.is_empty());
     }
 }

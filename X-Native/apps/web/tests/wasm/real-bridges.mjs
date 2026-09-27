@@ -112,6 +112,10 @@ try {
     assert.ok(actual.nodes.length > 0, `${format} fixture must contain imported layers`);
     assert.ok(importsEquivalent(actual, expected), `${format} bridge must preserve the complete TS contract`);
     assert.equal(calls[format], 1, `${format} must invoke the real native export`);
+    if (format === "fig") {
+      assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "basic FIG must pass the unchanged whole-result oracle");
+      assert.ok(importsEquivalent(decoded, expected), "the entire FIG candidate—not a TS-patched result—must match");
+    }
     console.log(`PASS real ${format} wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}`);
   }
   for (const [format, nativeImport, tsImport] of [["fig", importFig, figTs], ["sketch", importSketch, sketchTs]]) {

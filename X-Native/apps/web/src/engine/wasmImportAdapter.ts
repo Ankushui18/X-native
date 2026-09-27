@@ -36,6 +36,35 @@ const blendLabels: Record<string, string> = {
   hue: "Hue", saturation: "Saturation", color: "Color", luminosity: "Luminosity",
   "plus-darker": "Plus Darker", "plus-lighter": "Plus Lighter", "pass-through": "pass-through",
 };
+function figmaAppearance(n: Obj, out: ImportedNode, value: unknown) {
+  const a = object(value); keys(a, ["fill", "blend", "effectCount", "uniformCorners"]);
+  if (a.fill !== "none" && a.fill !== "solid") throw new Error("Unsupported FIG source fill");
+  if (a.fill === "solid") {
+    if (out.fill.length !== 7 && !out.fill.toLowerCase().endsWith("ff")) throw new Error("FIG solid paint is not opaque");
+    out.fillType = "solid";
+  } else {
+    // Native text/frame defaults are rendering fallbacks, not source paints.
+    // The versioned source fact is authoritative only after native stack checks.
+    out.fill = "#00000000"; out.fillVisible = false;
+  }
+  let blend = "pass-through";
+  if (a.blend !== null) {
+    const mode = text(a.blend).toLowerCase().replaceAll("_", "-");
+    if (!Object.prototype.hasOwnProperty.call(blendLabels, mode)) throw new Error("Unsupported FIG source blend");
+    blend = blendLabels[mode];
+    if ((out.blendMode ?? "Normal") !== blend) throw new Error("FIG source/native blend mismatch");
+  } else if (n.blend !== undefined) throw new Error("FIG source/native blend mismatch");
+  out.blendMode = blend;
+  const count = number(a.effectCount);
+  if (!Number.isInteger(count) || count < 0 || count > 10_000 || count !== (out.effects?.length ?? 0)) throw new Error("FIG source/native effect count mismatch");
+  if (count === 0) out.effects = [];
+  if (typeof a.uniformCorners !== "boolean") throw new Error("Invalid FIG corner metadata");
+  if (a.uniformCorners) {
+    if (out.kind !== "rect" || n.corners !== undefined) throw new Error("FIG source/native corners mismatch");
+    out.cornerRadii ??= [0, 0, 0, 0]; out.cornerIndependent = false;
+  }
+}
+
 function effects(v: unknown): Effect[] {
   if (!Array.isArray(v) || v.length > 10_000) throw new Error("Invalid Rust effect list");
   return v.map((value): Effect => {
@@ -184,6 +213,13 @@ export function decodeRustImport(payload: string): ImportResult {
     if (metadata.version !== 1) throw new Error("Unsupported FIG coordinate metadata version");
     figmaPositions = object(metadata.nodes);
   }
+  let appearanceNodes: Obj | null = null;
+  if (envelope.figmaAppearance !== undefined) {
+    const metadata = object(envelope.figmaAppearance); keys(metadata, ["version", "images", "nodes"]);
+    if (metadata.version !== 1 || metadata.images !== 0 || figmaPositions === null) throw new Error("Unsupported FIG appearance metadata");
+    appearanceNodes = object(metadata.nodes);
+  }
+  const usedAppearance = new Set<string>();
   const usedPositions = new Set<string>();
   const usedMetrics = new Set<string>();
   let count = 0;
@@ -282,6 +318,12 @@ export function decodeRustImport(payload: string): ImportResult {
       out.overflow = n.overflow;
     }
     if (kind.t === "vector") Object.assign(out, vector(kind.path));
+    if (appearanceNodes !== null && depth > 0) {
+      const id = text(n.id);
+      if (!Object.prototype.hasOwnProperty.call(appearanceNodes, id) || usedAppearance.has(id)) throw new Error("Missing or duplicate FIG appearance metadata");
+      usedAppearance.add(id);
+      figmaAppearance(n, out, appearanceNodes[id]);
+    }
     if (n.children != null) {
       if (!Array.isArray(n.children)) throw new Error("Invalid Rust children");
       out.children = n.children.map((c) => convert(c, depth + 1));
@@ -289,6 +331,7 @@ export function decodeRustImport(payload: string): ImportResult {
     return out;
   }
   const roots = doc.pages.map((p) => convert(p));
+  if (appearanceNodes !== null && usedAppearance.size !== Object.keys(appearanceNodes).length) throw new Error("Unused FIG appearance metadata");
   if (usedMetrics.size !== Object.keys(textMetrics).length) throw new Error("Unused Rust source text metrics");
   const pages = roots.map((p) => ({ name: p.name, nodes: p.children ?? [] }));
   if (figmaPositions !== null) {
@@ -309,7 +352,7 @@ export function decodeRustImport(payload: string): ImportResult {
     for (const p of pages) measure(p.nodes, 0, 0);
     const width = minX === Infinity ? 1 : Math.max(1, number(maxX - minX));
     const height = minY === Infinity ? 1 : Math.max(1, number(maxY - minY));
-    return { nodes: (pages.find((p) => p.nodes.length) ?? pages[0]).nodes, pages, width, height, skipped: 0 };
+    return { nodes: (pages.find((p) => p.nodes.length) ?? pages[0]).nodes, pages, width, height, skipped: 0, ...(appearanceNodes !== null ? { images: 0 } : {}) };
   }
   return { nodes: pages[0].nodes, pages, width: roots[0].w, height: roots[0].h, skipped: 0 };
 }

@@ -335,3 +335,21 @@ fn fig_source_positions_preserve_negative_pages_and_nested_local_coordinates() {
         "never shift nested local coordinates twice"
     );
 }
+
+#[test]
+fn fig_source_appearance_does_not_replace_native_rendering_defaults() {
+    let (doc, report) =
+        import_fig_bytes_with_report(include_bytes!("../../../apps/web/e2e/fixtures/sample.fig"))
+            .unwrap();
+    assert_eq!(report.figma_appearance.len(), 4);
+    let children = &doc.pages[0].children;
+    assert_eq!(report.figma_appearance[&children[0].id].fill, "solid");
+    assert!(report.figma_appearance[&children[1].id].uniform_corners);
+    let label = &children[3];
+    assert_eq!(report.figma_appearance[&label.id].fill, "none");
+    assert!(
+        matches!(label.fill, x_core::Paint::Solid(c) if c == x_core::Color::BLACK),
+        "native text fallback remains black"
+    );
+    assert!(report.figma_appearance[&label.id].blend.is_none());
+}

@@ -529,3 +529,42 @@ source positions are (-120,-80) and (300,200), with child-local (10,20).
 
 Evidence: `/home/user/wasm-coordinates-{red,focused,unit,unit-serial,tsc,build,reference,browser,ci}.log`;
 actual-artifact messages: `/home/user/wasm-coordinates-annotations.json`.
+
+## 13. Source appearance facts and basic FIG promotion gate (2026-09-27)
+
+Import-only continuation. The production comparator and TS importers are unchanged;
+no native candidate is patched with values obtained from the TS oracle. Geometry
+kernels/guards and persisted `.x` rendering defaults are also unchanged.
+
+### Fixes
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W20 — native fallback paints mistaken for source fills | Capture per-layer FIG appearance facts keyed by final IDs. Distinguish absent fill, one opaque visible unblended solid fill, and unsupported paint data. Adapter restores absent source fills instead of exposing native black-text/white-frame fallback paint | Native original fixture checks text remains black in `.x` while source fact says no fill; web test restores transparent source text without losing text or dimensions |
+| W21 — explicit FIG contract defaults missing from adapter | Versioned `figmaAppearance` metadata permits source-backed fill type, absent-vs-explicit layer blend, empty effect list, uniform/linked rectangle corners and zero imported-image count | New appearance suite validates defaults, explicit NORMAL, complete metadata coverage, contradictions, unsupported paints/resources and unchanged full-result comparison |
+| W22 — dropped paints could appear falsely absent | Binary shim retains an unsupported-paint marker and source paint blend presence through the REST shim; native paint conversion still declines unsupported types | Rust regression proves an unrepresentable VIDEO paint is marked unsupported, not an empty fill list |
+
+The supported subset is deliberately narrow: single opaque visible normal-composited
+solid fills or no fill. Multiple/hidden/translucent/blended/unsupported paints decline.
+Unknown versions, missing/unused facts, native/source blend or effect-count
+contradictions, invalid corner metadata and images decline. Per-corner and richer
+effect differences remain subject to full-contract fallback; metadata is not a
+claim of broad native import fidelity. Legacy envelopes acquire none of these
+defaults. Source appearance is carried only in FIG envelopes, not SVG/Sketch.
+
+The real-artifact smoke now **requires** the existing `sample.fig` candidate to
+match the complete TS result and select `backend=wasm`. This is an explicit
+promotion gate for that fixture, not a relaxed comparison or broad promotion.
+
+### Verification
+
+- Initial appearance regression: **3 passed / 22 failed**; final suite **25/0**.
+- Serial local full suite: **3,049 passed / 0 failed**, 50 suite summaries.
+  `tsc -b` and production build pass (existing chunk-size warning).
+- Rust checks, regenerated WASM and the actual basic-FIG promotion assertion are
+  **pending CI**; no native promotion is claimed yet. Local cargo/rustc remain
+  unavailable.
+- Native-browser visual fidelity, broad rich-import parity and performance
+  promotion remain **NOT VERIFIED**.
+
+Evidence: `/home/user/wasm-appearance-{red,focused,unit,tsc,build}.log`.

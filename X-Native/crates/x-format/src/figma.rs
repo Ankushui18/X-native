@@ -656,6 +656,40 @@ fn image_ref(node: &V) -> Option<&str> {
         .find_map(|f| s(f, "imageRef"))
 }
 
+fn figma_appearance(node: &V) -> crate::import_ir::FigmaAppearance {
+    let fills = node
+        .get("fills")
+        .and_then(V::arr)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let fill = match fills {
+        [] => "none",
+        [f] if s(f, "type") == Some("SOLID")
+            && f.get("visible").and_then(V::boolean).unwrap_or(true)
+            && n_or(f, "opacity", 1.0) == 1.0
+            && f.get("color").is_some()
+            && f.get("color")
+                .map(|c| n_or(c, "a", 1.0) == 1.0)
+                .unwrap_or(false)
+            && f.get("blendMode").is_none() =>
+        {
+            "solid"
+        }
+        _ => "unsupported",
+    };
+    crate::import_ir::FigmaAppearance {
+        fill,
+        blend: s(node, "blendMode").map(str::to_string),
+        effect_count: node
+            .get("effects")
+            .and_then(V::arr)
+            .map(Vec::len)
+            .unwrap_or(0),
+        uniform_corners: s(node, "type") == Some("RECTANGLE")
+            && node.get("rectangleCornerRadii").is_none(),
+    }
+}
+
 fn figma_blend(node: &V) -> Option<x_core::BlendKind> {
     use x_core::BlendKind;
     Some(match s(node, "blendMode")? {
@@ -919,6 +953,7 @@ fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<Impor
                 _ => None,
             });
     }
+    ir.figma_appearance = Some(figma_appearance(node));
     ir.fill = fill;
     ir.layout = figma_auto_layout(node);
     if let Some(strokes) = node.get("strokes").and_then(V::arr) {
@@ -1593,5 +1628,61 @@ mod blend_import_tests {
             None
         );
         assert_eq!(figma_blend(&json::parse("{}").unwrap()), None);
+    }
+}
+
+#[cfg(test)]
+mod appearance_import_tests {
+    use super::*;
+
+    #[test]
+    fn only_absent_or_single_opaque_unblended_fills_are_classified_simple() {
+        for (json, expected) in [
+            (r#"{"type":"RECTANGLE"}"#, "none"),
+            (r#"{"fills":[]}"#, "none"),
+            (r#"{"fills":[{"type":"SOLID","color":{"a":1}}]}"#, "solid"),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{"a":0.5}}]}"#,
+                "unsupported",
+            ),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{},"opacity":0.5}]}"#,
+                "unsupported",
+            ),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{},"visible":false}]}"#,
+                "unsupported",
+            ),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{},"blendMode":"NORMAL"}]}"#,
+                "unsupported",
+            ),
+            (r#"{"fills":[{"type":"SOLID"}]}"#, "unsupported"),
+            (r#"{"fills":[{"type":"GRADIENT_LINEAR"}]}"#, "unsupported"),
+            (r#"{"fills":[{"type":"UNSUPPORTED"}]}"#, "unsupported"),
+            (
+                r#"{"fills":[{"type":"SOLID","color":{}},{"type":"SOLID","color":{}}]}"#,
+                "unsupported",
+            ),
+        ] {
+            assert_eq!(
+                figma_appearance(&crate::json::parse(json).unwrap()).fill,
+                expected
+            );
+        }
+        let node =
+            crate::json::parse(r#"{"type":"RECTANGLE","blendMode":"NORMAL","effects":[{},{}]}"#)
+                .unwrap();
+        let source = figma_appearance(&node);
+        assert_eq!(source.blend.as_deref(), Some("NORMAL"));
+        assert_eq!(source.effect_count, 2);
+        assert!(source.uniform_corners);
+        assert!(
+            !figma_appearance(
+                &crate::json::parse(r#"{"type":"RECTANGLE","rectangleCornerRadii":[1,2,3,4]}"#)
+                    .unwrap()
+            )
+            .uniform_corners
+        );
     }
 }

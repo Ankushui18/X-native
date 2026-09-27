@@ -81,6 +81,7 @@ pub struct ImportNode {
     /// Exact top-level translation before source-specific page normalization.
     /// Import-only metadata, not persisted in the native document.
     pub source_position: Option<(f64, f64)>,
+    pub figma_appearance: Option<FigmaAppearance>,
     /// None = "source specified nothing" -> lower() picks the kind default
     pub fill: Option<Paint>,
     /// Primary (first) stroke — (paint, width); Paint so gradient strokes
@@ -127,6 +128,7 @@ impl ImportNode {
             rotation: 0.0,
             source_transform: None,
             source_position: None,
+            figma_appearance: None,
             fill: None,
             stroke: None,
             stroke_options: None,
@@ -199,10 +201,22 @@ pub struct ImportTextMetrics {
     pub font_size: Option<f64>,
 }
 
+/// Source facts needed to distinguish absent paints and source defaults from
+/// native rendering fallbacks. Unsupported paints are explicitly marked, never
+/// reclassified as absent after a lossy native parse. Not part of persisted .x.
+#[derive(Debug, Clone)]
+pub struct FigmaAppearance {
+    pub fill: &'static str,
+    pub blend: Option<String>,
+    pub effect_count: usize,
+    pub uniform_corners: bool,
+}
+
 /// Import result with per-file fidelity diagnostics.
 #[derive(Debug, Clone, Default)]
 pub struct ImportReport {
     pub text_metrics: HashMap<String, ImportTextMetrics>,
+    pub figma_appearance: HashMap<String, FigmaAppearance>,
     /// Final deduplicated node IDs -> pre-normalization top-level positions.
     pub source_positions: HashMap<String, (f64, f64)>,
     pub nodes_imported: usize,
@@ -276,8 +290,7 @@ pub fn lower_with_report(doc: ImportDoc) -> (Document, ImportReport) {
             &mut counter,
             true,
             &asset_ids,
-            &mut report.text_metrics,
-            &mut report.source_positions,
+            &mut report,
         );
         // shared page semantics: a page is always a Frame, auto-sized to
         // its content envelope when the source gave no/zero size
@@ -317,8 +330,7 @@ fn lower_node(
     counter: &mut usize,
     is_page: bool,
     asset_ids: &HashMap<String, String>,
-    text_metrics: &mut HashMap<String, ImportTextMetrics>,
-    source_positions: &mut HashMap<String, (f64, f64)>,
+    report: &mut ImportReport,
 ) -> Node {
     // ---- id: sanitize source id or generate; dedupe globally
     let base = match &ir.id {
@@ -343,10 +355,13 @@ fn lower_node(
     );
 
     if let Some(position) = ir.source_position {
-        source_positions.insert(id.clone(), position);
+        report.source_positions.insert(id.clone(), position);
+    }
+    if let Some(appearance) = ir.figma_appearance {
+        report.figma_appearance.insert(id.clone(), appearance);
     }
     if let ImportKind::Text { size, .. } = &ir.kind {
-        text_metrics.insert(
+        report.text_metrics.insert(
             id.clone(),
             ImportTextMetrics {
                 width: w,
@@ -560,15 +575,7 @@ fn lower_node(
     }
 
     for c in ir.children {
-        let cn = lower_node(
-            c,
-            used,
-            counter,
-            false,
-            asset_ids,
-            text_metrics,
-            source_positions,
-        );
+        let cn = lower_node(c, used, counter, false, asset_ids, report);
         node.children.push(cn);
     }
     node
