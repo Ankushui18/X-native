@@ -74,7 +74,9 @@ try {
   assert.equal(groupedExpected.pages, undefined);
   assert.equal(groupedCandidate.pages.length, 1);
   delete groupedCandidate.pages;
-  assert.ok(importsEquivalent(groupedCandidate, groupedExpected), "group flattening must preserve complete SVG contract");
+  const groupedDiff = differencePaths(groupedCandidate, groupedExpected);
+  console.log(`Diff grouped SVG: ${groupedDiff.join(", ") || "none"}`);
+  assert.ok(importsEquivalent(groupedCandidate, groupedExpected), `group flattening contract differs: ${groupedDiff.join(", ") || "paths helper found none"}`);
   assert.ok(importsEquivalent(importSvg(groupedSvg), groupedExpected));
   assert.equal(getEngineInfo().importBackend, "wasm");
   const transformedGroupSvg = '<svg width="120" height="80"><g transform="rotate(15)"><rect width="20" height="10"/></g></svg>';
