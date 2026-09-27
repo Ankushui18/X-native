@@ -110,6 +110,9 @@ pub struct ImportNode {
     pub blend: Option<BlendKind>,
     pub visible: bool,
     pub locked: bool,
+    /// Source-backed numeric SVG text weight. Import-only: the native text
+    /// model does not store this CSS property, so never invent it from runs.
+    pub source_font_weight: Option<u16>,
     /// Explicit source horizontal alignment; None keeps the native default.
     pub text_align: Option<TextAlign>,
     pub children: Vec<ImportNode>,
@@ -140,6 +143,7 @@ impl ImportNode {
             blend: None,
             visible: true,
             locked: false,
+            source_font_weight: None,
             text_align: None,
             children: vec![],
         }
@@ -193,12 +197,14 @@ pub struct ImportDoc {
 
 /// Source text box and explicit font size, before the native model repurposes
 /// Node.h as the font size. Interop consumers must not infer a bounding box
-/// from that native rendering convention. Keys are final, deduplicated IDs.
+/// or source typography from that native rendering convention. Keys are final,
+/// deduplicated IDs; numeric font weight is present only for supported SVG text.
 #[derive(Debug, Clone)]
 pub struct ImportTextMetrics {
     pub width: f64,
     pub height: f64,
     pub font_size: Option<f64>,
+    pub font_weight: Option<u16>,
 }
 
 /// Full source effect facts, including hidden entries omitted by the native
@@ -403,6 +409,7 @@ fn lower_single_node(
                 width: w,
                 height: h,
                 font_size: size.filter(|v| v.is_finite() && *v > 0.0),
+                font_weight: ir.source_font_weight,
             },
         );
     }
@@ -767,8 +774,8 @@ mod tests {
 
     #[test]
     fn text_metrics_use_final_ids_and_preserve_source_boxes() {
-        let make = |h, size| {
-            ImportNode::new(ImportKind::Text {
+        let make = |h, size, weight| {
+            let mut node = ImportNode::new(ImportKind::Text {
                 content: "text".into(),
                 size,
                 font: None,
@@ -777,12 +784,14 @@ mod tests {
                 runs: vec![],
             })
             .id("same id")
-            .size(100.0, h)
+            .size(100.0, h);
+            node.source_font_weight = weight;
+            node
         };
         let input = ImportDoc {
             pages: vec![ImportNode::new(ImportKind::Frame)
-                .child(make(40.0, Some(16.0)))
-                .child(make(60.0, None))],
+                .child(make(40.0, Some(16.0), Some(700)))
+                .child(make(60.0, None, None))],
             ..Default::default()
         };
         let (doc, report) = lower_with_report(input);
@@ -795,7 +804,9 @@ mod tests {
         assert_eq!(b.h, 60.0);
         assert_eq!(report.text_metrics[&a.id].height, 40.0);
         assert_eq!(report.text_metrics[&a.id].font_size, Some(16.0));
+        assert_eq!(report.text_metrics[&a.id].font_weight, Some(700));
         assert_eq!(report.text_metrics[&b.id].height, 60.0);
+        assert_eq!(report.text_metrics[&b.id].font_weight, None);
         assert_eq!(
             report.text_metrics[&b.id].font_size, None,
             "unknown font size must not be invented"

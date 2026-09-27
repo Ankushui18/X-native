@@ -20,6 +20,33 @@ await test("text content, source bounds and font size stay independent", () => {
   assert.equal(n.w, 200); assert.equal(n.h, 60); assert.equal(n.fontSize, 18);
   assert.equal(n.fontWeight, 400); assert.equal(n.textAlign, "left");
 });
+await test("v2 SVG text metadata carries a source-backed numeric weight without changing .x", () => {
+  const p = payload(); p.textMetrics.version = 2;
+  p.textMetrics.nodes["text-1"].fontWeight = 700;
+  assert.equal(decode(p).nodes[0].fontWeight, 700);
+  assert.equal(p.doc.pages[0].children[0].bindings, undefined);
+  p.textMetrics.nodes["text-1"].fontWeight = null;
+  assert.equal(decode(p).nodes[0].fontWeight, 400);
+});
+await test("versioned weights stay keyed by native text ID, not display name", () => {
+  const p = payload(); p.textMetrics.version = 2;
+  p.doc.pages[0].children.push(layer({ id: "text-2", h: 24 }));
+  p.textMetrics.nodes["text-1"].fontWeight = 700;
+  p.textMetrics.nodes["text-2"] = metrics({ height: 120, fontSize: 24, fontWeight: 500 });
+  assert.deepEqual(decode(p).nodes.map((n) => n.fontWeight), [700, 500]);
+});
+for (const [label, weight] of [["string", "700"], ["fraction", 700.5], ["zero", 0], ["negative", -1], ["out of range", 1001], ["boolean", true]]) {
+  await test(`reject ${label} v2 source font weight`, () => {
+    const p = payload(); p.textMetrics.version = 2; p.textMetrics.nodes["text-1"].fontWeight = weight;
+    assert.throws(() => decode(p), /font weight/);
+  });
+}
+await test("v2 requires a weight source fact (null means unspecified); v1 cannot carry it", () => {
+  const p = payload(); p.textMetrics.version = 2;
+  assert.throws(() => decode(p), /font weight/);
+  p.textMetrics.version = 1; p.textMetrics.nodes["text-1"].fontWeight = 700;
+  assert.throws(() => decode(p), /fontWeight/);
+});
 await test("known typography bindings map with correct line-height units", () => {
   const n = decode(payload(layer({ bindings: { font: "Inter", lh: "1.25", ls: "-0.5" }, text_align: "center" }))).nodes[0];
   assert.equal(n.fontFamily, "Inter"); assert.equal(n.lineHeight, 22.5); assert.equal(n.letterSpacing, -0.5); assert.equal(n.textAlign, "center");
@@ -43,7 +70,7 @@ await test("metadata supports Unicode IDs without prototype lookup", () => {
 });
 for (const [label, mutate] of [
   ["legacy text without source metrics", (p) => { delete p.textMetrics; }],
-  ["unknown metadata version", (p) => { p.textMetrics.version = 2; }],
+  ["unknown metadata version", (p) => { p.textMetrics.version = 3; }],
   ["missing text ID", (p) => { p.textMetrics.nodes = {}; }],
   ["unknown explicit font size", (p) => { p.textMetrics.nodes["text-1"].fontSize = null; }],
   ["negative font size", (p) => { p.textMetrics.nodes["text-1"].fontSize = -1; }],
@@ -96,6 +123,17 @@ await test("SVG text id/name parity selects native only for the complete result"
       importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => JSON.stringify(candidate) }));
     assert.ok(importsEquivalent(importSvg(svg), expected));
     assert.equal(getEngineInfo().importBackend, "wasm");
+    candidate.textMetrics.version = 2;
+    candidate.textMetrics.nodes.label.fontWeight = 700;
+    const boldSvg = svg.replace('text-anchor="middle"', 'text-anchor="middle" font-weight="700"');
+    const boldExpected = svgTs(boldSvg);
+    assert.ok(importsEquivalent(importSvg(boldSvg), boldExpected));
+    assert.equal(getEngineInfo().importBackend, "wasm", "v2 weight must still pass the whole-result guard");
+    candidate.textMetrics.nodes.label.fontWeight = 500;
+    assert.deepEqual(importSvg(boldSvg), boldExpected);
+    assert.equal(getEngineInfo().importBackend, "ts", "wrong source weight must retain the complete TS result");
+    assert.match(getEngineInfo().lastImportFallback, /differs/);
+    candidate.textMetrics.version = 1; delete candidate.textMetrics.nodes.label.fontWeight;
     n.name = "Keep this text"; // the last Rust importer revision used content instead of the explicit id
     assert.deepEqual(importSvg(svg), expected);
     assert.equal(getEngineInfo().importBackend, "ts");

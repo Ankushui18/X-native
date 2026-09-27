@@ -97,7 +97,8 @@ try {
   const text = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
   const textRaw = JSON.parse(glue.importSvgToX(text));
   console.log(`Diff SVG text envelope: ${JSON.stringify({metrics: textRaw.textMetrics, node: textRaw.doc?.pages?.[0]?.children?.[0]})}`);
-  assert.equal(textRaw.textMetrics.version, 1);
+  assert.equal(textRaw.textMetrics.version, 2);
+  assert.equal(textRaw.textMetrics.nodes.label.fontWeight, null, "unstyled SVG text reports no numeric source weight");
   let textCandidate;
   try { textCandidate = decodeRustImport(JSON.stringify(textRaw)); }
   catch (error) { console.log(`Diff SVG text decode error: ${String(error)}`); throw error; }
@@ -122,8 +123,24 @@ try {
   assert.ok(importsEquivalent(importSvg(unnamedText), svgTs(unnamedText)));
   assert.equal(getEngineInfo().importBackend, "wasm", "unnamed SVG text should use native output");
   const boldText = '<svg width="200" height="120"><text x="10" y="30" font-size="20" font-weight="700">Keep this text</text></svg>';
-  assert.ok(importsEquivalent(importSvg(boldText), svgTs(boldText)));
-  assert.equal(getEngineInfo().importBackend, "ts", "unsupported SVG font weight remains guarded");
+  const boldRaw = JSON.parse(glue.importSvgToX(boldText));
+  const boldNode = boldRaw.doc.pages[0].children[0];
+  assert.equal(boldRaw.textMetrics.version, 2);
+  assert.equal(boldRaw.textMetrics.nodes[boldNode.id].fontWeight, 700, "weight comes from the actual Rust SVG parser");
+  assert.equal(boldNode.bindings, undefined, "source-only weight must not change persisted .x");
+  const boldCandidate = decodeRustImport(JSON.stringify(boldRaw));
+  delete boldCandidate.pages;
+  const boldExpected = svgTs(boldText);
+  const boldDiff = differencePaths(boldCandidate, boldExpected);
+  console.log(`Diff SVG numeric weight: ${boldDiff.join(", ") || "none"}`);
+  assert.ok(importsEquivalent(boldCandidate, boldExpected), `numeric SVG weight candidate differs: ${boldDiff.join(", ")}`);
+  assert.ok(importsEquivalent(importSvg(boldText), boldExpected));
+  assert.equal(getEngineInfo().importBackend, "wasm", "complete numeric SVG weight candidate should select native");
+  boldRaw.textMetrics.nodes[boldNode.id].fontWeight = "700";
+  assert.throws(() => decodeRustImport(JSON.stringify(boldRaw)), /source font weight/);
+  const partialWeight = boldText.replace('font-weight="700"', 'font-weight="700bold"');
+  assert.ok(importsEquivalent(importSvg(partialWeight), svgTs(partialWeight)));
+  assert.equal(getEngineInfo().importBackend, "ts", "partially numeric SVG weight stays guarded");
   for (const [label, source, w, h] of [
     ["viewBox dimensions", '<svg viewBox="0, 0, 96, 48"><rect id="box" x="10" y="12" width="20" height="15" fill="red"/></svg>', 96, 48],
     ["explicit width over viewBox", '<svg width="200" viewBox="0 0 96 48"><rect id="box" width="20" height="15" fill="red"/></svg>', 200, 48],

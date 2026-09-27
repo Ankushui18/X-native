@@ -377,6 +377,20 @@ fn attr_num(attrs: &[(String, String)], key: &str) -> Option<f64> {
         .and_then(|v| v.trim().strip_suffix("px").unwrap_or(v.trim()).parse().ok())
 }
 
+/// The current web SVG importer reads only the element's `font-weight`
+/// attribute with parseInt. Emit a source fact only for a complete positive
+/// decimal integer in the CSS numeric range; partial/named/out-of-range values
+/// stay guarded by the whole-result TS comparison, not coerced or inferred.
+fn numeric_text_weight(attrs: &[(String, String)]) -> Option<u16> {
+    let raw = attr(attrs, "font-weight")?.trim();
+    if !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<u16>()
+        .ok()
+        .filter(|weight| (1..=1000).contains(weight))
+}
+
 fn css_number(value: &str) -> Option<f32> {
     let value = value.trim();
     if let Some(percent) = value.strip_suffix('%') {
@@ -1581,6 +1595,7 @@ fn parse_children(
                         // even if lowering deduplicates the native node id.
                         // A missing/empty id gets a content preview on Text.
                         n.name = src_id.clone().unwrap_or_default();
+                        n.source_font_weight = numeric_text_weight(&attrs);
                         n.text_align = Some(match attr(&attrs, "text-anchor") {
                             Some("middle") => TextAlign::Center,
                             Some("end") => TextAlign::Right,
@@ -1697,6 +1712,26 @@ mod tests {
             (metrics.width, metrics.height, metrics.font_size),
             (168.0, 28.0, Some(20.0))
         );
+    }
+
+    #[test]
+    fn svg_text_weight_only_carries_unambiguous_element_numbers() {
+        for (attribute, expected) in [
+            ("font-weight=\"700\"", Some(700)),
+            ("font-weight=\" 500 \"", Some(500)),
+            ("font-weight=\"bold\"", None),
+            ("font-weight=\"700bold\"", None),
+            ("font-weight=\"1001\"", None),
+            ("", None),
+        ] {
+            let svg = format!(
+                "<svg width=\"200\" height=\"120\"><text id=\"label\" x=\"10\" y=\"30\" {attribute}>Keep this text</text></svg>"
+            );
+            let (page, report) = import_svg_with_report(&svg).unwrap();
+            let text = &page.children[0];
+            assert_eq!(report.text_metrics[&text.id].font_weight, expected, "{attribute}");
+            assert!(text.bindings.is_empty(), "source weight must not enter .x");
+        }
     }
 
     #[test]

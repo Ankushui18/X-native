@@ -39,10 +39,24 @@ fn import_envelope(
     match result {
         Err(e) => envelope(Err(e)),
         Ok((doc, report)) => {
-            let metrics: serde_json::Map<String, serde_json::Value> = report.text_metrics.iter().map(|(id, m)| {
-                (id.clone(), serde_json::json!({ "width": m.width, "height": m.height, "fontSize": m.font_size }))
-            }).collect();
-            let metadata = serde_json::json!({ "version": 1, "nodes": metrics });
+            let metrics: serde_json::Map<String, serde_json::Value> = report
+                .text_metrics
+                .iter()
+                .map(|(id, m)| {
+                    let mut fields = serde_json::json!({
+                        "width": m.width, "height": m.height, "fontSize": m.font_size
+                    });
+                    if source == "svg" {
+                        // SVG-only v2: explicit numeric weight or null (no
+                        // supported element weight). Do not invent weight for
+                        // FIG/Sketch or change their v1 metadata contract.
+                        fields["fontWeight"] = serde_json::json!(m.font_weight);
+                    }
+                    (id.clone(), fields)
+                })
+                .collect();
+            let version = if source == "svg" { 2 } else { 1 };
+            let metadata = serde_json::json!({ "version": version, "nodes": metrics });
             let coordinates = if source == "fig" {
                 let nodes: serde_json::Map<String, serde_json::Value> = report
                     .source_positions
@@ -194,7 +208,7 @@ mod tests {
         );
         let value: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["textMetrics"]["version"], 1);
+        assert_eq!(value["textMetrics"]["version"], 2);
         let page = &value["doc"]["pages"][0];
         let text = &page["children"][0];
         let id = text["id"].as_str().unwrap();
@@ -206,8 +220,23 @@ mod tests {
         assert_eq!(value["textMetrics"]["nodes"][id]["width"], 168.0);
         assert_eq!(value["textMetrics"]["nodes"][id]["height"], 28.0);
         assert_eq!(value["textMetrics"]["nodes"][id]["fontSize"], 20.0);
+        assert!(value["textMetrics"]["nodes"][id]["fontWeight"].is_null());
         assert!(value.get("figmaCoordinates").is_none());
         assert!(value.get("figmaAppearance").is_none());
+    }
+
+    #[test]
+    fn svg_numeric_weight_is_versioned_source_metadata_not_persisted_typography() {
+        let out = import_svg_to_x(
+            r#"<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" font-weight="700">Keep this text</text></svg>"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["textMetrics"]["version"], 2);
+        assert_eq!(value["textMetrics"]["nodes"]["label"]["fontWeight"], 700);
+        assert!(value["doc"]["pages"][0]["children"][0]
+            .get("bindings")
+            .is_none());
     }
 
     #[test]

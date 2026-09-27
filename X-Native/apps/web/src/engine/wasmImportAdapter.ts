@@ -238,10 +238,13 @@ export function decodeRustImport(payload: string): ImportResult {
   // Native Node.h is font size for text, NOT its source bounding-box height.
   // Old glue (and SVG without explicit metrics) must continue to fall back.
   let textMetrics: Obj = {};
+  let textMetricsVersion = 1;
   if (envelope.textMetrics != null) {
     const metadata = object(envelope.textMetrics);
     keys(metadata, ["version", "nodes"]);
-    if (metadata.version !== 1) throw new Error("Unsupported Rust text metrics version");
+    const version = metadata.version;
+    if (version !== 1 && version !== 2) throw new Error("Unsupported Rust text metrics version");
+    textMetricsVersion = version;
     textMetrics = object(metadata.nodes);
   }
   // FIG's native editor normalizes each page near (40,40). Only explicit
@@ -305,14 +308,27 @@ export function decodeRustImport(payload: string): ImportResult {
       const id = text(n.id);
       if (!Object.prototype.hasOwnProperty.call(textMetrics, id) || usedMetrics.has(id)) throw new Error("Missing or duplicate Rust source text metrics");
       usedMetrics.add(id);
-      const metrics = object(textMetrics[id]); keys(metrics, ["width", "height", "fontSize"]);
+      const metrics = object(textMetrics[id]);
+      keys(metrics, ["width", "height", "fontSize", ...(textMetricsVersion === 2 ? ["fontWeight"] : [])]);
       out.w = number(metrics.width); out.h = number(metrics.height);
       out.fontSize = number(metrics.fontSize);
       if (out.fontSize <= 0 || out.fontSize !== number(n.h) || out.w !== number(n.w)) throw new Error("Invalid Rust source text metrics");
       out.text = text(kind.text);
-      // No inferred weight from PostScript names. Unsupported source styling
-      // still fails the whole-result TS comparison in wasmBridge.choose.
+      // V1 had no weight and retains the old unstyled default. V2 SVG
+      // explicitly distinguishes an absent/nonnumeric source value (null)
+      // from a supported numeric element attribute. Never infer from the TS
+      // oracle or a PostScript font name; choose() compares the whole result.
       out.fontWeight = 400;
+      if (textMetricsVersion === 2) {
+        if (!Object.prototype.hasOwnProperty.call(metrics, "fontWeight")) throw new Error("Missing Rust source font weight");
+        const weight = metrics.fontWeight;
+        if (weight !== null) {
+          if (typeof weight !== "number" || !Number.isSafeInteger(weight) || weight < 1 || weight > 1000) {
+            throw new Error("Invalid Rust source font weight");
+          }
+          out.fontWeight = weight;
+        }
+      }
       const align = n.text_align ?? "left";
       if (align !== "left" && align !== "center" && align !== "right" && align !== "justified") throw new Error("Unsupported Rust text alignment");
       out.textAlign = align;
