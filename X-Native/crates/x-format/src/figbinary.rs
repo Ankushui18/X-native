@@ -260,7 +260,7 @@ fn effects_json(nc: &V) -> Vec<V> {
                 .filter_map(|e| {
                     let ty = match gstr(e, "type")? {
                         "DROP_SHADOW" | "INNER_SHADOW" => gstr(e, "type")?.to_string(),
-                        "FOREGROUND_BLUR" => "LAYER_BLUR".to_string(),
+                        "FOREGROUND_BLUR" | "LAYER_BLUR" => "LAYER_BLUR".to_string(),
                         "BACKGROUND_BLUR" => "BACKGROUND_BLUR".to_string(),
                         _ => return None,
                     };
@@ -783,7 +783,7 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
                 pairs.push(("strokeWeight".into(), V::Num(swt)));
             }
         }
-        for key in ["strokeAlign", "strokeCap", "strokeJoin"] {
+        for key in ["strokeAlign", "strokeCap", "strokeJoin", "blendMode"] {
             if let Some(value) = gstr(nc, key) {
                 pairs.push((key.into(), V::Str(value.into())));
             }

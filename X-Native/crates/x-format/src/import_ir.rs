@@ -103,6 +103,7 @@ pub struct ImportNode {
     /// default; importers only set it when the source is explicit.
     pub pin: Option<(x_core::HPin, x_core::VPin)>,
     pub opacity: f32,
+    pub blend: Option<BlendKind>,
     pub visible: bool,
     pub locked: bool,
     /// Explicit source horizontal alignment; None keeps the native default.
@@ -130,6 +131,7 @@ impl ImportNode {
             layout: None,
             pin: None,
             opacity: 1.0,
+            blend: None,
             visible: true,
             locked: false,
             text_align: None,
@@ -535,6 +537,9 @@ fn lower_node(
     } else {
         1.0
     };
+    if let Some(blend) = ir.blend {
+        node.blend = blend;
+    }
     node.visible = ir.visible;
     node.locked = ir.locked;
     if matches!(node.kind, NodeKind::Text { .. }) {

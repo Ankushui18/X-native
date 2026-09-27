@@ -256,3 +256,57 @@ fn fig_stroke_geometry_survives_binary_shim_lowering_and_persistence() {
         }
     }
 }
+
+#[test]
+fn fig_layer_blends_and_both_blur_spellings_survive_import_and_save() {
+    use x_core::{BlendKind, Effect};
+    let doc = import_fig_bytes(include_bytes!(
+        "../../../apps/web/e2e/fixtures/effects-blend.fig"
+    ))
+    .unwrap();
+    let reloaded = x_format::load_x(&x_format::save_x(&doc)).unwrap();
+    for document in [&doc, &reloaded] {
+        let nodes = &document.pages[0].children;
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].blend, BlendKind::Multiply);
+        assert_eq!(nodes[1].blend, BlendKind::SoftLight);
+        assert_eq!(nodes[2].blend, BlendKind::PassThrough);
+        let effects = nodes[0].active_effects();
+        assert_eq!(
+            effects.len(),
+            4,
+            "stroke materialization retains every imported effect"
+        );
+        assert!(matches!(
+            effects[0].effect,
+            Effect::DropShadow {
+                dx: 5.0,
+                dy: -3.0,
+                blur: 6.0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            effects[1].effect,
+            Effect::InnerShadow {
+                dx: -2.0,
+                dy: 4.0,
+                blur: 2.0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            effects[2].effect,
+            Effect::LayerBlur { radius: 8.0 }
+        ));
+        assert!(matches!(
+            effects[3].effect,
+            Effect::BackgroundBlur { radius: 4.0 }
+        ));
+        assert!(matches!(
+            nodes[1].active_effects()[0].effect,
+            Effect::LayerBlur { radius: 3.0 }
+        ));
+        assert!(nodes[2].active_effects().is_empty());
+    }
+}

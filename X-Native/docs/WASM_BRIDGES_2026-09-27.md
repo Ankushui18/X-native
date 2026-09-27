@@ -410,3 +410,43 @@ third-party file or visual-rendering signoff.
 
 Evidence: `/home/user/wasm-stroke-{red,unit,tsc,build,browser,ci}.log`;
 native messages: `/home/user/wasm-stroke-annotations.json`.
+
+## 11. Explicit layer blends and guarded basic effects (2026-09-27)
+
+Import-only continuation. No changes to TypeScript importers, whole-result
+comparison, coordinate/hierarchy handling, or boolean kernels/guards.
+
+### Fixes
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W15 — FIG layer blend modes discarded | Binary shim carries `blendMode`; REST parser maps the 19 existing native modes through shared IR into `Node.blend`; adapter translates explicit serialized mode names to existing web labels | Native enum-name regression; adapter label table test; binary fixture imports and persists Multiply, Soft Light and Pass Through |
+| W16 — literal `LAYER_BLUR` dropped by FIG shim | Accept both `LAYER_BLUR` and the existing `FOREGROUND_BLUR` spelling as native layer blur | Binary fixture contains both aliases; native persistence regression |
+| W17 — all basic native effects rejected by adapter | Map ordered drop/inner shadows and layer/background blurs; accept materialized effect lists only when they exactly match the legacy effects, with visible/opacity-1/normal-blend layers | New `wasmEffects.test.mjs` covers legacy/materialized mappings, colors/offsets/radii, list order, malformed data, unknown modes/types, overriding stacks and complete-contract fallback |
+
+This maps the **native effect model**, not every source effect property. Native
+legacy effects do not preserve source shadow spread, hidden effects, effect blend
+modes or show-behind options. Those source-only differences must still fail the
+unchanged complete-result oracle. Tests explicitly verify that changing these
+properties makes results unequal. Noise, unknown effect fields, invalid radii,
+non-identity effect stacks and unknown blend modes decline rather than being
+silently discarded. Absent blend fields remain absent; no default-field
+normalization was added to force promotion.
+
+The synthetic `e2e/fixtures/effects-blend.fig` is generated with
+`make-fig-fixture.py --effects`. It exercises four ordered effects together with
+a stroke-materialized stack, a legacy blur list, both blur spellings and three
+layer blend modes. Existing binary fixtures remain unchanged.
+
+### Verification
+
+- Initial adapter regression: **20 passed / 6 failed**; final effect suite **26/0**.
+- Local full suite: **3,003 passed / 0 failed**, 48 suite summaries; existing stroke
+  **31/0**, text **35/0**, bridge **39/0**. `tsc -b` and production build pass
+  (existing chunk-size warning).
+- Rust workspace compilation/tests and regenerated real-WASM fixture smoke are
+  **pending CI**; local cargo/rustc remain unavailable.
+- Native-browser visual fidelity, broad rich-import parity and performance
+  promotion remain **NOT VERIFIED**.
+
+Evidence: `/home/user/wasm-effects-{red,focused,unit,tsc,build}.log`.

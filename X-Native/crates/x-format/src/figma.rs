@@ -656,6 +656,32 @@ fn image_ref(node: &V) -> Option<&str> {
         .find_map(|f| s(f, "imageRef"))
 }
 
+fn figma_blend(node: &V) -> Option<x_core::BlendKind> {
+    use x_core::BlendKind;
+    Some(match s(node, "blendMode")? {
+        "NORMAL" => BlendKind::Normal,
+        "DARKEN" => BlendKind::Darken,
+        "MULTIPLY" => BlendKind::Multiply,
+        "COLOR_BURN" => BlendKind::ColorBurn,
+        "LIGHTEN" => BlendKind::Lighten,
+        "SCREEN" => BlendKind::Screen,
+        "COLOR_DODGE" => BlendKind::ColorDodge,
+        "OVERLAY" => BlendKind::Overlay,
+        "SOFT_LIGHT" => BlendKind::SoftLight,
+        "HARD_LIGHT" => BlendKind::HardLight,
+        "DIFFERENCE" => BlendKind::Difference,
+        "EXCLUSION" => BlendKind::Exclusion,
+        "HUE" => BlendKind::Hue,
+        "SATURATION" => BlendKind::Saturation,
+        "COLOR" => BlendKind::Color,
+        "LUMINOSITY" => BlendKind::Luminosity,
+        "PLUS_DARKER" => BlendKind::PlusDarker,
+        "PLUS_LIGHTER" => BlendKind::PlusLighter,
+        "PASS_THROUGH" => BlendKind::PassThrough,
+        _ => return None,
+    })
+}
+
 fn figma_stroke_options(node: &V) -> x_core::StrokeOptions {
     use x_core::{StrokeAlign, StrokeCap, StrokeJoin, StrokeOptions};
     let cap = match s(node, "strokeCap") {
@@ -878,6 +904,7 @@ fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<Impor
     }
     ir.rotation = rotation;
     ir.opacity = opacity;
+    ir.blend = figma_blend(node);
     ir.visible = visible;
     ir.locked = node.get("locked").and_then(V::boolean).unwrap_or(false);
     if ty == "TEXT" {
@@ -1518,5 +1545,50 @@ mod tests {
         assert_eq!(runs[0].weight, Some(700));
         assert_eq!(runs[1].size, Some(30.0));
         assert_eq!(runs[1].italic, Some(true));
+    }
+}
+
+#[cfg(test)]
+mod blend_import_tests {
+    use super::*;
+
+    #[test]
+    fn all_explicit_native_blends_are_mapped_without_guessing_unknown_names() {
+        for name in [
+            "NORMAL",
+            "DARKEN",
+            "MULTIPLY",
+            "COLOR_BURN",
+            "LIGHTEN",
+            "SCREEN",
+            "COLOR_DODGE",
+            "OVERLAY",
+            "SOFT_LIGHT",
+            "HARD_LIGHT",
+            "DIFFERENCE",
+            "EXCLUSION",
+            "HUE",
+            "SATURATION",
+            "COLOR",
+            "LUMINOSITY",
+            "PLUS_DARKER",
+            "PLUS_LIGHTER",
+            "PASS_THROUGH",
+        ] {
+            let node = json::parse(&format!(r#"{{"blendMode":"{name}"}}"#)).unwrap();
+            assert_eq!(
+                figma_blend(&node)
+                    .unwrap()
+                    .label()
+                    .to_uppercase()
+                    .replace(' ', "_"),
+                name
+            );
+        }
+        assert_eq!(
+            figma_blend(&json::parse(r#"{"blendMode":"FUTURE_MODE"}"#).unwrap()),
+            None
+        );
+        assert_eq!(figma_blend(&json::parse("{}").unwrap()), None);
     }
 }

@@ -143,6 +143,21 @@ try {
   assert.equal(strokedSvg.nodes[0].strokeCap, "round"); assert.equal(strokedSvg.nodes[0].strokeJoin, "bevel");
   assert.equal(strokedSvg.nodes[0].strokeDash, 8); assert.equal(strokedSvg.nodes[0].strokeGap, 4);
   console.log("PASS native SVG materialized solid stroke adapter");
+  const effectBytes = fs.readFileSync("e2e/fixtures/effects-blend.fig");
+  const effectCandidate = decodeRustImport(glue.importFigToX(effectBytes));
+  assert.equal(effectCandidate.nodes.length, 3);
+  assert.deepEqual(effectCandidate.nodes.map(n => n.blendMode), ["Multiply", "Soft Light", "pass-through"]);
+  assert.deepEqual(effectCandidate.nodes[0].effects, [
+    { kind: "drop-shadow", color: "#ff000080", x: 5, y: -3, blur: 6, spread: 0, visible: true },
+    { kind: "inner-shadow", color: "#0000ff", x: -2, y: 4, blur: 2, spread: 0, visible: true },
+    { kind: "layer-blur", color: "#00000000", x: 0, y: 0, blur: 8, spread: 0, visible: true },
+    { kind: "background-blur", color: "#00000000", x: 0, y: 0, blur: 4, spread: 0, visible: true },
+  ]);
+  assert.equal(effectCandidate.nodes[1].effects[0].blur, 3);
+  const effectData = effectBytes.buffer.slice(effectBytes.byteOffset, effectBytes.byteOffset + effectBytes.byteLength);
+  assert.ok(importsEquivalent(await importFig(effectData), await figTs(effectData)));
+  assert.equal(calls.fig, 4);
+  console.log(`PASS native FIG effects/blends: four ordered effects, materialized+legacy lists, blur aliases, layer modes; wrapper=${getEngineInfo().importBackend}`);
   assert.equal(calls.svg, 2);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");

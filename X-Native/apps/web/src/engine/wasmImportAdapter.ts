@@ -2,7 +2,7 @@
  * Convert the supported interchange subset explicitly; reject a whole import
  * on unknown visual data, so the original TS parser can recover the file. */
 import type { ImportedNode, ImportResult } from "./svgImport";
-import type { PathPoint, VectorNetwork } from "./types";
+import type { Effect, PathPoint, VectorNetwork } from "./types";
 
 type Obj = Record<string, unknown>;
 const object = (v: unknown): Obj => {
@@ -29,12 +29,43 @@ function paint(v: unknown): string {
   }
   return p.c;
 }
+const blendLabels: Record<string, string> = {
+  normal: "Normal", darken: "Darken", multiply: "Multiply", "color-burn": "Color Burn",
+  lighten: "Lighten", screen: "Screen", "color-dodge": "Color Dodge", overlay: "Overlay",
+  "soft-light": "Soft Light", "hard-light": "Hard Light", difference: "Difference", exclusion: "Exclusion",
+  hue: "Hue", saturation: "Saturation", color: "Color", luminosity: "Luminosity",
+  "plus-darker": "Plus Darker", "plus-lighter": "Plus Lighter", "pass-through": "pass-through",
+};
+function effects(v: unknown): Effect[] {
+  if (!Array.isArray(v) || v.length > 10_000) throw new Error("Invalid Rust effect list");
+  return v.map((value): Effect => {
+    const e = object(value);
+    if (e.t === "drop" || e.t === "inner") {
+      keys(e, ["t", "dx", "dy", "blur", "c"]);
+      const blur = number(e.blur);
+      if (blur < 0) throw new Error("Invalid Rust shadow blur");
+      // These are the native enum's effective values, not guessed source
+      // spread/visibility/blend. Source-only differences still fail choose().
+      return { kind: e.t === "drop" ? "drop-shadow" : "inner-shadow", color: paint({ t: "solid", c: e.c }),
+        x: number(e.dx), y: number(e.dy), blur, spread: 0, visible: true };
+    }
+    if (e.t === "blur" || e.t === "bgblur") {
+      keys(e, ["t", "r"]);
+      const blur = number(e.r);
+      if (blur < 0) throw new Error("Invalid Rust blur radius");
+      return { kind: e.t === "blur" ? "layer-blur" : "background-blur", color: "#00000000",
+        x: 0, y: 0, blur, spread: 0, visible: true };
+    }
+    throw new Error("Unsupported Rust effect");
+  });
+}
+
 /** Narrow identity mapping for materialized stacks created by native stroke
  * options. Never flatten multiple paints or ignore stack overrides of legacy
  * fields. The import contract has only one symmetric stroke and a dash pair. */
 function simpleStacks(n: Obj, out: ImportedNode) {
   if (!Array.isArray(n.fill_layers) || !Array.isArray(n.stroke_layers) || !Array.isArray(n.effect_layers)
-    || n.fill_layers.length !== 1 || n.stroke_layers.length > 1 || n.effect_layers.length) {
+    || n.fill_layers.length !== 1 || n.stroke_layers.length > 1 || n.effect_layers.length > 10_000) {
     throw new Error("Unsupported Rust visual stacks");
   }
   const identity = (layer: Obj) => {
@@ -42,6 +73,11 @@ function simpleStacks(n: Obj, out: ImportedNode) {
   };
   const fill = object(n.fill_layers[0]); keys(fill, ["paint", "opacity", "visible", "blend"]); identity(fill);
   if (paint(fill.paint) !== out.fill) throw new Error("Rust fill stack overrides legacy paint");
+  const activeEffects = n.effect_layers.map((value) => {
+    const layer = object(value); keys(layer, ["effect", "opacity", "visible", "blend"]); identity(layer);
+    return effects([layer.effect])[0];
+  });
+  if (JSON.stringify(activeEffects) !== JSON.stringify(out.effects ?? [])) throw new Error("Rust effect stack overrides legacy effects");
   if (!n.stroke_layers.length) {
     if (n.stroke != null) throw new Error("Rust empty stroke stack overrides legacy stroke");
     return;
@@ -143,7 +179,7 @@ export function decodeRustImport(payload: string): ImportResult {
   function convert(value: unknown, depth = 0): ImportedNode {
     if (++count > 100_000 || depth > 256) throw new Error("Rust import exceeds document limits");
     const n = object(value), kind = object(n.kind);
-    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow", "origin", "fill_layers", "stroke_layers", "effect_layers", ...(kind.t === "text" ? ["bindings", "text_align"] : [])]);
+    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow", "origin", "fill_layers", "stroke_layers", "effect_layers", "effects", "blend", ...(kind.t === "text" ? ["bindings", "text_align"] : [])]);
     keys(kind, kind.t === "text" ? ["t", "text"] : ["t", "radius", "path"]);
     if (!["rect", "ellipse", "line", "frame", "group", "vector", "text"].includes(String(kind.t))) {
       throw new Error("Unsupported Rust layer kind; use TS importer");
@@ -157,6 +193,12 @@ export function decodeRustImport(payload: string): ImportResult {
       fill, fillVisible: fill.length !== 9 || !fill.endsWith("00"), strokePaint: "#00000000", strokeWidth: 0, strokeVisible: false,
       hidden: n.visible === false, locked: n.locked === true,
     };
+    if (n.effects !== undefined) out.effects = effects(n.effects);
+    if (n.blend !== undefined) {
+      const mode = text(n.blend);
+      if (!Object.prototype.hasOwnProperty.call(blendLabels, mode)) throw new Error("Unsupported Rust blend mode");
+      out.blendMode = blendLabels[mode];
+    }
     if (kind.t === "text") {
       const id = text(n.id);
       if (!Object.prototype.hasOwnProperty.call(textMetrics, id) || usedMetrics.has(id)) throw new Error("Missing or duplicate Rust source text metrics");
