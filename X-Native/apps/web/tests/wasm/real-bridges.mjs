@@ -77,8 +77,11 @@ try {
   const groupedDiff = differencePaths(groupedCandidate, groupedExpected);
   console.log(`Diff grouped SVG: ${groupedDiff.join(", ") || "none"}`);
   assert.ok(importsEquivalent(groupedCandidate, groupedExpected), `group flattening contract differs: ${groupedDiff.join(", ") || "paths helper found none"}`);
-  assert.ok(importsEquivalent(importSvg(groupedSvg), groupedExpected));
-  assert.equal(getEngineInfo().importBackend, "wasm");
+  console.log("PASS direct neutral-group candidate contract");
+  const groupedActual = importSvg(groupedSvg);
+  console.log(`Grouped SVG wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}; equivalent=${importsEquivalent(groupedActual, groupedExpected)}`);
+  assert.ok(importsEquivalent(groupedActual, groupedExpected), "production group import must preserve the whole TS contract");
+  assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "neutral groups should select native output");
   const transformedGroupSvg = '<svg width="120" height="80"><g transform="rotate(15)"><rect width="20" height="10"/></g></svg>';
   assert.ok(importsEquivalent(importSvg(transformedGroupSvg), svgTs(transformedGroupSvg)));
   assert.equal(getEngineInfo().importBackend, "ts", "transformed groups remain guarded until their flattening is equivalent");
