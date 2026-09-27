@@ -11,8 +11,8 @@ After user authorization, the current work was committed and pushed only to
 `arena/01a0e1ff-x-native`. No generated binaries are checked in; the local preview
 still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `ddf4472`, [CI run 36323243749](https://github.com/Ankushui18/X-native/actions/runs/36323243749).
-The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`; see §§13–14.
+Latest verified code/CI checkpoint: `99f8c14`, [CI run 36329834026](https://github.com/Ankushui18/X-native/actions/runs/36329834026).
+Basic FIG, both effects fixtures, neutral SVG groups and literal SVG text pass complete-result gates with `backend=wasm`; see §§13–16.
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -709,10 +709,18 @@ rendering or visual equivalence.
 
 ### Verification
 
-- Rust workspace and actual-module smoke are **pending CI**; local Cargo/rustc are
-  unavailable.
+- **CI [36329834026](https://github.com/Ankushui18/X-native/actions/runs/36329834026)
+  SUCCESS**, code `99f8c147be1466413fd4295c624a8edca42c4205`; Rust job
+  `108649529172`. Rust workspace, both WASM packages, genuine-module smoke,
+  web tests/build and screenshot test job pass.
+- The basic 20px literal SVG text candidate matches the full TS contract, including
+  ID-derived layer name, middle anchor, baseline position and estimated 168×28 box;
+  the production wrapper selects WASM. Weight-700 text remains on TS. No comparator
+  change or oracle patching.
 - Serial local web suite: **3,081/0**, 51 summaries; `tsc -b` and production build
-  pass. Local Chromium remains unavailable (`/tmp/chromium` missing).
+  pass. Local Chromium remains unavailable (`/tmp/chromium` missing). The screenshot
+  job produced no image artifacts.
 - Native-browser visual fidelity and complex SVG text remain **NOT VERIFIED**.
 
-Evidence: `/home/user/wasm-svg-text-{unit,tsc,build}.log`.
+Evidence: `/home/user/wasm-svg-text-{unit-2,tsc-2,build-2,verified,ci-final2}.log`;
+actual-module messages: `/home/user/wasm-svg-text-ci-final2.log`.
