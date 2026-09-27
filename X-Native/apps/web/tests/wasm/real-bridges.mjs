@@ -230,7 +230,7 @@ try {
   assert.equal(sourceCandidate.nodes[1].effects[0].visible, false);
   console.log("PASS native FIG source effects: hidden entries, spread, blend, show-behind; full candidate equivalent; wrapper=wasm");
   assert.equal(calls.fig, 6);
-  assert.equal(calls.svg, 2);
+  assert.equal(calls.svg, 4);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");
 
