@@ -205,3 +205,54 @@ fn file_layer_locks_and_all_text_alignments_survive_lowering() {
         }
     }
 }
+
+#[test]
+fn fig_stroke_geometry_survives_binary_shim_lowering_and_persistence() {
+    use x_core::{StrokeAlign, StrokeCap, StrokeJoin};
+    let doc = import_fig_bytes(include_bytes!(
+        "../../../apps/web/e2e/fixtures/stroke-options.fig"
+    ))
+    .unwrap();
+    let reloaded = x_format::load_x(&x_format::save_x(&doc)).unwrap();
+    for document in [&doc, &reloaded] {
+        let nodes = &document.pages[0].children;
+        assert_eq!(nodes.len(), 3);
+        for (i, (align, cap, join, dash)) in [
+            (
+                StrokeAlign::Inside,
+                StrokeCap::Round,
+                StrokeJoin::Bevel,
+                vec![8.0, 4.0],
+            ),
+            (
+                StrokeAlign::Center,
+                StrokeCap::Square,
+                StrokeJoin::Round,
+                vec![6.0],
+            ),
+            (
+                StrokeAlign::Outside,
+                StrokeCap::None,
+                StrokeJoin::Miter,
+                vec![],
+            ),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let strokes = nodes[i].active_strokes();
+            assert_eq!(strokes.len(), 1);
+            let options = &strokes[0].options;
+            assert_eq!(
+                (
+                    options.align,
+                    options.cap_start,
+                    options.cap_end,
+                    options.join
+                ),
+                (*align, *cap, *cap, *join)
+            );
+            assert_eq!(&options.dash, dash);
+        }
+    }
+}

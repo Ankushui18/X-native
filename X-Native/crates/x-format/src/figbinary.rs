@@ -783,6 +783,14 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
                 pairs.push(("strokeWeight".into(), V::Num(swt)));
             }
         }
+        for key in ["strokeAlign", "strokeCap", "strokeJoin"] {
+            if let Some(value) = gstr(nc, key) {
+                pairs.push((key.into(), V::Str(value.into())));
+            }
+        }
+        if let Some(dashes) = garr(nc, "strokeDashes") {
+            pairs.push(("strokeDashes".into(), V::Arr(dashes.to_vec())));
+        }
         if let Some(cr) = gnum(nc, "cornerRadius").filter(|v| *v > 0.0) {
             pairs.push(("cornerRadius".into(), V::Num(cr)));
         }

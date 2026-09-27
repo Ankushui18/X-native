@@ -488,7 +488,12 @@ fn lower_node(
             };
         }
     }
-    if let Some(options) = ir.stroke_options {
+    // Materialization snapshots the legacy effects into the active stack.
+    // Populate effects first or strokes would make imported effects invisible.
+    if !ir.effects.is_empty() {
+        node.effects = ir.effects;
+    }
+    if let Some(options) = ir.stroke_options.clone() {
         node.materialize_visual_stacks();
         if let Some(layer) = node.stroke_layers.first_mut() {
             layer.options = options;
@@ -498,15 +503,16 @@ fn lower_node(
         node.materialize_visual_stacks();
         for (paint, sw) in &ir.extra_strokes {
             if *sw > 0.0 {
-                node.stroke_layers.push(StrokeLayer::new(Stroke {
+                let mut layer = StrokeLayer::new(Stroke {
                     paint: paint.clone(),
                     width: clean(*sw),
-                }));
+                });
+                if let Some(options) = &ir.stroke_options {
+                    layer.options = options.clone();
+                }
+                node.stroke_layers.push(layer);
             }
         }
-    }
-    if !ir.effects.is_empty() {
-        node.effects = ir.effects;
     }
     if let Some((h, v)) = ir.pin {
         node.pin = (h, v);
@@ -547,6 +553,45 @@ fn lower_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stroke_materialization_preserves_effects_and_shared_options() {
+        for explicit in [false, true] {
+            let mut shape = ImportNode::new(ImportKind::Rect { radius: 0.0 }).size(100.0, 50.0);
+            shape.stroke = Some((Paint::Solid(Color::BLACK), 2.0));
+            shape.extra_strokes = vec![(Paint::Solid(Color::WHITE), 3.0)];
+            shape.effects = vec![Effect::LayerBlur { radius: 3.0 }];
+            if explicit {
+                shape.stroke_options = Some(StrokeOptions {
+                    align: StrokeAlign::Outside,
+                    dash: vec![8.0, 4.0],
+                    ..StrokeOptions::default()
+                });
+            }
+            let doc = lower(ImportDoc {
+                pages: vec![ImportNode::new(ImportKind::Frame).child(shape)],
+                ..Default::default()
+            });
+            let reloaded = crate::load_x(&crate::save_x(&doc)).unwrap();
+            for document in [&doc, &reloaded] {
+                let node = &document.pages[0].children[0];
+                assert_eq!(
+                    node.active_effects().len(),
+                    1,
+                    "materialization must not hide imported effects"
+                );
+                assert!(
+                    matches!(node.active_effects()[0].effect, Effect::LayerBlur { radius } if radius == 3.0)
+                );
+                let strokes = node.active_strokes();
+                assert_eq!(strokes.len(), 2);
+                assert_eq!(strokes[0].options, strokes[1].options);
+                if explicit {
+                    assert_eq!(strokes[1].options.align, StrokeAlign::Outside);
+                }
+            }
+        }
+    }
 
     #[test]
     fn locks_are_per_layer_and_alignment_only_applies_to_text() {

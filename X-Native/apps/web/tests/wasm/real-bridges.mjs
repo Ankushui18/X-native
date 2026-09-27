@@ -124,6 +124,25 @@ try {
     assert.equal(calls[format], 2);
     console.log(`PASS native ${format} state: four alignments, locked/unlocked text${format === "sketch" ? ", Cocoa line-height/tracking" : ""}; wrapper=${getEngineInfo().importBackend}`);
   }
+  const strokeBytes = fs.readFileSync("e2e/fixtures/stroke-options.fig");
+  const strokeCandidate = decodeRustImport(glue.importFigToX(strokeBytes));
+  assert.equal(strokeCandidate.nodes.length, 3);
+  for (const [i, [align, cap, join, dash, gap]] of [
+    ["inside", "round", "bevel", 8, 4], ["center", "square", "round", 6, 6], ["outside", "none", "miter", undefined, undefined],
+  ].entries()) {
+    const n = strokeCandidate.nodes[i];
+    assert.equal(n.strokeAlign, align); assert.equal(n.strokeCap, cap); assert.equal(n.strokeJoin, join);
+    assert.equal(n.strokeDash, dash); assert.equal(n.strokeGap, gap);
+    assert.equal(n.strokeWidth, 2); assert.equal(n.strokePaint, "#000000");
+  }
+  const strokeData = strokeBytes.buffer.slice(strokeBytes.byteOffset, strokeBytes.byteOffset + strokeBytes.byteLength);
+  assert.ok(importsEquivalent(await importFig(strokeData), await figTs(strokeData)));
+  assert.equal(calls.fig, 3);
+  console.log(`PASS native FIG stroke options: three alignments/caps/joins, solid/single/pair dashes; wrapper=${getEngineInfo().importBackend}`);
+  const strokedSvg = decodeRustImport(glue.importSvgToX('<svg width="200" height="120"><rect width="80" height="50" fill="#ff0000" stroke="#000000" stroke-width="2" stroke-linecap="round" stroke-linejoin="bevel" stroke-dasharray="8 4"/></svg>'));
+  assert.equal(strokedSvg.nodes[0].strokeCap, "round"); assert.equal(strokedSvg.nodes[0].strokeJoin, "bevel");
+  assert.equal(strokedSvg.nodes[0].strokeDash, 8); assert.equal(strokedSvg.nodes[0].strokeGap, 4);
+  console.log("PASS native SVG materialized solid stroke adapter");
   assert.equal(calls.svg, 2);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");

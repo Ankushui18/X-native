@@ -29,6 +29,40 @@ function paint(v: unknown): string {
   }
   return p.c;
 }
+/** Narrow identity mapping for materialized stacks created by native stroke
+ * options. Never flatten multiple paints or ignore stack overrides of legacy
+ * fields. The import contract has only one symmetric stroke and a dash pair. */
+function simpleStacks(n: Obj, out: ImportedNode) {
+  if (!Array.isArray(n.fill_layers) || !Array.isArray(n.stroke_layers) || !Array.isArray(n.effect_layers)
+    || n.fill_layers.length !== 1 || n.stroke_layers.length > 1 || n.effect_layers.length) {
+    throw new Error("Unsupported Rust visual stacks");
+  }
+  const identity = (layer: Obj) => {
+    if (layer.opacity !== 1 || layer.visible !== true || layer.blend !== "normal") throw new Error("Unsupported Rust stack compositing");
+  };
+  const fill = object(n.fill_layers[0]); keys(fill, ["paint", "opacity", "visible", "blend"]); identity(fill);
+  if (paint(fill.paint) !== out.fill) throw new Error("Rust fill stack overrides legacy paint");
+  if (!n.stroke_layers.length) {
+    if (n.stroke != null) throw new Error("Rust empty stroke stack overrides legacy stroke");
+    return;
+  }
+  if (n.stroke == null) throw new Error("Rust stroke stack has no matching legacy stroke");
+  const stroke = object(n.stroke_layers[0]);
+  keys(stroke, ["color", "width", "opacity", "visible", "blend", "align", "cap_start", "cap_end", "join", "dash", "dash_offset", "miter"]);
+  identity(stroke);
+  if (paint({ t: "solid", c: stroke.color }) !== out.strokePaint || number(stroke.width) !== out.strokeWidth) throw new Error("Rust stroke stack overrides legacy stroke");
+  const align = stroke.align, cap = stroke.cap_start, join = stroke.join;
+  if (align !== "inside" && align !== "center" && align !== "outside") throw new Error("Unsupported Rust stroke alignment");
+  if ((cap !== "none" && cap !== "round" && cap !== "square") || cap !== stroke.cap_end) throw new Error("Unsupported Rust stroke caps");
+  if (join !== "miter" && join !== "bevel" && join !== "round") throw new Error("Unsupported Rust stroke join");
+  if (stroke.dash_offset !== 0 || stroke.miter !== 4) throw new Error("Unsupported Rust stroke phase/miter");
+  if (!Array.isArray(stroke.dash) || stroke.dash.length > 2) throw new Error("Unsupported Rust dash pattern");
+  const dash = stroke.dash.map(number);
+  if (dash.some((v) => v <= 0)) throw new Error("Unsupported Rust dash segment");
+  out.strokeAlign = align; out.strokeCap = cap; out.strokeJoin = join;
+  if (dash.length) { out.strokeDash = dash[0]; out.strokeGap = dash[1] ?? dash[0]; }
+}
+
 function vector(v: unknown): { path: PathPoint[]; vectorNetwork: VectorNetwork; closed: boolean } {
   if (!Array.isArray(v) || v.length > 100_000) throw new Error("Invalid Rust path");
   const vertices: VectorNetwork["vertices"] = [], segments: VectorNetwork["segments"] = [], loops: number[][] = [];
@@ -109,7 +143,7 @@ export function decodeRustImport(payload: string): ImportResult {
   function convert(value: unknown, depth = 0): ImportedNode {
     if (++count > 100_000 || depth > 256) throw new Error("Rust import exceeds document limits");
     const n = object(value), kind = object(n.kind);
-    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow", "origin", ...(kind.t === "text" ? ["bindings", "text_align"] : [])]);
+    keys(n, ["id", "name", "kind", "x", "y", "w", "h", "rotation", "opacity", "visible", "locked", "fill", "stroke", "children", "corners", "smoothing", "overflow", "origin", "fill_layers", "stroke_layers", "effect_layers", ...(kind.t === "text" ? ["bindings", "text_align"] : [])]);
     keys(kind, kind.t === "text" ? ["t", "text"] : ["t", "radius", "path"]);
     if (!["rect", "ellipse", "line", "frame", "group", "vector", "text"].includes(String(kind.t))) {
       throw new Error("Unsupported Rust layer kind; use TS importer");
@@ -175,6 +209,7 @@ export function decodeRustImport(payload: string): ImportResult {
       if (out.strokeWidth < 0) throw new Error("Invalid Rust stroke width");
       out.strokeVisible = out.strokeWidth > 0;
     }
+    if (n.fill_layers !== undefined || n.stroke_layers !== undefined || n.effect_layers !== undefined) simpleStacks(n, out);
     if (kind.radius != null && number(kind.radius) !== 0) out.cornerRadii = Array(4).fill(number(kind.radius)) as [number, number, number, number];
     if (n.corners != null) {
       if (!Array.isArray(n.corners) || n.corners.length !== 4) throw new Error("Invalid Rust corners");

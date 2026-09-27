@@ -37,10 +37,10 @@ FIELDS={
  "NodeChange":[("guid","GUID",1),("type","string",2),("name","string",3),("visible","bool",4),
                ("opacity","float",5),("size","Vector",6),("transform","Matrix",7),
                ("fillPaints","Paint",8),("strokePaints","Paint",9),("strokeWeight","float",10),
-               ("cornerRadius","float",11),("characters","string",12),("fontSize","float",13),("phase","string",14),("locked","bool",15),("textAlignHorizontal","string",16)],
+               ("cornerRadius","float",11),("characters","string",12),("fontSize","float",13),("phase","string",14),("locked","bool",15),("textAlignHorizontal","string",16),("strokeAlign","string",17),("strokeCap","string",18),("strokeJoin","string",19),("strokeDashes","float",20)],
  "Message":[("nodeChanges","NodeChange",1)],
 }
-ARRAY={("NodeChange","fillPaints"),("NodeChange","strokePaints"),("Message","nodeChanges")}
+ARRAY={("NodeChange","strokeDashes"),("NodeChange","fillPaints"),("NodeChange","strokePaints"),("Message","nodeChanges")}
 
 sch=bytearray(); sch+=varuint(len(defs))
 for d in defs:
@@ -57,7 +57,7 @@ def paint(c):  # message
     return bytes(out)
 def matrix(x,y): return varfloat(1)+varfloat(0)+varfloat(x)+varfloat(0)+varfloat(1)+varfloat(y)
 
-def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,fs=0,locked=False,align=None):
+def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,fs=0,locked=False,align=None,stroke_align=None,cap=None,join=None,dashes=None):
     o=bytearray()
     o+=varuint(1)+varuint(sid)+varuint(lid)
     o+=varuint(2)+s(ty); o+=varuint(3)+s(name)
@@ -72,6 +72,11 @@ def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,
         o+=varuint(12)+s(chars); o+=varuint(13)+varfloat(fs)
     if locked: o+=varuint(15)+bytes([1])
     if align is not None: o+=varuint(16)+s(align)
+    for field,value in [(17,stroke_align),(18,cap),(19,join)]:
+        if value is not None: o+=varuint(field)+s(value)
+    if dashes is not None:
+        o+=varuint(20)+varuint(len(dashes))
+        for dash in dashes: o+=varfloat(dash)
     o+=varuint(0)
     return bytes(o)
 
@@ -91,6 +96,17 @@ if state:
              chars="State " + align,fs=18,locked=(i == 2),align=align)
         for i,align in enumerate(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"])
     ]
+strokes = "--strokes" in sys.argv
+if strokes:
+    nodes = [node(1,1,"CANVAS","Strokes",0,0,0,0)] + [
+        node(1,i+2,"RECTANGLE",align,100,50,20+i*120,40,fill=color(1,0,0),
+             stroke=color(0,0,0),sw=2,stroke_align=align,cap=cap,join=join,dashes=dash)
+        for i,(align,cap,join,dash) in enumerate([
+            ("INSIDE","ROUND","BEVEL",[8,4]),
+            ("CENTER","SQUARE","ROUND",[6]),
+            ("OUTSIDE","NONE","MITER",[]),
+        ])
+    ]
 msg+=varuint(1)+varuint(len(nodes))
 for n in nodes: msg+=n
 msg+=varuint(0)
@@ -103,7 +119,7 @@ canvas=bytearray(b"fig-kiwi"+struct.pack("<I",1))
 for chunk in (raw_deflate(bytes(sch)), raw_deflate(bytes(msg))):
     canvas+=struct.pack("<I",len(chunk))+chunk
 
-target = Path(__file__).with_name("state-text.fig") if state else Path("/tmp/test.fig")
+target = Path(__file__).with_name("stroke-options.fig") if strokes else Path(__file__).with_name("state-text.fig") if state else Path("/tmp/test.fig")
 z=zipfile.ZipFile(target,"w",zipfile.ZIP_DEFLATED)
 entry = zipfile.ZipInfo("canvas.fig", date_time=(2026,9,27,0,0,0))
 entry.compress_type = zipfile.ZIP_DEFLATED

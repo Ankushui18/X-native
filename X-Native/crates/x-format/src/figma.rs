@@ -656,6 +656,43 @@ fn image_ref(node: &V) -> Option<&str> {
         .find_map(|f| s(f, "imageRef"))
 }
 
+fn figma_stroke_options(node: &V) -> x_core::StrokeOptions {
+    use x_core::{StrokeAlign, StrokeCap, StrokeJoin, StrokeOptions};
+    let cap = match s(node, "strokeCap") {
+        Some("ROUND") => StrokeCap::Round,
+        Some("SQUARE") => StrokeCap::Square,
+        Some("LINE_ARROW") => StrokeCap::Arrow,
+        Some("TRIANGLE_ARROW") => StrokeCap::Triangle,
+        _ => StrokeCap::None,
+    };
+    StrokeOptions {
+        align: match s(node, "strokeAlign") {
+            Some("CENTER") => StrokeAlign::Center,
+            Some("OUTSIDE") => StrokeAlign::Outside,
+            _ => StrokeAlign::Inside,
+        },
+        cap_start: cap,
+        cap_end: cap,
+        join: match s(node, "strokeJoin") {
+            Some("ROUND") => StrokeJoin::Round,
+            Some("BEVEL") => StrokeJoin::Bevel,
+            _ => StrokeJoin::Miter,
+        },
+        dash: node
+            .get("strokeDashes")
+            .and_then(V::arr)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(V::num)
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        ..StrokeOptions::default()
+    }
+}
+
 fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<ImportNode> {
     let ty = s(node, "type")?;
     let (ax, ay, w, h) = bbox(node);
@@ -866,6 +903,7 @@ fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<Impor
         let weight = n_or(node, "strokeWeight", 1.0);
         if let Some(p) = paints.next() {
             ir.stroke = Some((p, weight));
+            ir.stroke_options = Some(figma_stroke_options(node));
         }
         // any additional stroke paints stack on top (same weight — Figma
         // only exposes one strokeWeight per node regardless of stack depth)
