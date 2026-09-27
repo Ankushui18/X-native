@@ -97,13 +97,16 @@ pub fn import_sketch_to_x(bytes: &[u8]) -> String {
 /// wrapped here. `Document::default()` supplies the empty variable/style/asset
 /// stores, which is what an SVG carries anyway.
 pub fn import_svg_to_x(text: &str) -> String {
-    envelope(svg_import::import_svg(text).map(|page| {
-        let doc = x_core::Document {
-            pages: vec![page],
-            ..Default::default()
-        };
-        save_x(&doc)
-    }))
+    import_envelope(
+        svg_import::import_svg_with_report(text).map(|(page, report)| {
+            let doc = x_core::Document {
+                pages: vec![page],
+                ..Default::default()
+            };
+            (doc, report)
+        }),
+        "svg",
+    )
 }
 
 /// Build identifier, so the web app can report which engine answered and a
@@ -170,6 +173,26 @@ mod tests {
         assert!(out.starts_with("{\"ok\":true"), "got: {out}");
         // The payload has to be the document, not an empty stub.
         assert!(out.len() > 64, "suspiciously small payload: {out}");
+    }
+
+    #[test]
+    fn svg_text_exports_the_same_source_box_metrics_as_the_web_importer() {
+        let out = import_svg_to_x(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["textMetrics"]["version"], 1);
+        let page = &value["doc"]["pages"][0];
+        let text = &page["children"][0];
+        let id = text["id"].as_str().unwrap();
+        assert_eq!(text["name"], "Keep this text");
+        assert_eq!(text["h"], 20.0, "persisted native text h remains font size");
+        assert_eq!(value["textMetrics"]["nodes"][id]["width"], 168.0);
+        assert_eq!(value["textMetrics"]["nodes"][id]["height"], 28.0);
+        assert_eq!(value["textMetrics"]["nodes"][id]["fontSize"], 20.0);
+        assert!(value.get("figmaCoordinates").is_none());
+        assert!(value.get("figmaAppearance").is_none());
     }
 
     #[test]

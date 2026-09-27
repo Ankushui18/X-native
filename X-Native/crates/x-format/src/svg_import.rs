@@ -1,4 +1,4 @@
-use crate::import_ir::{lower, ImportDoc, ImportKind, ImportNode};
+use crate::import_ir::{ImportDoc, ImportKind, ImportNode};
 #[allow(unused_imports)]
 use crate::*;
 use std::collections::HashMap;
@@ -18,8 +18,13 @@ use x_core::*;
 const MAX_SVG_DEPTH: usize = 512;
 
 pub fn import_svg(svg: &str) -> Result<Node, String> {
-    // parse -> shared Import IR -> lower() (ONE set of import semantics
-    // across svg///png), then unwrap the single page.
+    import_svg_with_report(svg).map(|(node, _)| node)
+}
+
+/// Import SVG with the shared fidelity report used by the optional web bridge.
+pub fn import_svg_with_report(svg: &str) -> Result<(Node, crate::ImportReport), String> {
+    // parse -> shared Import IR -> lower_with_report() (ONE set of import
+    // semantics), then unwrap the single page and retain source text metrics.
     let mut lexer = XmlLexer {
         s: svg.as_bytes(),
         i: 0,
@@ -40,16 +45,17 @@ pub fn import_svg(svg: &str) -> Result<Node, String> {
                     "svg",
                 );
                 parse_children(&mut lexer, &mut root, root_style, css_rules)?;
-                let doc = lower(ImportDoc {
+                let (doc, report) = crate::lower_with_report(ImportDoc {
                     source: "svg",
                     pages: vec![root],
                     ..Default::default()
                 });
-                return doc
+                let page = doc
                     .pages
                     .into_iter()
                     .next()
-                    .ok_or_else(|| "empty svg".into());
+                    .ok_or_else(|| "empty svg".to_string())?;
+                return Ok((page, report));
             }
             XmlTag::Eof => return Err("no <svg> element found".into()),
             _ => {}
@@ -1341,10 +1347,22 @@ fn parse_children(
             XmlTag::Text(content) => {
                 if let Some(top) = stack.last_mut() {
                     if let Some(mut t) = top.pending_text.take() {
-                        if let ImportKind::Text { content: c, .. } = &mut t.kind {
-                            *c = content;
+                        let content = content.trim();
+                        if !content.is_empty() {
+                            if let ImportKind::Text {
+                                content: c,
+                                size: Some(size),
+                                ..
+                            } = &mut t.kind
+                            {
+                                *c = content.to_string();
+                                t.w =
+                                    (content.encode_utf16().count() as f64 * *size * 0.6).max(8.0);
+                                t.h = *size * 1.4;
+                            }
+                            t.name = content.chars().take(40).collect();
+                            top.node.children.push(t);
                         }
-                        top.node.children.push(t);
                     }
                 }
             }
@@ -1511,10 +1529,20 @@ fn parse_children(
                         stack.last_mut().unwrap().node.children.push(n);
                     }
                     "text" => {
-                        let size = attr_num(&attrs, "font-size").unwrap_or(16.0);
+                        if self_closed {
+                            continue;
+                        }
+                        let size = attr_num(&attrs, "font-size")
+                            .filter(|size| *size != 0.0)
+                            .unwrap_or(16.0);
+                        let content = String::new();
+                        // Match the existing web SVG import estimate in UTF-16
+                        // code units (JavaScript String.length), not UTF-8 bytes.
+                        let width = (content.encode_utf16().count() as f64 * size * 0.6).max(8.0);
+                        let height = size * 1.4;
                         let mut n = with_id(ImportNode::new(ImportKind::Text {
-                            content: String::new(),
-                            size: None,
+                            content,
+                            size: Some(size),
                             font: None,
                             line_height: None,
                             letter_spacing: None,
@@ -1522,17 +1550,19 @@ fn parse_children(
                         }))
                         .at(
                             attr_num(&attrs, "x").unwrap_or(0.0),
-                            attr_num(&attrs, "y").unwrap_or(0.0) - size * 0.8,
+                            attr_num(&attrs, "y").unwrap_or(0.0) - size,
                         )
-                        .size(10.0 * size, size * 1.25)
-                        .fill(current_style.fill_paint(10.0 * size, size * 1.25));
+                        .size(width, height)
+                        .fill(current_style.fill_paint(width, height));
+                        n.name.clear();
+                        n.text_align = Some(match attr(&attrs, "text-anchor") {
+                            Some("middle") => TextAlign::Center,
+                            Some("end") => TextAlign::Right,
+                            _ => TextAlign::Left,
+                        });
                         n.opacity = current_style.opacity;
                         apply_transform_attr(&mut n, &attrs);
-                        if self_closed {
-                            stack.last_mut().unwrap().node.children.push(n);
-                        } else {
-                            stack.last_mut().unwrap().pending_text = Some(n);
-                        }
+                        stack.last_mut().unwrap().pending_text = Some(n);
                     }
                     "defs" => {
                         if !self_closed {
@@ -1601,6 +1631,22 @@ mod tests {
         s.push_str(&"</g>".repeat(depth));
         s.push_str("</svg>");
         assert!(import_svg(&s).is_ok(), "64 levels must import fine");
+    }
+
+    #[test]
+    fn svg_text_metrics_match_web_baseline_width_name_and_anchor_contract() {
+        let (page, report) = import_svg_with_report(r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##).unwrap();
+        let text = &page.children[0];
+        assert_eq!(text.id, "label");
+        assert_eq!(text.name, "Keep this text");
+        assert_eq!((text.transform.x, text.transform.y), (10.0, 10.0));
+        assert_eq!((text.w, text.h), (168.0, 20.0));
+        assert_eq!(text.text_align, TextAlign::Center);
+        let metrics = &report.text_metrics[&text.id];
+        assert_eq!(
+            (metrics.width, metrics.height, metrics.font_size),
+            (168.0, 28.0, Some(20.0))
+        );
     }
 
     #[test]

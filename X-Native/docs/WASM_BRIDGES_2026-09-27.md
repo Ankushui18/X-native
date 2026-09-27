@@ -687,3 +687,32 @@ not broad SVG parity.
 
 Evidence: `/home/user/wasm-svg-groups-{unit,tsc,build,browser,ci-final2}.log`;
 actual-module messages: `/home/user/wasm-svg-groups-ci-annotations.json`.
+
+## 16. Basic SVG text metrics and anchors (2026-09-27)
+
+Import-only continuation. The existing browser SVG importer already handles
+plain literal text, but the Rust candidate used synthetic widths/baselines and the
+WASM SVG envelope omitted text-metric metadata; therefore even basic text always
+fell back. The shared full-result oracle remains unchanged.
+
+### Fixes
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W28 — basic SVG text could never satisfy the web contract | Emit shared versioned text metrics for SVG imports; capture text content/name, UTF-16-compatible width estimate, source-box height, baseline top position, font size and `text-anchor` alignment | New Rust importer and wasm-envelope regression for “Keep this text” (200×120 SVG, 20px, middle anchor); real-module smoke requires the decoded candidate and wrapper to match the complete TS result |
+| W29 — rich SVG weight could be silently implied if routed natively | No weight inference added: the native adapter still reports only its existing 400 default, so non-400 text must fail the strict comparator and keep the TS result | Real-module smoke asserts weight 700 stays on the TS fallback |
+
+Only plain text representable by the current native typography contract is
+promoted. Complex SVG text/tspan/font styling remains guarded. Metrics describe
+the existing web importer’s approximate text-box convention, not measured font
+rendering or visual equivalence.
+
+### Verification
+
+- Rust workspace and actual-module smoke are **pending CI**; local Cargo/rustc are
+  unavailable.
+- Serial local web suite: **3,081/0**, 51 summaries; `tsc -b` and production build
+  pass. Local Chromium remains unavailable (`/tmp/chromium` missing).
+- Native-browser visual fidelity and complex SVG text remain **NOT VERIFIED**.
+
+Evidence: `/home/user/wasm-svg-text-{unit,tsc,build}.log`.

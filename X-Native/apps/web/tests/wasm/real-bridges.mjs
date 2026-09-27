@@ -87,9 +87,20 @@ try {
   console.log(`Transformed SVG wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}; equivalent=${importsEquivalent(transformedActual, transformedExpected)}`);
   assert.ok(importsEquivalent(transformedActual, transformedExpected), "transformed group fallback must retain the complete TS result");
   assert.equal(getEngineInfo().importBackend, "ts", "transformed groups remain guarded until their flattening is equivalent");
-  const text = '<svg width="200" height="120"><text x="10" y="30" font-size="20">Keep this text</text></svg>';
-  assert.ok(importsEquivalent(importSvg(text), svgTs(text)));
-  assert.equal(getEngineInfo().importBackend, "ts", "unmapped native typography must retain TS result");
+  const text = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
+  const textRaw = JSON.parse(glue.importSvgToX(text));
+  assert.equal(textRaw.textMetrics.version, 1);
+  const textCandidate = decodeRustImport(JSON.stringify(textRaw)), textExpected = svgTs(text);
+  assert.equal(textCandidate.nodes[0].name, "Keep this text");
+  assert.equal(textCandidate.nodes[0].textAlign, "center");
+  assert.deepEqual([textCandidate.nodes[0].x, textCandidate.nodes[0].y, textCandidate.nodes[0].w, textCandidate.nodes[0].h], [10, 10, 168, 28]);
+  delete textCandidate.pages; // same single-interchange-page adaptation used by choose()
+  assert.ok(importsEquivalent(textCandidate, textExpected), "basic SVG text candidate must match the complete TS contract");
+  assert.ok(importsEquivalent(importSvg(text), textExpected));
+  assert.equal(getEngineInfo().importBackend, "wasm", "literal SVG text should use the complete native result");
+  const boldText = '<svg width="200" height="120"><text x="10" y="30" font-size="20" font-weight="700">Keep this text</text></svg>';
+  assert.ok(importsEquivalent(importSvg(boldText), svgTs(boldText)));
+  assert.equal(getEngineInfo().importBackend, "ts", "unsupported SVG font weight remains guarded");
   for (const [format, nativeImport, tsImport] of [["fig", importFig, figTs], ["sketch", importSketch, sketchTs]]) {
     const bytes = fs.readFileSync(`e2e/fixtures/sample.${format}`);
     const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
