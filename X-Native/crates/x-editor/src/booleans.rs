@@ -57,8 +57,12 @@ impl Editor {
             return Err("Boolean requires two distinct selected layers");
         }
         let (ida, idb) = (self.selection[0].clone(), self.selection[1].clone());
-        let na = find(&self.root, &ida).ok_or("first Boolean operand missing")?.clone();
-        let nb = find(&self.root, &idb).ok_or("second Boolean operand missing")?.clone();
+        let na = find(&self.root, &ida)
+            .ok_or("first Boolean operand missing")?
+            .clone();
+        let nb = find(&self.root, &idb)
+            .ok_or("second Boolean operand missing")?
+            .clone();
         let a = PositionedPath {
             cmds: node_to_path(&na).ok_or("unsupported first Boolean operand")?,
             offset: (na.transform.x, na.transform.y),
@@ -68,12 +72,17 @@ impl Editor {
             offset: (nb.transform.x, nb.transform.y),
         };
         let rings = boolean_web_raster_shaped(op, &[a, b])?;
-        if rings.len() > 512 || rings.iter().any(|ring| ring.len() < 3) ||
-            rings.iter().map(Vec::len).sum::<usize>() > 4096 {
+        if rings.len() > 512
+            || rings.iter().any(|ring| ring.len() < 3)
+            || rings.iter().map(Vec::len).sum::<usize>() > 4096
+        {
             return Err("Boolean result exceeds the bounded vector dialect");
         }
         let (mut min_x, mut min_y, mut max_x, mut max_y) = (
-            f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
         );
         for &(x, y) in rings.iter().flatten() {
             min_x = min_x.min(x);
@@ -108,8 +117,12 @@ impl Editor {
             .find(|id| find(&self.root, id).is_none())
             .ok_or("cannot allocate unique Boolean result id")?;
         let mut result = Node::vector(
-            &new_id, min_x, min_y, (max_x - min_x).max(1.0),
-            (max_y - min_y).max(1.0), path,
+            &new_id,
+            min_x,
+            min_y,
+            (max_x - min_x).max(1.0),
+            (max_y - min_y).max(1.0),
+            path,
         );
         result.fill = na.fill.clone();
         result.name = format!("{:?}", op);
