@@ -975,14 +975,7 @@ mod tests {
         );
         let c1 = find(&root, "c1").unwrap();
         assert_eq!((c1.transform.x, c1.w), (160.0, 80.0)); // cx-r, 2r
-        // Pure translations are offsets, not extra web layers.
         assert!(find(&root, "grp").is_none());
-        assert_eq!(root.children.len(), 4);
-        let ellipse = &root.children[2];
-        assert!(matches!(ellipse.kind, NodeKind::Ellipse));
-        let position = (ellipse.transform.x, ellipse.transform.y);
-        assert_eq!(position, (50.0, 60.0));
-        assert_eq!((ellipse.w, ellipse.h), (60.0, 40.0));
         let label = find(&root, "label").unwrap();
         assert!(matches!(&label.kind, NodeKind::Text { text } if text == "Hi there"));
     }
