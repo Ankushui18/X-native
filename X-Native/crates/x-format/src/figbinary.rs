@@ -480,6 +480,65 @@ fn stack_json(nc: &V) -> Vec<(String, V)> {
 
 // ------------------------------------------------------------- main mapping
 
+/// Preserve ordered document children, but also recover canvases and layers
+/// whose parent record is absent (older/partial archives). A layer attached to
+/// a KNOWN parent is never promoted: in particular, hidden component canvases
+/// must not leak their internals onto a visible page.
+fn canvas_children(
+    nodes: &[V],
+    kids: &HashMap<String, Vec<usize>>,
+    known: &HashMap<String, usize>,
+    doc_id: &str,
+) -> Vec<(usize, Vec<usize>)> {
+    let parent = |n: &V| {
+        n.get("parentIndex")
+            .and_then(|p| p.get("guid"))
+            .and_then(gid)
+    };
+    let orphan = |n: &V| parent(n).is_none_or(|id| !known.contains_key(&id));
+    let mut page_ids = kids.get(doc_id).cloned().unwrap_or_default();
+    let mut seen: std::collections::HashSet<usize> = page_ids.iter().copied().collect();
+    for (i, n) in nodes.iter().enumerate() {
+        if gstr(n, "type") == Some("CANVAS") && orphan(n) && seen.insert(i) {
+            page_ids.push(i);
+        }
+    }
+    let mut pages: Vec<(usize, Vec<usize>)> = page_ids
+        .into_iter()
+        .filter_map(|i| {
+            let n = &nodes[i];
+            if gstr(n, "type") != Some("CANVAS")
+                || gbool(n, "internalOnly") == Some(true)
+                || gbool(n, "visible") == Some(false)
+            {
+                return None;
+            }
+            let children = guid_of(n)
+                .and_then(|id| kids.get(&id))
+                .cloned()
+                .unwrap_or_default();
+            Some((i, children))
+        })
+        .collect();
+    let orphans: Vec<usize> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, n)| {
+            (!matches!(gstr(n, "type"), Some("DOCUMENT" | "CANVAS")) && orphan(n)).then_some(i)
+        })
+        .collect();
+    // Match the web reader: first otherwise-empty page consumes orphans;
+    // if all pages already have children, append them to the first page.
+    let target = pages
+        .iter()
+        .position(|(_, children)| children.is_empty())
+        .unwrap_or(0);
+    if let Some((_, children)) = pages.get_mut(target) {
+        children.extend(orphans);
+    }
+    pages
+}
+
 /// Import a `.fig` file's bytes (the ZIP container, not the raw canvas).
 pub fn import_fig_bytes(bytes: &[u8]) -> Result<Document, String> {
     import_fig_bytes_with_report(bytes).map(|(d, _)| d)
@@ -761,8 +820,7 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
     }
 
     let mut pages = Vec::new();
-    let page_list: Vec<usize> = kids.get(&doc_id).cloned().unwrap_or_default();
-    for &pi in &page_list {
+    for (pi, child_list) in canvas_children(&nodes, &kids, &index, &doc_id) {
         let nc = &nodes[pi];
         if gstr(nc, "type") != Some("CANVAS") {
             continue;
@@ -781,8 +839,8 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
             ("children".into(), V::Arr(vec![])),
         ]);
         let mut kidsout = Vec::new();
-        if let Some(list) = kids.get(&pid) {
-            for &c in list {
+        {
+            for c in child_list {
                 if let Some(cn) = emit_node(
                     c,
                     &nodes,
@@ -917,5 +975,75 @@ fn write_v(v: &V, s: &mut String) {
             }
             s.push('}');
         }
+    }
+}
+
+#[cfg(test)]
+mod orphan_page_tests {
+    use super::*;
+
+    fn record(kind: &str, id: usize, parent: Option<usize>, internal: bool) -> V {
+        let guid = |n| {
+            obj(vec![
+                ("sessionID".into(), V::Num(0.0)),
+                ("localID".into(), V::Num(n as f64)),
+            ])
+        };
+        let mut fields = vec![
+            ("type".into(), V::Str(kind.into())),
+            ("guid".into(), guid(id)),
+            ("internalOnly".into(), V::Bool(internal)),
+        ];
+        if let Some(p) = parent {
+            fields.push(("parentIndex".into(), obj(vec![("guid".into(), guid(p))])));
+        }
+        obj(fields)
+    }
+
+    #[test]
+    fn recovers_missing_parents_without_leaking_hidden_canvas_children() {
+        let nodes = vec![
+            record("DOCUMENT", 0, None, false),
+            record("CANVAS", 1, Some(0), false),
+            record("CANVAS", 2, Some(0), true),
+            record("RECTANGLE", 3, Some(2), false),
+            record("RECTANGLE", 4, Some(99), false),
+            record("RECTANGLE", 5, Some(1), false),
+            record("CANVAS", 6, None, false),
+        ];
+        let known = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (guid_of(n).unwrap(), i))
+            .collect();
+        let kids = HashMap::from([
+            ("0:0".into(), vec![1, 2]),
+            ("0:1".into(), vec![5]),
+            ("0:2".into(), vec![3]),
+        ]);
+        assert_eq!(
+            canvas_children(&nodes, &kids, &known, "0:0"),
+            vec![(1, vec![5]), (6, vec![4])]
+        );
+    }
+
+    #[test]
+    fn document_page_order_is_kept_and_orphans_are_not_duplicated() {
+        let nodes = vec![
+            record("DOCUMENT", 0, None, false),
+            record("CANVAS", 1, Some(0), false),
+            record("CANVAS", 2, Some(0), false),
+            record("RECTANGLE", 3, None, false),
+        ];
+        let known = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (guid_of(n).unwrap(), i))
+            .collect();
+        let kids = HashMap::from([("0:0".into(), vec![2, 1])]);
+        assert_eq!(
+            canvas_children(&nodes, &kids, &known, "0:0"),
+            vec![(2, vec![3]), (1, vec![])]
+        );
     }
 }

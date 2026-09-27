@@ -27,8 +27,19 @@ await test("all pages and nested children retained", () => {
   assert.equal(r.pages.length, 2); assert.equal(r.pages[1].name, "Page 2"); assert.equal(r.nodes[0].children.length, 1);
 });
 await test("visibility, locks, rotation, opacity and strokes map explicitly", () => {
-  const n = decodeRustImport(envelope([page([rect({ visible: false, locked: true, rotation: 35, opacity: 0.4, stroke: { color: "#01020380", width: 2 } })])])).nodes[0];
-  assert.equal(n.hidden, true); assert.equal(n.locked, true); assert.equal(n.rotation, 35); assert.equal(n.opacity, 0.4); assert.equal(n.strokePaint, "#01020380"); assert.equal(n.strokeWidth, 2);
+  const n = decodeRustImport(envelope([page([rect({ visible: false, locked: true, rotation: Math.PI / 2, opacity: 0.4, stroke: { color: "#01020380", width: 2 } })])])).nodes[0];
+  assert.equal(n.hidden, true); assert.equal(n.locked, true); assert.equal(n.rotation, 90); assert.equal(n.opacity, 0.4); assert.equal(n.strokePaint, "#01020380"); assert.equal(n.strokeWidth, 2);
+});
+await test("negative and half-turn radians map to web degrees", () => {
+  for (const [rotation, expected] of [[-Math.PI / 2, -90], [Math.PI, 180]]) {
+    assert.equal(decodeRustImport(envelope([page([rect({ rotation })])])).nodes[0].rotation, expected);
+  }
+});
+await test("angle conversion overflow declines rather than producing Infinity", () => {
+  assert.throws(() => decodeRustImport(envelope([page([rect({ rotation: 1e308 })])])), /Invalid Rust document number/);
+});
+await test("unsupported field diagnostics identify the unmapped schema keys", () => {
+  assert.throws(() => decodeRustImport(envelope([page([rect({ bindings: { font: "Inter" } })])])), /properties: bindings/);
 });
 await test("opaque black vs transparent black", () => {
   for (const [c, visible] of [["#000000", true], ["#00000000", false]]) assert.equal(decodeRustImport(envelope([page([rect({ fill: { t: "solid", c } })])])).nodes[0].fillVisible, visible);

@@ -33,6 +33,8 @@ assert.match(glue.engineVersion(), /^x-wasm /);
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect id="λ-box" x="10" y="10" width="80" height="50" fill="#ff0000"/></svg>';
 const imported = decodeRustImport(glue.importSvgToX(svg));
 assert.ok(imported.nodes.length > 0, "native pages are direct nodes, not Page.root");
+const rotated = decodeRustImport(glue.importSvgToX('<svg width="200" height="120"><rect id="box" x="0" y="0" width="80" height="50" transform="rotate(90)" fill="#ff0000"/></svg>'));
+assert.ok(Math.abs(rotated.nodes[0].rotation - 90) < 1e-9, "native radians must become web degrees");
 assert.equal(JSON.parse(glue.importFigToX(new Uint8Array([1, 2, 3]))).ok, false);
 assert.equal(JSON.parse(glue.importSketchToX(new Uint8Array([1, 2, 3]))).ok, false);
 console.log("PASS real wasm-bindgen: version, UTF-8 SVG/schema, binary error envelopes");
@@ -50,6 +52,14 @@ try {
   for (const [format, nativeImport, tsImport] of [["fig", importFig, figTs], ["sketch", importSketch, sketchTs]]) {
     const bytes = fs.readFileSync(`e2e/fixtures/sample.${format}`);
     const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const raw = JSON.parse(format === "fig" ? glue.importFigToX(bytes) : glue.importSketchToX(bytes));
+    assert.equal(raw.ok, true, `${format} native parser must import the real fixture: ${raw.error}`);
+    const names = (n) => [n.name ?? n.id, ...(n.children ?? []).flatMap(names)];
+    const nativeNames = raw.doc.pages.flatMap(names);
+    for (const expectedName of format === "fig" ? ["Page 1", "Home", "FigCard", "FigDot", "FigLabel"] : ["Page 1", "Home", "Card", "Dot", "Label", "Grp", "Inner"]) {
+      assert.ok(nativeNames.includes(expectedName), `${format} native import lost layer name ${expectedName}`);
+    }
+    console.log(`PASS native ${format} parser: ${raw.doc.pages.length} page(s), source layer names retained`);
     const expected = await tsImport(data);
     const actual = await nativeImport(data);
     assert.ok(actual.nodes.length > 0, `${format} fixture must contain imported layers`);

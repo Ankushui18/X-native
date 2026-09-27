@@ -65,3 +65,42 @@ fn non_fig_bytes_fail_cleanly() {
     let zip_of_junk = b"PK\x03\x04junkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunkjunk";
     assert!(import_fig_bytes(&zip_of_junk[..]).is_err() || true); // parser-tolerant: at worst Err, never panic
 }
+
+#[test]
+fn parentless_web_fixture_recovers_its_canvas_and_layers() {
+    // The committed web fixture has CANVAS and drawable records but no
+    // DOCUMENT or parentIndex. These were decoded, then silently discarded.
+    let bytes = include_bytes!("../../../apps/web/e2e/fixtures/sample.fig");
+    let doc = import_fig_bytes(bytes).expect("recover parentless archive");
+    assert_eq!(doc.pages.len(), 1);
+    assert_eq!(doc.pages[0].name, "Page 1");
+    let names: Vec<_> = doc.pages[0]
+        .children
+        .iter()
+        .map(|n| n.name.as_str())
+        .collect();
+    assert_eq!(names, ["Home", "FigCard", "FigDot", "FigLabel"]);
+    assert_eq!(doc.pages[0].children[1].w, 120.0);
+    assert_eq!(doc.pages[0].children[1].transform.x, 120.0);
+}
+
+#[test]
+fn sketch_fixture_preserves_page_and_nested_layer_names() {
+    let bytes = include_bytes!("../../../apps/web/e2e/fixtures/sample.sketch");
+    let doc = x_format::sketch::import_sketch(bytes).expect("Sketch fixture");
+    assert_eq!(doc.pages[0].name, "Page 1");
+    let home = &doc.pages[0].children[0];
+    assert_eq!(home.name, "Home");
+    assert_eq!(
+        home.id, "ab-1",
+        "IDs remain stable, separate from display names"
+    );
+    assert_eq!(
+        home.children
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Card", "Dot", "Label", "Grp"]
+    );
+    assert_eq!(home.children[3].children[0].name, "Inner");
+}

@@ -18,7 +18,8 @@ const text = (v: unknown): string => {
   return v;
 };
 function keys(v: Obj, allowed: string[]) {
-  if (Object.keys(v).some((k) => !allowed.includes(k))) throw new Error("Unsupported Rust document property");
+  const unsupported = Object.keys(v).filter((k) => !allowed.includes(k));
+  if (unsupported.length) throw new Error(`Unsupported Rust document properties: ${unsupported.join(", ")}`);
 }
 function paint(v: unknown): string {
   const p = object(v);
@@ -100,7 +101,8 @@ export function decodeRustImport(payload: string): ImportResult {
     const out: ImportedNode = {
       kind: kind.t as ImportedNode["kind"], name: text(n.name ?? n.id),
       x: number(n.x), y: number(n.y), w: number(n.w), h: number(n.h),
-      rotation: number(n.rotation), opacity: number(n.opacity),
+      // Native Transform serializes radians; the web import contract is degrees.
+      rotation: number(number(n.rotation) * 180 / Math.PI), opacity: number(n.opacity),
       fill, fillVisible: fill.length !== 9 || !fill.endsWith("00"), strokePaint: "#00000000", strokeWidth: 0, strokeVisible: false,
       hidden: n.visible === false, locked: n.locked === true,
     };

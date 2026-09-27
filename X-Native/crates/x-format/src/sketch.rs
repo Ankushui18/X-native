@@ -1045,6 +1045,9 @@ fn convert_layer(
         .map(|f| (f.x, f.y, f.w, f.h))
         .unwrap_or((x, y, w, h));
     let mut ir = ImportNode::new(kind).at(px, py).size(pw, ph);
+    if let Some(name) = s(layer, "name") {
+        ir = ir.named(name);
+    }
     if let Some(id) = s(layer, "do_objectID") {
         ir = ir.id(id);
     }
@@ -1153,6 +1156,9 @@ pub fn import_sketch_with_report(bytes: &[u8]) -> Result<(Document, crate::Impor
     }
     for pv in &page_values {
         let mut page_ir = ImportNode::new(ImportKind::Frame);
+        if let Some(name) = s(pv, "name") {
+            page_ir = page_ir.named(name);
+        }
         if let Some(id) = s(pv, "do_objectID") {
             page_ir = page_ir.id(id);
         }
