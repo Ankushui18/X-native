@@ -975,9 +975,14 @@ mod tests {
         );
         let c1 = find(&root, "c1").unwrap();
         assert_eq!((c1.transform.x, c1.w), (160.0, 80.0)); // cx-r, 2r
-        let grp = find(&root, "grp").unwrap();
-        assert_eq!((grp.transform.x, grp.transform.y), (50.0, 60.0));
-        assert_eq!(grp.children.len(), 1);
+        // The web SVG importer flattens pure translations: the group id is
+        // not an extra layer, but its offset still lands on the ellipse.
+        assert!(find(&root, "grp").is_none());
+        assert_eq!(root.children.len(), 4);
+        let ellipse = &root.children[2];
+        assert!(matches!(ellipse.kind, NodeKind::Ellipse));
+        assert_eq!((ellipse.transform.x, ellipse.transform.y), (50.0, 60.0));
+        assert_eq!((ellipse.w, ellipse.h), (60.0, 40.0));
         let label = find(&root, "label").unwrap();
         assert!(matches!(&label.kind, NodeKind::Text { text } if text == "Hi there"));
     }

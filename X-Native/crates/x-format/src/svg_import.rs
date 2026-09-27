@@ -1819,7 +1819,7 @@ mod tests {
         </svg>"##;
         let (page, report) = import_svg_with_report(svg).unwrap();
         let nodes = &page.children;
-        assert_eq!(nodes.len(), 4, "groups do not replace or drop their children");
+        assert_eq!(nodes.len(), 4);
         let ids: Vec<_> = nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids, ["box", "label", "after", "outside"]);
         assert_eq!((nodes[0].transform.x, nodes[0].transform.y), (11.0, 29.0));
@@ -1829,7 +1829,7 @@ mod tests {
         assert_eq!(nodes[0].opacity, 0.5);
         assert_eq!(nodes[1].opacity, 0.5);
         assert_eq!(report.text_metrics["label"].height, 14.0);
-        assert_eq!(nodes[1].h, 10.0, "native h remains the font size");
+        assert_eq!(nodes[1].h, 10.0); // native h is font size, not source box height
     }
 
     #[test]
@@ -1851,8 +1851,9 @@ mod tests {
             );
             let page = import_svg(&svg).unwrap();
             assert_eq!(page.children.len(), 1);
-            assert_eq!(page.children[0].id, "complex", "{transform}");
-            assert_eq!(page.children[0].children.len(), 1);
+            let group = &page.children[0];
+            assert_eq!(group.id, "complex", "{transform}");
+            assert_eq!(group.children.len(), 1);
         }
     }
 
