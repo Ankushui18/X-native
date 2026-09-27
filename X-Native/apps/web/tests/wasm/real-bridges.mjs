@@ -96,13 +96,22 @@ try {
   catch (error) { console.log(`Diff SVG text decode error: ${String(error)}`); throw error; }
   const textExpected = svgTs(text);
   console.log(`Diff SVG text candidate: ${JSON.stringify(textCandidate.nodes[0])}; expected: ${JSON.stringify(textExpected.nodes[0])}`);
-  assert.equal(textCandidate.nodes[0].name, "Keep this text");
+  assert.equal(textRaw.doc.pages[0].children[0].name, "label", "native SVG layer retains its source id as the name");
+  assert.equal(textCandidate.nodes[0].name, "label", "the adapter must not borrow a name from TS");
   assert.equal(textCandidate.nodes[0].textAlign, "center");
   assert.deepEqual([textCandidate.nodes[0].x, textCandidate.nodes[0].y, textCandidate.nodes[0].w, textCandidate.nodes[0].h], [10, 10, 168, 28]);
   delete textCandidate.pages; // same single-interchange-page adaptation used by choose()
-  assert.ok(importsEquivalent(textCandidate, textExpected), "basic SVG text candidate must match the complete TS contract");
+  const textDiff = differencePaths(textCandidate, textExpected);
+  assert.ok(importsEquivalent(textCandidate, textExpected), `basic SVG text candidate differs: ${textDiff.join(", ")}`);
   assert.ok(importsEquivalent(importSvg(text), textExpected));
   assert.equal(getEngineInfo().importBackend, "wasm", "literal SVG text should use the complete native result");
+  const unnamedText = '<svg width="200" height="120"><text x="10" y="30" font-size="20">Keep this text</text></svg>';
+  const unnamedCandidate = decodeRustImport(glue.importSvgToX(unnamedText));
+  assert.equal(unnamedCandidate.nodes[0].name, "Keep this text", "unnamed SVG text uses a content preview");
+  delete unnamedCandidate.pages;
+  assert.ok(importsEquivalent(unnamedCandidate, svgTs(unnamedText)), "unnamed SVG text candidate must match TS");
+  assert.ok(importsEquivalent(importSvg(unnamedText), svgTs(unnamedText)));
+  assert.equal(getEngineInfo().importBackend, "wasm", "unnamed SVG text should use native output");
   const boldText = '<svg width="200" height="120"><text x="10" y="30" font-size="20" font-weight="700">Keep this text</text></svg>';
   assert.ok(importsEquivalent(importSvg(boldText), svgTs(boldText)));
   assert.equal(getEngineInfo().importBackend, "ts", "unsupported SVG font weight remains guarded");
@@ -246,7 +255,7 @@ try {
   assert.equal(sourceCandidate.nodes[1].effects[0].visible, false);
   console.log("PASS native FIG source effects: hidden entries, spread, blend, show-behind; full candidate equivalent; wrapper=wasm");
   assert.equal(calls.fig, 6);
-  assert.equal(calls.svg, 4);
+  assert.equal(calls.svg, 6);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");
 

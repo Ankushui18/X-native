@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { decodeRustImport } from "../wasmImportAdapter.ts";
-import { initWasmBridge, __resetWasmForTests, importSvg, getEngineInfo } from "../wasmBridge.ts";
+import { initWasmBridge, __resetWasmForTests, importSvg, getEngineInfo, importsEquivalent } from "../wasmBridge.ts";
 import { importSvg as svgTs } from "../svgImport.ts";
 import { JSDOM } from "jsdom";
 let passed = 0, failed = 0;
@@ -76,6 +76,29 @@ await test("unknown variable schema declines", () => {
 });
 await test("orphan metadata cannot be accepted for a shape-only document", () => {
   const p = payload(layer({ kind: { t: "rect" } })); assert.throws(() => decode(p));
+});
+await test("SVG text id/name parity selects native only for the complete result", async () => {
+  const dom = new JSDOM("<!doctype html>"); globalThis.DOMParser = dom.window.DOMParser;
+  const svg = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
+  const n = layer({ id: "label", name: "label", kind: { t: "text", text: "Keep this text" }, x: 10, y: 10, w: 168, h: 20, text_align: "center" });
+  const page = layer({ id: "svg-root", name: "svg-root", kind: { t: "frame" }, x: 0, y: 0, w: 200, h: 120, children: [n], fill: { t: "solid", c: "#00000000" } });
+  const candidate = { ok: true, doc: { format: "x-native", version: 1, pages: [page] }, textMetrics: { version: 1, nodes: { label: metrics({ width: 168, height: 28, fontSize: 20 }) } } };
+  __resetWasmForTests();
+  try {
+    const expected = svgTs(svg);
+    const raw = decode(candidate);
+    assert.equal(raw.nodes[0].name, "label");
+    delete raw.pages; // choose() removes the single SVG interchange page, never a named design page
+    assert.ok(importsEquivalent(raw, expected), "candidate, not a TS-patched result, must match the whole SVG import");
+    await initWasmBridge(async () => ({ default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm test (rust)",
+      importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => JSON.stringify(candidate) }));
+    assert.ok(importsEquivalent(importSvg(svg), expected));
+    assert.equal(getEngineInfo().importBackend, "wasm");
+    n.name = "Keep this text"; // the last Rust importer revision used content instead of the explicit id
+    assert.deepEqual(importSvg(svg), expected);
+    assert.equal(getEngineInfo().importBackend, "ts");
+    assert.match(getEngineInfo().lastImportFallback, /differs/);
+  } finally { __resetWasmForTests(); delete globalThis.DOMParser; dom.window.close(); }
 });
 await test("text candidates still require the unchanged whole-result oracle", async () => {
   const dom = new JSDOM("<!doctype html>"); globalThis.DOMParser = dom.window.DOMParser;

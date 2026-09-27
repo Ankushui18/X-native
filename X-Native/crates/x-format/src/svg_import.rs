@@ -1360,7 +1360,11 @@ fn parse_children(
                                     (content.encode_utf16().count() as f64 * *size * 0.6).max(8.0);
                                 t.h = *size * 1.4;
                             }
-                            t.name = content.chars().take(40).collect();
+                            // Like the web importer, an explicit SVG id is the
+                            // layer name; otherwise use a content preview.
+                            if t.name.is_empty() {
+                                t.name = content.chars().take(40).collect();
+                            }
                             top.node.children.push(t);
                         }
                     }
@@ -1554,7 +1558,10 @@ fn parse_children(
                         )
                         .size(width, height)
                         .fill(current_style.fill_paint(width, height));
-                        n.name.clear();
+                        // Keep the source id as the web importer's display name,
+                        // even if lowering deduplicates the native node id.
+                        // A missing/empty id gets a content preview on Text.
+                        n.name = src_id.clone().unwrap_or_default();
                         n.text_align = Some(match attr(&attrs, "text-anchor") {
                             Some("middle") => TextAlign::Center,
                             Some("end") => TextAlign::Right,
@@ -1638,7 +1645,7 @@ mod tests {
         let (page, report) = import_svg_with_report(r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##).unwrap();
         let text = &page.children[0];
         assert_eq!(text.id, "label");
-        assert_eq!(text.name, "Keep this text");
+        assert_eq!(text.name, "label", "an explicit SVG id wins over text content");
         assert_eq!((text.transform.x, text.transform.y), (10.0, 10.0));
         assert_eq!((text.w, text.h), (168.0, 20.0));
         assert_eq!(text.text_align, TextAlign::Center);
@@ -1647,6 +1654,17 @@ mod tests {
             (metrics.width, metrics.height, metrics.font_size),
             (168.0, 28.0, Some(20.0))
         );
+    }
+
+    #[test]
+    fn svg_text_without_a_source_id_uses_a_content_preview_as_its_name() {
+        let (page, report) = import_svg_with_report(
+            r#"<svg width="200" height="120"><text x="10" y="30" font-size="20">Keep this text</text></svg>"#,
+        )
+        .unwrap();
+        let text = &page.children[0];
+        assert_eq!(text.name, "Keep this text");
+        assert_eq!(report.text_metrics[&text.id].height, 28.0);
     }
 
     #[test]
