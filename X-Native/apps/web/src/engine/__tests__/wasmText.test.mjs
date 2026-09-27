@@ -24,6 +24,14 @@ await test("known typography bindings map with correct line-height units", () =>
   const n = decode(payload(layer({ bindings: { font: "Inter", lh: "1.25", ls: "-0.5" }, text_align: "center" }))).nodes[0];
   assert.equal(n.fontFamily, "Inter"); assert.equal(n.lineHeight, 22.5); assert.equal(n.letterSpacing, -0.5); assert.equal(n.textAlign, "center");
 });
+await test("all native horizontal alignments and lock state survive", () => {
+  for (const text_align of ["left", "center", "right", "justified"]) {
+    for (const locked of [false, true]) {
+      const n = decode(payload(layer({ text_align, locked }))).nodes[0];
+      assert.equal(n.textAlign, text_align); assert.equal(n.locked, locked);
+    }
+  }
+});
 await test("explicit zero tracking survives", () => assert.equal(decode(payload(layer({ bindings: { ls: "0" } }))).nodes[0].letterSpacing, 0));
 await test("same names do not collide: metadata is keyed by native ID", () => {
   const p = payload(); p.doc.pages[0].children.push(layer({ id: "text-2", h: 24 }));

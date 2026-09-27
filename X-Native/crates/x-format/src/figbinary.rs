@@ -324,6 +324,9 @@ fn text_json(nc: &V, diags: &mut Vec<String>) -> Vec<(String, V)> {
     // Base style lives on the NodeChange itself (Figma's UI style fields
     // were hoisted onto the node in .fig; REST nests them under "style").
     let mut style: Vec<(String, V)> = vec![];
+    if let Some(align) = gstr(nc, "textAlignHorizontal") {
+        style.push(("textAlignHorizontal".into(), V::Str(align.into())));
+    }
     if let Some(fs) = gnum(nc, "fontSize").filter(|v| *v > 0.0) {
         style.push(("fontSize".into(), V::Num(fs)));
     }
@@ -748,6 +751,10 @@ pub fn import_fig_bytes_with_report(bytes: &[u8]) -> Result<(Document, ImportRep
             (
                 "visible".into(),
                 V::Bool(gbool(nc, "visible").unwrap_or(true)),
+            ),
+            (
+                "locked".into(),
+                V::Bool(gbool(nc, "locked").unwrap_or(false)),
             ),
             ("opacity".into(), V::Num(gnum(nc, "opacity").unwrap_or(1.0))),
             (

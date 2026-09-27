@@ -1,4 +1,5 @@
-import struct, zlib, zipfile, io
+import struct, zlib, zipfile, io, sys
+from pathlib import Path
 
 def varuint(v):
     out=bytearray()
@@ -36,7 +37,7 @@ FIELDS={
  "NodeChange":[("guid","GUID",1),("type","string",2),("name","string",3),("visible","bool",4),
                ("opacity","float",5),("size","Vector",6),("transform","Matrix",7),
                ("fillPaints","Paint",8),("strokePaints","Paint",9),("strokeWeight","float",10),
-               ("cornerRadius","float",11),("characters","string",12),("fontSize","float",13),("phase","string",14)],
+               ("cornerRadius","float",11),("characters","string",12),("fontSize","float",13),("phase","string",14),("locked","bool",15),("textAlignHorizontal","string",16)],
  "Message":[("nodeChanges","NodeChange",1)],
 }
 ARRAY={("NodeChange","fillPaints"),("NodeChange","strokePaints"),("Message","nodeChanges")}
@@ -56,7 +57,7 @@ def paint(c):  # message
     return bytes(out)
 def matrix(x,y): return varfloat(1)+varfloat(0)+varfloat(x)+varfloat(0)+varfloat(1)+varfloat(y)
 
-def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,fs=0):
+def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,fs=0,locked=False,align=None):
     o=bytearray()
     o+=varuint(1)+varuint(sid)+varuint(lid)
     o+=varuint(2)+s(ty); o+=varuint(3)+s(name)
@@ -69,6 +70,8 @@ def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,
     if radius: o+=varuint(11)+varfloat(radius)
     if chars is not None:
         o+=varuint(12)+s(chars); o+=varuint(13)+varfloat(fs)
+    if locked: o+=varuint(15)+bytes([1])
+    if align is not None: o+=varuint(16)+s(align)
     o+=varuint(0)
     return bytes(o)
 
@@ -80,6 +83,14 @@ nodes=[
  node(1,4,"ELLIPSE","FigDot",50,50,280,70,fill=color(0,0.8,0)),
  node(1,5,"TEXT","FigLabel",200,24,120,160,chars="Figma Hello",fs=18),
 ]
+# Separate regression fixture; the historical sample.fig is never overwritten.
+state = "--state" in sys.argv
+if state:
+    nodes = [node(1,1,"CANVAS","State",0,0,0,0)] + [
+        node(1,i+2,"TEXT",align,200,24,20,40+i*40,fill=color(0,0,0),
+             chars="State " + align,fs=18,locked=(i == 2),align=align)
+        for i,align in enumerate(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"])
+    ]
 msg+=varuint(1)+varuint(len(nodes))
 for n in nodes: msg+=n
 msg+=varuint(0)
@@ -92,6 +103,9 @@ canvas=bytearray(b"fig-kiwi"+struct.pack("<I",1))
 for chunk in (raw_deflate(bytes(sch)), raw_deflate(bytes(msg))):
     canvas+=struct.pack("<I",len(chunk))+chunk
 
-z=zipfile.ZipFile("/tmp/test.fig","w",zipfile.ZIP_DEFLATED)
-z.writestr("canvas.fig",bytes(canvas)); z.close()
-print("wrote /tmp/test.fig", __import__("os").path.getsize("/tmp/test.fig"),"bytes")
+target = Path(__file__).with_name("state-text.fig") if state else Path("/tmp/test.fig")
+z=zipfile.ZipFile(target,"w",zipfile.ZIP_DEFLATED)
+entry = zipfile.ZipInfo("canvas.fig", date_time=(2026,9,27,0,0,0))
+entry.compress_type = zipfile.ZIP_DEFLATED
+z.writestr(entry,bytes(canvas)); z.close()
+print("wrote", target, target.stat().st_size, "bytes")

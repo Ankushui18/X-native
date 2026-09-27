@@ -160,3 +160,48 @@ fn source_text_metrics_survive_native_lowering_for_both_file_formats() {
         assert!(matches!(&node.kind, x_core::NodeKind::Text { text } if text == expected));
     }
 }
+
+#[test]
+fn file_layer_locks_and_all_text_alignments_survive_lowering() {
+    use x_core::TextAlign;
+    for (format, bytes) in [
+        (
+            "fig",
+            &include_bytes!("../../../apps/web/e2e/fixtures/state-text.fig")[..],
+        ),
+        (
+            "sketch",
+            &include_bytes!("../../../apps/web/e2e/fixtures/state-text.sketch")[..],
+        ),
+    ] {
+        let doc = if format == "fig" {
+            import_fig_bytes(bytes).unwrap()
+        } else {
+            x_format::sketch::import_sketch(bytes).unwrap()
+        };
+        let children = &doc.pages[0].children;
+        assert_eq!(children.len(), 4);
+        for (i, align) in [
+            TextAlign::Left,
+            TextAlign::Center,
+            TextAlign::Right,
+            TextAlign::Justified,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let node = &children[i];
+            assert_eq!(node.text_align, *align, "{format}: {}", node.name);
+            assert_eq!(node.locked, i == 2, "{format}: {}", node.name);
+            if format == "sketch" {
+                assert_eq!(node.bindings.get("ls").map(String::as_str), Some("2.25"));
+                assert_eq!(node.bindings.get("lh").map(String::as_str), Some("1.5"));
+            }
+        }
+        let saved = x_format::save_x(&doc);
+        let reloaded = x_format::load_x(&saved).unwrap();
+        for (a, b) in children.iter().zip(&reloaded.pages[0].children) {
+            assert_eq!((a.locked, a.text_align), (b.locked, b.text_align));
+        }
+    }
+}

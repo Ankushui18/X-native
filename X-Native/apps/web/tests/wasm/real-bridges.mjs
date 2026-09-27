@@ -39,6 +39,22 @@ assert.equal(JSON.parse(glue.importFigToX(new Uint8Array([1, 2, 3]))).ok, false)
 assert.equal(JSON.parse(glue.importSketchToX(new Uint8Array([1, 2, 3]))).ok, false);
 console.log("PASS real wasm-bindgen: version, UTF-8 SVG/schema, binary error envelopes");
 
+// Bounded diagnostics only. This does not participate in the production guard
+// and never patches a native candidate with values from the TS oracle.
+function differencePaths(a, b, path = "", out = []) {
+  if (out.length >= 12 || Object.is(a, b)) return out;
+  if (a && b && typeof a === "object" && typeof b === "object" && Array.isArray(a) === Array.isArray(b)) {
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      // Match only the existing comparator's documented node defaults.
+      const node = typeof a.kind === "string" && typeof b.kind === "string";
+      const fallback = node && key === "children" ? [] : node && ["hidden", "locked"].includes(key) ? false : undefined;
+      differencePaths(a[key] ?? fallback, b[key] ?? fallback, path ? `${path}.${key}` : key, out);
+      if (out.length >= 12) break;
+    }
+  } else out.push(path);
+  return out;
+}
+
 // Exercise the production choose/fallback boundary, not only direct exports.
 const dom = new JSDOM("<!doctype html>");
 globalThis.DOMParser = dom.window.DOMParser;
@@ -84,11 +100,29 @@ try {
     console.log(`PASS native ${format} text: content, source 200x24, font size 18, literal typography`);
     console.log(`PASS native ${format} parser: ${raw.doc.pages.length} page(s), source layer names retained`);
     const expected = await tsImport(data);
+    console.log(`DIFF ${format} candidate paths (first 12): ${differencePaths(decoded, expected).join(", ") || "none"}`);
     const actual = await nativeImport(data);
     assert.ok(actual.nodes.length > 0, `${format} fixture must contain imported layers`);
     assert.ok(importsEquivalent(actual, expected), `${format} bridge must preserve the complete TS contract`);
     assert.equal(calls[format], 1, `${format} must invoke the real native export`);
     console.log(`PASS real ${format} wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}`);
+  }
+  for (const [format, nativeImport, tsImport] of [["fig", importFig, figTs], ["sketch", importSketch, sketchTs]]) {
+    const bytes = fs.readFileSync(`e2e/fixtures/state-text.${format}`);
+    const raw = format === "fig" ? glue.importFigToX(bytes) : glue.importSketchToX(bytes);
+    const decoded = decodeRustImport(raw);
+    assert.equal(decoded.nodes.length, 4);
+    for (const [i, align] of ["left", "center", "right", "justified"].entries()) {
+      const n = decoded.nodes[i];
+      assert.equal(n.textAlign, align); assert.equal(n.locked, i === 2);
+      assert.equal(n.text, `State ${align.toUpperCase()}`);
+      assert.equal(n.h, 24); assert.equal(n.fontSize, 18);
+      if (format === "sketch") { assert.equal(n.lineHeight, 27); assert.equal(n.letterSpacing, 2.25); }
+    }
+    const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    assert.ok(importsEquivalent(await nativeImport(data), await tsImport(data)), `${format} state fixture keeps the full TS contract`);
+    assert.equal(calls[format], 2);
+    console.log(`PASS native ${format} state: four alignments, locked/unlocked text${format === "sketch" ? ", Cocoa line-height/tracking" : ""}; wrapper=${getEngineInfo().importBackend}`);
   }
   assert.equal(calls.svg, 2);
 } finally { dom.window.close(); delete globalThis.DOMParser; }

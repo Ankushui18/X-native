@@ -842,6 +842,19 @@ fn convert(node: &V, parent_abs: (f64, f64), ctx: &mut FigmaCtx) -> Option<Impor
     ir.rotation = rotation;
     ir.opacity = opacity;
     ir.visible = visible;
+    ir.locked = node.get("locked").and_then(V::boolean).unwrap_or(false);
+    if ty == "TEXT" {
+        ir.text_align = node
+            .get("style")
+            .and_then(|st| s(st, "textAlignHorizontal"))
+            .and_then(|align| match align {
+                "LEFT" => Some(x_core::TextAlign::Left),
+                "CENTER" => Some(x_core::TextAlign::Center),
+                "RIGHT" => Some(x_core::TextAlign::Right),
+                "JUSTIFIED" => Some(x_core::TextAlign::Justified),
+                _ => None,
+            });
+    }
     ir.fill = fill;
     ir.layout = figma_auto_layout(node);
     if let Some(strokes) = node.get("strokes").and_then(V::arr) {

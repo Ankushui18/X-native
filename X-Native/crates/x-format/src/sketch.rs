@@ -777,6 +777,22 @@ fn flatten_boolean_group(
     })
 }
 
+// Cocoa keys occur in real Sketch archives; retain the existing aliases too.
+fn text_attributes(layer: &V) -> Option<&V> {
+    layer
+        .get("attributedString")?
+        .get("attributes")?
+        .arr()?
+        .first()?
+        .get("attributes")
+}
+
+fn paragraph_style(attrs: &V) -> Option<&V> {
+    attrs
+        .get("NSParagraphStyle")
+        .or_else(|| attrs.get("paragraphStyle"))
+}
+
 fn convert_layer(
     layer: &V,
     symbol_names: &HashMap<String, String>,
@@ -825,11 +841,7 @@ fn convert_layer(
             // from Sketch's UTF-16 location/length).
             let asv = layer.get("attributedString");
             let content = asv.and_then(|a| s(a, "string")).unwrap_or("").to_string();
-            let attrs = asv
-                .and_then(|a| a.get("attributes"))
-                .and_then(V::arr)
-                .and_then(|runs| runs.first())
-                .and_then(|r| r.get("attributes"));
+            let attrs = text_attributes(layer);
             let font = attrs
                 .and_then(|a| a.get("NSFontAttribute"))
                 .map(|f| (s(f, "name").unwrap_or("Helvetica"), n_or(f, "size", 0.0)));
@@ -849,10 +861,16 @@ fn convert_layer(
                     fill = Some(Paint::Solid(c));
                 }
             }
-            let ls = attrs.map(|a| n_or(a, "kerning", 0.0)).filter(|v| *v != 0.0);
+            let ls = attrs
+                .and_then(|a| n(a, "NSKern").or_else(|| n(a, "kerning")))
+                .filter(|v| *v != 0.0);
             let lh = attrs
-                .and_then(|a| a.get("paragraphStyle"))
-                .map(|p| n_or(p, "minimumLineHeight", 0.0))
+                .and_then(paragraph_style)
+                .and_then(|p| {
+                    n(p, "minimumLineHeight")
+                        .filter(|v| *v > 0.0)
+                        .or_else(|| n(p, "maximumLineHeight"))
+                })
                 .filter(|v| *v > 0.0)
                 .map(|m| m / size.unwrap_or(m));
             // rich runs: runs 1.. whose style differs from run 0's base
@@ -1045,6 +1063,19 @@ fn convert_layer(
         .map(|f| (f.x, f.y, f.w, f.h))
         .unwrap_or((x, y, w, h));
     let mut ir = ImportNode::new(kind).at(px, py).size(pw, ph);
+    if class == "text" {
+        ir.text_align = text_attributes(layer)
+            .and_then(paragraph_style)
+            .and_then(|p| n(p, "alignment"))
+            .and_then(|align| match align {
+                0.0 => Some(x_core::TextAlign::Left),
+                1.0 => Some(x_core::TextAlign::Right),
+                2.0 => Some(x_core::TextAlign::Center),
+                3.0 => Some(x_core::TextAlign::Justified),
+                // Natural/unknown alignment is not an explicit horizontal value.
+                _ => None,
+            });
+    }
     if let Some(name) = s(layer, "name") {
         ir = ir.named(name);
     }
@@ -1068,6 +1099,7 @@ fn convert_layer(
     ir.rotation = -rotation_deg.to_radians();
     ir.opacity = opacity(layer);
     ir.visible = b_or(layer, "isVisible", true);
+    ir.locked = b_or(layer, "isLocked", false);
 
     if flat.is_none() {
         if let Some(children) = layer.get("layers").and_then(|v| v.arr()) {
@@ -2231,5 +2263,44 @@ mod tests {
             "gradient border round-trips"
         );
         assert_eq!(n2.stroke.width, 3.0);
+    }
+}
+
+#[cfg(test)]
+mod cocoa_attribute_tests {
+    use super::*;
+
+    #[test]
+    fn cocoa_keys_win_over_aliases_and_zero_tracking_is_not_replaced() {
+        let layer = json::parse(
+            r#"{"_class":"text","frame":{"width":200,"height":40},
+            "attributedString":{"string":"A","attributes":[{"attributes":{
+                "NSFontAttribute":{"name":"Inter","size":20},
+                "NSKern":0,"kerning":9,
+                "NSParagraphStyle":{"alignment":1,"minimumLineHeight":24,"maximumLineHeight":30},
+                "paragraphStyle":{"alignment":2,"minimumLineHeight":60}
+            }}]}}"#,
+        )
+        .unwrap();
+        let ir = convert_layer(&layer, &HashMap::new(), &mut vec![]).unwrap();
+        assert_eq!(ir.text_align, Some(x_core::TextAlign::Right));
+        if let ImportKind::Text {
+            line_height,
+            letter_spacing,
+            ..
+        } = ir.kind
+        {
+            assert_eq!(
+                line_height,
+                Some(1.2),
+                "existing positive minimum takes precedence"
+            );
+            assert_eq!(
+                letter_spacing, None,
+                "explicit zero must not become alias tracking"
+            );
+        } else {
+            panic!("expected text");
+        }
     }
 }

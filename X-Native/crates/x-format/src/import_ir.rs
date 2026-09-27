@@ -104,6 +104,9 @@ pub struct ImportNode {
     pub pin: Option<(x_core::HPin, x_core::VPin)>,
     pub opacity: f32,
     pub visible: bool,
+    pub locked: bool,
+    /// Explicit source horizontal alignment; None keeps the native default.
+    pub text_align: Option<TextAlign>,
     pub children: Vec<ImportNode>,
 }
 
@@ -128,6 +131,8 @@ impl ImportNode {
             pin: None,
             opacity: 1.0,
             visible: true,
+            locked: false,
+            text_align: None,
             children: vec![],
         }
     }
@@ -525,6 +530,12 @@ fn lower_node(
         1.0
     };
     node.visible = ir.visible;
+    node.locked = ir.locked;
+    if matches!(node.kind, NodeKind::Text { .. }) {
+        if let Some(align) = ir.text_align {
+            node.text_align = align;
+        }
+    }
 
     for c in ir.children {
         let cn = lower_node(c, used, counter, false, asset_ids, text_metrics);
@@ -536,6 +547,30 @@ fn lower_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locks_are_per_layer_and_alignment_only_applies_to_text() {
+        let mut parent = ImportNode::new(ImportKind::Frame);
+        parent.locked = true;
+        parent.text_align = Some(TextAlign::Right);
+        parent
+            .children
+            .push(ImportNode::new(ImportKind::Rect { radius: 0.0 }));
+        let doc = lower(ImportDoc {
+            pages: vec![parent],
+            ..Default::default()
+        });
+        assert!(doc.pages[0].locked);
+        assert!(
+            !doc.pages[0].children[0].locked,
+            "do not bake inherited locks into children"
+        );
+        assert_eq!(
+            doc.pages[0].text_align,
+            TextAlign::Left,
+            "non-text nodes retain their default"
+        );
+    }
 
     #[test]
     fn text_metrics_use_final_ids_and_preserve_source_boxes() {

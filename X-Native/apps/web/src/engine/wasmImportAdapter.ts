@@ -136,7 +136,7 @@ export function decodeRustImport(payload: string): ImportResult {
       // still fails the whole-result TS comparison in wasmBridge.choose.
       out.fontWeight = 400;
       const align = n.text_align ?? "left";
-      if (align !== "left" && align !== "center" && align !== "right") throw new Error("Unsupported Rust text alignment");
+      if (align !== "left" && align !== "center" && align !== "right" && align !== "justified") throw new Error("Unsupported Rust text alignment");
       out.textAlign = align;
       if (n.bindings != null) {
         const bindings = object(n.bindings); keys(bindings, ["font", "lh", "ls"]);
