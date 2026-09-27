@@ -72,6 +72,7 @@ const CEILING = {
   "Rulers.tsx": [0, 0, 0, 0, 0],
   "Tooltip.tsx": [1, 0, 0, 0, 0],
   "ZenHUD.tsx": [16, 14, 9, 6, 0],
+  "announce.tsx": [0, 0, 0, 0, 0],
   "chrome.tsx": [50, 4, 40, 64, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],

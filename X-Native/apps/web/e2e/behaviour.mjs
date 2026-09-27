@@ -3546,6 +3546,117 @@ for (const [label, payload] of [
   await p.close();
 }
 
+// 49. PM-U8: the app says it out loud ----------------------------------------
+{
+  const p = await page();
+  await rows(p);
+
+  /* ── the status region exists before it has anything to say ── */
+  const quiet = await p.evaluate(() => {
+    const st = document.querySelector('[role="status"]');
+    const cs = st ? getComputedStyle(st) : null;
+    return {
+      present: !!st,
+      text: st?.textContent ?? null,
+      live: st?.getAttribute("aria-live"),
+      atomic: st?.getAttribute("aria-atomic"),
+      cls: st?.className ?? null,
+      display: cs?.display ?? null,
+      clip: cs?.clip ?? null,
+      pill: !!document.querySelector(".toast"),
+      regions: [...document.querySelectorAll("[aria-live]")].map((el) => el.getAttribute("role")),
+    };
+  });
+  t(`the editor mounts its status region empty (${quiet.present ? `${quiet.cls}, ${quiet.regions.length} live region(s)` : "missing"})`,
+    quiet.present && quiet.text === "" && quiet.live === "polite" && quiet.atomic === "true" && !quiet.pill);
+  t(`and clips it rather than hiding it (display ${quiet.display}, clip ${quiet.clip})`,
+    quiet.display !== "none" && /rect|inset/.test(quiet.clip || ""));
+
+  /* ── a destructive action is announced, once ── */
+  // The idiom §44 uses to empty the sample document: select everything, delete.
+  await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
+  await sleep(300);
+  await p.keyboard.press("Delete");
+  await sleep(500);
+  const said = await p.evaluate(() => {
+    const st = document.querySelector('[role="status"]');
+    const pill = document.querySelector(".toast");
+    return {
+      text: (st?.textContent || "").trim(),
+      pill: (pill?.textContent || "").trim(),
+      same: !!pill && pill.textContent === st?.textContent,
+      pillLive: !!pill && (pill.hasAttribute("aria-live") || !!pill.closest("[aria-live]")),
+      regions: [...document.querySelectorAll("[aria-live]")].map((el) => el.getAttribute("role")),
+    };
+  });
+  t(`deleting a layer is announced (${JSON.stringify(said.text).slice(0, 56)})`, /delet/i.test(said.text));
+  t("the visible pill says the same words", said.same);
+  t("and is not itself a live region — one message, one announcement", !said.pillLive);
+  t(`nothing else on screen is a live region (${said.regions.join(", ") || "none"})`,
+    said.regions.length === 1 && said.regions[0] === "status");
+
+  /* ── it clears; the region does not ── */
+  await sleep(2200);
+  const cleared = await p.evaluate(() => {
+    const st = document.querySelector('[role="status"]');
+    return { present: !!st, text: st?.textContent ?? null, pill: !!document.querySelector(".toast") };
+  });
+  t(`the message clears and the region stays for the next one (pill ${cleared.pill ? "still up" : "gone"})`,
+    cleared.present && cleared.text === "" && !cleared.pill);
+
+  /* ── a stream that arrives on its own: the agent's transcript ── */
+  await p.evaluate(() => {
+    [...document.querySelectorAll(".rail .nav")].find((x) => x.textContent.trim() === "Agent")?.click();
+  });
+  await sleep(500);
+  const opened = await p.evaluate(() => {
+    const log = document.querySelector('[role="log"]');
+    return {
+      present: !!log,
+      label: log?.getAttribute("aria-label"),
+      live: log?.getAttribute("aria-live"),
+      rows: document.querySelectorAll(".agent-row").length,
+      text: (log?.textContent || "").slice(0, 40),
+    };
+  });
+  t(`the agent's transcript is a named log, mounted with the greeting (${opened.rows} row, "${opened.text}")`,
+    opened.present && opened.label === "Agent transcript" && opened.live === "polite" &&
+    opened.rows >= 1 && /frame|rectangle/i.test(opened.text));
+
+  await p.evaluate(() => {
+    const el = [...document.querySelectorAll(".panel.left .search input")]
+      .find((i) => i.getAttribute("aria-label") === "Ask the agent");
+    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    el.focus();
+    set.call(el, "add a rectangle");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sleep(200);
+  await p.keyboard.press("Enter");
+  await sleep(700);
+  const answered = await p.evaluate(() => {
+    const log = document.querySelector('[role="log"]');
+    const rows = [...document.querySelectorAll(".agent-row")].map((r) => ({
+      who: r.getAttribute("data-who"),
+      text: (r.querySelector(".name")?.textContent || "").trim(),
+    }));
+    return {
+      logs: document.querySelectorAll('[role="log"]').length,
+      rows,
+      // The transcript is what the region contains — an answer that rendered
+      // outside it would be visible and silent.
+      inLog: /rectangle/i.test(log?.textContent || ""),
+    };
+  });
+  const answer = answered.rows.filter((r) => r.who === "agent").pop();
+  t(`the answer lands inside the log, not beside it ("${answer?.text?.slice(0, 48)}")`,
+    answered.logs === 1 && answered.inLog && /rectangle/i.test(answer?.text || ""));
+  t(`and the question and the answer are both in it (${answered.rows.length} turns)`,
+    answered.rows.length >= 3 && answered.rows.some((r) => r.who === "you"));
+
+  await p.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log("page errors:", allErrors.length ? allErrors.slice(0, 5) : "none");
 await b.close();

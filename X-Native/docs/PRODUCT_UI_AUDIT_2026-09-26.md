@@ -269,6 +269,7 @@ Actions palette (combobox/listbox/activedescendant, arrows+enter+esc, filters, e
 | PM-U3 | FIXED: one Escape owner. Every overlay registers in `ui/escape.ts` while it is open — the App's five sheets, the dock's flyouts, XDialog/XPopover, the dialog bus, the context menu, the fill picker, the radial menu, the shortcuts sheet and the inspector's zoom/language/property menus — and the topmost (opened most recently) closes on one press, which the central handler consumes. Order used to follow *registration*, not the screen: a dialog on top of the export sheet lost the press to the sheet behind it, and the shortcuts sheet could be starved outright. The old `popoverGuard` counter (which protected the selection but closed nothing) is deleted, and the presentation's second Escape implementation with it, so one press walks back one frame. The same registry hands the caret back: an overlay that closes unmounts the field it focused, and focus now returns to whatever opened it, or to the canvas column when that control is gone (a palette row), instead of falling to `<body>`. §4v, §4w | FIXED (P1) | — |
 | PM-U4 | FIXED: the nudge form is now the shared `XDialog` — same chrome, `aria-modal`, backdrop/close-button dismissal, and one Escape owner (its own capture-phase handler is gone; that handler was also fighting the editor's global Escape). Values, commit-on-blur/Enter and persistence unchanged (verified 7 → stored). | FIXED (P2) | — |
 | PM-U5 | FIXED: the hand-rolled variants are gone — inspector head tabs → `XTabs`, the Variables/Styles switch and both Dev Mode switches (Inspect view, Code scope) → `XSegmentedControl`, which until now had **zero** call sites while the app hand-wrote `.seg` everywhere. All three share one roving-focus + arrow/Home/End model (`tablistKeys`). Chrome was held to be identical: the pane switch keeps the selection token, the compact dev segs keep their elevated active state (a first cut made them green — caught in review and scoped to `.pane`). Remaining out-of-family: the left NavRail (vertical, its own layout — not a tab strip) and the dashboard's filter tabs, which are a different surface. | FIXED (P2) | — |
+| PM-U8 | The product announced nothing: the toast — the only confirmation channel there is ("Deleted 5 layers · ⌘Z to undo", "Copied to clipboard") — was a plain `<div className="toast">`, and across the whole app the single ARIA live region was the dialog's validation error. FIXED: `ui/announce.tsx` owns the announcement half — `LiveStatus` (a polite `role="status"` region, always mounted before it has text, clipped not `display:none`, and deliberately not wrapped around the visible pill so nothing is said twice), `ToastPill` for the pill, `LiveLog` for a stream that arrives on its own (the agent's answers), and `useToastMessage` for the bus → message half both screens hand-rolled. §4y | FIXED (P2) | — |
 | PM-U7 | A modal did not hold the keyboard: `aria-modal="true"` was set but Tab from the last control in the export sheet walked out from under the veil into the toolbar behind it (where Enter operated chrome the user could not see), and the nudge dialog never took focus at all, so it opened with the caret still on whatever was behind it. FIXED: `useFocusTrap` (ui/escape.ts) — both modals take the caret on open (their first field if they have one) and ring Tab/Shift+Tab among their controls, skipping disabled ones; non-modal overlays are deliberately not trapped. §4x | FIXED (P2) | — |
 | PM-U6 | FIXED: the sheet focuses its filter field on open, which is both the first control in the sheet and the first thing worth doing in it — every other modal input in the app (shortcuts, find-in-page, the palette) already did. The dialog also says `aria-modal="true"`, which it did not, so a screen reader was not told the document behind the veil is inert. §46 types into it with no click first and watches the list filter. Focus *restore* on close was PM-U3's, and is answered there: the registry hands the caret back to the command that opened the sheet, or to the canvas column when that row is gone with the palette (no longer `<body>`, and e2e §47 checks it). | FIXED (P2) | — |
 
@@ -316,6 +317,7 @@ palette (max-width/max-height/scroll).
 - DENSITY: appropriate for a pro tool (11px type scale, compact rows); ToolsPane wasted its density on
   7 shortcut-less buttons until §4t (LP-U5) — each row now carries its chord and its disabled state.
 - CONSISTENCY: four tab systems (PM-U5, open), one tooltip system (§2.3 FIXED), one Esc owner (§4v/§4w),
+  one live-region owner (§4y: two polite regions and a log, and nothing else anywhere),
   `export-run` class reused for Present/vector-Done (PT-U2/IN-U4), two accent greens — since §4r two
   *named roles* (`--accent` for controls, `--cv-sel` for selection ink on the canvas) rather than one
   literal and one token that happened to disagree (FR-U2).
@@ -1243,6 +1245,54 @@ caret to its first field, its ring wrapping at the end, and Escape closing it wi
 styling needs eyes — and whether the wrap reads as expected when the sheet is scrolled (the trap moves
 focus, and the browser then scrolls the control into view; `preventScroll` is deliberately not passed on
 the Tab path).
+
+## §4y. P2 round 12 — say it out loud (PM-U8)
+
+The keyboard and focus work of §4v–§4x had a sibling nobody had measured: the product draws status and
+announces none of it. The audit's instrument was blunt about it — across `src/`, `aria-live` appeared
+**zero** times, and the only ARIA live region in the whole app was the dialog's `role="alert"` for a
+validation error. So the toast, which is the *only* confirmation channel the product has ("Deleted 5
+layers · ⌘Z to undo", "Copied to clipboard", "Exported 3 assets", "Link copied"), was a screen reader
+silence; and the agent's answers arrived into a plain list, so a blind user could send a message and never
+learn that it had been answered.
+
+`ui/announce.tsx` is now the product's live-region owner, in the same shape as the Escape registry:
+
+- **`LiveStatus`** is the polite `role="status"` region, and it is *always mounted* — a live region created
+  together with its content is widely not announced, which is the one implementation detail that decides
+  whether any of this works. It is clipped by `.sr-only` rather than `display: none`, which would remove it
+  from the accessibility tree and silence it again.
+- **`ToastPill`** is the visible half, unchanged (same class, same 1800ms) and deliberately **not** a live
+  region: two regions carrying one string says everything twice.
+- **`LiveLog`** is the transcript role for messages that arrive on their own. The agent pane's `.tree` is
+  now a named `role="log"`, mounted from the first render (the greeting is there), so the answer that lands
+  700ms after the send is announced rather than inserted in silence.
+- **`useToastMessage`** absorbs the bus → message → clear-after-1800ms block that App and Dashboard had
+  each hand-rolled, so the two screens cannot drift on the duration. App's own *warnings* keep their longer
+  clocks (4s for an unreadable save, 3.2s for a bad link) and its ordinary confirmations moved onto the
+  bus; what is shared is the channel, not the clock.
+
+Politeness is `polite` in both regions on purpose: a confirmation should wait its turn and a chat answer
+should never interrupt. The one `assertive` message in the product stays the dialog's validation error.
+
+**Where it is checked.** `announce.test.mjs` (30 checks): the region mounted empty and clipped-not-hidden;
+a real toast through the bus landing in the region *and* the pill with the same words; the pill asserted not
+to be a live region; a second message replacing the first; the 1800ms clear emptying both channels while
+the region stays; `LiveLog` existing before its first answer and the answer landing inside it; the agent
+pane mounted for real with exactly one log; and source checks that `announce.tsx` is the only file in
+`src/ui` containing `aria-live`, that both its regions are polite, that the dialog's `role="alert"` is the
+only assertive one, and that neither the App nor the Dashboard still hand-rolls the subscription. Unit suite
+**2,233 checks, 0 failed** (2,202 → 2,233); `tsc -b` clean; drift totals unmoved at 413/131/340/363/49, with
+`announce.tsx` added to the table pinned at 0/0/0/0/0.
+
+**Browser suite §49 — written, NOT RUN here** (10 checks, 351 total): the region empty and clipped before
+anything happens; `⌘A`-then-Delete announcing the deletion in the region *and* the pill; the pill proven
+not to be a live region; the region proven to be the only one on screen, and to clear after 1.8s while
+staying mounted; the agent pane's named log carrying both turns and the answer proven to be inside it.
+
+**Not verified here:** what a screen reader actually says, and how the queue behaves when two toasts land
+within the timeout (the second replaces the first rather than queueing, so a fast pair is announced as the
+later one). The DOM contract is asserted; the speech is not.
 
 ## §5. Plan (running)
 1. Per-surface code↔UI traces + integration tables (§2.4 order). 2. Senior critique (§26) with concrete

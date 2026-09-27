@@ -21,6 +21,7 @@ import type { RecentEntry, SearchEntry, SearchKind } from "./search";
 import { useRestoreFocus } from "./a11y";
 import { selectInverse, selectMatching } from "./selectSame";
 import { closeTopEscape, useEscape } from "./escape";
+import { LiveLog } from "./announce";
 import {
   DEFAULT_NUDGE,
   getNudgePrefs,
@@ -3954,14 +3955,17 @@ function AgentPane({ engine }: { engine: Engine }) {
           New chat
         </button>
       </div>
-      <div className="tree">
+      {/* PM-U8: an answer arrives on its own, after the send, so the transcript
+          is a `log`: additions are announced, and it is mounted from the first
+          render (the greeting is there) rather than created when one lands. */}
+      <LiveLog label="Agent transcript">
         {chats.map((c, i) => (
           <div key={i} className="row agent-row" data-who={c.who}>
             <Icon name={c.who === "agent" ? "agent" : "comment"} size={14} />
             <span className="name">{c.text}</span>
           </div>
         ))}
-      </div>
+      </LiveLog>
       <div className="search">
         <input
           placeholder="Ask to add a frame, text…"

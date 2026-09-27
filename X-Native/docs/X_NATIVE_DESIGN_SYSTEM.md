@@ -101,5 +101,10 @@ sheet, colours from tokens, controls from the primitives.
    control wraps to the first, Shift+Tab at the first wraps to the last, disabled controls are not stops.
    Non-modal overlays (popovers, menus, flyouts) are deliberately not trapped — Tab leaving them is how
    a keyboard user gets out.
+6. Transient status is announced, not just drawn: a confirmation goes to both channels — the `.toast` pill
+   and the hidden `LiveStatus` region (`ui/announce.tsx`, `role="status"`/`aria-live="polite"`), which is
+   mounted before it has anything to say. A stream that arrives on its own is a `role="log"` (`LiveLog`).
+   Those are the product's only live regions; the one `assertive` message is the dialog's validation error.
+   Never make the visible pill a live region as well, or the user hears everything twice.
 6. Multi-select: Mixed-or-aggregate everywhere; first-layer values must never masquerade (IN-U1/TY-U3).
 7. Bound props: visible indicator + "explicit edit wins" (FS-U1/U5/U6).

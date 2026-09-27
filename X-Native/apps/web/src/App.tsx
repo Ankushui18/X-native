@@ -5,6 +5,7 @@ import { copyText, worldClones } from "./engine/clipboard";
 import { worldPos } from "./engine/memory";
 import { zoomTo } from "./ui/zoom";
 import { useEscape } from "./ui/escape";
+import { LiveStatus, ToastPill, useToastMessage } from "./ui/announce";
 import { devLangLabel, getDevPrefs, type DevFormat } from "./ui/devPrefs";
 import {
   Actions,
@@ -25,7 +26,7 @@ import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
 import { ZenHUD } from "./ui/ZenHUD";
 import { RadialMenu } from "./ui/RadialMenu";
-import { subscribeToast, toast as toastMsg } from "./ui/toast";
+import { toast as toastMsg } from "./ui/toast";
 import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
 import { DEMO_ID, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
@@ -273,20 +274,12 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return () => window.clearTimeout(t);
   }, [engine]);
 
-  // Any module can raise a toast via the bus; keep the existing local setter
-  // working for the share button.
-  useEffect(() => {
-    let timer = 0;
-    const off = subscribeToast((msg) => {
-      setToast(msg);
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => setToast(""), 1800);
-    });
-    return () => {
-      off();
-      window.clearTimeout(timer);
-    };
-  }, []);
+  // Any module can raise a toast via the bus (PM-U8: the subscription and the
+  // 1800ms are the shared hook's now, so the editor and the dashboard cannot
+  // drift). The editor's own warnings above keep their own, longer durations —
+  // what is shared is the channel, not the clock.
+  const busToast = useToastMessage();
+  const shown = toast || busToast;
 
   // Opening a file shows the whole page - default view for a file you have
   // not seen before - rather than whatever viewport the last session left in
@@ -360,10 +353,10 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return () => window.clearTimeout(timer);
   }, [engine]);
   useEffect(() => {
-    const flash = (msg: string) => {
-      setToast(msg);
-      window.setTimeout(() => setToast(""), 1800);
-    };
+    // Through the bus, not the local state: these are ordinary confirmations, so
+    // they get the shared 1800ms clock and the announcement with it (PM-U8).
+    // What stays local is the two warnings below, which are deliberately longer.
+    const flash = (msg: string) => toastMsg(msg);
     const onCopyLink = () => {
       const s = engine.snapshot();
       if (!s.selection.length) flash("Select a layer first · this link opens one layer");
@@ -495,8 +488,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   const present = () => {
     engine.dispatch({ type: "presentStart" });
     setHideUi(true);
-    setToast("Presenting — click hotspots, Esc to go back");
-    window.setTimeout(() => setToast(""), 1800);
+    toastMsg("Presenting — click hotspots, Esc to go back");
   };
 
   useEffect(
@@ -660,7 +652,11 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onOpenVariables={() => setNav("variables")}
       />
       <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
-      {toast && <div className="toast">{toast}</div>}
+      {/* PM-U8: the message has two channels — the pill you see and the status
+          region a screen reader hears. The pill stays out of the live region on
+          purpose; two of them saying the same string says it twice. */}
+      <ToastPill text={shown} />
+      <LiveStatus text={shown} />
       {nudgeOpen && <NudgeDialog onClose={() => setNudgeOpen(false)} />}
       {figInspector && <FigInspectorModal engine={engine} onClose={() => setFigInspector(false)} />}
     </div>
