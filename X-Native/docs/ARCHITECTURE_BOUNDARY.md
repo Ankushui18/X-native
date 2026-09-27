@@ -3,8 +3,8 @@
 > **2026-09-27 update:** optional import and geometry bridges are wired and
 > equivalence-guarded. A separate, stateful Rust command-session boundary now
 > exists for native `.x` documents; it is **not** the production web editor.
-> The earlier bridges passed CI; native geometry promotion **failed** its
-> comparator. See [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
+> The import bridges and command-session ABI passed CI; native geometry
+> promotion **failed** its comparator. See [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
 > The baseline inventory below is historical, not a claim that the bridges are inert.
 
 Status: **provisional by design.** This document describes what the repository
@@ -42,6 +42,8 @@ persisted web `Page.root` tree is not the native `.x` schema. Do not run two
 histories against the same document or silently rehydrate one from the other.
 The web UI continues using `MemoryEngine` until document round-tripping,
 commands, layout, undo, persistence and rendering agree on observable behavior.
+The shared Rust/native and real generated-WASM session tests passed
+[CI 36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226).
 See §20 in the WASM implementation record for scope and tests.
 
 ## Historical TypeScript baseline (before the bridge integration)

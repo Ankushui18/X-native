@@ -886,7 +886,16 @@ proven slice, followed by removal of the TS duplicate.
 - Rust session and native-host tests cover status, no-op/invalid commands,
   rename/move/undo/redo, metadata preservation, explicit `.x` round-trip,
   one-page/unique-ID limits and per-node rather than whole-page rename history.
-- The real generated-WASM smoke gate opens the native `.x` result from a real
-  SVG import, calls the actual wasm-bindgen class and the TS transport wrapper,
-  checks small deltas, undo/redo, independent sessions, explicit export and
-  invalid/multi-page refusals. CI verification of that new gate: **PENDING**.
+- **CI [36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226) SUCCESS**
+  on `3db4253`: Rust formatting, clippy/workspace tests (including the direct
+  native-host regression), matched WASM packages, real-module smoke, web
+  tests/build and the screenshot job passed. The smoke opens a genuine native
+  `.x` result from SVG, calls the generated wasm-bindgen class and TS transport
+  wrapper, and logs `PASS real Rust command session: open, per-node deltas,
+  move/rename, Rust undo/redo, explicit .x export, isolation and refusals`.
+  The initial CI run caught the architecture-test allowlist for the new
+  `x-wasm → x-editor` leaf edge; it was updated without introducing a cycle.
+  Rustfmt-only test fixture differences were corrected before this green run.
+- The unchanged geometry diagnostic remains **NOT APPROVED (1/30 equivalent)**.
+  A passed command ABI does not promote geometry, the full web editor, native
+  desktop UI or per-frame rendering parity.
