@@ -55,9 +55,13 @@ fn native_host_boolean_uses_the_same_atomic_session_and_edit_history() {
         ..Default::default()
     };
     let mut session = DocumentSession::new(doc).unwrap();
-    let result = session.dispatch(SessionCommand::Boolean {
-        first: "a", second: "b", op: BoolOp::Exclude,
-    }).unwrap();
+    let result = session
+        .dispatch(SessionCommand::Boolean {
+            first: "a",
+            second: "b",
+            op: BoolOp::Exclude,
+        })
+        .unwrap();
     let patch = result.boolean.unwrap();
     assert_eq!(patch.removed, ["a", "b"]);
     assert_eq!(patch.upsert[0].rings.as_ref().unwrap().len(), 2);
@@ -67,5 +71,10 @@ fn native_host_boolean_uses_the_same_atomic_session_and_edit_history() {
     assert_eq!(session.snapshot().pages[0].children.len(), 2);
     let redo = session.dispatch(SessionCommand::Redo).unwrap();
     assert_eq!(redo.boolean.unwrap().upsert.len(), 1);
-    assert_eq!(load_x(&save_x(&session.into_document())).unwrap().pages[0].children.len(), 1);
+    assert_eq!(
+        load_x(&save_x(&session.into_document())).unwrap().pages[0]
+            .children
+            .len(),
+        1
+    );
 }

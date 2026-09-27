@@ -179,14 +179,21 @@ impl DocumentSession {
             || node.h <= 0.0
             || !matches!(&node.fill, Paint::Solid(color) if color.to_rgba8().a == 255)
         {
-            return Err("Boolean session admits only plain visible, unlocked solid rectangles".into());
+            return Err(
+                "Boolean session admits only plain visible, unlocked solid rectangles".into(),
+            );
         }
         Ok(())
     }
 
     fn geometry_node(&self, id: &str) -> Result<GeometryNodeDelta, String> {
         let node = self.target(id)?;
-        let index = self.editor.root.children.iter().position(|n| n.id == id)
+        let index = self
+            .editor
+            .root
+            .children
+            .iter()
+            .position(|n| n.id == id)
             .ok_or("Boolean delta target is not a page child")?;
         let Paint::Solid(color) = &node.fill else {
             return Err("Boolean delta requires a solid fill".into());
@@ -337,7 +344,10 @@ impl DocumentSession {
                 }
             } else {
                 BooleanDelta {
-                    upsert: sources.iter().map(|id| self.geometry_node(id)).collect::<Result<_, _>>()?,
+                    upsert: sources
+                        .iter()
+                        .map(|id| self.geometry_node(id))
+                        .collect::<Result<_, _>>()?,
                     removed: vec![result],
                 }
             });
@@ -476,9 +486,13 @@ mod tests {
                 ..Default::default()
             };
             let mut session = DocumentSession::new(document).unwrap();
-            let changed = session.dispatch(SessionCommand::Boolean {
-                first: "a", second: "b", op,
-            }).unwrap();
+            let changed = session
+                .dispatch(SessionCommand::Boolean {
+                    first: "a",
+                    second: "b",
+                    op,
+                })
+                .unwrap();
             assert_eq!(changed.revision, 1);
             assert!(changed.node.is_none());
             assert!(changed.can_undo);
@@ -488,7 +502,16 @@ mod tests {
             let result = &patch.upsert[0];
             assert_eq!(result.index, 0);
             assert_eq!(result.fill, "#000000");
-            assert_eq!(result.rings.as_ref().unwrap().iter().map(Vec::len).collect::<Vec<_>>(), loop_sizes);
+            assert_eq!(
+                result
+                    .rings
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(Vec::len)
+                    .collect::<Vec<_>>(),
+                loop_sizes
+            );
             let result_id = result.node.id.clone();
             let saved = session.snapshot();
             assert_eq!(saved.pages[0].children.len(), 2);
@@ -500,9 +523,23 @@ mod tests {
             assert!(undo.can_redo);
             let undo_patch = undo.boolean.unwrap();
             assert_eq!(undo_patch.removed, vec![result_id.as_str()]);
-            assert_eq!(undo_patch.upsert.iter().map(|n| n.index).collect::<Vec<_>>(), [0, 2]);
+            assert_eq!(
+                undo_patch
+                    .upsert
+                    .iter()
+                    .map(|n| n.index)
+                    .collect::<Vec<_>>(),
+                [0, 2]
+            );
             assert!(undo_patch.upsert.iter().all(|n| n.rings.is_none()));
-            assert_eq!(session.snapshot().pages[0].children.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), ["a", "middle", "b"]);
+            assert_eq!(
+                session.snapshot().pages[0]
+                    .children
+                    .iter()
+                    .map(|n| n.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["a", "middle", "b"]
+            );
             let redo = session.dispatch(SessionCommand::Redo).unwrap();
             assert_eq!(redo.boolean.unwrap().upsert[0].node.id, result_id);
             assert_eq!(session.state().revision, 3);
@@ -518,29 +555,56 @@ mod tests {
             ..Default::default()
         };
         let mut session = DocumentSession::new(doc).unwrap();
-        let result = session.dispatch(SessionCommand::Boolean {
-            first: "a", second: "b", op: BoolOp::Intersect,
-        }).unwrap();
-        assert!(result.boolean.unwrap().upsert[0].rings.as_ref().unwrap().is_empty());
+        let result = session
+            .dispatch(SessionCommand::Boolean {
+                first: "a",
+                second: "b",
+                op: BoolOp::Intersect,
+            })
+            .unwrap();
+        assert!(result.boolean.unwrap().upsert[0]
+            .rings
+            .as_ref()
+            .unwrap()
+            .is_empty());
         assert_eq!(session.snapshot().pages[0].children.len(), 1);
-        assert_eq!(session.dispatch(SessionCommand::Undo).unwrap().boolean.unwrap().upsert.len(), 2);
+        assert_eq!(
+            session
+                .dispatch(SessionCommand::Undo)
+                .unwrap()
+                .boolean
+                .unwrap()
+                .upsert
+                .len(),
+            2
+        );
         assert_eq!(session.snapshot().pages[0].children.len(), 2);
     }
 
     #[test]
     fn refused_boolean_keeps_both_nodes_and_history_unchanged() {
         let mut doc = sample();
-        doc.pages[0].children.push(Node::rect("b", 12.0, 20.0, 20.0, 20.0, Color::BLACK));
+        doc.pages[0]
+            .children
+            .push(Node::rect("b", 12.0, 20.0, 20.0, 20.0, Color::BLACK));
         let mut session = DocumentSession::new(doc).unwrap();
         for (a, b) in [("box", "box"), ("box", "missing"), ("page", "b")] {
-            assert!(session.dispatch(SessionCommand::Boolean {
-                first: a, second: b, op: BoolOp::Union,
-            }).is_err());
+            assert!(session
+                .dispatch(SessionCommand::Boolean {
+                    first: a,
+                    second: b,
+                    op: BoolOp::Union,
+                })
+                .is_err());
         }
         session.editor.root.children[1].locked = true;
-        assert!(session.dispatch(SessionCommand::Boolean {
-            first: "box", second: "b", op: BoolOp::Union,
-        }).is_err());
+        assert!(session
+            .dispatch(SessionCommand::Boolean {
+                first: "box",
+                second: "b",
+                op: BoolOp::Union,
+            })
+            .is_err());
         assert_eq!(session.state().revision, 0);
         assert!(!session.state().can_undo);
         assert_eq!(session.snapshot().pages[0].children.len(), 2);

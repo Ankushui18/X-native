@@ -184,8 +184,15 @@ mod bindings {
         }
 
         #[wasm_bindgen(js_name = booleanNode)]
-        pub fn boolean_node(&mut self, first: &str, second: &str, op: &str) -> Result<String, JsValue> {
-            self.bridge.boolean_node(first, second, op).map_err(js_error)
+        pub fn boolean_node(
+            &mut self,
+            first: &str,
+            second: &str,
+            op: &str,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .boolean_node(first, second, op)
+                .map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

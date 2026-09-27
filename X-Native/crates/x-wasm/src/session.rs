@@ -13,7 +13,11 @@ fn node_value(node: NodeDelta) -> Value {
 fn geometry_value(change: GeometryNodeDelta) -> Value {
     let mut value = node_value(change.node);
     value["index"] = json!(change.index);
-    value["kind"] = json!(if change.rings.is_some() { "vector" } else { "rect" });
+    value["kind"] = json!(if change.rings.is_some() {
+        "vector"
+    } else {
+        "rect"
+    });
     value["fill"] = json!(change.fill);
     value["visible"] = json!(change.visible);
     value["locked"] = json!(change.locked);
@@ -78,7 +82,12 @@ impl CommandBridge {
         self.dispatch(SessionCommand::Resize { id, w, h })
     }
 
-    pub fn boolean_node(&mut self, first: &str, second: &str, name: &str) -> Result<String, String> {
+    pub fn boolean_node(
+        &mut self,
+        first: &str,
+        second: &str,
+        name: &str,
+    ) -> Result<String, String> {
         let op = match name {
             "union" => BoolOp::Union,
             "subtract" => BoolOp::Subtract,
@@ -198,7 +207,10 @@ mod tests {
             let mut bridge = CommandBridge::open(&save_x(&document)).unwrap();
             let wire = bridge.boolean_node("first", "second", name).unwrap();
             let changed: Value = serde_json::from_str(&wire).unwrap();
-            assert!(wire.len() < 2_048, "returned a full document, not a vector delta");
+            assert!(
+                wire.len() < 2_048,
+                "returned a full document, not a vector delta"
+            );
             assert_eq!(changed["revision"], 1);
             assert_eq!(changed["node"], Value::Null);
             assert_eq!(changed["boolean"]["removed"], json!(["first", "second"]));
@@ -216,9 +228,13 @@ mod tests {
             let redo: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
             assert_eq!(redo["boolean"]["upsert"][0]["id"], created);
             assert!(bridge.boolean_node("missing", "second", name).is_err());
-            assert_eq!(bridge.state(), serde_json::json!({
-                "revision": 3, "node": null, "canUndo": true, "canRedo": false,
-            }).to_string());
+            assert_eq!(
+                bridge.state(),
+                serde_json::json!({
+                    "revision": 3, "node": null, "canUndo": true, "canRedo": false,
+                })
+                .to_string()
+            );
         }
     }
 

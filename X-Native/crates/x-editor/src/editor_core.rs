@@ -2682,8 +2682,7 @@ impl Editor {
 
     fn boolean_history_ids(commands: &[Command]) -> Option<([String; 2], String)> {
         match commands {
-            [Command::Delete { node: first, .. }, Command::Delete { node: second, .. },
-             Command::Insert { node: result, .. }]
+            [Command::Delete { node: first, .. }, Command::Delete { node: second, .. }, Command::Insert { node: result, .. }]
                 if matches!(&result.kind, NodeKind::Vector { .. }) =>
             {
                 // Deletes run back-to-front; restore/paint low-to-high.
