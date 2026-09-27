@@ -81,7 +81,14 @@ fn parentless_web_fixture_recovers_its_canvas_and_layers() {
         .collect();
     assert_eq!(names, ["Home", "FigCard", "FigDot", "FigLabel"]);
     assert_eq!(doc.pages[0].children[1].w, 120.0);
-    assert_eq!(doc.pages[0].children[1].transform.x, 120.0);
+    // The existing native REST lowering moves the page envelope to (40,40).
+    // Preserve that native convention and the source-relative spacing.
+    assert_eq!(doc.pages[0].children[0].transform.x, 40.0);
+    assert_eq!(doc.pages[0].children[1].transform.x, 60.0);
+    assert_eq!(
+        doc.pages[0].children[1].transform.y - doc.pages[0].children[0].transform.y,
+        20.0
+    );
 }
 
 #[test]

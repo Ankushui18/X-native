@@ -249,6 +249,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Keep panic/assertion details API-readable even without an open PR.
+          # Emit this first: GitHub caps error annotations per step.
+          python3 -c '
+          import pathlib, re
+          p = pathlib.Path("/tmp/tests.log")
+          if p.exists():
+              failures = re.findall(r"---- .*? stdout ----.*?(?=\nfailures:|\n---- |\Z)", p.read_text(errors="replace"), re.S)
+              if failures:
+                  text = ("Rust test failure detail:\n" + "\n".join(failures))[:3500]
+                  print("::error::" + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
+          '
           esc=$(printf '\033')
           if [ -f /tmp/gate.log ]; then
             grep -aE '==>|FAIL|error|warning|Diff|panicked|\.rs:[0-9]+' /tmp/gate.log |
