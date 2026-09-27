@@ -117,7 +117,7 @@ Both bridge crates are leaves in the dependency graph.
 `npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
 real generated artifacts (no mock/replay substitution). CI is configured to run
 both. **The current import-only continuation and real modules passed CI at
-`1e89edf`** ([run 36330628149](https://github.com/Ankushui18/X-native/actions/runs/36330628149));
+`dbacb2c`** ([run 36334336133](https://github.com/Ankushui18/X-native/actions/runs/36334336133));
 the local sandbox still cannot run Cargo. The separate native geometry promotion
 diagnostic failed 29 of 30 cases; auto retains its per-call TS guard, as requested.
 
@@ -126,11 +126,13 @@ typography, layer locks/alignment, stroke options, basic effects and explicit la
 blends. Versioned source appearance facts now distinguish absent fills and defaults
 from native rendering fallbacks. **Basic FIG, effects and source-effects fixtures
 pass complete native candidate equivalence and select WASM**; FIG state,
-stroke-options and coordinate fixtures do too. Simple SVG shapes and plain text
-(with and without an id), viewport-only and unsized SVGs also select WASM.
+stroke-options and coordinate fixtures do too. Simple SVG shapes, plain text
+(with and without an id), explicit numeric text `font-weight`, viewport-only
+and unsized SVGs also select WASM when the complete import agrees with TS.
 Sketch fixtures, transformed SVG groups, rich text and resources still fall back
-to the complete TS result. Unknown document-level fields now decline instead of
-silently disappearing. This is not broad native import parity.
+to the complete TS result. Unsupported partial-numeric text weight remains
+behind that guard. Unknown document-level fields now decline instead of silently
+disappearing. This is not broad native import parity.
 
 Metadata growth exposed a shared-lowering stack overflow in the existing 64-level
 SVG test. Single-node construction is now separated from recursive traversal;

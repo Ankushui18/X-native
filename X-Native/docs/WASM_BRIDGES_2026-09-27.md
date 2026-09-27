@@ -11,9 +11,9 @@ The earlier work was committed on `arena/01a0e1ff-x-native`; this import-only
 continuation is on `arena/01a0e36f-x-native`. No generated binaries are checked
 in; the local preview still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `1e89edf`, [CI run 36330628149](https://github.com/Ankushui18/X-native/actions/runs/36330628149).
+Latest verified code/CI checkpoint: `dbacb2c`, [CI run 36334336133](https://github.com/Ankushui18/X-native/actions/runs/36334336133).
 The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`;
-plain SVG text and SVG viewport defaults now do too (see §§13–17).
+plain/numeric-weight SVG text and SVG viewport defaults now do too (see §§13–18).
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -752,9 +752,49 @@ into the native candidate; resources without a lossless mapping still fall back.
   real generated-module smoke, and web tests/build. The actual candidate logs
   `Diff SVG viewBox dimensions: none`, `Diff SVG explicit width over viewBox:
   none`, and `Diff SVG default dimensions: none`; each production wrapper
-  selects WASM after complete equivalence. The additional real-module smoke
-  also rejects unsupported metadata on a valid native envelope; it does not
-  alter the Rust artifact or conversion logic.
+  selects WASM after complete equivalence.
+- The documentation/smoke follow-up **CI [36330943567](https://github.com/Ankushui18/X-native/actions/runs/36330943567) SUCCESS**
+  on `ad16bf0` additionally exercised an actual generated-module envelope
+  mutated with unsupported document metadata; the adapter declined it. The
+  three whole-result viewport matches were still verified.
 - Geometry stays guarded: **1/30 equivalent, 29 differential failures** in this
   run; the `auto` mode TS check is unchanged. Broader SVG fidelity, browser
   visual parity, and native speedup remain **NOT VERIFIED**.
+
+## 18. Guarded numeric SVG text weight (2026-09-27)
+
+Import-only continuation. This narrows §16's *historical* weight-700 fallback:
+explicit numeric element `font-weight` values can now enter the candidate through
+native source facts; no TS-oracle value is copied into the candidate.
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W33 — numeric SVG text weight always fell back even when the rest of the native text result agreed | The SVG parser records only complete decimal element attributes in the positive 1–1000 CSS numeric range. Shared lowering keys this import-only fact by the final deduplicated text ID. The SVG envelope uses `textMetrics.version=2` with `fontWeight` set to a number or `null` (no supported numeric attribute); FIG/Sketch remain on version 1. The web adapter accepts both versions, requires the v2 field, rejects malformed/out-of-range values, and uses the unstyled 400 default only when no supported weight was reported | Red-first `wasmText` regressions for valid/invalid versions, range and keyed IDs; Rust SVG/import-IR/envelope regressions; real generated-module smoke checks weight 700, the unchanged persisted `.x`, whole-result equivalence, wrapper backend, malformed-metadata rejection and partial-numeric fallback |
+
+The `.x` document schema, WASM function ABI, import comparator and native text
+rendering model are unchanged. No PostScript-name inference, rich text, inherited
+CSS styling, or broad SVG text support is claimed. E.g. `700bold` is not emitted
+as a numeric source fact; the current TS importer parses it as 700, so the
+complete-result check retains TS rather than dropping its value.
+
+### Verification
+
+- Local red-first `wasmText` run failed on v2 metadata as expected; the focused
+  suite then passed **45/0**. The full local `npm test`, `npx tsc -b`,
+  `npm run build`, and `git diff --check` pass (pre-existing large-chunk warning).
+- The initial push's Rust gate caught a test-assertion formatting error; after
+  that was corrected, the real-module smoke caught its stale SVG call-count
+  assertion (9 instead of 10 with the new fallback case). No comparator or
+  format/schema guard was relaxed. The smoke now emits a bounded error annotation
+  if a future assertion fails where runner logs are inaccessible.
+- **CI [36334336133](https://github.com/Ankushui18/X-native/actions/runs/36334336133) SUCCESS**
+  on `dbacb2c`: Rust formatting, clippy/workspace tests, both WASM builds,
+  real generated-module smoke, web tests/build and screenshot jobs passed.
+  Annotations confirm `Diff SVG numeric weight: none` and
+  `PASS actual-module SVG numeric weight selects guarded WASM result`. The
+  production wrapper selects WASM for the complete weight-700 candidate;
+  `700bold` retains TS, and malformed source metadata is rejected.
+- Local Cargo/rustc and a generated WASM module are unavailable. The native
+  geometry promotion diagnostic is still **NOT APPROVED: 1/30 equivalent**;
+  `auto` keeps the TS comparator. Wider SVG and browser-visual parity and
+  native import speedup are **NOT VERIFIED**.
