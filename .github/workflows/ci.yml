@@ -255,7 +255,9 @@ jobs:
           import pathlib, re
           p = pathlib.Path("/tmp/tests.log")
           if p.exists():
-              failures = re.findall(r"---- .*? stdout ----.*?(?=\nfailures:|\n---- |\Z)", p.read_text(errors="replace"), re.S)
+              raw = p.read_text(errors="replace")
+              failures = re.findall(r"---- .*? stdout ----.*?(?=\nfailures:|\n---- |\Z)", raw, re.S)
+              failures += [raw[max(0, m.start() - 1600):m.end() + 300] for m in re.finditer(r"[^\n]*(?:overflowed its stack|fatal runtime error|memory allocation)[^\n]*", raw)]
               if failures:
                   text = ("Rust test failure detail:\n" + "\n".join(failures))[:3500]
                   print("::error::" + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
