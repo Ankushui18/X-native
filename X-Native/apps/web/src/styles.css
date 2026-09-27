@@ -5337,3 +5337,39 @@ html[data-theme="dark"] .x-btn-danger {
 .width-profile { min-width: 0; margin: 0; padding: 0; border: 0; }
 .width-profile:disabled svg { opacity: 0.4; }
 .width-profile-reason { margin: 4px 0; font-size: 10px; color: var(--dim); }
+
+/* Optional Rust-owned rectangle preview. It is deliberately separate from
+   .canvas-col/the production editor until one owner can serve all features. */
+.rust-preview { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text); }
+.rust-preview-head, .rust-preview-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line-2); }
+.rust-preview-head > div:first-child { display: grid; gap: 4px; }
+.rust-preview-head strong { font-size: 15px; }
+.rust-preview-head span, .rust-preview-toolbar small { color: var(--muted); font-size: 11px; }
+.rust-preview-actions, .rust-preview-nudges { display: flex; flex-wrap: wrap; gap: 6px; }
+.rust-preview-layers button, .rust-preview-inspector form button, .rust-preview-actions a[download] { padding: 6px 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 12px; text-decoration: none; cursor: pointer; }
+.rust-preview-layers button:hover, .rust-preview-inspector form button:hover:not(:disabled), .rust-preview-actions a[download]:hover { background: var(--hover); }
+.rust-preview button:focus-visible, .rust-preview a[download]:focus-visible, .rust-preview input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rust-preview-inspector form button:disabled { cursor: not-allowed; opacity: .55; }
+.rust-preview-actions a[download] { display: inline-flex; align-items: center; color: var(--accent-ink); border-color: var(--accent); }
+.rust-preview-message { margin: 24px; max-width: 540px; padding: 20px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--panel); font-size: 13px; }
+.rust-preview-error { margin: 8px 20px; padding: 9px; color: var(--red); background: var(--panel); border: 1px solid var(--red); border-radius: 6px; font-size: 12px; }
+.rust-preview-toolbar span { font-size: 12px; font-variant-numeric: tabular-nums; }
+.rust-preview-content { display: grid; grid-template-columns: 220px minmax(0, 1fr) 250px; min-height: 0; flex: 1; }
+.rust-preview-layers, .rust-preview-inspector { background: var(--panel); padding: 15px; overflow: auto; border-right: 1px solid var(--line-2); }
+.rust-preview-inspector { border-right: 0; border-left: 1px solid var(--line-2); }
+.rust-preview-layers { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+.rust-preview-layers button { text-align: left; overflow-wrap: anywhere; }
+.rust-preview-layers button[aria-pressed="true"] { border-color: var(--accent); background: var(--active); }
+.rust-preview-stage { background: var(--canvas); overflow: auto; height: min(70vh, 900px); }
+.rust-preview-world { position: relative; min-width: 1px; min-height: 1px; }
+.rust-preview-rect { position: absolute; padding: 0 !important; border: 0 !important; border-radius: 0 !important; }
+.rust-preview-rect[aria-pressed="true"] { outline: 2px solid var(--cv-sel); outline-offset: 2px; }
+.rust-preview-inspector h2 { margin: 0 0 12px; font-size: 14px; }
+.rust-preview-inspector p, .rust-preview-inspector label { font-size: 12px; color: var(--muted); }
+.rust-preview-inspector form { display: grid; gap: 8px; margin: 18px 0; }
+.rust-preview-inspector input { min-width: 0; height: 30px; padding: 5px 8px; background: var(--input); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; }
+@media (max-width: 820px) {
+  .rust-preview-content { grid-template-columns: minmax(0, 1fr); }
+  .rust-preview-stage { order: -1; height: 48vh; }
+  .rust-preview-layers, .rust-preview-inspector { border: 0; border-top: 1px solid var(--line-2); }
+}

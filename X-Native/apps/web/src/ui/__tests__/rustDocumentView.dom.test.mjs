@@ -1,0 +1,227 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { installDom } from "./domEnv.mjs";
+
+const win = installDom();
+const React = await import("react");
+const { createRoot } = await import("react-dom/client");
+const { docFromTemplate } = await import("../../engine/files.ts");
+const { node } = await import("../../engine/memory.ts");
+const { initWasmBridge, __resetWasmForTests } = await import("../../engine/wasmBridge.ts");
+const { RustDocumentView } = await import("../RustDocumentView.tsx");
+const { readRoute, decideRouteChange } = await import("../fileRoute.ts");
+const { act } = React;
+const clone = x => JSON.parse(JSON.stringify(x));
+
+const fixture = () => {
+  const doc = docFromTemplate("blank");
+  doc.fileName = "Rust / preview";
+  doc.pages[0].root.children.push(
+    node("rect", "Card", 10, 20, 70, 40, { fill: "#13aabb" }),
+    node("rect", "Hidden", -5, 0, 25, 50, { fill: "#445566", visible: false, locked: true }),
+  );
+  return doc;
+};
+const moduleWith = Session => ({
+  default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
+  importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
+  sessionBridgeVersion: () => 1, RustDocumentSession: Session,
+});
+const calls = { opens: 0, exports: 0, queries: 0, edits: 0, closes: 0 };
+class FakeRust {
+  constructor(x) { calls.opens++; this.doc = JSON.parse(x); this.revision = 0; this.undos = []; this.redos = []; }
+  get(id) { return this.doc.pages[0].children.find(n => n.id === id); }
+  state(node = null) { return JSON.stringify({ revision: this.revision, node, canUndo: this.undos.length > 0, canRedo: this.redos.length > 0 }); }
+  getNode(id) {
+    calls.queries++;
+    const n = this.get(id);
+    return JSON.stringify(n ? { id, name: n.name ?? id, x: n.x, y: n.y } : null);
+  }
+  edit(id, change) {
+    calls.edits++;
+    const n = this.get(id), before = { name: n.name, x: n.x, y: n.y };
+    change(n); const after = { name: n.name, x: n.x, y: n.y };
+    this.undos.push({ id, before, after }); this.redos.length = 0; this.revision++;
+    return this.state({ id, ...after });
+  }
+  moveNode(id, dx, dy) {
+    const result = this.edit(id, n => { n.x += dx; n.y += dy; });
+    if (FakeRust.badNextDelta) {
+      FakeRust.badNextDelta = false;
+      const corrupt = JSON.parse(result); corrupt.node.id = "unknown-rust-id";
+      return JSON.stringify(corrupt);
+    }
+    return result;
+  }
+  renameNode(id, name) { return this.edit(id, n => { n.name = name.trim(); }); }
+  undo() {
+    const op = this.undos.pop();
+    if (!op) return this.state();
+    this.redos.push(op); Object.assign(this.get(op.id), op.before); this.revision++;
+    return this.state({ id: op.id, ...op.before });
+  }
+  redo() {
+    const op = this.redos.pop();
+    if (!op) return this.state();
+    this.undos.push(op); Object.assign(this.get(op.id), op.after); this.revision++;
+    return this.state({ id: op.id, ...op.after });
+  }
+  exportX() { calls.exports++; return JSON.stringify(this.doc); }
+  free() { calls.closes++; }
+}
+const urls = new Map(), revoked = [];
+URL.createObjectURL = blob => { const url = `blob:rust-preview/${urls.size + 1}`; urls.set(url, blob); return url; };
+URL.revokeObjectURL = url => revoked.push(url);
+
+function mount(seed, strict = false) {
+  const host = document.createElement("div"); document.body.appendChild(host);
+  const root = createRoot(host);
+  const releases = [];
+  const props = {
+    fileId: "qa-file", seed,
+    onHome: () => {}, onStandard: () => {},
+    onRelease: fn => releases.push(fn),
+  };
+  const element = React.createElement(RustDocumentView, props);
+  return {
+    host, root, releases,
+    async render() {
+      await act(async () => root.render(strict ? React.createElement(React.StrictMode, null, element) : element));
+      await act(async () => { await Promise.resolve(); });
+    },
+    byText(label) { return [...host.querySelectorAll("button")].find(b => b.textContent.trim() === label); },
+    async click(label) {
+      const button = this.byText(label);
+      assert.ok(button, `missing button ${label}`);
+      await act(async () => button.dispatchEvent(new win.MouseEvent("click", { bubbles: true })));
+    },
+    async type(name) {
+      const input = host.querySelector("#rust-layer-name"); assert.ok(input);
+      const set = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value").set;
+      await act(async () => { input.focus(); set.call(input, name); input.dispatchEvent(new win.Event("input", { bubbles: true })); });
+    },
+    async close() { await act(async () => root.unmount()); host.remove(); },
+  };
+}
+
+assert.deepEqual(readRoute("#/file/a%20b"), { view: "file", id: "a b", rust: false });
+assert.deepEqual(readRoute("#/file/a%20b?f=box&engine=rust"), { view: "file", id: "a b", rust: true });
+assert.deepEqual(readRoute("#/file/a?engine=ts"), { view: "file", id: "a", rust: false });
+assert.deepEqual(readRoute("#/file/%bad"), { view: "home" });
+assert.deepEqual(readRoute("#/"), { view: "home" });
+const rustRoute = readRoute("#/file/a?engine=rust");
+const sameRustRoute = readRoute("#/file/a?f=rect&engine=rust");
+const standardRoute = readRoute("#/file/a");
+assert.equal(decideRouteChange(rustRoute, sameRustRoute, true, () => { throw Error("must not prompt"); }), "same-owner");
+assert.equal(decideRouteChange(rustRoute, standardRoute, true, () => false), "cancel");
+assert.equal(decideRouteChange(rustRoute, standardRoute, true, () => true), "switch");
+assert.equal(decideRouteChange(rustRoute, standardRoute, false, () => { throw Error("must not prompt"); }), "switch");
+assert.equal(decideRouteChange(rustRoute, readRoute("#/file/b?engine=rust"), true, () => false), "cancel");
+// Owner swap is in the router, not in a MemoryEngine adapter. A browser Back
+// must close Rust synchronously before it can render the production Editor.
+const app = readFileSync(new URL("../../App.tsx", import.meta.url), "utf8");
+assert.match(app, /owner\?\.close\(\);\s*acceptedHash\.current = window\.location\.hash;\s*routeRef\.current = next;\s*setRoute\(next\)/);
+assert.match(app, /decideRouteChange\(previous, next, !!owner\?\.hasEdits\(\), \(\) => window\.confirm/);
+assert.match(app, /if \(pending\) write\(\);\s*window\.removeEventListener\("pagehide", flush\)/);
+assert.match(app, /seed\.rust !== route\.rust/);
+assert.match(app, /if \(route\.rust\) \{\s*return \(\s*<RustDocumentView/);
+console.log("  ok explicit route and close-before-TS-owner boundary");
+
+__resetWasmForTests();
+assert.equal(await initWasmBridge(async () => moduleWith(FakeRust)), true);
+const source = fixture(), snapshot = clone(source);
+const ui = mount(source, true); // React StrictMode must still open ONE Rust history
+await ui.render();
+assert.equal(calls.opens, 1);
+assert.equal(calls.exports, 1, "full Rust export occurs only at open");
+assert.equal(calls.queries, 2, "one-node reads at open, not a shadow document");
+assert.equal(ui.host.querySelectorAll(".rust-preview-layers button").length, 2);
+assert.equal(ui.host.querySelectorAll(".rust-preview-rect").length, 1, "hidden rect is not painted");
+assert.ok(ui.host.textContent.includes("not autosaved"));
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.background, "rgb(19, 170, 187)");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.left, "10px");
+const cleanExit = new win.Event("beforeunload", { cancelable: true });
+win.dispatchEvent(cleanExit);
+assert.equal(cleanExit.defaultPrevented, false);
+await ui.click("Move right 10");
+const unsavedExit = new win.Event("beforeunload", { cancelable: true });
+win.dispatchEvent(unsavedExit);
+assert.equal(unsavedExit.defaultPrevented, true, "browser unload prompts after Rust-owned edits");
+assert.equal(ui.host.querySelector(".rust-preview-rect").style.left, "20px");
+assert.equal(calls.exports, 1, "move responds with one-node delta; no .x per edit");
+assert.equal(ui.host.querySelector(".rust-preview-toolbar span").textContent, "Rust revision 1");
+await ui.type("Renamed");
+await ui.click("Rename");
+assert.equal(ui.host.querySelector(".rust-preview-rect").getAttribute("aria-label"), "Renamed");
+await ui.click("Undo");
+assert.equal(ui.host.querySelector(".rust-preview-rect").getAttribute("aria-label"), "Card");
+await ui.click("Redo");
+assert.equal(ui.host.querySelector(".rust-preview-rect").getAttribute("aria-label"), "Renamed");
+assert.equal(calls.exports, 1, "history never serializes the full document");
+assert.deepEqual(source, snapshot, "React presentation never mutates original web seed");
+await ui.click("Prepare download");
+assert.equal(calls.exports, 2);
+const link = ui.host.querySelector("a[download]");
+assert.ok(link && link.getAttribute("download") === "Rust _ preview.x.json");
+const downloaded = JSON.parse(await urls.get(link.href).text());
+assert.equal(downloaded.pages[0].root.children[0].x, 20);
+assert.equal(downloaded.pages[0].root.children[0].name, "Renamed");
+assert.deepEqual(downloaded.pages[0].root.children[1], snapshot.pages[0].root.children[1]);
+await ui.click("Move down 10");
+assert.equal(ui.host.querySelector("a[download]"), null, "stale link invalidated on Rust edit");
+assert.ok(revoked.includes(link.href));
+assert.equal(calls.exports, 2);
+// Simulate App's synchronous hashchange release. Cleanup is idempotent.
+const owner = ui.releases.find(x => x && typeof x.close === "function"); assert.ok(owner);
+assert.equal(owner.hasEdits(), true);
+owner.close();
+assert.equal(calls.closes, 1);
+await ui.close();
+assert.equal(calls.closes, 1);
+console.log("  ok mounted Rust-only view: one owner, small deltas, Rust undo, explicit safe download and cleanup");
+
+const invalid = fixture(); invalid.styles.push({ name: "outside subset" });
+const no = mount(invalid);
+await no.render();
+assert.equal(calls.opens, 1, "unsupported whole file never starts a second history");
+assert.ok(no.host.textContent.includes("outside the safe Rust subset"));
+assert.ok(no.byText("Standard editor"));
+await no.close();
+console.log("  ok unsupported file keeps its stored data and offers standard editor");
+
+const corrupt = mount(fixture());
+await corrupt.render();
+FakeRust.badNextDelta = true;
+await corrupt.click("Move right 10");
+assert.ok(corrupt.host.textContent.includes("Edits are paused"));
+assert.equal(corrupt.host.querySelector(".rust-preview-rect").style.left, "10px", "never guess state after corrupt delta");
+assert.equal(corrupt.byText("Undo").disabled, true);
+const recoveryOwner = corrupt.releases.find(x => x?.hasEdits);
+assert.equal(recoveryOwner.hasEdits(), true);
+await corrupt.click("Prepare download");
+const recovered = JSON.parse(await urls.get(corrupt.host.querySelector("a[download]").href).text());
+assert.equal(recovered.pages[0].root.children[0].x, 20, "actual Rust state is recoverable without TS replay");
+await corrupt.close();
+console.log("  ok malformed Rust delta freezes UI, keeps single owner and allows strict recovery export");
+
+__resetWasmForTests();
+assert.equal(await initWasmBridge(async () => { throw Error("missing optional asset"); }), false);
+const missing = mount(fixture());
+await missing.render();
+assert.ok(missing.host.textContent.includes("Rust session is unavailable"));
+assert.ok(missing.byText("Standard editor"));
+await missing.close();
+console.log("  ok missing WASM does not silently mount another editing history");
+
+__resetWasmForTests();
+let finish;
+const waitForWasm = initWasmBridge(() => new Promise(resolve => { finish = () => resolve(moduleWith(FakeRust)); }));
+const openedBeforeLeave = calls.opens;
+const abandoned = mount(fixture());
+await abandoned.render();
+await abandoned.close();
+finish();
+assert.equal(await waitForWasm, true);
+await Promise.resolve();
+assert.equal(calls.opens, openedBeforeLeave, "aborted route cannot open Rust after unmount");
+console.log("  ok leaving during WASM load cannot resurrect an editor");

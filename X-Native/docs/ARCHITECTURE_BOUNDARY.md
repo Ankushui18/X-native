@@ -3,8 +3,9 @@
 > **2026-09-27 update:** optional import and geometry bridges are wired and
 > equivalence-guarded. A separate, stateful Rust command-session boundary now
 > exists for native `.x` documents; it is **not** the production web editor.
-> A strictly gated, opt-in web-document V1 admission/checkpoint adapter now
-> covers a small rectangle-only subset; no production editor owner changed.
+> A strictly gated web-document V1 adapter now powers an explicit
+> `#/file/<id>?engine=rust` rectangle preview when genuine WASM is available.
+> The ordinary editor, production history and persistence remain TypeScript-owned.
 > The import bridges, command-session ABI and narrow web-document gate passed
 > CI; native geometry promotion **failed** its comparator. See
 > [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
@@ -29,8 +30,8 @@ before a lossless document boundary and behavior parity would lose user work.
 | Part | Target | Current checkpoint |
 | --- | --- | --- |
 | `x-core` model, `x-editor` commands/undo, Rust layout | Engine authority shared across hosts | One-page native `.x` command session; live web engine not migrated |
-| TypeScript / UI | Application state, input and presentation only | Existing `MemoryEngine` still drives the production web editor |
-| WASM | Web boundary | Import bridge, optional `RustDocumentSession`, and opt-in rectangle-only web-document admission/checkpoint |
+| TypeScript / UI | Application state, input and presentation only | `MemoryEngine` drives the default web editor; the explicit Rust preview is UI-only |
+| WASM | Web boundary | Guarded import bridge, optional `RustDocumentSession` and rectangle-only admission; explicit preview uses its command/state boundary |
 | Native desktop | Direct Rust boundary | Direct Rust session API and native-host test; no desktop UI yet |
 | Document, Auto Layout, undo duplicated in TS | **Avoid** in the destination | Existing duplication must be removed one proven slice at a time; no new TS engine in the bridge |
 | Rust ↔ TS per-frame full JSON | **Avoid** | Native `.x` read once at open / written on explicit export; command replies are one-node deltas |
@@ -58,7 +59,14 @@ The shared Rust/native and real generated-WASM session tests passed
 [CI 36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226);
 the web-document V1 open/checkpoint smoke passed
 [CI 36340690212](https://github.com/Ankushui18/X-native/actions/runs/36340690212).
-See §§20–21 in the WASM implementation record for scope and tests.
+The opt-in preview uses that same session to paint admitted rectangles, move
+and rename individual layers, and call Rust undo/redo. `App.tsx` closes it
+synchronously before any other file/editor owner mounts; a dirty preview
+confirms navigation and browser unload. It has **no autosave**: download is an
+explicit copy, and the stored file is unchanged. Failed admission or unavailable
+WASM offers a switch back to the standard editor, never a silent engine swap.
+It is not a production editor, rendering or Auto Layout promotion. See §§20–22
+in the WASM implementation record for the bounded scope and tests.
 
 ## Historical TypeScript baseline (before the bridge integration)
 

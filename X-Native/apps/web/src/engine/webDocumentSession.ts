@@ -217,18 +217,21 @@ export class RustWebDocumentSession {
   close(): void { this.rust.close(); }
 }
 
-export async function openWebDocumentSession(input: unknown): Promise<RustWebDocumentSession | null> {
+export async function openWebDocumentSession(input: unknown, signal?: AbortSignal): Promise<RustWebDocumentSession | null> {
+  if (signal?.aborted) return null;
   const x = admitWebDocument(input);
-  if (!x) return null;
+  if (!x || signal?.aborted) return null;
   let rust: RustSessionClient | null = null;
   try {
-    rust = await openRustSession(x);
+    rust = await openRustSession(x, signal);
     if (!rust) return null;
     const shell = input as WebDocument;
     // Round-trip the WHOLE document before handing out a Rust-owned session.
     // If native defaults, precision or metadata differ, MemoryEngine remains
     // the only owner; never expose a partly converted Rust session.
-    if (!equal(decodeWebDocument(rust.exportX(), shell), shell)) throw new Error("Web/native round trip differs");
+    if (!equal(decodeWebDocument(rust.exportX(), shell), shell) || signal?.aborted) {
+      throw new Error("Web/native round trip differs or open was cancelled");
+    }
     return RustWebDocumentSession.create(rust, shell);
   } catch {
     rust?.close();

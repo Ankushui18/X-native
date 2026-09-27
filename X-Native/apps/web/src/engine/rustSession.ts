@@ -77,8 +77,10 @@ export class RustSessionClient {
 /** No fallback to a second JS command engine: callers must keep their
  * existing engine until a native .x document can be opened without loss.
  * Invalid .x throws, while a missing/older optional artifact returns null. */
-export async function openRustSession(x: string): Promise<RustSessionClient | null> {
-  if (!(await initWasmBridge())) return null;
+export async function openRustSession(x: string, signal?: AbortSignal): Promise<RustSessionClient | null> {
+  // The optional bridge can take time to download. A route that was left while
+  // it loaded must not create a second Rust history when initialization ends.
+  if (signal?.aborted || !(await initWasmBridge()) || signal?.aborted) return null;
   const Session = rustSessionConstructor();
   return Session ? new RustSessionClient(new Session(x)) : null;
 }

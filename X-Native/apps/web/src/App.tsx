@@ -33,26 +33,59 @@ import { DEMO_ID, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, re
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
 import { initWasmBridge } from "./engine/wasmBridge";
 import { preloadGeo } from "./engine/geoBridge";
+import { decideRouteChange, readRoute } from "./ui/fileRoute";
+import { RustDocumentView, type RustPreviewOwner } from "./ui/RustDocumentView";
 
-/** The dashboard is the app's front door; a file opens at `#/file/<id>`. The
- *  hash is the source of truth so reload, back and a shared link all behave. */
-function readRoute(): { view: "home" } | { view: "file"; id: string } {
-  const m = /#\/file\/([^/?#]+)/.exec(window.location.hash || "");
-  return m ? { view: "file", id: decodeURIComponent(m[1]) } : { view: "home" };
-}
+/** The hash is the source of truth for home, ordinary files and the explicit
+ * `?engine=rust` preview. The preview must never mount MemoryEngine beside a
+ * live Rust history, including when browser Back changes the hash. */
 
 export default function App() {
   // Preload on the dashboard too, before the first file import.
   useEffect(() => { void initWasmBridge(); }, []);
   const [route, setRoute] = useState(readRoute);
+  const routeRef = useRef(route);
+  const acceptedHash = useRef(window.location.hash);
+  const rustOwner = useRef<RustPreviewOwner | null>(null);
+  const registerRustOwner = useCallback((owner: RustPreviewOwner | null) => {
+    rustOwner.current = owner;
+  }, []);
   // The document is resolved before the editor mounts: seeding the engine is
   // synchronous, so the canvas never paints half a file. Large documents live in
   // IndexedDB, which is only readable asynchronously — hence this small state
   // machine rather than a direct render.
-  const [seed, setSeed] = useState<{ id: string; doc: DocSeed | null; missing: boolean } | null>(null);
+  const [seed, setSeed] = useState<{ id: string; rust: boolean; doc: DocSeed | null; missing: boolean } | null>(null);
 
   useEffect(() => {
-    const on = () => setRoute(readRoute());
+    const on = () => {
+      // A cancelled Back/URL change restores the accepted hash. Ignore the
+      // resulting hashchange rather than confirming the same edits twice.
+      if (window.location.hash === acceptedHash.current) return;
+      const next = readRoute();
+      const previous = routeRef.current;
+      const owner = rustOwner.current;
+      const decision = decideRouteChange(previous, next, !!owner?.hasEdits(), () => window.confirm(
+        "The Rust preview does not autosave. Download a file copy first or leave and discard these edits?",
+      ));
+      // A selection/query change within one Rust-owned file does not reopen
+      // stale bytes. Cancelling a different owner change restores the URL.
+      if (decision === "same-owner") {
+        acceptedHash.current = window.location.hash;
+        return;
+      }
+      if (decision === "cancel") {
+        window.location.hash = acceptedHash.current;
+        return;
+      }
+      // React's passive effect cleanup runs AFTER rendering the next route.
+      // Close Rust synchronously here, before Editor can construct its TS
+      // history. This includes Back, shared links and manual URL edits.
+      rustOwner.current = null;
+      owner?.close();
+      acceptedHash.current = window.location.hash;
+      routeRef.current = next;
+      setRoute(next);
+    };
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
@@ -79,11 +112,11 @@ export default function App() {
     const present = (doc: DocSeed | null) => {
       // Images are references in storage; the editor needs the bytes. Resolve
       // them first, so a document never reaches the engine half-loaded.
-      if (!doc) return Promise.resolve(setSeed({ id: route.id, doc: null, missing: !!getFile(route.id) }));
+      if (!doc) return Promise.resolve(setSeed({ id: route.id, rust: route.rust, doc: null, missing: !!getFile(route.id) }));
       return hydrateDoc(doc as never).then((unresolved) => {
         if (!alive) return;
         if (unresolved) toastMsg(`${unresolved} image${unresolved > 1 ? "s" : ""} could not be loaded`);
-        setSeed({ id: route.id, doc, missing: false });
+        setSeed({ id: route.id, rust: route.rust, doc, missing: false });
       });
     };
     const sync = readDocSync(route.id);
@@ -101,10 +134,10 @@ export default function App() {
         // a direct link to a file in another browser should behave, and it is
         // what the e2e harness drives. An id that exists but whose bytes are
         // gone must NOT be overwritten by a blank file.
-        setSeed({ id: route.id, doc: doc ?? null, missing: !!doc === false && !!getFile(route.id) });
+        setSeed({ id: route.id, rust: route.rust, doc: doc ?? null, missing: !!doc === false && !!getFile(route.id) });
       })
       .catch(() => {
-        if (alive) setSeed({ id: route.id, doc: null, missing: !!getFile(route.id) });
+        if (alive) setSeed({ id: route.id, rust: route.rust, doc: null, missing: !!getFile(route.id) });
       });
     return () => {
       alive = false;
@@ -112,7 +145,7 @@ export default function App() {
   }, [route]);
 
   if (route.view === "file") {
-    if (seed && seed.missing) {
+    if (seed && seed.id === route.id && seed.rust === route.rust && seed.missing) {
       return (
         <div className="open-screen">
           <div className="open-card">
@@ -125,7 +158,7 @@ export default function App() {
         </div>
       );
     }
-    if (!seed || seed.id !== route.id) {
+    if (!seed || seed.id !== route.id || seed.rust !== route.rust) {
       return (
         <div className="open-screen">
           <div className="open-card">
@@ -133,6 +166,18 @@ export default function App() {
             <span>Reading the document from local storage.</span>
           </div>
         </div>
+      );
+    }
+    if (route.rust) {
+      return (
+        <RustDocumentView
+          key={`rust:${route.id}`}
+          fileId={route.id}
+          seed={seed.doc}
+          onHome={() => { window.location.hash = "#/"; }}
+          onStandard={() => { window.location.hash = `#/file/${encodeURIComponent(route.id)}`; }}
+          onRelease={registerRustOwner}
+        />
       );
     }
     return (
@@ -210,7 +255,9 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
   useEffect(() => {
     let timer = 0;
     let warned = false;
+    let pending = false;
     const write = () => {
+      pending = false;
       // "New file…" has already replaced this file's stored copy; the flush on
       // the way to the reload must not put the discarded document back.
       if (saveSuppressed()) return;
@@ -235,6 +282,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
       if (status === "saved") warned = false;
     };
     const off = engine.subscribe(() => {
+      pending = true;
       window.clearTimeout(timer);
       timer = window.setTimeout(write, 600);
     });
@@ -246,6 +294,10 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     return () => {
       off();
       window.clearTimeout(timer);
+      // Route changes do not fire pagehide. Flush only a pending edit before
+      // the next file/mode reads storage; otherwise the Rust preview could
+      // admit stale bytes while a TS debounce was cancelled on unmount.
+      if (pending) write();
       window.removeEventListener("pagehide", flush);
     };
   }, [engine, fileId]);

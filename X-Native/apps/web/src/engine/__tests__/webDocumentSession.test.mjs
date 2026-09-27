@@ -147,6 +147,23 @@ await test("open gates without wasm and rejects mismatched native round trip, fr
   assert.equal(released, 1);
 });
 
+await test("leaving during optional WASM load cannot create a stale Rust history", async () => {
+  let finishLoad;
+  let constructed = 0;
+  class Session { constructor() { constructed++; } }
+  const loading = initWasmBridge(() => new Promise(resolve => { finishLoad = () => resolve(moduleWith(Session)); }));
+  const controller = new AbortController();
+  const opening = openWebDocumentSession(fixture(), controller.signal);
+  controller.abort();
+  finishLoad();
+  assert.equal(await loading, true);
+  assert.equal(await opening, null);
+  assert.equal(constructed, 0);
+  const cancelled = new AbortController(); cancelled.abort();
+  assert.equal(await openWebDocumentSession(fixture(), cancelled.signal), null);
+  assert.equal(constructed, 0);
+});
+
 await test("once admitted, small commands go straight to Rust; full data only on explicit export", async () => {
   const doc = fixture(), initial = clone(doc);
   const counters = { opens: 0, exports: 0, commands: 0, frees: 0 };

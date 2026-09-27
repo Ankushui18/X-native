@@ -440,3 +440,51 @@ const p = e.xgeo_alloc(8); assert.ok(p);
 e.xgeo_free(p, 8); e.xgeo_free(p, 8); // double free is harmless
 console.log("PASS real x-geo: four operations, empty, invalid input/pointers, repeated ownership cycles");
 console.log("NOTE: smoke is NOT corpus equivalence or a performance/promotion signoff; run bench:wasm --module public/x_geo.wasm separately.");
+
+// Mount the actual opt-in React view over the generated WASM class. This is
+// intentionally separate from the import oracle: Rust alone owns this editor.
+// The mocked DOM checks wiring, not browser paint fidelity.
+const uiDom = new JSDOM("<!doctype html><html><body></body></html>", {
+  url: "http://localhost/", pretendToBeVisual: true,
+});
+const uiWindow = uiDom.window;
+for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLInputElement", "Element", "Node", "Event", "MouseEvent", "DOMParser"]) {
+  Object.defineProperty(globalThis, key, { value: key === "window" ? uiWindow : uiWindow[key], configurable: true, writable: true });
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+try {
+  const React = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { RustDocumentView } = await import("../../src/ui/RustDocumentView.tsx");
+  const uiDoc = docFromTemplate("blank");
+  uiDoc.pages[0].root.children.push(node("rect", "Native card", 10, 20, 50, 30, { fill: "#a1b2c3" }));
+  const host = uiWindow.document.createElement("div"); uiWindow.document.body.appendChild(host);
+  const root = createRoot(host);
+  const releases = [];
+  await React.act(async () => root.render(React.createElement(RustDocumentView, {
+    fileId: "real-wasm-preview", seed: uiDoc,
+    onHome: () => {}, onStandard: () => {}, onRelease: fn => releases.push(fn),
+  })));
+  await React.act(async () => { await Promise.resolve(); });
+  assert.ok(host.textContent.includes("Rust document preview"));
+  assert.equal(host.querySelector(".rust-preview-rect")?.style.left, "10px");
+  const action = label => [...host.querySelectorAll("button")].find(b => b.textContent.trim() === label);
+  await React.act(async () => action("Move right 10").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(host.querySelector(".rust-preview-rect")?.style.left, "20px");
+  assert.equal(host.querySelector(".rust-preview-toolbar span")?.textContent, "Rust revision 1");
+  await React.act(async () => action("Undo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(host.querySelector(".rust-preview-rect")?.style.left, "10px");
+  assert.ok(releases.some(owner => owner && typeof owner.close === "function" && owner.hasEdits()));
+  await React.act(async () => root.unmount());
+  host.remove();
+  console.log("PASS real WASM opt-in React host: one Rust session, small visual deltas, native undo and safe unmount");
+} catch (error) {
+  const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+  console.log(`::error::Real WASM Rust UI failed: ${detail.slice(0, 3000).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}`);
+  throw error;
+} finally {
+  uiWindow.close();
+  for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLInputElement", "Element", "Node", "Event", "MouseEvent", "DOMParser", "IS_REACT_ACT_ENVIRONMENT"]) {
+    delete globalThis[key];
+  }
+}

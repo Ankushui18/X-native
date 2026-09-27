@@ -935,3 +935,50 @@ smoke and screenshot job all passed. Native geometry remains independently
 builds are unavailable. This **does not** migrate production rendering, layout, file store,
 undo or `App.tsx` to Rust. Wider schemas and a single production document owner
 remain prerequisites before retiring the TS engine.
+
+## 22. Explicit Rust-owned web rectangle preview (not the default editor)
+
+For a stored, V1-admissible file, open `#/file/<id>?engine=rust`. `App.tsx`
+mounts `ui/RustDocumentView.tsx` **instead of**, never inside, the standard
+`MemoryEngine` editor. The view opens through the existing admission/checkpoint
+gate, queries Rust's node IDs and current node values once, then paints only
+rectangle presentation. Rename, move and undo/redo send individual commands to
+one Rust session. Each response has one optional changed node and small status
+fields; no document JSON is exchanged per command/frame. There is no shadow TS
+edit engine, document history, layout calculation, or Rust/TS dual-write.
+
+The V1 **format restriction** from §21 is unchanged. The view is a deliberately
+narrow interface, not a claim of canvas renderer/viewport parity: it displays
+flat solid rectangles with native-returned positions/names and seed paint/size;
+there are no text, groups, effects, layout, variable edits or other standard
+editor tools. Nonadmitted files, WASM load failure or a mismatched Rust open
+show a refusal and an explicit standard-editor link; they never switch engines
+after an edit. A malformed command delta pauses editing but keeps the session
+available for strict recovery export. The explicit "Prepare download" control
+runs `exportDocument()` once, verifies its native→web checkpoint, and offers a
+**copy** of the `.x` web document. It never writes the original browser file
+store. Renaming/moving followed by "Standard editor" therefore does **not**
+import those changes; the user must knowingly leave and discard them or first
+download the copy. File/route changes with edits require confirmation, as does
+browser unload. A same-file Rust query change does not reopen stale stored data.
+
+Router and lifecycle safeguards: `ui/fileRoute.ts` requires the literal
+`engine=rust` query; the ordinary `#/file/<id>` route is unchanged. A route
+owner change synchronously closes Rust before React mounts the next editor;
+opening is abortable across a pending optional-WASM load. When leaving the
+standard editor, its pending autosave flushes before the Rust route reads a
+fresh, mode-matched seed. No edit or history is copied between engines. Strict
+Mode remounts and cross-file route changes dispose sessions and blob URLs.
+The existing FIG/Sketch/SVG import equivalence gates and geometry guard are
+unchanged; native geometry is still **NOT APPROVED (1/30 equivalent)**.
+
+Verification layers: jsdom view interaction tests mount the real React view
+over a fake session, assert one owner, small node deltas, Rust-owned history,
+strict explicit export, disabled unsafe states and cleanup; adapter tests cover
+cancellation during WASM initialization. `npm test`, TypeScript and the web
+build run without generated binaries. `npm run test:wasm` now also mounts the
+React view against the **real generated** `x-wasm` class in jsdom, checks a
+move/undo round trip and release; it requires CI-built artifacts and is not a
+browser paint test. Browser rendering parity, native desktop integration,
+advanced document schemas, durable Rust-owned persistence and default-route
+promotion are still **unverified** and outside this slice.
