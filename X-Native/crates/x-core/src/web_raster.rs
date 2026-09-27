@@ -74,7 +74,10 @@ pub fn boolean_web_raster(
     let gh = height as usize;
     let cells = GRID_WIDTH * gh;
     let edges: usize = world.iter().map(Vec::len).sum();
-    if cells.checked_mul(edges).is_none_or(|n| n > MAX_SAMPLE_EDGES) {
+    if cells
+        .checked_mul(edges)
+        .is_none_or(|n| n > MAX_SAMPLE_EDGES)
+    {
         return Err("web raster sampling budget exceeded");
     }
     let sx = bw / GRID_WIDTH as f64;
@@ -180,9 +183,7 @@ fn inside(poly: &[Point], x: f64, y: f64) -> bool {
     let mut j = poly.len() - 1;
     for (i, &a) in poly.iter().enumerate() {
         let b = poly[j];
-        if (a.1 > y) != (b.1 > y)
-            && x < ((b.0 - a.0) * (y - a.1)) / (b.1 - a.1 + 1e-9) + a.0
-        {
+        if (a.1 > y) != (b.1 > y) && x < ((b.0 - a.0) * (y - a.1)) / (b.1 - a.1 + 1e-9) + a.0 {
             hit = !hit;
         }
         j = i;
