@@ -89,8 +89,10 @@ try {
   assert.equal(getEngineInfo().importBackend, "ts", "transformed groups remain guarded until their flattening is equivalent");
   const text = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
   const textRaw = JSON.parse(glue.importSvgToX(text));
+  console.log(`Diff SVG text envelope: ${JSON.stringify({metrics: textRaw.textMetrics, node: textRaw.doc?.pages?.[0]?.children?.[0]})}`);
   assert.equal(textRaw.textMetrics.version, 1);
   const textCandidate = decodeRustImport(JSON.stringify(textRaw)), textExpected = svgTs(text);
+  console.log(`Diff SVG text candidate: ${JSON.stringify(textCandidate.nodes[0])}; expected: ${JSON.stringify(textExpected.nodes[0])}`);
   assert.equal(textCandidate.nodes[0].name, "Keep this text");
   assert.equal(textCandidate.nodes[0].textAlign, "center");
   assert.deepEqual([textCandidate.nodes[0].x, textCandidate.nodes[0].y, textCandidate.nodes[0].w, textCandidate.nodes[0].h], [10, 10, 168, 28]);
