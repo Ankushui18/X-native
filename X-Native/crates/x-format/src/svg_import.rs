@@ -1729,8 +1729,9 @@ mod tests {
             );
             let (page, report) = import_svg_with_report(&svg).unwrap();
             let text = &page.children[0];
-            assert_eq!(report.text_metrics[&text.id].font_weight, expected, "{attribute}");
-            assert!(text.bindings.is_empty(), "source weight must not enter .x");
+            let weight = report.text_metrics[&text.id].font_weight;
+            assert_eq!(weight, expected, "{attribute}");
+            assert!(text.bindings.is_empty(), "weight must not enter .x");
         }
     }
 
