@@ -672,11 +672,18 @@ not broad SVG parity.
 
 ### Verification
 
-- New Rust tests and full actual-WASM assertions are **pending CI**; local Cargo and
-  rustc are unavailable.
+- **CI [36327446710](https://github.com/Ankushui18/X-native/actions/runs/36327446710)
+  SUCCESS**, code `9704d64e65f441db36756e9a8a7a7c1d5337d610`; Rust job
+  `108642820454`. Rust workspace, both WASM packages, actual-module smoke, web
+  tests/build and screenshot test job pass. `test:wasm` reports `Diff grouped SVG:
+  none`; the grouped fixture selects `backend=wasm`, `fallback=none`. A transformed
+  group selects TS with the expected full-result mismatch fallback.
 - Serial local web suite: **3,081/0**, 51 summaries; `tsc -b` and production build
   pass. Local headless Chromium smoke could not run because `/tmp/chromium` is not
-  present. The previous CI fallback browser smoke is recorded in §14.
-- Native browser visual fidelity and broad SVG/import parity remain **NOT VERIFIED**.
+  present. The screenshot job produced no image artifacts.
+- Neutral wrappers with inherited fill/opacity are verified; transformed groups
+  and broad third-party SVG/import parity remain guarded or **NOT VERIFIED**.
+  Native-browser visual fidelity remains **NOT VERIFIED**.
 
-Evidence: `/home/user/wasm-svg-groups-{unit,tsc,build,browser}.log`.
+Evidence: `/home/user/wasm-svg-groups-{unit,tsc,build,browser,ci-final2}.log`;
+actual-module messages: `/home/user/wasm-svg-groups-ci-annotations.json`.
