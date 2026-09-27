@@ -1018,6 +1018,9 @@ fn import_figma_json_with_report_impl(
                 miny = 0.0;
             }
             for mut k in kids {
+                // Preserve exact values, not an offset that could lose precision
+                // when a web consumer reverses this native-only normalization.
+                k.source_position = Some((k.x, k.y));
                 k.x -= minx - 40.0;
                 k.y -= miny - 40.0;
                 page_ir.children.push(k);

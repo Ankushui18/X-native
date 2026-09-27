@@ -32,7 +32,10 @@ fn envelope(result: Result<String, String>) -> String {
 /// Additive, independently versioned import metadata. The persisted .x schema
 /// and native document remain unchanged. Older clients still decline text;
 /// newer clients require these original dimensions rather than guessing.
-fn import_envelope(result: Result<(x_core::Document, x_format::ImportReport), String>) -> String {
+fn import_envelope(
+    result: Result<(x_core::Document, x_format::ImportReport), String>,
+    source: &str,
+) -> String {
     match result {
         Err(e) => envelope(Err(e)),
         Ok((doc, report)) => {
@@ -40,8 +43,21 @@ fn import_envelope(result: Result<(x_core::Document, x_format::ImportReport), St
                 (id.clone(), serde_json::json!({ "width": m.width, "height": m.height, "fontSize": m.font_size }))
             }).collect();
             let metadata = serde_json::json!({ "version": 1, "nodes": metrics });
+            let coordinates = if source == "fig" {
+                let nodes: serde_json::Map<String, serde_json::Value> = report
+                    .source_positions
+                    .iter()
+                    .map(|(id, (x, y))| (id.clone(), serde_json::json!({ "x": x, "y": y })))
+                    .collect();
+                format!(
+                    ",\"figmaCoordinates\":{}",
+                    serde_json::json!({ "version": 1, "nodes": nodes })
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "{{\"ok\":true,\"doc\":{},\"textMetrics\":{metadata}}}",
+                "{{\"ok\":true,\"doc\":{},\"textMetrics\":{metadata}{coordinates}}}",
                 save_x(&doc)
             )
         }
@@ -50,12 +66,12 @@ fn import_envelope(result: Result<(x_core::Document, x_format::ImportReport), St
 
 /// Import a  `.fig` archive and return it as `.x` JSON.
 pub fn import_fig_to_x(bytes: &[u8]) -> String {
-    import_envelope(figbinary::import_fig_bytes_with_report(bytes))
+    import_envelope(figbinary::import_fig_bytes_with_report(bytes), "fig")
 }
 
 /// Import a  archive and return it as `.x` JSON.
 pub fn import_sketch_to_x(bytes: &[u8]) -> String {
-    import_envelope(sketch::import_sketch_with_report(bytes))
+    import_envelope(sketch::import_sketch_with_report(bytes), "sketch")
 }
 
 /// Import an SVG document and return it as `.x` JSON.
@@ -174,6 +190,35 @@ mod tests {
             assert_eq!(metrics["height"], 24.0);
             assert_eq!(metrics["fontSize"], 18.0);
         }
+    }
+
+    #[test]
+    fn fig_coordinates_are_versioned_import_only_metadata() {
+        let out = import_fig_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/coordinates.fig"
+        ));
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["figmaCoordinates"]["version"], 1);
+        let outer = &value["doc"]["pages"][1]["children"][0];
+        let id = outer["id"].as_str().unwrap();
+        assert_eq!(outer["x"], 40.0);
+        assert_eq!(
+            value["figmaCoordinates"]["nodes"][id],
+            serde_json::json!({ "x": -120.0, "y": -80.0 })
+        );
+        assert!(
+            value["doc"].get("figmaCoordinates").is_none(),
+            "persisted .x unchanged"
+        );
+        let sketch: serde_json::Value = serde_json::from_str(&import_sketch_to_x(include_bytes!(
+            "../../../apps/web/e2e/fixtures/sample.sketch"
+        )))
+        .unwrap();
+        assert!(
+            sketch.get("figmaCoordinates").is_none(),
+            "do not apply FIG coordinate semantics to Sketch"
+        );
     }
 
     #[test]

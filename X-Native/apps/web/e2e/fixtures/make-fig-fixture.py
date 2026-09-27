@@ -26,9 +26,10 @@ def tycode(t, defs):
     return defs.index(t)                      # non-negative => def index
 
 # --- schema: enough of Figma's shape to exercise the decoder
-defs=["Vector","Color","Paint","GUID","Matrix","NodeChange","Message","Effect"]
-KIND={"Vector":1,"Color":1,"Paint":2,"GUID":1,"Matrix":1,"NodeChange":2,"Message":2,"Effect":2}  # 1=struct 2=message
+defs=["Vector","Color","Paint","GUID","Matrix","NodeChange","Message","Effect","ParentIndex"]
+KIND={"Vector":1,"Color":1,"Paint":2,"GUID":1,"Matrix":1,"NodeChange":2,"Message":2,"Effect":2,"ParentIndex":2}  # 1=struct 2=message
 FIELDS={
+ "ParentIndex":[("guid","GUID",1),("position","string",2)],
  "Effect":[("type","string",1),("color","Color",2),("offset","Vector",3),("radius","float",4),("visible","bool",5)],
  "Vector":[("x","float",0),("y","float",0)],
  "Color":[("r","float",0),("g","float",0),("b","float",0),("a","float",0)],
@@ -38,7 +39,7 @@ FIELDS={
  "NodeChange":[("guid","GUID",1),("type","string",2),("name","string",3),("visible","bool",4),
                ("opacity","float",5),("size","Vector",6),("transform","Matrix",7),
                ("fillPaints","Paint",8),("strokePaints","Paint",9),("strokeWeight","float",10),
-               ("cornerRadius","float",11),("characters","string",12),("fontSize","float",13),("phase","string",14),("locked","bool",15),("textAlignHorizontal","string",16),("strokeAlign","string",17),("strokeCap","string",18),("strokeJoin","string",19),("strokeDashes","float",20),("blendMode","string",21),("effects","Effect",22)],
+               ("cornerRadius","float",11),("characters","string",12),("fontSize","float",13),("phase","string",14),("locked","bool",15),("textAlignHorizontal","string",16),("strokeAlign","string",17),("strokeCap","string",18),("strokeJoin","string",19),("strokeDashes","float",20),("blendMode","string",21),("effects","Effect",22),("parentIndex","ParentIndex",23)],
  "Message":[("nodeChanges","NodeChange",1)],
 }
 ARRAY={("NodeChange","effects"),("NodeChange","strokeDashes"),("NodeChange","fillPaints"),("NodeChange","strokePaints"),("Message","nodeChanges")}
@@ -58,7 +59,7 @@ def paint(c):  # message
     return bytes(out)
 def matrix(x,y): return varfloat(1)+varfloat(0)+varfloat(x)+varfloat(0)+varfloat(1)+varfloat(y)
 
-def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,fs=0,locked=False,align=None,stroke_align=None,cap=None,join=None,dashes=None,blend=None,effects=None):
+def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,fs=0,locked=False,align=None,stroke_align=None,cap=None,join=None,dashes=None,blend=None,effects=None,parent=None,order="a"):
     o=bytearray()
     o+=varuint(1)+varuint(sid)+varuint(lid)
     o+=varuint(2)+s(ty); o+=varuint(3)+s(name)
@@ -82,6 +83,8 @@ def node(sid,lid,ty,name,w,h,x,y,fill=None,stroke=None,sw=0,radius=0,chars=None,
     if effects is not None:
         o+=varuint(22)+varuint(len(effects))
         for fx in effects: o+=fx
+    if parent is not None:
+        o+=varuint(23)+varuint(1)+varuint(sid)+varuint(parent)+varuint(2)+s(order)+varuint(0)
     o+=varuint(0)
     return bytes(o)
 
@@ -129,6 +132,17 @@ if effect_case:
         node(1,3,"RECTANGLE","ForegroundAlias",100,50,140,40,fill=color(1,1,1),blend="SOFT_LIGHT",effects=[effect("FOREGROUND_BLUR",3)]),
         node(1,4,"FRAME","Passthrough",100,50,260,40,fill=color(1,1,1),blend="PASS_THROUGH"),
     ]
+coordinate_case = "--coordinates" in sys.argv
+if coordinate_case:
+    nodes = [
+        node(1,0,"DOCUMENT","Document",0,0,0,0),
+        node(1,1,"CANVAS","Empty",0,0,0,0,parent=0,order="a"),
+        node(1,2,"CANVAS","Negative",0,0,0,0,parent=0,order="b"),
+        node(1,3,"CANVAS","Positive",0,0,0,0,parent=0,order="c"),
+        node(1,4,"FRAME","Outer",100,50,-120,-80,fill=color(1,1,1),parent=2),
+        node(1,5,"RECTANGLE","Overflow",20,60,10,20,fill=color(1,0,0),parent=4),
+        node(1,6,"RECTANGLE","Other",50,60,300,200,fill=color(0,0,1),parent=3),
+    ]
 msg+=varuint(1)+varuint(len(nodes))
 for n in nodes: msg+=n
 msg+=varuint(0)
@@ -141,7 +155,7 @@ canvas=bytearray(b"fig-kiwi"+struct.pack("<I",1))
 for chunk in (raw_deflate(bytes(sch)), raw_deflate(bytes(msg))):
     canvas+=struct.pack("<I",len(chunk))+chunk
 
-target = Path(__file__).with_name("effects-blend.fig") if effect_case else Path(__file__).with_name("stroke-options.fig") if strokes else Path(__file__).with_name("state-text.fig") if state else Path("/tmp/test.fig")
+target = Path(__file__).with_name("coordinates.fig") if coordinate_case else Path(__file__).with_name("effects-blend.fig") if effect_case else Path(__file__).with_name("stroke-options.fig") if strokes else Path(__file__).with_name("state-text.fig") if state else Path("/tmp/test.fig")
 z=zipfile.ZipFile(target,"w",zipfile.ZIP_DEFLATED)
 entry = zipfile.ZipInfo("canvas.fig", date_time=(2026,9,27,0,0,0))
 entry.compress_type = zipfile.ZIP_DEFLATED

@@ -174,6 +174,17 @@ export function decodeRustImport(payload: string): ImportResult {
     if (metadata.version !== 1) throw new Error("Unsupported Rust text metrics version");
     textMetrics = object(metadata.nodes);
   }
+  // FIG's native editor normalizes each page near (40,40). Only explicit
+  // versioned metadata can restore exact original top-level translations;
+  // never infer offsets from native bounds or borrow coordinates from TS.
+  let figmaPositions: Obj | null = null;
+  if (envelope.figmaCoordinates !== undefined) {
+    const metadata = object(envelope.figmaCoordinates);
+    keys(metadata, ["version", "nodes"]);
+    if (metadata.version !== 1) throw new Error("Unsupported FIG coordinate metadata version");
+    figmaPositions = object(metadata.nodes);
+  }
+  const usedPositions = new Set<string>();
   const usedMetrics = new Set<string>();
   let count = 0;
   function convert(value: unknown, depth = 0): ImportedNode {
@@ -193,6 +204,13 @@ export function decodeRustImport(payload: string): ImportResult {
       fill, fillVisible: fill.length !== 9 || !fill.endsWith("00"), strokePaint: "#00000000", strokeWidth: 0, strokeVisible: false,
       hidden: n.visible === false, locked: n.locked === true,
     };
+    if (figmaPositions !== null && depth === 1) {
+      const id = text(n.id);
+      if (!Object.prototype.hasOwnProperty.call(figmaPositions, id) || usedPositions.has(id)) throw new Error("Missing or duplicate FIG source position");
+      usedPositions.add(id);
+      const position = object(figmaPositions[id]); keys(position, ["x", "y"]);
+      out.x = number(position.x); out.y = number(position.y);
+    }
     if (n.effects !== undefined) out.effects = effects(n.effects);
     if (n.blend !== undefined) {
       const mode = text(n.blend);
@@ -273,5 +291,25 @@ export function decodeRustImport(payload: string): ImportResult {
   const roots = doc.pages.map((p) => convert(p));
   if (usedMetrics.size !== Object.keys(textMetrics).length) throw new Error("Unused Rust source text metrics");
   const pages = roots.map((p) => ({ name: p.name, nodes: p.children ?? [] }));
+  if (figmaPositions !== null) {
+    if (usedPositions.size !== Object.keys(figmaPositions).length) throw new Error("Unused FIG source positions");
+    if (roots.some((p) => p.kind !== "frame" || p.x !== 0 || p.y !== 0 || p.rotation !== 0)) throw new Error("Unsupported FIG page transform");
+    // The web FIG interchange contract measures untranslated content extents
+    // across every page, including children that extend beyond their parent.
+    // It does not use the native editor's minimum 800x600 page envelope.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    function measure(list: ImportedNode[], ox: number, oy: number) {
+      for (const n of list) {
+        const x = number(ox + n.x), y = number(oy + n.y);
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, number(x + n.w)); maxY = Math.max(maxY, number(y + n.h));
+        if (n.children) measure(n.children, x, y);
+      }
+    }
+    for (const p of pages) measure(p.nodes, 0, 0);
+    const width = minX === Infinity ? 1 : Math.max(1, number(maxX - minX));
+    const height = minY === Infinity ? 1 : Math.max(1, number(maxY - minY));
+    return { nodes: (pages.find((p) => p.nodes.length) ?? pages[0]).nodes, pages, width, height, skipped: 0 };
+  }
   return { nodes: pages[0].nodes, pages, width: roots[0].w, height: roots[0].h, skipped: 0 };
 }

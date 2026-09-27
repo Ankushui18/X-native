@@ -310,3 +310,28 @@ fn fig_layer_blends_and_both_blur_spellings_survive_import_and_save() {
         assert!(nodes[2].active_effects().is_empty());
     }
 }
+
+#[test]
+fn fig_source_positions_preserve_negative_pages_and_nested_local_coordinates() {
+    let (doc, report) = import_fig_bytes_with_report(include_bytes!(
+        "../../../apps/web/e2e/fixtures/coordinates.fig"
+    ))
+    .unwrap();
+    assert_eq!(doc.pages.len(), 3);
+    assert!(doc.pages[0].children.is_empty());
+    assert_eq!(report.source_positions.len(), 2);
+    let outer = &doc.pages[1].children[0];
+    let other = &doc.pages[2].children[0];
+    assert_eq!((outer.transform.x, outer.transform.y), (40.0, 40.0));
+    assert_eq!((other.transform.x, other.transform.y), (40.0, 40.0));
+    assert_eq!(report.source_positions[&outer.id], (-120.0, -80.0));
+    assert_eq!(report.source_positions[&other.id], (300.0, 200.0));
+    assert_eq!(
+        (outer.children[0].transform.x, outer.children[0].transform.y),
+        (10.0, 20.0)
+    );
+    assert!(
+        !report.source_positions.contains_key(&outer.children[0].id),
+        "never shift nested local coordinates twice"
+    );
+}

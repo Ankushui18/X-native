@@ -78,6 +78,9 @@ pub struct ImportNode {
     /// represented by the legacy rotation-only field. Lowering composes this
     /// with the node's placement and decomposes it into the native transform.
     pub source_transform: Option<Affine>,
+    /// Exact top-level translation before source-specific page normalization.
+    /// Import-only metadata, not persisted in the native document.
+    pub source_position: Option<(f64, f64)>,
     /// None = "source specified nothing" -> lower() picks the kind default
     pub fill: Option<Paint>,
     /// Primary (first) stroke — (paint, width); Paint so gradient strokes
@@ -123,6 +126,7 @@ impl ImportNode {
             h: 0.0,
             rotation: 0.0,
             source_transform: None,
+            source_position: None,
             fill: None,
             stroke: None,
             stroke_options: None,
@@ -199,6 +203,8 @@ pub struct ImportTextMetrics {
 #[derive(Debug, Clone, Default)]
 pub struct ImportReport {
     pub text_metrics: HashMap<String, ImportTextMetrics>,
+    /// Final deduplicated node IDs -> pre-normalization top-level positions.
+    pub source_positions: HashMap<String, (f64, f64)>,
     pub nodes_imported: usize,
     pub assets_imported: usize,
     pub diagnostics: Vec<String>,
@@ -271,6 +277,7 @@ pub fn lower_with_report(doc: ImportDoc) -> (Document, ImportReport) {
             true,
             &asset_ids,
             &mut report.text_metrics,
+            &mut report.source_positions,
         );
         // shared page semantics: a page is always a Frame, auto-sized to
         // its content envelope when the source gave no/zero size
@@ -311,6 +318,7 @@ fn lower_node(
     is_page: bool,
     asset_ids: &HashMap<String, String>,
     text_metrics: &mut HashMap<String, ImportTextMetrics>,
+    source_positions: &mut HashMap<String, (f64, f64)>,
 ) -> Node {
     // ---- id: sanitize source id or generate; dedupe globally
     let base = match &ir.id {
@@ -334,6 +342,9 @@ fn lower_node(
         clean(ir.h).max(0.0),
     );
 
+    if let Some(position) = ir.source_position {
+        source_positions.insert(id.clone(), position);
+    }
     if let ImportKind::Text { size, .. } = &ir.kind {
         text_metrics.insert(
             id.clone(),
@@ -549,7 +560,15 @@ fn lower_node(
     }
 
     for c in ir.children {
-        let cn = lower_node(c, used, counter, false, asset_ids, text_metrics);
+        let cn = lower_node(
+            c,
+            used,
+            counter,
+            false,
+            asset_ids,
+            text_metrics,
+            source_positions,
+        );
         node.children.push(cn);
     }
     node
@@ -558,6 +577,30 @@ fn lower_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_positions_follow_final_ids_without_changing_native_geometry() {
+        let make = |position| {
+            let mut n = ImportNode::new(ImportKind::Rect { radius: 0.0 })
+                .id("same id")
+                .at(40.0, 40.0)
+                .size(10.0, 20.0);
+            n.source_position = Some(position);
+            n
+        };
+        let (doc, report) = lower_with_report(ImportDoc {
+            pages: vec![ImportNode::new(ImportKind::Frame)
+                .child(make((1e-12, -5.0)))
+                .child(make((-30.0, 100.0)))],
+            ..Default::default()
+        });
+        assert_eq!(report.source_positions.len(), 2);
+        assert_eq!(report.source_positions["same-id"], (1e-12, -5.0));
+        assert_eq!(report.source_positions["same-id-2"], (-30.0, 100.0));
+        for child in &doc.pages[0].children {
+            assert_eq!((child.transform.x, child.transform.y), (40.0, 40.0));
+        }
+    }
 
     #[test]
     fn stroke_materialization_preserves_effects_and_shared_options() {

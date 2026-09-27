@@ -87,6 +87,13 @@ try {
     // Decode the entire real document; don't carve out unsupported nodes to
     // manufacture a native success. Whole-result equivalence is checked below.
     const decoded = decodeRustImport(JSON.stringify(raw));
+    if (format === "fig") {
+      assert.equal(raw.figmaCoordinates.version, 1);
+      assert.equal(decoded.nodes.find(n => n.name === "Home").x, 100);
+      assert.equal(decoded.nodes.find(n => n.name === "Home").y, 50);
+      assert.equal(decoded.nodes.find(n => n.name === "FigCard").x, 120);
+      assert.equal(decoded.width, 320); assert.equal(decoded.height, 240);
+    }
     const decodedText = decoded.nodes.flatMap(flatten).find((n) => n.kind === "text");
     assert.ok(decodedText, `${format} adapter must retain text`);
     assert.equal(decodedText.text, content);
@@ -158,6 +165,23 @@ try {
   assert.ok(importsEquivalent(await importFig(effectData), await figTs(effectData)));
   assert.equal(calls.fig, 4);
   console.log(`PASS native FIG effects/blends: four ordered effects, materialized+legacy lists, blur aliases, layer modes; wrapper=${getEngineInfo().importBackend}`);
+  const coordinateBytes = fs.readFileSync("e2e/fixtures/coordinates.fig");
+  const rawCoordinates = JSON.parse(glue.importFigToX(coordinateBytes));
+  assert.equal(rawCoordinates.doc.pages[1].children[0].x, 40, "native placement remains normalized");
+  const placed = decodeRustImport(JSON.stringify(rawCoordinates));
+  assert.deepEqual(placed.pages.map(p => p.name), ["Empty", "Negative", "Positive"]);
+  assert.equal(placed.pages[0].nodes.length, 0);
+  assert.equal(placed.nodes[0].name, "Outer");
+  assert.deepEqual([placed.nodes[0].x, placed.nodes[0].y], [-120, -80]);
+  assert.deepEqual([placed.nodes[0].children[0].x, placed.nodes[0].children[0].y], [10, 20]);
+  assert.deepEqual([placed.pages[2].nodes[0].x, placed.pages[2].nodes[0].y], [300, 200]);
+  assert.deepEqual([placed.width, placed.height], [470, 340]);
+  const coordinateData = coordinateBytes.buffer.slice(coordinateBytes.byteOffset, coordinateBytes.byteOffset + coordinateBytes.byteLength);
+  const coordinateTs = await figTs(coordinateData);
+  assert.deepEqual([placed.width, placed.height], [coordinateTs.width, coordinateTs.height]);
+  assert.ok(importsEquivalent(await importFig(coordinateData), coordinateTs));
+  assert.equal(calls.fig, 5);
+  console.log(`PASS native FIG source placement: negative+positive pages, empty first page, nested local coordinates, content bounds; wrapper=${getEngineInfo().importBackend}`);
   assert.equal(calls.svg, 2);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");
