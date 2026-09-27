@@ -444,9 +444,26 @@ layer blend modes. Existing binary fixtures remain unchanged.
 - Local full suite: **3,003 passed / 0 failed**, 48 suite summaries; existing stroke
   **31/0**, text **35/0**, bridge **39/0**. `tsc -b` and production build pass
   (existing chunk-size warning).
-- Rust workspace compilation/tests and regenerated real-WASM fixture smoke are
-  **pending CI**; local cargo/rustc remain unavailable.
+- **CI [36319870093](https://github.com/Ankushui18/X-native/actions/runs/36319870093)
+  SUCCESS**, runtime `a63c981c5e8d2e936509f717d211588f190f08fe`.
+  Rust workspace gate, both WASM packages, expanded real-artifact smoke and web
+  checks pass. Rust job: `108621515526`. Local cargo/rustc remain unavailable.
+- Actual WASM imports the complete effects fixture, retaining the four effects
+  in order, their colors/offsets/radii, matching materialized and legacy lists,
+  both blur spellings and the explicit layer modes. Its production wrapper still
+  uses TS because whole-document differences remain. Previous fixture checks and
+  native simple-SVG routing continue to pass.
+- Original sample FIG still differs in placement, absent/default blend/effect/
+  fill-type metadata and corner independence; Sketch still differs in root
+  kind, transforms and hierarchy. Mapping explicit properties does not eliminate
+  those separate mismatches, and no normalization was added to conceal them.
+- Browser fallback smoke: dashboard SVG import, editable persisted rectangle and
+  reload pass with native assets absent; zero uncaught browser errors.
+- Geometry remains guarded: **1/30 equivalent, 29 failures**, repeat 2; summed
+  means TS 63.03ms / native 6.91ms. This non-blocking diagnostic failure is not
+  promotion or speedup approval.
 - Native-browser visual fidelity, broad rich-import parity and performance
-  promotion remain **NOT VERIFIED**.
+  promotion remain **NOT VERIFIED**. The screenshot job produced no artifacts.
 
-Evidence: `/home/user/wasm-effects-{red,focused,unit,tsc,build}.log`.
+Evidence: `/home/user/wasm-effects-{red,focused,unit,tsc,build,browser,ci}.log`;
+actual-artifact messages: `/home/user/wasm-effects-annotations.json`.
