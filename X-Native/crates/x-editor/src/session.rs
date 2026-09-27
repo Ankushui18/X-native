@@ -306,9 +306,8 @@ mod tests {
         duplicate_page.pages.push(Node::frame("page-2", 200.0, 100.0));
         assert!(DocumentSession::new(duplicate_page).is_err());
         let mut duplicate_id = sample();
-        duplicate_id.pages[0]
-            .children
-            .push(Node::rect("box", 0.0, 0.0, 1.0, 1.0, Color::BLACK));
+        let duplicate = Node::rect("box", 0.0, 0.0, 1.0, 1.0, Color::BLACK);
+        duplicate_id.pages[0].children.push(duplicate);
         assert!(DocumentSession::new(duplicate_id).is_err());
 
         let mut session = DocumentSession::new(sample()).unwrap();
@@ -329,9 +328,9 @@ mod tests {
     fn renaming_one_layer_does_not_snapshot_sibling_subtrees_into_history() {
         let mut doc = sample();
         for i in 0..300 {
-            doc.pages[0].children.push(Node::rect(
-                &format!("sibling-{i}"), 0.0, 0.0, 1.0, 1.0, Color::BLACK,
-            ));
+            let id = format!("sibling-{i}");
+            let child = Node::rect(&id, 0.0, 0.0, 1.0, 1.0, Color::BLACK);
+            doc.pages[0].children.push(child);
         }
         let mut session = DocumentSession::new(doc).unwrap();
         session
@@ -340,6 +339,7 @@ mod tests {
                 name: "Small",
             })
             .unwrap();
-        assert!(session.editor.history_bytes() < 10_000, "rename history captured the page");
+        let bytes = session.editor.history_bytes();
+        assert!(bytes < 10_000, "rename history captured the page: {bytes}");
     }
 }
