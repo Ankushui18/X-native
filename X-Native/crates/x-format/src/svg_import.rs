@@ -1360,7 +1360,9 @@ fn parse_children(
                                     (content.encode_utf16().count() as f64 * *size * 0.6).max(8.0);
                                 t.h = *size * 1.4;
                             }
-                            t.name = content.chars().take(40).collect();
+                            t.name =
+                                t.id.clone()
+                                    .unwrap_or_else(|| content.chars().take(40).collect());
                             top.node.children.push(t);
                         }
                     }
@@ -1638,7 +1640,7 @@ mod tests {
         let (page, report) = import_svg_with_report(r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##).unwrap();
         let text = &page.children[0];
         assert_eq!(text.id, "label");
-        assert_eq!(text.name, "Keep this text");
+        assert_eq!(text.name, "label");
         assert_eq!((text.transform.x, text.transform.y), (10.0, 10.0));
         assert_eq!((text.w, text.h), (168.0, 20.0));
         assert_eq!(text.text_align, TextAlign::Center);

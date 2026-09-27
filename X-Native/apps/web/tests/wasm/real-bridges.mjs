@@ -92,7 +92,7 @@ try {
   assert.equal(textRaw.textMetrics.version, 1);
   const textCandidate = decodeRustImport(JSON.stringify(textRaw)), textExpected = svgTs(text);
   console.log(`Diff SVG text candidate paths: ${differencePaths(textCandidate, textExpected).join(", ") || "none"}`);
-  assert.equal(textCandidate.nodes[0].name, "Keep this text");
+  assert.equal(textCandidate.nodes[0].name, "label");
   assert.equal(textCandidate.nodes[0].textAlign, "center");
   assert.deepEqual([textCandidate.nodes[0].x, textCandidate.nodes[0].y, textCandidate.nodes[0].w, textCandidate.nodes[0].h], [10, 10, 168, 28]);
   delete textCandidate.pages; // same single-interchange-page adaptation used by choose()
