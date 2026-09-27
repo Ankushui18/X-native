@@ -260,9 +260,12 @@ jobs:
                   text = ("Rust test failure detail:\n" + "\n".join(failures))[:3500]
                   print("::error::" + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
           '
+          if [ -f /tmp/report.txt ]; then
+            printf '::notice::%s\n' "$(head -1 /tmp/report.txt)"
+          fi
           esc=$(printf '\033')
           if [ -f /tmp/gate.log ]; then
-            grep -aE '==>|FAIL|error|warning|Diff|panicked|\.rs:[0-9]+' /tmp/gate.log |
+            grep -aE '==>|FAIL|error|warning|Diff|panicked|process didn.t exit|signal:|Caused by:|\.rs:[0-9]+' /tmp/gate.log |
               sed -e "s/${esc}\[[0-9;]*m//g" -e 's/%/%25/g' -e 's/\r//g' |
               cut -c1-350 | head -35 |
               while IFS= read -r line; do printf '::error::%s\n' "$line"; done
