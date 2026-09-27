@@ -83,7 +83,9 @@ try {
   assert.ok(importsEquivalent(groupedActual, groupedExpected), "production group import must preserve the whole TS contract");
   assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "neutral groups should select native output");
   const transformedGroupSvg = '<svg width="120" height="80"><g transform="rotate(15)"><rect width="20" height="10"/></g></svg>';
-  assert.ok(importsEquivalent(importSvg(transformedGroupSvg), svgTs(transformedGroupSvg)));
+  const transformedExpected = svgTs(transformedGroupSvg), transformedActual = importSvg(transformedGroupSvg);
+  console.log(`Transformed SVG wrapper: backend=${getEngineInfo().importBackend}; fallback=${getEngineInfo().lastImportFallback ?? "none"}; equivalent=${importsEquivalent(transformedActual, transformedExpected)}`);
+  assert.ok(importsEquivalent(transformedActual, transformedExpected), "transformed group fallback must retain the complete TS result");
   assert.equal(getEngineInfo().importBackend, "ts", "transformed groups remain guarded until their flattening is equivalent");
   const text = '<svg width="200" height="120"><text x="10" y="30" font-size="20">Keep this text</text></svg>';
   assert.ok(importsEquivalent(importSvg(text), svgTs(text)));
