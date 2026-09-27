@@ -388,9 +388,25 @@ third-party file or visual-rendering signoff.
 - Local full suite: **2,977 passed / 0 failed**, 47 suite summaries; text **35/0**,
   existing bridge **39/0**. `tsc -b` and production build pass, with the existing
   chunk-size warning.
-- Rust compilation/tests, regenerated WASM and expanded native-artifact checks are
-  **pending CI**; local cargo/rustc remain unavailable.
+- **CI [36319037573](https://github.com/Ankushui18/X-native/actions/runs/36319037573)
+  SUCCESS**, runtime `43a5ed55188f1f68d06038208d5988834bf52d92`.
+  Rust workspace gate, both WASM packages, expanded real-artifact smoke and web
+  checks pass. Rust job: `108619168025`. Local cargo/rustc remain unavailable.
+- Actual WASM decodes the complete FIG stroke fixture with all expected options;
+  raw native SVG also passes materialized solid-stroke conversion. Original
+  content/metrics, state/typography, error-envelope and native simple-SVG routing
+  tests still pass. The FIG fixture wrapper retains TS because other whole-result
+  differences remain. Stroked SVG conversion is not browser-native visual proof.
+- Sample FIG's first-12 differing-path diagnostic no longer lists stroke alignment
+  or cap; placement, blend/effects/fill-type metadata and corner independence
+  remain visible. Sketch's structural differences remain. No guard was relaxed.
+- Browser fallback smoke: actual dashboard SVG upload, editable persisted rectangle
+  and reload pass with native assets absent; zero uncaught browser errors.
+- Unchanged geometry diagnostic: **1/30 equivalent, 29 failures**, repeat 2;
+  summed means TS 59.19ms / native 6.48ms. Non-blocking failure is still explicit;
+  green CI is not geometry promotion or speedup approval.
 - Native browser E2E, broad rich-import fidelity and performance promotion remain
-  **NOT VERIFIED**.
+  **NOT VERIFIED**. No screenshot artifacts were produced by the screenshot job.
 
-Evidence: `/home/user/wasm-stroke-{red,unit,tsc,build}.log`.
+Evidence: `/home/user/wasm-stroke-{red,unit,tsc,build,browser,ci}.log`;
+native messages: `/home/user/wasm-stroke-annotations.json`.
