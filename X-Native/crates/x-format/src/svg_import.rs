@@ -32,8 +32,27 @@ pub fn import_svg_with_report(svg: &str) -> Result<(Node, crate::ImportReport), 
     loop {
         match lexer.next_tag()? {
             XmlTag::Open(name, attrs) | XmlTag::SelfClose(name, attrs) if name == "svg" => {
-                let w = attr_num(&attrs, "width").unwrap_or(800.0);
-                let h = attr_num(&attrs, "height").unwrap_or(600.0);
+                // The web SVG importer uses viewBox dimensions for missing (or
+                // zero) width/height, then 100x100 when neither is specified.
+                // Only accept a finite four-number viewBox here; malformed
+                // source remains subject to the complete TS import guard.
+                let view_box = attr(&attrs, "viewBox").and_then(|value| {
+                    let values: Vec<f64> = value
+                        .split(|c: char| c.is_ascii_whitespace() || c == ',')
+                        .filter(|part| !part.is_empty())
+                        .map(str::parse)
+                        .collect::<Result<_, _>>()
+                        .ok()?;
+                    (values.len() == 4 && values.iter().all(|v| v.is_finite()))
+                        .then_some((values[2], values[3]))
+                });
+                let (fallback_w, fallback_h) = view_box.unwrap_or((100.0, 100.0));
+                let w = attr_num(&attrs, "width")
+                    .filter(|value| value.is_finite() && *value != 0.0)
+                    .unwrap_or(fallback_w);
+                let h = attr_num(&attrs, "height")
+                    .filter(|value| value.is_finite() && *value != 0.0)
+                    .unwrap_or(fallback_h);
                 let mut root = ImportNode::new(ImportKind::Frame).id("svg-root").size(w, h);
                 apply_transform_attr(&mut root, &attrs);
                 let css_rules = parse_css_rules(svg);
@@ -1638,6 +1657,27 @@ mod tests {
         s.push_str(&"</g>".repeat(depth));
         s.push_str("</svg>");
         assert!(import_svg(&s).is_ok(), "64 levels must import fine");
+    }
+
+    #[test]
+    fn svg_view_box_supplies_missing_dimensions_without_overriding_explicit_sizes() {
+        for (source, expected) in [
+            (
+                r#"<svg viewBox="0, 0, 96, 48"><rect id="box" x="10" y="12" width="20" height="15" fill="red"/></svg>"#,
+                (96.0, 48.0),
+            ),
+            (
+                r#"<svg width="200" viewBox="0 0 96 48"><rect id="box" width="20" height="15" fill="red"/></svg>"#,
+                (200.0, 48.0),
+            ),
+            (
+                r#"<svg><rect id="box" width="20" height="15" fill="red"/></svg>"#,
+                (100.0, 100.0),
+            ),
+        ] {
+            let page = import_svg(source).expect("SVG should import");
+            assert_eq!((page.w, page.h), expected, "source: {source}");
+        }
     }
 
     #[test]

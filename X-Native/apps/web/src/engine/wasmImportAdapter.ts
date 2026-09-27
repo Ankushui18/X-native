@@ -205,17 +205,30 @@ function vector(v: unknown): { path: PathPoint[]; vectorNetwork: VectorNetwork; 
 export function decodeRustImport(payload: string): ImportResult {
   const envelope = object(JSON.parse(payload));
   if (envelope.ok !== true) throw new Error(typeof envelope.error === "string" ? envelope.error : "Rust importer declined");
+  keys(envelope, ["ok", "doc", "textMetrics", "figmaCoordinates", "figmaAppearance", "figmaEffects"]);
   const doc = object(envelope.doc);
+  // The .x serializer can add fields without bumping its v1 version. Never
+  // turn an unknown document capability into a seemingly complete web import.
+  keys(doc, ["format", "version", "pages", "default_font", "variables", "styles", "component_props", "comments", "assets", "libraries"]);
   if (doc.format !== "x-native" || doc.version !== 1 || !Array.isArray(doc.pages) || !doc.pages.length) {
     throw new Error("Unsupported Rust document schema");
   }
-  // Resource-bearing documents must be handled by the existing importer until
-  // their assets/styles/variables have a lossless web mapping.
-  for (const key of ["assets", "styles", "components", "libraries"]) {
+  if (doc.default_font !== undefined) throw new Error("Unsupported Rust default_font");
+  // Even an empty resource section must have the right native container type:
+  // a scalar/null here is not evidence that the source has no resources.
+  for (const key of ["styles", "component_props"] as const) {
+    if (doc[key] === undefined) continue;
     const value = doc[key];
-    if (value && typeof value === "object" && Object.keys(value).length) throw new Error(`Unsupported Rust ${key}`);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid Rust ${key}`);
+    if (Object.keys(value).length) throw new Error(`Unsupported Rust ${key}`);
   }
-  if (doc.variables != null) {
+  for (const key of ["assets", "libraries", "comments"] as const) {
+    const value = doc[key];
+    if (value === undefined) continue;
+    if (!Array.isArray(value)) throw new Error(`Invalid Rust ${key}`);
+    if (value.length) throw new Error(`Unsupported Rust ${key}`);
+  }
+  if (doc.variables !== undefined) {
     const vars = object(doc.variables);
     keys(vars, ["colors", "numbers", "strings", "bools", "collections", "modes", "num_modes", "str_modes", "bool_modes"]);
     for (const table of Object.values(vars)) {

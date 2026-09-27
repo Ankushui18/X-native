@@ -176,6 +176,18 @@ mod tests {
     }
 
     #[test]
+    fn svg_view_box_dimensions_survive_the_wasm_envelope() {
+        let out = import_svg_to_x(
+            r#"<svg viewBox="0 0 96 48"><rect id="box" width="20" height="15" fill="red"/></svg>"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["doc"]["pages"][0]["w"], 96.0);
+        assert_eq!(value["doc"]["pages"][0]["h"], 48.0);
+        assert_eq!(value["doc"]["pages"][0]["children"][0]["id"], "box");
+    }
+
+    #[test]
     fn svg_text_exports_the_same_source_box_metrics_as_the_web_importer() {
         let out = import_svg_to_x(
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##,

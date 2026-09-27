@@ -85,6 +85,37 @@ for (const payload of ["bad", JSON.stringify({ ok: false, error: "nope" }), JSON
 await test("asset-bearing document cannot silently lose assets", () => {
   const r = JSON.parse(envelope()); r.doc.assets = { image: "data:abc" }; assert.throws(() => decodeRustImport(JSON.stringify(r)));
 });
+await test("accept typed empty native document tables", () => {
+  const r = JSON.parse(envelope());
+  Object.assign(r.doc, { variables: { colors: {}, numbers: {}, strings: {}, bools: {}, collections: {}, modes: {}, num_modes: {}, str_modes: {}, bool_modes: {} },
+    styles: {}, component_props: {}, comments: [], assets: [], libraries: [] });
+  assert.equal(decodeRustImport(JSON.stringify(r)).nodes[0].name, "box");
+});
+await test("unknown envelope and document fields must decline rather than disappear", () => {
+  for (const scope of ["envelope", "doc"]) {
+    const r = JSON.parse(envelope());
+    (scope === "doc" ? r.doc : r).futurePaints = ["lost"];
+    assert.throws(() => decodeRustImport(JSON.stringify(r)), /properties: futurePaints/);
+  }
+});
+for (const [field, value] of [
+  ["default_font", "Other Face"], ["assets", "none"], ["styles", null],
+  ["component_props", { Button: [] }], ["comments", [{ text: "keep me" }]],
+  ["libraries", {}], ["variables", null],
+]) await test(`decline unsupported/malformed document ${field}`, () => {
+  const r = JSON.parse(envelope()); r.doc[field] = value;
+  assert.throws(() => decodeRustImport(JSON.stringify(r)), /Unsupported Rust|Invalid Rust/);
+});
+await test("unsupported document fields fall back through the production SVG wrapper", async () => {
+  const r = JSON.parse(envelope()); r.doc.comments = [{ text: "keep me" }];
+  __resetWasmForTests();
+  try {
+    await initWasmBridge(async () => glue({ importSvgToX: () => JSON.stringify(r) }));
+    assert.deepEqual(importSvg(svg), svgTs(svg));
+    assert.equal(getEngineInfo().importBackend, "ts");
+    assert.match(getEngineInfo().lastImportFallback, /comments/);
+  } finally { __resetWasmForTests(); }
+});
 await test("single-page shape equivalence expands absent defaults", () => assert.equal(importsEquivalent(svgTs(svg), { ...decodeRustImport(envelope()), pages: undefined }), true));
 await test("equivalence includes optional paints and additional pages", () => {
   const a = svgTs(svg), b = structuredClone(a); b.nodes[0].imageSrc = "data:x"; assert.equal(importsEquivalent(a, b), false);

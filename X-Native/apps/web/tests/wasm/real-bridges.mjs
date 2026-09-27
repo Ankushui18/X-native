@@ -117,6 +117,22 @@ try {
   const boldText = '<svg width="200" height="120"><text x="10" y="30" font-size="20" font-weight="700">Keep this text</text></svg>';
   assert.ok(importsEquivalent(importSvg(boldText), svgTs(boldText)));
   assert.equal(getEngineInfo().importBackend, "ts", "unsupported SVG font weight remains guarded");
+  for (const [label, source, w, h] of [
+    ["viewBox dimensions", '<svg viewBox="0, 0, 96, 48"><rect id="box" x="10" y="12" width="20" height="15" fill="red"/></svg>', 96, 48],
+    ["explicit width over viewBox", '<svg width="200" viewBox="0 0 96 48"><rect id="box" width="20" height="15" fill="red"/></svg>', 200, 48],
+    ["default dimensions", '<svg><rect id="box" width="20" height="15" fill="red"/></svg>', 100, 100],
+  ]) {
+    const raw = JSON.parse(glue.importSvgToX(source));
+    assert.equal(raw.ok, true, `${label}: native SVG import should succeed`);
+    assert.deepEqual([raw.doc.pages[0].w, raw.doc.pages[0].h], [w, h], `${label}: native root size`);
+    const expected = svgTs(source), candidate = decodeRustImport(JSON.stringify(raw));
+    delete candidate.pages; // single SVG interchange root, as in choose()
+    const diff = differencePaths(candidate, expected);
+    console.log(`Diff SVG ${label}: ${diff.join(", ") || "none"}`);
+    assert.ok(importsEquivalent(candidate, expected), `${label}: native import differs: ${diff.join(", ")}`);
+    assert.ok(importsEquivalent(importSvg(source), expected), `${label}: complete wrapper result differs`);
+    assert.equal(getEngineInfo().importBackend, "wasm", `${label}: ${getEngineInfo().lastImportFallback ?? "native output expected"}`);
+  }
   for (const [format, nativeImport, tsImport] of [["fig", importFig, figTs], ["sketch", importSketch, sketchTs]]) {
     const bytes = fs.readFileSync(`e2e/fixtures/sample.${format}`);
     const data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -257,7 +273,7 @@ try {
   assert.equal(sourceCandidate.nodes[1].effects[0].visible, false);
   console.log("PASS native FIG source effects: hidden entries, spread, blend, show-behind; full candidate equivalent; wrapper=wasm");
   assert.equal(calls.fig, 6);
-  assert.equal(calls.svg, 6);
+  assert.equal(calls.svg, 9);
 } finally { dom.window.close(); delete globalThis.DOMParser; }
 console.log("PASS production import routing: native simple SVG, safe text fallback, real FIG/Sketch fixtures");
 
