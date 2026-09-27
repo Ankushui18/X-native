@@ -11,8 +11,8 @@ After user authorization, the current work was committed and pushed only to
 `arena/01a0e1ff-x-native`. No generated binaries are checked in; the local preview
 still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `9677ddf`, [CI run 36322532944](https://github.com/Ankushui18/X-native/actions/runs/36322532944).
-Basic FIG now passes the complete-result gate with `backend=wasm`; see §13.
+Latest verified code/CI checkpoint: `ddf4472`, [CI run 36323243749](https://github.com/Ankushui18/X-native/actions/runs/36323243749).
+The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`; see §§13–14.
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -630,13 +630,23 @@ fixture. Synthetic fixture coverage is not general real-world or visual signoff.
 
 ### Verification
 
-- Regression first: **25 passed / 7 failed**; implemented suite **32/0**.
+- Regression first: **25 passed / 7 failed**; implemented source-effects suite **32/0**.
 - Serial full npm suite: **3,081/0**, 51 summaries. `tsc -b` and production build
-  pass (existing chunk-size warning).
-- Native Rust checks, regenerated modules and stricter actual-artifact assertions
-  are **pending CI**. Local cargo/rustc remain unavailable; no new native promotion
-  is claimed until those assertions execute successfully.
-- Broad rich-import parity, native-browser visual fidelity and performance remain
-  **NOT VERIFIED**. Geometry remains guarded as requested.
+  pass (existing chunk-size warning). Missing-WASM browser fallback smoke passes:
+  dashboard SVG upload → editable rectangle → persistence/reload, no uncaught errors.
+- **CI [36323243749](https://github.com/Ankushui18/X-native/actions/runs/36323243749)
+  SUCCESS**, commit `ddf4472f306d61c9d2b6db5b29faa125d35660b0`; Rust job
+  `108631010562`. Rust workspace, WASM packaging, genuine-module smoke and web
+  gates all pass. Published `x-wasm` and `wasm-verification` artifacts.
+- Both the original `effects-blend.fig` and new `effect-source.fig` have no
+  complete-result candidate differences and select `backend=wasm`. This verifies
+  the tested subset (including source-only fields); it does not establish broad
+  third-party file or visual fidelity. Real Sketch fixtures and rich unsupported
+  cases continue to fall back safely.
+- Geometry remains guarded: **1/30 equivalent, 29 failures**, repeat 2; latest
+  summed means TS 64.43ms / native 6.73ms. Not promotion or speedup proof.
+- Screenshot job reported no screenshot files. Broad rich-import parity,
+  native-browser visual fidelity and performance remain **NOT VERIFIED**.
 
-Evidence: `/home/user/wasm-source-effects-{red,focused,unit,tsc,build}.log`.
+Evidence: `/home/user/wasm-source-effects-{red,focused,unit,tsc,build,browser,ci}.log`,
+`/home/user/wasm-source-effects-annotations.json`.
