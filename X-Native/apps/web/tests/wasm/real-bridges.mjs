@@ -62,6 +62,13 @@ try {
   const plain = svg.replace("λ-box", "box");
   assert.ok(importsEquivalent(importSvg(plain), svgTs(plain)));
   assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "simple SVG must use native output");
+  const extended = JSON.parse(glue.importSvgToX(plain));
+  extended.doc.comments = [{ text: "do not discard me" }];
+  assert.throws(() => decodeRustImport(JSON.stringify(extended)), /Unsupported Rust comments/);
+  extended.doc.comments = [];
+  extended.futureAppearance = { enabled: true };
+  assert.throws(() => decodeRustImport(JSON.stringify(extended)), /properties: futureAppearance/);
+  console.log("PASS actual-module envelope declines unsupported document metadata");
   const groupedSvg = '<svg width="120" height="80"><g id="outer" fill="#123456" opacity=".5"><g id="inner"><rect id="box" width="20" height="10"/></g></g><g id="empty"/></svg>';
   const groupedCandidate = decodeRustImport(glue.importSvgToX(groupedSvg));
   const groupedExpected = svgTs(groupedSvg);

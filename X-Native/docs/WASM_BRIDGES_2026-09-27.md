@@ -11,9 +11,9 @@ The earlier work was committed on `arena/01a0e1ff-x-native`; this import-only
 continuation is on `arena/01a0e36f-x-native`. No generated binaries are checked
 in; the local preview still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `9b2f31c`, [CI run 36329391845](https://github.com/Ankushui18/X-native/actions/runs/36329391845).
+Latest verified code/CI checkpoint: `1e89edf`, [CI run 36330628149](https://github.com/Ankushui18/X-native/actions/runs/36330628149).
 The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`;
-plain SVG text now does too (see §§13–16).
+plain SVG text and SVG viewport defaults now do too (see §§13–17).
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -728,3 +728,33 @@ rendering or visual equivalence.
 
 Evidence: CI run above and its `wasm-verification` artifact/annotations. The local
 preview does not contain the CI-built WASM assets and uses the TS fallback.
+
+## 17. Fail-closed document envelopes and SVG viewport sizing (2026-09-27)
+
+Import-only continuation. TypeScript remains the whole-result oracle; no WASM
+editor replacement, persisted `.x` schema change or geometry promotion.
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W31 — unknown document-level fields and malformed empty resources could disappear silently | The web adapter now admits only known success-envelope and `.x` v1 document fields. It validates empty styles, component props, comments, assets and libraries with their native container types; present default fonts, nonempty resources, unexpected fields and null variable tables decline to the complete TS import. Missing optional fields still work with old envelopes | Red-first web regressions for unknown fields, wrong types, nonempty resources, complete-wrapper fallback, and typed empty native tables; real-module smoke mutates a valid envelope to check rejection |
+| W32 — native SVG root defaulted to 800×600 even when web import used a `viewBox` or 100×100 | Read a finite four-number `viewBox` for missing/zero width or height; explicit nonzero dimensions win. Without either, use the web importer's 100×100 defaults. Malformed/unsupported geometry remains subject to the unchanged complete-result comparator | Rust importer/envelope tests; actual-module smoke compares three entire SVG results (viewBox-only, explicit width + viewBox height, and no dimensions) and requires `backend=wasm` for each |
+
+These checks protect the conversion boundary, not native rendering or support
+for nonempty component/resource tables. No TypeScript oracle fields are copied
+into the native candidate; resources without a lossless mapping still fall back.
+
+### Verification
+
+- Local `npm test`, `npm run build` and `git diff --check` pass. This sandbox
+  still cannot build Rust or run native-browser visual checks.
+- **CI [36330628149](https://github.com/Ankushui18/X-native/actions/runs/36330628149) SUCCESS**
+  on `1e89edf`: Rust formatting/clippy/workspace tests, matching WASM packaging,
+  real generated-module smoke, and web tests/build. The actual candidate logs
+  `Diff SVG viewBox dimensions: none`, `Diff SVG explicit width over viewBox:
+  none`, and `Diff SVG default dimensions: none`; each production wrapper
+  selects WASM after complete equivalence. The additional real-module smoke
+  also rejects unsupported metadata on a valid native envelope; it does not
+  alter the Rust artifact or conversion logic.
+- Geometry stays guarded: **1/30 equivalent, 29 differential failures** in this
+  run; the `auto` mode TS check is unchanged. Broader SVG fidelity, browser
+  visual parity, and native speedup remain **NOT VERIFIED**.
