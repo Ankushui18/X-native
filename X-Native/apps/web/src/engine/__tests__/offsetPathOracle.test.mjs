@@ -45,6 +45,9 @@ const tips = prominentMiterTips(star, 4);
 assert.equal(tips.length, 5);
 assert.ok(tips.some(([x, y]) => Math.abs(x - 45) < 1e-7 && Math.abs(y + 9.45) < 0.1));
 assert.deepEqual(prominentMiterTips(star, -4), []);
+assert.equal(offsetCoverageEquivalent(star,
+  { ...star, kind: "vector", w: 1, h: 1, path: [] }, 4, "miter"), false,
+  "a growing star must retain original ink even near every sharp vertex");
 assert.deepEqual(offsetRings(expanded.path), [square(82, 52)]);
 assert.equal(offsetRings([["M", 0, 0], ["C", 1, 2, 3, 4, 5, 6], ["Z"]]), null);
 console.log("Offset guard: TS nonzero/analytic coverage, both signs and join/mismatch refusals passed");

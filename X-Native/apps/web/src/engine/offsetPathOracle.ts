@@ -177,12 +177,15 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
       expected = signed < distance;
       boundary = Math.abs(signed - distance);
       // Signed Euclidean distance models ROUND corners exactly. Miter tips
-      // can extend to the 4x limit: points in that wedge must be checked by
-      // the independent edge-line intersection above, not a circular SDF.
-      // Outside wedges, still compare straight edges and gross topology.
+      // can extend to the 4x limit: uncertain points in that wedge must be
+      // checked by the edge-line intersection above, not a circular SDF.
+      // Original ink is *certainly* retained by an expansion; deep ink also
+      // survives an inset. Always compare that decisive interior even near a
+      // star's many vertices, or every filled sample could be skipped.
       const wedge = join === "miter" ? 4 * Math.abs(distance) : Math.abs(distance);
+      const certainInk = start.inside && (distance > 0 || start.distance > -distance + epsilon);
       if (before.kind !== "ellipse" && join !== "round" &&
-          start.vertex <= wedge + epsilon) continue;
+          start.vertex <= wedge + epsilon && !certainInk) continue;
     }
     const end = insideAndDistance(output, x - after.x, y - after.y);
     if (boundary <= epsilon || end.distance <= epsilon) continue;
