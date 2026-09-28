@@ -721,6 +721,12 @@ fn side_outline(
                     }
                     let mut clipped = false;
                     let search_limit = out.len().saturating_sub(32);
+                    let next_half = width
+                        * sample_width_profile(&options.width_profile, samples[next].t)
+                        * side_scale;
+                    let to_next = add(samples[next].point, mul(normal_out, side * next_half));
+                    let d_out_edge = direction(to, to_next).unwrap_or(outgoing);
+                    let l_out_edge = distance(to, to_next);
                     for k in (search_limit + 1..out.len()).rev() {
                         let p_a = out[k - 1];
                         let p_b = out[k];
@@ -728,11 +734,11 @@ fn side_outline(
                             continue;
                         };
                         if let Some((pt_int, t_seg, s_ray)) =
-                            line_intersection_params(p_a, d_ab, to, outgoing)
+                            line_intersection_params(p_a, d_ab, to, d_out_edge)
                         {
                             let d_seg = distance(p_a, p_b);
                             if (-EPS..=d_seg + EPS).contains(&t_seg)
-                                && (-EPS..=l_out + EPS).contains(&s_ray)
+                                && (-EPS..=l_out_edge + EPS).contains(&s_ray)
                             {
                                 out.truncate(k);
                                 if distance(p_a, pt_int) > EPS {
