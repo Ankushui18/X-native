@@ -5,6 +5,37 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Outline Stroke promoted in the opt-in Rust view)
+
+The genuine generated-WASM 30/30 outline corpus ran green with the promotion
+guard still ON — CI
+[36398066150](https://github.com/Ankushui18/X-native/actions/runs/36398066150)
+and [36409190946](https://github.com/Ankushui18/X-native/actions/runs/36409190946)
+— and only then was the browser guard lifted. The post-promotion run
+[36413696948](https://github.com/Ankushui18/X-native/actions/runs/36413696948)
+drove the public web owner on the packaged artifact.
+
+- **The opt-in Rust document view dispatches Outline Stroke directly.**
+  `#/file/<id>?engine=rust` turns one admitted live-stroked rectangle into one
+  filled vector with a single `x-editor` `ReplaceNode` command. Strict ABI
+  parsing, affected-layer identity, a closed `vector` result with `stroke: null`
+  and explicit-checkpoint verification still apply; there is no per-edit TS
+  geometry, JS node tree or second history. The richer native dialect (lines,
+  arcs, ellipse/poly/star, dashes, asymmetric caps, variable-width stations) is
+  unchanged for native callers.
+- **`?outline=audit` keeps the independent diagnostic.** The command's own undo
+  projection supplies the source rect and its true stroke style (the only
+  bounded shape query is the offset dialect's `getShape`, which refuses a layer
+  that still owns a live stroke); the committed filled ink is compared with an
+  analytic rectangle band model under NONZERO winding, including miter/bevel/
+  round outer corners and the miter-limit bevel fallback. A decisive
+  disagreement returns native history to the proven source and pauses editing; a
+  source the model cannot cover is recorded as `not-run` rather than passed. The
+  default route consults none of it.
+- **Not built:** the normal TypeScript editor still owns Outline Stroke, text
+  outlining and its own history; the Rust view is not a second owner there.
+  Details, evidence and the withheld list: [docs/OUTLINE_STROKE_TASK2C.md](docs/OUTLINE_STROKE_TASK2C.md).
+
 ## [Unreleased] — 2026-09-19 (Outlines mode)
 
 [Designlab Figma 101 — Tips and Tricks](https://designlab.com/figma-101-course/tips-and-tricks)
