@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { outlineAuditRequested, outlineInkVerdict, outlineReferenceRect, recordOutlineAudit } from "../outlineStrokeOracle.ts";
 import { __enableBridgeAuditForTests, bridgeAuditSnapshot, resetBridgeAudit } from "../bridgeRuntimeAudit.ts";
 
-const rect = { id: "a", name: "Box", x: 10, y: 20, w: 30, h: 40, kind: "rect", radius: 0 };
 const style = (over = {}) => ({ width: 8, color: "#236b9e", align: "center", capStart: "none",
   capEnd: "none", join: "miter", dash: [], dashOffset: 0, miterLimit: 4, widthProfile: [], ...over });
+const rect = { id: "a", name: "Box", x: 10, y: 20, w: 30, h: 40, kind: "rect", radius: 0,
+  fill: null, stroke: style() };
 /** A committed filled vector whose rings are written by hand, not measured. */
 const committed = (x, y, w, h, rings, fill = "#236b9e") => ({ id: "a", name: "Box", x, y, w, h,
   kind: "vector", fill, stroke: null,
@@ -72,6 +73,8 @@ assert.equal(outlineInkVerdict(rect, style(), { ...miterBand, kind: "rect", radi
   path: undefined }).decisive, false, "a non-vector result is reported, never asserted");
 
 assert.deepEqual(outlineReferenceRect(rect), { x: 10, y: 20, w: 30, h: 40 });
+assert.equal(outlineReferenceRect({ ...rect, stroke: null }), null,
+  "a source restored without its live stroke cannot be modelled");
 assert.equal(outlineReferenceRect({ ...rect, radius: 4 }), null, "rounded corners are not this model");
 assert.equal(outlineReferenceRect({ ...rect, kind: "ellipse" }), null);
 assert.equal(outlineReferenceRect({ ...rect, w: 0 }), null);

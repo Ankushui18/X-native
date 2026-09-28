@@ -383,6 +383,10 @@ try {
     const auditShapesBefore = counters()["x-wasm.RustDocumentSession.getShape"]?.calls ?? 0;
     const auditUndoBefore = counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0;
     const auditRedoBefore = counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0;
+    // The audit reads the source from the command's own undo projection: the
+    // only bounded shape query in the bridge is offset-gated and refuses a
+    // layer that still owns a live stroke.
+
     const previousOutlineLocation = globalThis.location;
     let auditedOutline;
     try {
@@ -397,7 +401,8 @@ try {
       (counters()["x-wasm.RustDocumentSession.getShape"]?.calls ?? 0) - auditShapesBefore,
       (counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0) - auditUndoBefore,
       (counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0) - auditRedoBefore,
-    ], [1, 1, 1, 1], "the opt-in audit must read one source shape and round the one command once");
+    ], [1, 0, 1, 1],
+      "the opt-in audit must run one command and one undo/redo round trip, without an offset-gated shape read");
     assert.deepEqual(auditedOutline.outline, applied.outline,
       "the audited result must be the same filled vector the default route commits");
     assert.equal(bridgeAuditSnapshot().decisions["session.outline"]?.last.guard, "passed",

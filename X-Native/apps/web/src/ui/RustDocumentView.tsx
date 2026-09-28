@@ -201,13 +201,13 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
     !selectedLayer?.outlineStroke && (selectedLayer?.kind !== "vector" || !!selectedLayer?.rings?.length) &&
     offsetDraft.distance.trim() !== "" && Number.isFinite(offsetDistance) &&
     offsetDistance !== 0 && Math.abs(offsetDistance) <= 2048;
-  // This preview admits a conservative UI subset. The Rust bridge itself keeps
-  // the richer cap/dash/profile command dialect for native callers; the web
-  // button is only offered when the existing DOM layer can be replaced from a
-  // reversible bounded delta without inventing another geometry engine.
+  // This preview admits a conservative UI subset: one visible stroked
+  // rectangle. The Rust bridge itself keeps the richer cap/dash/profile command
+  // dialect for native callers. The genuine generated-WASM 30/30 corpus passed
+  // with the promotion guard still on, so the button now dispatches the real
+  // command directly; `?outline=audit` adds the independent ink diagnostic.
   const canOutline = ready && selectedLayer?.kind === "rect" &&
-    !!selectedLayer?.visible && !selectedLayer?.locked &&
-    (!!selectedLayer.stroke?.width || !!selectedLayer.outlineStroke);
+    !!selectedLayer?.visible && !selectedLayer?.locked && !!selectedLayer.stroke?.width;
   const phaseMessage = phase === "opening" ? "Checking the document and loading Rust"
     : phase === "unsupported" ? "Unsupported file. Use the standard editor"
     : phase === "unavailable" ? "Rust unavailable. Use the standard editor"

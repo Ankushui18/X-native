@@ -12,14 +12,16 @@
  * promoted web owner dispatches the Rust command directly and does not consult
  * this reference per edit. `?outline=audit` opts into the diagnostic: the
  * committed vector is compared with this model before the DOM accepts the
- * delta. A decisive disagreement pauses editing; a source this reference
- * cannot model is reported as `not-run`, never as a pass. This module never
- * paints, stores history or reads a document.
+ * delta. The source geometry and style come from the command's own undo
+ * projection — the web host keeps no JS copy of the layer, and the bounded
+ * shape query is gated on the offset dialect, which does not admit a live
+ * stroke — so this reference is the independent half of that comparison, not a
+ * second source of truth. A decisive disagreement pauses editing; a source the
+ * model cannot cover is reported as `not-run`, never as a pass. This module
+ * never paints, stores history or reads a document.
  */
 import { auditDecision } from "./bridgeRuntimeAudit";
-import type {
-  RustOffsetChange, RustOutlineChange, RustOutlineStrokeStyle,
-} from "./rustSession";
+import type { RustOutlineChange, RustOutlineStrokeStyle } from "./rustSession";
 
 type Point = [number, number];
 type Rings = Point[][];
@@ -51,12 +53,13 @@ export interface OutlineAuditVerdict {
   reason: string;
 }
 
-/** The one centreline dialect this reference models: an unrounded rectangle,
- * which is the only source the promoted web preview offers the command. Its
- * corners are solved by x-core without curvature, so both boundaries are plain
- * rectangles. */
-export function outlineReferenceRect(source: RustOffsetChange): Rect | null {
-  if (source.kind !== "rect" || source.radius !== 0) return null;
+/** The one centreline dialect this reference models: an unrounded rectangle
+ * that owned one live stroke — the only source the promoted web preview offers
+ * the command. Its corners are solved by x-core without curvature, so both
+ * boundaries are plain rectangles. The caller passes the source projection the
+ * command's own undo returned. */
+export function outlineReferenceRect(source: RustOutlineChange): Rect | null {
+  if (source.kind !== "rect" || source.radius !== 0 || !source.stroke) return null;
   if (![source.x, source.y, source.w, source.h].every(Number.isFinite) ||
       source.w <= 0 || source.h <= 0) return null;
   return { x: source.x, y: source.y, w: source.w, h: source.h };

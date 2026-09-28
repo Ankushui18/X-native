@@ -407,9 +407,8 @@ await test("opt-in outline audit proves committed ink against the independent re
     fill: "#236b9e", stroke: null } };
   const restored = { ...banded, outline: { id, name: "Box 91", x: 10, y: 20, w: 30, h: 40,
     kind: "rect", radius: 0, fill: null, stroke: style } };
-  const calls = { shapes: 0, commands: 0, undos: 0, redos: 0 };
+  const calls = { commands: 0, undos: 0, redos: 0 };
   const native = {
-    getShape() { calls.shapes++; return { id, name: "Box 91", x: 10, y: 20, w: 30, h: 40, kind: "rect", radius: 0 }; },
     outlineStroke() { calls.commands++; return { ...banded, revision: 1 }; },
     undo() { calls.undos++; return { ...restored, revision: 2 }; },
     redo() { calls.redos++; return { ...banded, revision: 3 }; },
@@ -422,7 +421,8 @@ await test("opt-in outline audit proves committed ink against the independent re
     const result = owner.outlineStroke(id);
     assert.equal(result.revision, 3, "the audit returns the redone command, not the intermediate undo");
     assert.deepEqual(result.outline, banded.outline, "the committed vector round-trips exactly");
-    assert.deepEqual(calls, { shapes: 1, commands: 1, undos: 1, redos: 1 });
+    assert.deepEqual(calls, { commands: 1, undos: 1, redos: 1 },
+      "the audit reads no offset-gated shape query: the source comes from the command's own undo projection");
     const decision = bridgeAuditSnapshot().decisions["session.outline"];
     assert.equal(decision.last.guard, "passed");
     assert.equal(decision.last.result, "rust");
@@ -430,14 +430,14 @@ await test("opt-in outline audit proves committed ink against the independent re
     // A source this reference does not model is reported, never asserted as a
     // pass, and never turned into a refusal: the native command still runs.
     resetBridgeAudit();
-    const ellipseCalls = { shapes: 0, commands: 0, undos: 0 };
+    const ellipseCalls = { commands: 0, undos: 0, redos: 0 };
     const ellipse = RustWebDocumentSession.create({
-      getShape() { ellipseCalls.shapes++; return { id, name: "E", x: 0, y: 0, w: 20, h: 20, kind: "ellipse" }; },
       outlineStroke() { ellipseCalls.commands++; return { ...banded, revision: 1 }; },
-      undo() { ellipseCalls.undos++; return { ...restored, revision: 2 }; },
+      undo() { ellipseCalls.undos++; return { ...restored, revision: 2, outline: { ...restored.outline, kind: "ellipse", radius: null } }; },
+      redo() { ellipseCalls.redos++; return { ...banded, revision: 1 }; },
     }, seed);
     assert.equal(ellipse.outlineStroke(id).revision, 1);
-    assert.deepEqual(ellipseCalls, { shapes: 1, commands: 1, undos: 0 });
+    assert.deepEqual(ellipseCalls, { commands: 1, undos: 1, redos: 1 });
     assert.equal(bridgeAuditSnapshot().decisions["session.outline"].last.guard, "not-run");
 
     // Fabricated ink (a filled bounding box, not a band) is a decisive
@@ -445,7 +445,6 @@ await test("opt-in outline audit proves committed ink against the independent re
     resetBridgeAudit();
     const fabricatedPath = [["M", 0, 0], ["L", 38, 0], ["L", 38, 48], ["L", 0, 48], ["Z"]];
     const fabricated = RustWebDocumentSession.create({
-      getShape: native.getShape,
       outlineStroke() { return { ...banded, revision: 1, outline: { ...banded.outline, path: fabricatedPath } }; },
       undo: native.undo,
       redo() { return { ...banded, revision: 3, outline: { ...banded.outline, path: fabricatedPath } }; },

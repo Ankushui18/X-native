@@ -1,12 +1,14 @@
 /**
- * Independent filled-ink oracle for the guarded Outline Stroke promotion
- * corpus.  This intentionally does not call any x-core geometry helper: it
- * evaluates straight centre lines, SVG dash phase, caps, rectangular alignment
- * bands and NONZERO output paths in plain JavaScript.
+ * Independent filled-ink oracle for the Outline Stroke promotion corpus. It
+ * intentionally does not call any x-core geometry helper: it evaluates straight
+ * centre lines, SVG dash phase, caps, rectangular alignment bands and NONZERO
+ * output paths in plain JavaScript.
  *
  * The caller supplies the low-level generated-bindgen session factory, so this
  * proof exercises RustDocumentSession.outlineStroke directly and independently
- * of the promoted web owner's admission and delta projection.
+ * of the promoted web owner's admission and delta projection. It is the run
+ * that was recorded green BEFORE the web guard was lifted, and it keeps running
+ * on every generated-artifact smoke.
  */
 import assert from "node:assert/strict";
 

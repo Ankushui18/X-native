@@ -402,28 +402,25 @@ export class RustWebDocumentSession {
    * `?outline=audit` opts into the independent filled-ink diagnostic. */
   outlineStroke(id: string) {
     if (!outlineAuditRequested()) return this.checkedOutline(this.rust.outlineStroke(id), id);
-    // Bounded geometry read before the edit. A source this reference cannot
-    // model is reported, not silently trusted and not turned into a finding.
-    const rect = outlineReferenceRect(this.rust.getShape(id));
-    if (!rect) {
-      recordOutlineAudit({ verified: false, decisive: false, reason: "source is not an unrounded rectangle" });
-      return this.checkedOutline(this.rust.outlineStroke(id), id);
-    }
     const applied = this.checkedOutline(this.rust.outlineStroke(id), id);
-    // Rust's own undo projection is the only faithful source style: the web
-    // host keeps no JS copy of the layer or its stroke. The round trip returns
-    // the session to the pre-edit depth (apply, undo, redo) and proves the
-    // committed ink against the independent reference before the DOM sees it.
+    // Rust's own undo projection is the only faithful source: the web host
+    // keeps no JS copy of the layer or its stroke, and the bounded shape query
+    // is gated on the offset dialect, which does not admit a live stroke. The
+    // round trip returns the session to the pre-edit depth — it ends on the
+    // redo, so the next user undo still removes exactly this outline — and
+    // proves the committed ink before the DOM sees the delta.
     const restored = this.rust.undo().outline;
-    if (!restored || restored.id !== id || restored.kind !== "rect" || !restored.stroke) {
+    const redone = this.rust.redo();
+    if (!restored || restored.id !== id) {
       throw new Error("Rust outline undo did not restore the source layer; editing must pause");
     }
-    const verdict = outlineInkVerdict(rect, restored.stroke, applied.outline!);
-    const redone = this.rust.redo();
     if (JSON.stringify(redone.outline) !== JSON.stringify(applied.outline)) {
       throw new Error("Rust outline changed after the audit round trip; editing must pause");
     }
-    recordOutlineAudit(verdict);
+    const rect = outlineReferenceRect(restored);
+    recordOutlineAudit(rect
+      ? outlineInkVerdict(rect, restored.stroke!, applied.outline!)
+      : { verified: false, decisive: false, reason: "source is not an unrounded rectangle with one live stroke" });
     return redone;
   }
   private checkedOutline(change: RustStateChange, id: string): RustStateChange {
