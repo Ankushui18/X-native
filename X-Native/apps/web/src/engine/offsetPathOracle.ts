@@ -18,6 +18,13 @@ export class OffsetGuardRejected extends Error {
   readonly unchanged = true;
 }
 
+/** Explicit comparison mode survives once the default guard can be lifted.
+ * The route uses the real URL's search query, not its document-ID hash. */
+export function offsetAuditRequested(): boolean {
+  try { return typeof location !== "undefined" && new URLSearchParams(location.search).get("offset") === "audit"; }
+  catch { return false; }
+}
+
 export function offsetRings(path: RustPathCommand[]): [number, number][][] | null {
   const rings: Rings = [];
   let ring: Point[] = [];
@@ -149,10 +156,11 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
 export function guardOffsetPreview(before: RustOffsetChange, after: RustOffsetChange,
     distance: number, join: Join): RustOffsetChange {
   const passes = offsetCoverageEquivalent(before, after, distance, join);
+  const mode = offsetAuditRequested() ? "opt-in offset audit" : "default offset guard";
   auditDecision({ bridge: "session", operation: "offset", result: passes ? "rust" : "none",
     guard: passes ? "passed" : "blocked", candidate: true,
-    reason: passes ? "bounded Rust preview agrees with independent TS winding/offset coverage" :
-      "native offset coverage unproven; Rust edit not applied" });
+    reason: passes ? `${mode}: Rust preview equals independent TS winding/offset coverage` :
+      `${mode}: native offset coverage unproven; Rust edit not applied` });
   if (!passes) throw new OffsetGuardRejected("Offset did not pass the geometry guard; no change was made. Use the standard editor for this shape.");
   return after;
 }

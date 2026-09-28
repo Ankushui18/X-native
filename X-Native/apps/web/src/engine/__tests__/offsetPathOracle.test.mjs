@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { offsetCoverageEquivalent, guardOffsetPreview, OffsetGuardRejected, offsetRings } from "../offsetPathOracle.ts";
+import { offsetCoverageEquivalent, guardOffsetPreview, OffsetGuardRejected, offsetRings, offsetAuditRequested } from "../offsetPathOracle.ts";
 
 const source = { id: "a", name: "Box", x: 10, y: 20, w: 70, h: 40, kind: "rect", radius: 0 };
 const vector = (x, y, w, h, points) => ({ ...source, kind: "vector", x, y, w, h,
@@ -8,6 +8,15 @@ const square = (w, h) => [[0, 0], [w, 0], [w, h], [0, h]];
 const expanded = vector(4, 14, 82, 52, square(82, 52));
 assert.equal(offsetCoverageEquivalent(source, expanded, 6, "miter"), true);
 assert.equal(guardOffsetPreview(source, expanded, 6, "miter"), expanded);
+const priorLocation = globalThis.location;
+try {
+  globalThis.location = { search: "?offset=audit" };
+  assert.equal(offsetAuditRequested(), true);
+  assert.equal(guardOffsetPreview(source, expanded, 6, "miter"), expanded);
+} finally {
+  if (priorLocation === undefined) delete globalThis.location;
+  else globalThis.location = priorLocation;
+}
 assert.equal(offsetCoverageEquivalent(source, vector(15, 25, 60, 30, square(60, 30)), -5, "round"), true);
 assert.equal(offsetCoverageEquivalent(source, { ...expanded, x: 10, y: 20, w: 1, h: 1, path: [] }, -40, "miter"), true);
 const bevel = vector(4, 14, 82, 52, [[0, 6], [6, 0], [76, 0], [82, 6],

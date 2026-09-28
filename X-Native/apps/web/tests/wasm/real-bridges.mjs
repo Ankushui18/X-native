@@ -339,7 +339,20 @@ try {
       const firstRevision = owner.state().revision;
       assert.throws(() => owner.offsetNode(id, 2049, join), /distance/i);
       assert.equal(owner.state().revision, firstRevision, "invalid distance never creates history");
-      const result = owner.offsetNode(id, distance, join);
+      const previousLocation = globalThis.location;
+      let result;
+      try {
+        if (offsetParity === 0) globalThis.location = { search: "?offset=audit" };
+        result = owner.offsetNode(id, distance, join);
+      } finally {
+        if (offsetParity === 0) {
+          if (previousLocation === undefined) delete globalThis.location;
+          else globalThis.location = previousLocation;
+        }
+      }
+      if (offsetParity === 0) {
+        assert.match(bridgeAuditSnapshot().decisions["session.offset"]?.last.reason ?? "", /opt-in offset audit/);
+      }
       assert.equal(result.revision, firstRevision + 1);
       assert.equal(result.node, null);
       assert.equal(result.offset?.id, id);
