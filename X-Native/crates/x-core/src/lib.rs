@@ -29,6 +29,7 @@ pub mod plugin;
 pub mod prototype;
 pub mod query;
 pub mod registry;
+pub mod simplify;
 pub mod smart_animate;
 pub mod stroke_alignment;
 pub mod stroke_outline;

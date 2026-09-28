@@ -646,40 +646,14 @@ fn perp_dist(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     ((p.0 - a.0) * dy - (p.1 - a.1) * dx).abs() / len
 }
 
-/// Ramer-Douglas-Peucker as a KEEP MASK (first and last always kept). The same
-/// algorithm as `x_core::simplify_polyline`, but it answers "which of these
-/// points survive" instead of handing back a fresh polyline — that is what lets
-/// [`simplify_path`] keep each survivor's ORIGINAL command, so a simplified
-/// curve stays a curve. Iterative (explicit stack): a 10k-anchor path cannot
-/// overflow it.
+/// Ramer-Douglas-Peucker as a KEEP MASK (first and last always kept): the
+/// shared iterative, segment-distance simplifier in `x_core::simplify`, so
+/// the tolerance is a guarantee and a 100k-anchor path cannot overflow. It
+/// answers "which of these points survive" instead of handing back a fresh
+/// polyline — that is what lets [`simplify_path`] keep each survivor's
+/// ORIGINAL command, so a simplified curve stays a curve.
 fn rdp_keep(pts: &[(f64, f64)], tol: f64) -> Vec<bool> {
-    let n = pts.len();
-    let mut keep = vec![false; n];
-    if n == 0 {
-        return keep;
-    }
-    keep[0] = true;
-    keep[n - 1] = true;
-    let mut stack: Vec<(usize, usize)> = vec![(0, n - 1)];
-    while let Some((a, b)) = stack.pop() {
-        if b <= a + 1 {
-            continue;
-        }
-        let (mut worst, mut worst_d) = (a, 0.0f64);
-        for i in a + 1..b {
-            let d = perp_dist(pts[i], pts[a], pts[b]);
-            if d > worst_d {
-                worst = i;
-                worst_d = d;
-            }
-        }
-        if worst_d > tol {
-            keep[worst] = true;
-            stack.push((a, worst));
-            stack.push((worst, b));
-        }
-    }
-    keep
+    x_core::simplify::simplify_keep(pts, tol)
 }
 
 /// The point an anchor command lands on (its endpoint).

@@ -98,6 +98,21 @@ jobs:
           cat /tmp/gate.log || true
           exit $status
 
+      # Sprint 3 measurement probe (crates/x-core/tests/vector_probe.rs): complex
+      # inputs through Rust Outline Stroke and the shared simplifier. Diagnostic
+      # for the outline numbers (never fatal on them); the simplify half asserts
+      # its tolerance contract. Published as a notice annotation because the raw
+      # step log is not reachable from every tool.
+      - name: Vector probe (Sprint 3 diagnostic)
+        if: always()
+        run: |
+          set +e
+          cargo test -p x-core --release --test vector_probe -- --ignored --nocapture --test-threads=1 > /tmp/probe.log 2>&1
+          status=$?
+          cat /tmp/probe.log
+          node -e 'const fs=require("fs");const l=fs.readFileSync("/tmp/probe.log","utf8").split("\n").filter(x=>x.startsWith("PROBE|")||/panicked|test result/.test(x));const t=("Vector probe (exit '"$status"')\n"+l.join("\n")).slice(0,15000);console.log("::notice::"+t.replaceAll("%","%25").replaceAll("\r","%0D").replaceAll("\n","%0A"));'
+          exit $status
+
       # The wasm bridge (crates/x-wasm) is the first slice connecting the Rust
       # engine to the web app; see docs/ARCHITECTURE_BOUNDARY.md. Building it
       # here is what makes the boundary mechanically checkable instead of a
