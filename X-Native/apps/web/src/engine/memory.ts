@@ -2058,6 +2058,37 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      case "distributeSpacing": {
+        // The smart-selection gap handle (Figma help 360040450233): "click and
+        // drag the handle to adjust the space between layers" and "uniformly
+        // adjust the vertical and horizontal spacing between layers" — every
+        // pair gets the dragged value, in order, sizes untouched. World
+        // coordinates and the same member filter as `distribute`: locked layers
+        // and instance members sit out. The run is anchored at its first layer
+        // so the space grows away from the handle (right/down increases it,
+        // which is the direction the article's tooltip describes).
+        const rt = this.root();
+        const items = cmd.ids
+          .map((id) => worldPos(rt, id))
+          .filter(
+            (w): w is { x: number; y: number; node: XNode } =>
+              !!w && !isEffectivelyLocked(rt, w.node.id) && !isInstanceMember(rt, w.node.id),
+          );
+        if (items.length < 2) break;
+        const snap = snapOn(this.state, s.page);
+        const gap = Math.max(0, cmd.gap);
+        items.sort((a, b) => (cmd.axis === "h" ? a.x - b.x : a.y - b.y));
+        let cursor = cmd.axis === "h" ? items[0].x : items[0].y;
+        for (const w of items) {
+          // `shiftWorld` takes world coordinates and rounds the node's own
+          // local ones when pixel snapping is on, exactly as under `move` and
+          // `distribute`; the world cursor itself stays exact.
+          if (cmd.axis === "h") shiftWorld(w, cursor, w.y, snap);
+          else shiftWorld(w, w.x, cursor, snap);
+          cursor += (cmd.axis === "h" ? w.node.w : w.node.h) + gap;
+        }
+        break;
+      }
       case "tidyUp": {
         const rt = this.root();
         // Same footing as distribute: world coordinates, locked layers and

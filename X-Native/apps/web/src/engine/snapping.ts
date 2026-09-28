@@ -202,6 +202,61 @@ function equalGaps(moving: Box, others: Box[], tol: number): GapBadge[] {
 }
 
 /**
+ * The gap handles of a 1D Smart selection: two or more boxes that overlap on
+ * the cross axis and sit an equal distance apart along `axis`.
+ *
+ * Figma (help 360040450233, "Arrange layers with Smart selection"): "To make a
+ * Smart selection, all layers must be an equal distance apart and overlap on
+ * either the x or y axis (1D) … additional pink handles will appear between
+ * each layer. These handles allow you to adjust the vertical or horizontal
+ * spacing between layers."
+ *
+ * One badge per gap, at the gap's midpoint, with the cross position of the band
+ * every box shares — the same `GapBadge` shape the move-snapping feedback
+ * paints, so the canvas has one thing to draw and one thing to hit-test.
+ * `tol` is float dust, not a Figma tolerance: the article's rule is exact.
+ * Empty when the boxes are not a 1D smart selection on either axis — a 2D
+ * (grid) selection is deliberately not offered (see the pipeline run record).
+ */
+export function smartSelectionGaps(boxes: Box[], tol = 1): GapBadge[] {
+  if (boxes.length < 2) return [];
+  const out: GapBadge[] = [];
+  for (const axis of ["x", "y"] as const) {
+    const sorted = [...boxes].sort((a, b) => (axis === "x" ? a.x - b.x : a.y - b.y));
+    // 1D means one row (or column): the cross-axis bands must share a strip.
+    let crossLo = -Infinity;
+    let crossHi = Infinity;
+    for (const b of sorted) {
+      const [lo, hi] = span(b, axis);
+      crossLo = Math.max(crossLo, lo);
+      crossHi = Math.min(crossHi, hi);
+    }
+    if (crossHi - crossLo <= 0) continue;
+    const gaps: { at: number; size: number }[] = [];
+    let uniform = -1;
+    for (let i = 1; i < sorted.length; i++) {
+      const prevHi = axis === "x" ? sorted[i - 1].x + sorted[i - 1].w : sorted[i - 1].y + sorted[i - 1].h;
+      const curLo = axis === "x" ? sorted[i].x : sorted[i].y;
+      const g = curLo - prevHi;
+      // Touching or overlapping boxes have no space to show.
+      if (g < 0.5) {
+        uniform = -1;
+        break;
+      }
+      if (uniform < 0) uniform = g;
+      else if (Math.abs(g - uniform) > tol) {
+        uniform = -1;
+        break;
+      }
+      gaps.push({ at: prevHi + g / 2, size: g });
+    }
+    if (uniform < 0 || gaps.length !== sorted.length - 1) continue;
+    for (const g of gaps) out.push({ axis, at: g.at, cross: (crossLo + crossHi) / 2, size: g.size });
+  }
+  return out;
+}
+
+/**
  * Snap a single dragged resize handle. `corner` follows the same 0..7 ordering
  * the canvas uses (TL, T, TR, R, BR, B, BL, L), so we only snap the edges that
  * the handle actually moves.

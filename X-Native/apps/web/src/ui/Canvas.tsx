@@ -39,6 +39,7 @@ import {
   snapCandidates,
   snapMove,
   snapResize,
+  smartSelectionGaps,
   wantsPixelSnap,
   type Box,
   type GapBadge,
@@ -177,6 +178,7 @@ type Drag =
         | "multiRotate"
         | "autoPad"
         | "autoGap"
+        | "smartGap"
         | "protoConnect"
         | "starRatio"
         | "starRadius"
@@ -207,6 +209,10 @@ type Drag =
       moved?: boolean;
       origPad?: [number, number, number, number];
       origGap?: number;
+      /** Smart-selection gap handle drag: the live gap value and the pointer
+       *  position the drag started from (both world coordinates). */
+      smartGap?: number;
+      smartSX?: number;
       fromX?: number;
       fromY?: number;
       sx: number;
@@ -388,6 +394,32 @@ export function Canvas({
   useEffect(() => {
     if (cropId && !snap.selection.includes(cropId)) setCropId(null);
   }, [snap.selection]);
+  // Smart-selection handles: recompute the mid-gap badges whenever the
+  // selection or the page geometry changes, so a nudged layer makes the run
+  // stop matching and the handles disappear, exactly as the article's
+  // "all layers must be an equal distance apart" rule requires.
+  useEffect(() => {
+    const root = snap.pages[snap.page].root;
+    const boxes: Box[] = [];
+    for (const id of snap.selection) {
+      const wp = worldPos(root, id);
+      if (!wp || isEffectivelyLocked(root, id) || isInstanceMember(root, id)) continue;
+      const b = nodeVisualBounds(wp);
+      boxes.push({ id, x: b.x, y: b.y, w: b.w, h: b.h });
+    }
+    const next = boxes.length >= 2 ? smartSelectionGaps(boxes) : [];
+    // Returning the previous array when nothing moved keeps this effect from
+    // re-rendering the canvas on every unrelated dispatch.
+    setSmartGaps((prev) =>
+      prev.length === next.length &&
+      prev.every((b, i) => b.axis === next[i].axis && b.at === next[i].at && b.cross === next[i].cross && b.size === next[i].size)
+        ? prev
+        : next,
+    );
+    // `snap` itself is the dependency: the engine keeps the same `pages`
+    // reference across a dispatch and bumps `treeRev`, so a narrower list
+    // would leave the handles stale while a layer moves.
+  }, [snap]);
   // Enter applies, Escape reverts, while cropping or placing. Keystrokes
   // aimed at a field belong to the field, not the tool.
   useEffect(() => {
@@ -493,6 +525,11 @@ export function Canvas({
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
+  /** Smart-selection gap handles: for a 1D selection of equal-spaced layers,
+   *  the mid-gap badges a drag can grab (Figma help 360040450233). Separate
+   *  from `gapBadges`, which is move-snapping feedback and only exists during
+   *  a drag. */
+  const [smartGaps, setSmartGaps] = useState<GapBadge[]>([]);
   /** Live drop target during a move drag: the frame outline plus, for a linear
    *  flow, the blue insertion line - all in world coordinates. */
   const [dropHint, setDropHint] = useState<{
@@ -3068,17 +3105,21 @@ export function Canvas({
       }
       ctx.restore();
     }
-    if (gapBadges.length) {
+    // Gap pills: the red equal-spacing feedback from a move drag, and the
+    // smart-selection handles that sit between the layers of a 1D run - "a
+    // tooltip above your cursor shows the current space between layers, in
+    // pixels" (Figma help 360040450233), drawn as the pink handle.
+    const paintGapPills = (list: GapBadge[], fill: string) => {
       ctx.save();
       ctx.font = "500 10px Inter, system-ui";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      for (const g of gapBadges) {
+      for (const g of list) {
         const cx = g.axis === "x" ? snap.panX + g.at * z : snap.panX + g.cross * z;
         const cy = g.axis === "x" ? snap.panY + g.cross * z : snap.panY + g.at * z;
         const label = `${Math.round(g.size)}`;
         const bw = ctx.measureText(label).width + 10;
-        ctx.fillStyle = GUIDE;
+        ctx.fillStyle = fill;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(cx - bw / 2, cy - 8, bw, 16, 3);
@@ -3090,6 +3131,12 @@ export function Canvas({
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
       ctx.restore();
+    };
+    if (gapBadges.length) paintGapPills(gapBadges, GUIDE);
+    // The at-rest handles step aside while another gesture is live so the two
+    // pill sets never double up; during their own drag they move with the gaps.
+    if (smartGaps.length && !band && (!drag.current || drag.current.mode === "smartGap")) {
+      paintGapPills(smartGaps, SEL);
     }
     // The drop target during a move drag: the frame's outline, plus the blue
     // insertion line in a flow - the same gap the drop would land in.
@@ -3591,7 +3638,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -4100,6 +4147,36 @@ export function Canvas({
               corner: i,
               bounds: bb,
               origs: multiOrigins(root, snap.selection),
+            };
+            return;
+          }
+        }
+        // Smart-selection gap handles sit between the layers of a 1D run and
+        // take priority over the empty-canvas marquee, the way the article
+        // describes them ("hover over your Smart selection, additional pink
+        // handles will appear between each layer … click and drag the handle
+        // to adjust the space between layers"). The pointer is in screen
+        // space, so the world-space midpoint is projected first.
+        for (const g of smartGaps) {
+          // A row's handle sits at (gap midpoint, band center); a column's is
+          // the other way round, the same way the paint reads them.
+          const gx = snap.panX + (g.axis === "x" ? g.at : g.cross) * z;
+          const gy = snap.panY + (g.axis === "x" ? g.cross : g.at) * z;
+          if (Math.hypot(px - gx, py - gy) < 10) {
+            if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
+              toast("Locked · ⇧⌘L to unlock");
+              return;
+            }
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "smartGap",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              smartGap: g.size,
+              smartSX: g.axis === "x" ? wpt.x : wpt.y,
+              axis: g.axis,
             };
             return;
           }
@@ -5303,6 +5380,23 @@ export function Canvas({
         }
         engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, padding: nextPad } });
       }
+    } else if (d.mode === "smartGap" && d.axis && d.smartGap != null && d.smartSX != null) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      // "Click and drag the handle to adjust the space between layers. A
+      // tooltip above your cursor shows the current space between layers, in
+      // pixels." Right/down grows the space, left/up shrinks it; ⇧ steps by
+      // the Big nudge setting, the same convention the auto-layout gap handle
+      // uses. The value is applied to every gap in the run at once, which is
+      // what makes the selection "adjust … uniformly".
+      const big = e.shiftKey && !e.altKey ? getNudgePrefs().big : 1;
+      const raw = d.axis === "x" ? wpt.x - d.smartSX : wpt.y - d.smartSX;
+      const nextGap = Math.max(0, Math.round((d.smartGap + raw) / big) * big);
+      engine.dispatch({
+        type: "distributeSpacing",
+        ids: [...snap.selection],
+        axis: d.axis === "x" ? "h" : "v",
+        gap: nextGap,
+      });
     } else if (d.mode === "autoGap" && d.id && d.origGap != null) {
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
@@ -5536,6 +5630,7 @@ export function Canvas({
       d.mode === "rotOrigin" ||
       d.mode === "autoPad" ||
       d.mode === "autoGap" ||
+      d.mode === "smartGap" ||
       d.mode === "crop" ||
       d.mode === "cropMove" ||
       (d.mode === "marquee" && d.id === "erase")
