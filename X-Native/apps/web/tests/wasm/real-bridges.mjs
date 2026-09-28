@@ -336,6 +336,14 @@ try {
       }
       const original = owner.exportDocument();
       const current = owner.getShape(id);
+      if (shape === "vector") {
+        const rings = offsetRings(current.path);
+        assert.equal(rings?.length, 2, "subtraction must retain an outer contour and a hole");
+        const areas = rings.map(r => r.reduce((sum, [x, y], i) => {
+          const [u, v] = r[(i + 1) % r.length]; return sum + x * v - y * u;
+        }, 0));
+        assert.ok(areas[0] * areas[1] < 0, "Rust NONZERO fill needs opposing outer/hole winding");
+      }
       const firstRevision = owner.state().revision;
       assert.throws(() => owner.offsetNode(id, 2049, join), /distance/i);
       assert.equal(owner.state().revision, firstRevision, "invalid distance never creates history");
