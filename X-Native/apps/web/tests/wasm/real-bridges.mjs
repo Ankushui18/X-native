@@ -11,7 +11,8 @@ import { importSketch as sketchTs } from "../../src/engine/sketchImport.ts";
 import { initWasmBridge, getEngineInfo, importSvg, importFig, importSketch, importsEquivalent, __resetWasmForTests } from "../../src/engine/wasmBridge.ts";
 import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
 import { openRustSession } from "../../src/engine/rustSession.ts";
-import { admitWebDocument, openWebDocumentSession } from "../../src/engine/webDocumentSession.ts";
+import { admitWebDocument, openWebDocumentSession, OUTLINE_STROKE_GUARD_ACTIVE } from "../../src/engine/webDocumentSession.ts";
+import { runOutlineStrokeCorpus } from "./outline-stroke-corpus.mjs";
 import { rectangleStrokeOracle, strokeMatchesRectangle } from "../../src/engine/strokeBandOracle.ts";
 import { offsetCoverageEquivalent, offsetRings } from "../../src/engine/offsetPathOracle.ts";
 import { docFromTemplate } from "../../src/engine/files.ts";
@@ -308,6 +309,17 @@ try {
   assert.equal(bridgeAuditSnapshot().decisions["session.stroke"]?.attempts, strokeAuditsBefore + 1,
     "only the one opt-in edit may run the TS oracle; 29 default edits stay Rust-owned");
   console.log(`PASS real-WASM Rust stroke alignment: ${parity}/30 rectangle oracle parity, one opt-in audit, 29 default Rust edits, bound checks, history, resize reprojection and lossless checkpoints`);
+
+  // Promotion evidence deliberately bypasses the public web-owner operation:
+  // that owner remains guarded until this independent generated-WASM corpus is
+  // recorded green. `openRustSession` still dispatches the actual bindgen
+  // RustDocumentSession.outlineStroke method and its audited call counter.
+  const outlined = await runOutlineStrokeCorpus({
+    openRustSession,
+    auditSnapshot: bridgeAuditSnapshot,
+    guardActive: OUTLINE_STROKE_GUARD_ACTIVE,
+  });
+  console.log(`PASS real-WASM Outline Stroke: ${outlined.cases}/30 independent filled-ink cases, rich raw .x styles, bounded apply/undo/redo/checkpoints and refusal no-history proof while UI guard remains active`);
 
   // Actual V5 bindgen/session class, not x-geo or a mock. The independent TS
   // NONZERO reference verifies all 30 committed Rust results here. Only the
@@ -866,6 +878,8 @@ assert.equal(audit.modules.geometry.source, "override");
 assert.ok(audit.functions["x-wasm.importSvgToX"]?.calls >= 1);
 assert.ok(audit.functions["x-wasm.RustDocumentSession.resizeNode"]?.calls >= 2);
 assert.ok(audit.functions["x-wasm.RustDocumentSession.booleanNode"]?.calls >= 6);
+assert.ok(audit.functions["x-wasm.RustDocumentSession.outlineStroke"]?.calls >= 33,
+  "guarded promotion corpus must observe 30 applied and 3 refused real outline calls");
 assert.ok(audit.functions["x-geo.xgeo_boolean"]?.calls >= 4);
 assert.ok(audit.decisions["geometry.union"]?.attempts >= 1);
 assert.ok(audit.decisions["session.open"]?.rust >= 1);

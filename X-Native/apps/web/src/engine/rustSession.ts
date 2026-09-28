@@ -332,7 +332,13 @@ function outlineValue(value: unknown): RustOutlineChange {
     kind === "poly" ? ["count"] : kind === "star" ? ["count", "ratio"] : kind === "vector" ? ["path"] : [];
   keys(obj, ["id", "name", "x", "y", "w", "h", "kind", ...extra, "fill", "stroke"], "outline layer delta");
   const node = nodeValue({ id: obj.id, name: obj.name, x: obj.x, y: obj.y, w: obj.w, h: obj.h });
-  if (!node || node.id.length > 256 || node.name.length > 1024 || node.w <= 0 || node.h <= 0 ||
+  // `line` keeps an endpoint delta in w/h, so a horizontal or vertical
+  // source legitimately has one zero (or a negative direction) component.
+  // The outlined vector returned on apply still has a positive bounding box.
+  const invalidDimensions = kind === "line"
+    ? node === null || (node.w === 0 && node.h === 0)
+    : node === null || node.w <= 0 || node.h <= 0;
+  if (!node || node.id.length > 256 || node.name.length > 1024 || invalidDimensions ||
       [node.x, node.y, node.w, node.h].some(n => Math.abs(n) > OUTLINE_COORD_LIMIT) ||
       !(obj.fill === null || typeof obj.fill === "string" && /^#[0-9a-f]{6}$/.test(obj.fill))) {
     throw new Error("Invalid Rust outline layer");

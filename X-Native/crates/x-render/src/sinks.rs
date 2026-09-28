@@ -65,7 +65,14 @@ pub fn export_pdf_full(
     fonts: Option<&x_text::FontManager>,
 ) -> Vec<u8> {
     let outlined = fonts.and_then(|f| crate::text_geometry::outline_text(tree, f).ok());
-    let tree = outlined.as_ref().unwrap_or(tree);
+    // Raw IR can still carry a `StrokePath`. PDF has no variable-width stroke
+    // operator, so materialize profiles before this sink examines commands.
+    // Uniform strokes deliberately remain native PDF strokes: that preserves
+    // existing compact gradient-stroke handling while profiles cannot degrade
+    // into a visually incorrect uniform width.
+    let mut export_tree = outlined.unwrap_or_else(|| tree.clone());
+    crate::text_geometry::materialize_variable_strokes(&mut export_tree);
+    let tree = &export_tree;
     let mut content = String::new();
     let mut images: Vec<(String, vello::peniko::ImageBrush)> = vec![];
     let mut shadings: Vec<String> = vec![];
@@ -905,6 +912,56 @@ mod pdf_quality_tests {
         );
         assert!(txt.contains(" sh\n"), "shading paint op used");
         assert!(txt.contains("/Shading <<"), "page resources expose it");
+    }
+
+    #[test]
+    fn profiled_strokes_materialize_to_filled_pdf_geometry() {
+        let mut line = Node::line("profile", 20.0, 40.0, 140.0, 0.0, Color::TRANSPARENT);
+        line.visual_stacks_materialized = true;
+        line.fill_layers = vec![PaintLayer::new(line.fill.clone())];
+        line.stroke = Stroke::solid(Color::from_rgb8(0x31, 0x65, 0x9a), 8.0);
+        line.stroke_layers = vec![StrokeLayer {
+            stroke: line.stroke.clone(),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendKind::Normal,
+            options: StrokeOptions {
+                cap_start: StrokeCap::Round,
+                cap_end: StrokeCap::Square,
+                dash: vec![24.0, 9.0],
+                dash_offset: 5.0,
+                width_profile: vec![
+                    VariableWidthPoint {
+                        position: 0.0,
+                        width_multiplier: 0.5,
+                    },
+                    VariableWidthPoint {
+                        position: 0.6,
+                        width_multiplier: 1.75,
+                    },
+                    VariableWidthPoint {
+                        position: 1.0,
+                        width_multiplier: 0.75,
+                    },
+                ],
+                ..Default::default()
+            },
+        }];
+        let tree = build_render_tree(
+            &Node::frame("page", 200.0, 100.0).child(line),
+            &Variables::default(),
+        );
+        assert!(tree.commands.iter().any(|command| matches!(
+            command,
+            RenderCommand::StrokePath { options, .. } if !options.width_profile.is_empty()
+        )));
+        let pdf = export_pdf(&tree, 200.0, 100.0);
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("\nf\n"), "profiled ink is emitted as a fill");
+        assert!(
+            !text.contains("\nS\n"),
+            "a profile must not reach PDF's uniform stroke operator"
+        );
     }
 
     #[test]

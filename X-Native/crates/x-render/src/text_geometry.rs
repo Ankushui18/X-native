@@ -234,9 +234,50 @@ pub fn stroke_style(width: f64, options: &x_core::StrokeOptions) -> Stroke {
     stroke
 }
 
-/// Outlined strokes make transformed widths, dashes and asymmetric caps
-/// portable across SVG/PDF and give export bounds the actual visual geometry.
+/// Materialize only variable-width strokes as filled paths.
+///
+/// Vello/tiny-skia/PDF's ordinary stroke operators cannot express a profile.
+/// Keep uniform strokes as `StrokePath` so sinks that have native dashing and
+/// gradient-stroke support retain their compact, higher-fidelity path; a
+/// nonempty profile must never silently fall through to a uniform stroke.
+pub fn materialize_variable_strokes(tree: &mut RenderTree) {
+    for command in &mut tree.commands {
+        let RenderCommand::StrokePath {
+            key,
+            transform,
+            path,
+            brush,
+            width,
+            options,
+        } = command
+        else {
+            continue;
+        };
+        if options.width_profile.is_empty() {
+            continue;
+        }
+        // `variable_stroke_outline` returns `Some`, including an intentionally
+        // empty path for malformed in-memory profile data. Keep this total if
+        // that contract changes: retaining the command is safer than a sink
+        // panic, while valid nonempty profiles always take the fill route.
+        let Some(outlined) = variable_stroke_outline(path, *width, options) else {
+            continue;
+        };
+        *command = RenderCommand::FillPath {
+            key: key.clone(),
+            transform: *transform,
+            brush: brush.clone(),
+            path: outlined,
+        };
+    }
+}
+
+/// Outline every stroke for consumers that cannot encode any stroke operator.
+///
+/// This broader export helper builds on [`materialize_variable_strokes`], then
+/// converts the remaining uniform strokes with kurbo's native stroker.
 pub fn outline_strokes(tree: &mut RenderTree) {
+    materialize_variable_strokes(tree);
     for command in &mut tree.commands {
         if let RenderCommand::StrokePath {
             key,
@@ -247,10 +288,8 @@ pub fn outline_strokes(tree: &mut RenderTree) {
             options,
         } = command
         {
-            let outlined = variable_stroke_outline(path, *width, options).unwrap_or_else(|| {
-                let style = stroke_style(*width, options);
-                stroke(path.iter(), &style, &StrokeOpts::default(), 0.05)
-            });
+            let style = stroke_style(*width, options);
+            let outlined = stroke(path.iter(), &style, &StrokeOpts::default(), 0.05);
             *command = RenderCommand::FillPath {
                 key: key.clone(),
                 transform: *transform,

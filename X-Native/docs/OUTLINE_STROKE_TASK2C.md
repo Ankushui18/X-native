@@ -23,6 +23,20 @@
   joins, miter limit, alignment, and width-profile stations without returning a page.
   The session deliberately declines non-lossless paint stacks, transforms, effects,
   children, locks, unsupported forms, malformed profiles, and budget overflow.
+  Axis-aligned `Line` layers are explicitly admitted: line `w`/`h` are endpoint
+  deltas, so one component may be zero while a point-like line remains rejected.
+- `x-render::text_geometry::materialize_variable_strokes` selectively turns a raw
+  nonempty-profile `StrokePath` into the same x-core closed fill geometry before PDF
+  emission. Uniform strokes intentionally retain the native PDF route, including its
+  gradient pattern-color-space encoding; malformed in-memory profiles produce no
+  uniform-profile fallback.
+- `apps/web/tests/wasm/outline-stroke-corpus.mjs` now defines the pending promotion
+  harness: 30 rich raw `.x` sources (transparent axis-aligned lines plus primitive and
+  vector closed paths), an independent JavaScript filled-ink reference, bounded delta
+  and checkpoint assertions, exact apply/undo/redo recovery, and refusal/no-history
+  cases. `real-bridges.mjs` invokes it only through the generated native session while
+  the public web guard is asserted on. It is not recorded as proof until CI packages
+  and executes the generated artifact.
 
 ## Promotion sequence (not yet completed)
 

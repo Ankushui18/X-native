@@ -516,6 +516,13 @@ impl DocumentSession {
 
     fn outline_projection(node: &Node) -> Result<OutlineDelta, String> {
         let finite = |value: f64| value.is_finite() && value.abs() <= OUTLINE_SESSION_COORD_LIMIT;
+        // A line stores its endpoint delta in `w`/`h`, rather than a bounding
+        // box. Horizontal and vertical lines therefore legitimately have one
+        // zero component; only a point-like line is not outlineable.
+        let valid_dimensions = match &node.kind {
+            NodeKind::Line => node.w != 0.0 || node.h != 0.0,
+            _ => node.w > 0.0 && node.h > 0.0,
+        };
         if node.id.is_empty()
             || node.id.len() > 256
             || node.name.len() > 1024
@@ -537,8 +544,7 @@ impl DocumentSession {
             || ![node.transform.x, node.transform.y, node.w, node.h]
                 .iter()
                 .all(|value| finite(*value))
-            || node.w <= 0.0
-            || node.h <= 0.0
+            || !valid_dimensions
         {
             return Err("outline session admits only direct, plain opaque layers".into());
         }
@@ -1656,6 +1662,43 @@ mod tests {
             redone.outline.unwrap().shape,
             OutlineShapeDelta::Vector { .. }
         ));
+    }
+
+    #[test]
+    fn outline_stroke_session_admits_axis_aligned_lines() {
+        for (id, w, h) in [("horizontal", 72.0, 0.0), ("vertical", 0.0, 48.0)] {
+            let mut source = Node::line(id, 12.0, 18.0, w, h, Color::TRANSPARENT);
+            source.visual_stacks_materialized = true;
+            source.fill_layers = vec![PaintLayer::new(source.fill.clone())];
+            source.stroke = x_core::Stroke::solid(Color::from_rgb8(0x39, 0x72, 0xb4), 6.0);
+            source.stroke_layers = vec![StrokeLayer {
+                stroke: source.stroke.clone(),
+                opacity: 1.0,
+                visible: true,
+                blend: x_core::BlendKind::Normal,
+                options: x_core::StrokeOptions {
+                    cap_start: StrokeCap::Round,
+                    cap_end: StrokeCap::Square,
+                    ..Default::default()
+                },
+            }];
+            let mut session = DocumentSession::new(Document {
+                pages: vec![Node::frame("page", 120.0, 90.0).child(source)],
+                ..Default::default()
+            })
+            .unwrap();
+            let applied = session
+                .dispatch(SessionCommand::OutlineStroke { id })
+                .expect("axis-aligned line is a non-degenerate centerline");
+            assert!(matches!(
+                applied.outline.unwrap().shape,
+                OutlineShapeDelta::Vector { ref path } if path.iter().any(|command| matches!(command, PathCmd::Close))
+            ));
+            let restored = session.dispatch(SessionCommand::Undo).unwrap().outline.unwrap();
+            assert!(matches!(restored.shape, OutlineShapeDelta::Line));
+            assert_eq!(restored.node.w, w);
+            assert_eq!(restored.node.h, h);
+        }
     }
 
     #[test]
