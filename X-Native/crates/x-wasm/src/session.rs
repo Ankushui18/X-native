@@ -3,6 +3,7 @@
 
 use serde_json::{json, Value};
 use x_core::booleans::BoolOp;
+use x_core::{parse_hex_color, StrokeAlign, StrokeJoin};
 use x_editor::{DocumentSession, GeometryNodeDelta, NodeDelta, SessionCommand, SessionDelta};
 use x_format::{deserialize::load_x, serialize::save_x};
 
@@ -39,6 +40,21 @@ fn delta_json(delta: SessionDelta) -> String {
         value["boolean"] = json!({
             "upsert": boolean.upsert.into_iter().map(geometry_value).collect::<Vec<_>>(),
             "removed": boolean.removed,
+        });
+    }
+    if let Some(stroke) = delta.stroke {
+        value["stroke"] = json!({
+            "id": stroke.id,
+            "width": stroke.width,
+            "color": stroke.color,
+            "align": match stroke.align {
+                StrokeAlign::Inside => "inside", StrokeAlign::Center => "center", StrokeAlign::Outside => "outside"
+            },
+            "join": match stroke.join {
+                StrokeJoin::Miter => "miter", StrokeJoin::Bevel => "bevel", StrokeJoin::Round => "round"
+            },
+            "outer": stroke.outer,
+            "inner": stroke.inner,
         });
     }
     value.to_string()
@@ -96,6 +112,22 @@ impl CommandBridge {
             _ => return Err("unknown Boolean operation".into()),
         };
         self.dispatch(SessionCommand::Boolean { first, second, op })
+    }
+
+    pub fn stroke_node(&mut self, id: &str, width: f64, hex: &str, alignment: &str, join: &str) -> Result<String, String> {
+        if hex.len() != 7 || !hex.starts_with('#') || !hex[1..].bytes().all(|v| v.is_ascii_hexdigit()) {
+            return Err("stroke color must be opaque #rrggbb".into());
+        }
+        let color = parse_hex_color(hex).ok_or("invalid stroke color")?;
+        let align = match alignment {
+            "inside" => StrokeAlign::Inside, "center" => StrokeAlign::Center,
+            "outside" => StrokeAlign::Outside, _ => return Err("unknown stroke alignment".into()),
+        };
+        let join = match join {
+            "miter" => StrokeJoin::Miter, "bevel" => StrokeJoin::Bevel,
+            _ => return Err("stroke join not proven".into()),
+        };
+        self.dispatch(SessionCommand::Stroke { id, width, color, align, join })
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -236,6 +268,36 @@ mod tests {
                 .to_string()
             );
         }
+    }
+
+    #[test]
+    fn stroke_delta_is_small_validated_and_checkpoint_is_lossless() {
+        let mut bridge = CommandBridge::open(&fixture()).unwrap();
+        for (width, color, align, join) in [
+            (-1.0, "#236b9e", "inside", "miter"),
+            (f64::NAN, "#236b9e", "center", "bevel"),
+            (3.0, "#fff", "inside", "miter"),
+            (3.0, "#ffffff00", "inside", "miter"),
+            (3.0, "#236b9e", "wrong", "miter"),
+            (3.0, "#236b9e", "outside", "round"),
+        ] {
+            assert!(bridge.stroke_node("box", width, color, align, join).is_err());
+        }
+        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
+        let wire = bridge.stroke_node("box", 8.0, "#236b9e", "outside", "bevel").unwrap();
+        assert!(wire.len() < 550, "returned a page instead of at most 12 stroke anchors");
+        let delta: Value = serde_json::from_str(&wire).unwrap();
+        assert_eq!(delta["node"], Value::Null);
+        assert_eq!(delta["stroke"]["outer"][0], json!([-8.0, 0.0]));
+        assert_eq!(delta["stroke"]["inner"][0], json!([0.0, 0.0]));
+        assert_eq!(delta["stroke"]["color"], "#236b9e");
+        assert_eq!(delta["stroke"]["join"], "bevel");
+        let saved = load_x(&bridge.export_x()).unwrap();
+        assert_eq!(saved.pages[0].children[0].stroke_layers[0].options.align, StrokeAlign::Outside);
+        let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+        assert_eq!(undone["stroke"]["width"], 0.0);
+        let redo: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
+        assert_eq!(redo["stroke"], delta["stroke"]);
     }
 
     #[test]

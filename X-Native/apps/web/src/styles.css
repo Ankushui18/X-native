@@ -5363,12 +5363,16 @@ html[data-theme="dark"] .x-btn-danger {
 .rust-preview-layers button[aria-pressed="true"] { border-color: var(--accent); background: var(--active); }
 .rust-preview-stage { background: var(--canvas); overflow: auto; height: min(70vh, 900px); }
 .rust-preview-world { position: relative; min-width: 1px; min-height: 1px; }
-.rust-preview-rect { position: absolute; padding: 0 !important; border: 0 !important; border-radius: 0 !important; }
+.rust-preview-rect { position: absolute; padding: 0 !important; border: 0 !important; border-radius: 0 !important; overflow: visible; }
+.rust-preview-stroke { position: absolute; pointer-events: none; overflow: visible; }
 .rust-preview-rect[aria-pressed="true"] { outline: 2px solid var(--cv-sel); outline-offset: 2px; }
 .rust-preview-inspector h2 { margin: 0 0 12px; font-size: 14px; }
 .rust-preview-inspector p, .rust-preview-inspector label { font-size: 12px; color: var(--muted); }
 .rust-preview-inspector form { display: grid; gap: 8px; margin: 18px 0; }
-.rust-preview-inspector input { min-width: 0; height: 30px; padding: 5px 8px; background: var(--input); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; }
+.rust-preview-inspector input, .rust-preview-inspector select { min-width: 0; height: 30px; padding: 5px 8px; background: var(--input); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; }
+.rust-preview-stroke-form { padding-top: 14px; border-top: 1px solid var(--line-2); }
+.rust-preview-stroke-form strong { font-size: 12px; }
+.rust-preview-stroke-form input[type="color"] { padding: 2px; width: 60px; }
 @media (max-width: 820px) {
   .rust-preview-content { grid-template-columns: minmax(0, 1fr); }
   .rust-preview-stage { order: -1; height: 48vh; }

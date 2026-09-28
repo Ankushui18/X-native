@@ -29,6 +29,7 @@ pub mod prototype;
 pub mod query;
 pub mod registry;
 pub mod smart_animate;
+pub mod stroke_alignment;
 pub mod styles;
 pub mod transaction;
 pub mod transform;

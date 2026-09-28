@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { DocSeed } from "../engine/files";
 import type { BooleanOp } from "../engine/types";
 import { admitWebDocument, openWebDocumentSession, type RustWebDocumentSession } from "../engine/webDocumentSession";
-import type { RustGeometryChange, RustNodeChange, RustStateChange } from "../engine/rustSession";
+import { DEFAULT_RECT_STROKE_COLOR, type RustGeometryChange, type RustNodeChange, type RustStateChange, type RustStrokeChange } from "../engine/rustSession";
 import { LiveStatus } from "./announce";
-import { XButton } from "./x-ui";
+import { XButton, XSelect } from "./x-ui";
 
 /** Explicitly opt-in, bounded web host for Rust-owned plain rectangles and
  * their Boolean results. NOT the production designer: no MemoryEngine, layout,
@@ -32,10 +32,15 @@ interface RectView extends RustNodeChange {
   visible: boolean;
   locked: boolean;
 }
-type LayerView = RectView | RustGeometryChange;
+type LayerView = (RectView | RustGeometryChange) & { stroke?: RustStrokeChange };
 
 function contourPath(rings: [number, number][][]): string {
   return rings.map(ring => ring.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join(" ") + " Z").join(" ");
+}
+// Node-local document geometry. The existing two inline layout/ink values in
+// this surface remain unchanged; no new hard-coded chrome styles are added.
+function strokeSvgGeometry(w: number, h: number, spill: number): CSSProperties {
+  return { left: -spill, top: -spill, width: w + 2 * spill, height: h + 2 * spill };
 }
 const INITIAL_STATE: RustStateChange = { revision: 0, node: null, canUndo: false, canRedo: false };
 
@@ -56,6 +61,9 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
   const [history, setHistory] = useState<RustStateChange>(INITIAL_STATE);
   const [selected, setSelected] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
+  const [strokeDraft, setStrokeDraft] = useState<{ width: string; color: string;
+    align: RustStrokeChange["align"]; join: RustStrokeChange["join"] }>(
+    { width: "8", color: DEFAULT_RECT_STROKE_COLOR, align: "center", join: "miter" });
   const [error, setError] = useState("");
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
 
@@ -143,10 +151,13 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
   const selectedLayer = layers.find(r => r.id === selected[selected.length - 1]) ?? null;
   const ready = phase === "ready" && !!session.current;
   const canBoolean = ready && selected.length === 2 &&
-    selected.every(id => layers.some(r => r.id === id && r.kind === "rect" && r.visible && !r.locked));
+    selected.every(id => layers.some(r => r.id === id && r.kind === "rect" && r.visible && !r.locked && !r.stroke?.width));
   // Vector resize needs its own geometry proof; admit rename/move but not
   // resizing a vector's box independently of its Rust path contours.
   const canResize = ready && selectedLayer?.kind === "rect" && selectedLayer.w >= 1 && selectedLayer.h >= 1;
+  const strokeWidth = Number(strokeDraft.width);
+  const canStroke = canResize && selectedLayer?.visible && !selectedLayer.locked &&
+    strokeDraft.width.trim() !== "" && Number.isFinite(strokeWidth) && strokeWidth > 0 && strokeWidth <= 2048;
   const phaseMessage = phase === "opening" ? "Checking the document and loading Rust"
     : phase === "unsupported" ? "Unsupported file. Use the standard editor"
     : phase === "unavailable" ? "Rust unavailable. Use the standard editor"
@@ -158,8 +169,10 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
     try {
       const change = command(rust);
       if (change.revision < lastRevision.current ||
-          ((change.node || change.boolean) && change.revision === lastRevision.current) ||
+          ((change.node || change.boolean || change.stroke) && change.revision === lastRevision.current) ||
           (change.node && (!layers.some(r => r.id === change.node!.id) || change.node.w <= 0 || change.node.h <= 0)) ||
+          (change.stroke && (!layers.some(r => r.id === change.stroke!.id && r.kind === "rect") ||
+            change.node && change.node.id !== change.stroke.id)) ||
           (change.boolean && (change.boolean.removed.some(id => !layers.some(r => r.id === id)) ||
             change.boolean.upsert.some(n => layers.some(r => r.id === n.id && !change.boolean!.removed.includes(r.id)))))) {
         throw new Error("Rust returned an invalid layer delta");
@@ -168,7 +181,7 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
       // Status/history are supplied by Rust; JS retains only what the DOM
       // needs to paint. No speculative patch and no full JSON at command time.
       setHistory(change);
-      if (change.node || change.boolean) {
+      if (change.node || change.boolean || change.stroke) {
         hasEdits.current = true;
         if (change.boolean) {
           const patch = change.boolean;
@@ -181,12 +194,19 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
           });
           setSelected(patch.upsert.map(r => r.id));
           setDraft(patch.upsert[patch.upsert.length - 1].name);
-        } else if (change.node) {
-          const node = change.node;
-          setLayers(list => list.map(layer => layer.id === node.id
-            ? { ...layer, name: node.name, x: node.x, y: node.y, w: node.w, h: node.h }
+        } else {
+          const { node, stroke } = change;
+          setLayers(list => list.map(layer => (node && layer.id === node.id || stroke && layer.id === stroke.id)
+            ? { ...layer, ...(node ? { name: node.name, x: node.x, y: node.y, w: node.w, h: node.h } : {}),
+              ...(stroke ? { stroke: stroke.width ? stroke : undefined } : {}) }
             : layer));
-          setDraft(current => selected.includes(node.id) ? node.name : current);
+          if (node) setDraft(current => selected.includes(node.id) ? node.name : current);
+          if (stroke && selected.includes(stroke.id)) {
+            setStrokeDraft(prev => ({ width: stroke.width ? String(stroke.width) : prev.width,
+              color: stroke.width ? stroke.color : prev.color,
+              align: stroke.width ? stroke.align : prev.align,
+              join: stroke.width ? stroke.join : prev.join }));
+          }
         }
         revokeDownload();
         setDownloadUrl(null);
@@ -207,6 +227,8 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
       ? previous.filter(value => value !== id)
       : [...previous.slice(-1), id]) : [id]);
     setDraft(name);
+    const stroke = layers.find(r => r.id === id)?.stroke;
+    if (stroke) setStrokeDraft({ width: String(stroke.width), color: stroke.color, align: stroke.align, join: stroke.join });
   }
 
   function boolean(op: BooleanOp): void {
@@ -232,7 +254,7 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
   return (
     <div className="rust-preview" data-file-id={fileId}>
       <header className="rust-preview-head">
-        <div><strong>Rust document preview</strong><span>Experimental · rectangles + Boolean vectors · not autosaved</span></div>
+        <div><strong>Rust document preview</strong><span>Experimental · rectangles, aligned strokes and Boolean vectors · not autosaved</span></div>
         <div className="rust-preview-actions">
           <XButton onClick={onHome}>Back to files</XButton>
           <XButton onClick={onStandard}>Standard editor</XButton>
@@ -282,6 +304,15 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
                     background: r.kind === "vector" ? "transparent" : r.fill }}>
                   {r.kind === "vector" && <svg width="100%" height="100%" viewBox={`0 0 ${r.w} ${r.h}`}
                     aria-hidden="true"><path d={contourPath(r.rings ?? [])} fill={r.fill} fillRule="evenodd" /></svg>}
+                  {r.stroke && r.stroke.width > 0 && (() => {
+                    const spill = r.stroke!.align === "inside" ? 0 : r.stroke!.align === "center" ? r.stroke!.width / 2 : r.stroke!.width;
+                    const contours = [r.stroke!.outer, ...(r.stroke!.inner.length ? [r.stroke!.inner] : [])];
+                    return <svg className="rust-preview-stroke" aria-hidden="true"
+                      viewBox={`${-spill} ${-spill} ${r.w + 2 * spill} ${r.h + 2 * spill}`}
+                      style={strokeSvgGeometry(r.w, r.h, spill)}>
+                      <path d={contourPath(contours)} fill={r.stroke!.color} fillRule="evenodd" />
+                    </svg>;
+                  })()}
                 </button>)}
             </div>
           </div>
@@ -311,8 +342,36 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
                   <XButton disabled={!canResize || selectedLayer.h <= 1}
                     onClick={() => apply(s => s.resizeNode(selectedLayer.id, selectedLayer.w, Math.max(1, selectedLayer.h - 10)))}>Shorter 10</XButton>
                 </div>
+                {selectedLayer.kind === "rect" && <form className="rust-preview-stroke-form" onSubmit={e => {
+                  e.preventDefault();
+                  if (canStroke) apply(s => s.strokeNode(selectedLayer.id, strokeWidth, strokeDraft.color, strokeDraft.align, strokeDraft.join));
+                }}>
+                  <strong>Rust stroke · exact edge offsets</strong>
+                  <label htmlFor="rust-stroke-width">Width</label>
+                  <input id="rust-stroke-width" type="number" min="0.01" max="2048" step="any"
+                    value={strokeDraft.width} onChange={e => setStrokeDraft(v => ({ ...v, width: e.target.value }))} />
+                  <label htmlFor="rust-stroke-color">Color</label>
+                  <input id="rust-stroke-color" type="color" value={strokeDraft.color}
+                    onChange={e => setStrokeDraft(v => ({ ...v, color: e.target.value }))} />
+                  <label>Alignment
+                    <XSelect ariaLabel="Stroke alignment" value={strokeDraft.align}
+                      options={[{ value: "inside", label: "Inside" }, { value: "center", label: "Center" },
+                        { value: "outside", label: "Outside" }]}
+                      onChange={value => setStrokeDraft(v => ({ ...v, align: value as RustStrokeChange["align"] }))} />
+                  </label>
+                  <label>Join
+                    <XSelect ariaLabel="Stroke join" value={strokeDraft.join}
+                      options={[{ value: "miter", label: "Miter" }, { value: "bevel", label: "Bevel" }]}
+                      onChange={value => setStrokeDraft(v => ({ ...v, join: value as RustStrokeChange["join"] }))} />
+                  </label>
+                  <XButton disabled={!canStroke}>Apply stroke</XButton>
+                </form>}
+                {selectedLayer.kind === "rect" && <XButton disabled={!ready || !selectedLayer.stroke?.width}
+                  onClick={() => apply(s => s.strokeNode(selectedLayer.id, 0, strokeDraft.color, "center", "miter"))}>
+                  Remove stroke
+                </XButton>}
                 {selectedLayer.kind === "vector" ?
-                  <p>Vector resize is not in this preview dialect; move and rename remain available.</p> :
+                  <p>Vector resize and strokes need a separate geometry proof; move and rename remain available.</p> :
                   (selectedLayer.w < 1 || selectedLayer.h < 1) &&
                   <p>Native resize requires both dimensions to be at least 1. Other edits remain available.</p>}
               </>}

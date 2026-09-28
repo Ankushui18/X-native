@@ -12,6 +12,7 @@ import { initWasmBridge, getEngineInfo, importSvg, importFig, importSketch, impo
 import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
 import { openRustSession } from "../../src/engine/rustSession.ts";
 import { admitWebDocument, openWebDocumentSession } from "../../src/engine/webDocumentSession.ts";
+import { rectangleStrokeOracle, strokeMatchesRectangle } from "../../src/engine/strokeBandOracle.ts";
 import { docFromTemplate } from "../../src/engine/files.ts";
 import { node } from "../../src/engine/memory.ts";
 import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
@@ -72,7 +73,7 @@ try {
   assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "simple SVG must use native output");
   // Real stateful class, not a synthetic session/replayed patch. The Rust
   // document is opened once; each edit/undo returns one node, never .x JSON.
-  assert.equal(glue.sessionBridgeVersion(), 3);
+  assert.equal(glue.sessionBridgeVersion(), 4);
   const sessionX = JSON.stringify(JSON.parse(glue.importSvgToX(plain)).doc);
   const session = await openRustSession(sessionX);
   assert.ok(session, "generated bindgen must expose the shared Rust command session");
@@ -224,6 +225,69 @@ try {
   emptyOwner.close();
   assert.deepEqual(booleanSeed, originalBooleanDoc, "Rust command must never mutate the web caller");
   console.log("PASS real WASM Rust Boolean V3: four shaped operations, TS anchor parity, atomic history, empty result, small deltas and explicit vector checkpoint");
+
+  // The stroke corpus uses the ACTUAL bindgen class and the opt-in web owner,
+  // not a mock/replay. Each result is checked against independently computed
+  // rectangle edge offsets. Five distinct rectangles × 3 alignments × 2 joins
+  // include fractional/negative origins, narrow holes and a thick collapse.
+  const strokeRects = [
+    { x: 10, y: 15, w: 100, h: 70, width: 8 },
+    { x: -32.5, y: 4.75, w: 20.5, h: 12.75, width: 2.5 },
+    { x: 100, y: 120, w: 6, h: 4, width: 5 },
+    { x: 0, y: 0, w: 1, h: 1, width: 0.25 },
+    { x: 145.25, y: -23.5, w: 300.25, h: 149.75, width: 27.5 },
+  ];
+  let parity = 0;
+  for (const r of strokeRects) for (const align of ["inside", "center", "outside"])
+    for (const join of ["miter", "bevel"]) {
+      const seed = docFromTemplate("blank");
+      seed.pages[0].root.children.push(node("rect", "Border", r.x, r.y, r.w, r.h, { fill: "#b7a9c2" }));
+      const id = seed.pages[0].root.children[0].id;
+      const owner = await openWebDocumentSession(seed);
+      assert.ok(owner, "native owner must admit an unstroked rectangle");
+      assert.throws(() => owner.strokeNode(id, -1, "#236b9e", align, join), /width/);
+      assert.throws(() => owner.strokeNode(id, r.width, "#236b9e", align, "round"), /join/);
+      assert.equal(owner.state().revision, 0, "a rejected command cannot change native history");
+      const changed = owner.strokeNode(id, r.width, "#236b9e", align, join);
+      assert.equal(changed.revision, 1);
+      assert.equal(changed.node, null, "style change must not copy the bounding box");
+      assert.equal(changed.boolean, undefined);
+      assert.deepEqual(changed.stroke?.id, id);
+      assert.deepEqual([changed.stroke.width, changed.stroke.color, changed.stroke.align, changed.stroke.join],
+        [r.width, "#236b9e", align, join]);
+      const expected = rectangleStrokeOracle(r.w, r.h, changed.stroke);
+      assert.ok(strokeMatchesRectangle(r, changed.stroke), `${align}/${join}: Rust differs from rectangle edge oracle`);
+      assert.deepEqual(changed.stroke.outer.length, expected.outer.length);
+      assert.deepEqual(changed.stroke.inner.length, expected.inner.length);
+      assert.ok(JSON.stringify(changed).length < 550, "stroke delta copied too much geometry");
+      const saved = owner.exportDocument();
+      const webStroke = saved.pages[0].root.children[0];
+      assert.deepEqual([webStroke.strokeWidth, webStroke.strokePaint, webStroke.strokeAlign, webStroke.strokeJoin,
+        webStroke.strokeVisible], [r.width, "#236b9e", align, join, true]);
+      assert.equal(owner.strokeNode(id, r.width, "#236b9e", align, join).revision, 1,
+        "no-op must not create a second history entry");
+      const undo = owner.undo();
+      assert.equal(undo.stroke?.width, 0);
+      assert.deepEqual(undo.stroke?.outer, []);
+      assert.deepEqual(owner.exportDocument(), seed, "undo restores the entire original document, not just the paint");
+      const redo = owner.redo();
+      assert.deepEqual(redo.stroke, changed.stroke, "redo restores exact Rust geometry/style");
+      assert.deepEqual(owner.exportDocument(), saved);
+      if (parity === 0) {
+        const resized = owner.resizeNode(id, r.w + 10, r.h + 5);
+        assert.deepEqual([resized.node.w, resized.node.h], [r.w + 10, r.h + 5]);
+        assert.ok(strokeMatchesRectangle(resized.node, resized.stroke), "resize must reproject both stroke contours");
+        const back = owner.undo();
+        assert.ok(strokeMatchesRectangle(back.node, back.stroke), "undo resize must reproject the old band");
+        assert.deepEqual(back.stroke, changed.stroke);
+        assert.deepEqual(owner.redo().stroke, resized.stroke, "redo resize must reproject new band");
+        assert.equal(owner.strokeNode(id, 0, "#236b9e", "center", "miter").stroke.width, 0);
+      }
+      owner.close();
+      parity++;
+    }
+  assert.equal(parity, 30);
+  console.log(`PASS real-WASM Rust stroke alignment: ${parity}/30 rectangle oracle parity, bound checks, native history, resize reprojection and lossless checkpoints`);
 
   const extended = JSON.parse(glue.importSvgToX(plain));
   extended.doc.comments = [{ text: "do not discard me" }];
@@ -564,6 +628,24 @@ try {
   assert.equal(host.querySelector(".rust-preview-rect")?.style.width, "60px");
   await React.act(async () => action("Undo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
   assert.equal(host.querySelector(".rust-preview-rect")?.style.width, "50px");
+  const alignControl = host.querySelector('select[aria-label="Stroke alignment"]');
+  const joinControl = host.querySelector('select[aria-label="Stroke join"]');
+  await React.act(async () => {
+    alignControl.value = "outside";
+    alignControl.dispatchEvent(new uiWindow.Event("change", { bubbles: true }));
+    joinControl.value = "bevel";
+    joinControl.dispatchEvent(new uiWindow.Event("change", { bubbles: true }));
+  });
+  await React.act(async () => host.querySelector(".rust-preview-stroke-form").dispatchEvent(new uiWindow.Event("submit", { bubbles: true, cancelable: true })));
+  assert.match(host.querySelector(".rust-preview-stroke path")?.getAttribute("d") ?? "", /^M-8 0 L0 -8/);
+  assert.equal(host.querySelector(".rust-preview-stroke path")?.getAttribute("fill"), "#202020");
+  assert.equal(host.querySelector(".rust-preview-stroke")?.style.left, "-8px", "outside band cannot be clipped to the node's bounds");
+  await React.act(async () => action("Undo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(host.querySelector(".rust-preview-stroke"), null);
+  await React.act(async () => action("Redo").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.ok(host.querySelector(".rust-preview-stroke path"));
+  await React.act(async () => action("Remove stroke").dispatchEvent(new uiWindow.MouseEvent("click", { bubbles: true })));
+  assert.equal(host.querySelector(".rust-preview-stroke"), null);
   assert.ok(releases.some(owner => owner && typeof owner.close === "function" && owner.hasEdits()));
   await React.act(async () => root.unmount());
   host.remove();

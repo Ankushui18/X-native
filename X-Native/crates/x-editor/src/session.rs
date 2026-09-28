@@ -9,7 +9,8 @@ use std::collections::HashSet;
 
 use crate::{find, Editor};
 use x_core::booleans::BoolOp;
-use x_core::{Document, Node, NodeKind, Paint, PathCmd};
+use x_core::stroke_alignment::aligned_stroke_band;
+use x_core::{Color, Document, Node, NodeKind, Paint, PaintLayer, PathCmd, StrokeAlign, StrokeJoin, StrokeLayer};
 
 /// The first bounded command slice. Further mutations need their own state
 /// delta and equivalence tests before they can be added to the bridge.
@@ -36,6 +37,15 @@ pub enum SessionCommand<'a> {
         first: &'a str,
         second: &'a str,
         op: BoolOp,
+    },
+    /// Bounded uniform stroke on a direct, plain rectangle. The style and
+    /// actual offset contours are owned by Rust; zero width removes it.
+    Stroke {
+        id: &'a str,
+        width: f64,
+        color: Color,
+        align: StrokeAlign,
+        join: StrokeJoin,
     },
     Undo,
     Redo,
@@ -70,6 +80,19 @@ pub struct BooleanDelta {
     pub removed: Vec<String>,
 }
 
+/// Local stroke contours and the style that produced them, sent ONLY on an
+/// edit/undo/redo. At most two rectangular rings (12 anchors), never a page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrokeDelta {
+    pub id: String,
+    pub width: f64,
+    pub color: String,
+    pub align: StrokeAlign,
+    pub join: StrokeJoin,
+    pub outer: Vec<(f64, f64)>,
+    pub inner: Vec<(f64, f64)>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionDelta {
     /// Increases only after a successful document edit, including undo/redo.
@@ -78,6 +101,8 @@ pub struct SessionDelta {
     pub node: Option<NodeDelta>,
     /// Only structural Boolean edits/undo/redo return this bounded change set.
     pub boolean: Option<BooleanDelta>,
+    /// Mutually exclusive with the structural and simple-node projections.
+    pub stroke: Option<StrokeDelta>,
     pub can_undo: bool,
     pub can_redo: bool,
 }
@@ -137,6 +162,7 @@ impl DocumentSession {
             revision: self.revision,
             node: None,
             boolean: None,
+            stroke: None,
             can_undo: self.editor.undo_depth() > 0,
             can_redo: self.editor.next_redo_node().is_some()
                 || self.editor.next_redo_boolean().is_some(),
@@ -184,6 +210,84 @@ impl DocumentSession {
             );
         }
         Ok(())
+    }
+
+    fn stroke_operand(&self, id: &str) -> Result<(), String> {
+        let node = self.target(id)?;
+        if !self.editor.root.children.iter().any(|child| child.id == id)
+            || !matches!(&node.kind, NodeKind::Rect { radius } if *radius == 0.0)
+            || !node.children.is_empty()
+            || id.len() > 256
+            || node.name.len() > 1024
+            || !node.visible
+            || node.locked
+            || node.opacity != 1.0
+            || node.transform.rotation != 0.0
+            || node.transform.scale_x != 1.0
+            || node.transform.scale_y != 1.0
+            || node.transform.skew_x != 0.0
+            || node.transform.skew_y != 0.0
+            || node.corner_radii.is_some()
+            || node.corner_smoothing != 0.0
+            || !node.effects.is_empty()
+            || !node.effect_layers.is_empty()
+            || ![node.transform.x, node.transform.y, node.w, node.h]
+                .iter().all(|v| v.is_finite() && v.abs() <= 1e9)
+            || node.w <= 0.0
+            || node.h <= 0.0
+            || !matches!(&node.fill, Paint::Solid(c) if c.to_rgba8().a == 255)
+        {
+            return Err("stroke session admits only direct, plain opaque rectangles".into());
+        }
+        if node.stroke.width == 0.0 && !node.visual_stacks_materialized
+            && node.fill_layers.is_empty() && node.stroke_layers.is_empty()
+        {
+            return Ok(());
+        }
+        // Accept only a style produced by this same command. Native inputs
+        // with gradient/multiple layers, dashes, effects or modified options
+        // must not be flattened to a single rectangle stroke on update.
+        let Some(layer) = node.stroke_layers.first() else {
+            return Err("unsupported stroke stack".into());
+        };
+        let mut expected = StrokeLayer::new(node.stroke.clone());
+        expected.options.align = layer.options.align;
+        expected.options.join = layer.options.join;
+        if !node.visual_stacks_materialized
+            || node.fill_layers.len() != 1
+            || node.fill_layers[0] != PaintLayer::new(node.fill.clone())
+            || node.stroke_layers.len() != 1
+            || node.stroke_layers[0] != expected
+            || layer.options.join == StrokeJoin::Round
+            || !(0.0 < node.stroke.width && node.stroke.width <= 2048.0)
+            || !matches!(&node.stroke.paint, Paint::Solid(c) if c.to_rgba8().a == 255)
+        {
+            return Err("unsupported stroke stack".into());
+        }
+        Ok(())
+    }
+
+    fn stroke_node(&self, id: &str) -> Result<StrokeDelta, String> {
+        let node = self.target(id)?;
+        self.stroke_operand(id)?;
+        let width = node.stroke.width;
+        let (align, join) = node.stroke_layers.first().map(|l| (l.options.align, l.options.join))
+            .unwrap_or((StrokeAlign::Center, StrokeJoin::Miter));
+        let color = match &node.stroke.paint {
+            Paint::Solid(c) => {
+                let rgba = c.to_rgba8();
+                format!("#{:02x}{:02x}{:02x}", rgba.r, rgba.g, rgba.b)
+            }
+            _ => return Err("stroke delta requires a solid color".into()),
+        };
+        let band = if width > 0.0 {
+            let corners = [(0.0, 0.0), (node.w, 0.0), (node.w, node.h), (0.0, node.h)];
+            aligned_stroke_band(&corners, width, align, join, 4.0).map_err(str::to_string)?
+        } else {
+            x_core::stroke_alignment::AlignedStrokeBand { outer: vec![], inner: vec![] }
+        };
+        Ok(StrokeDelta { id: id.into(), width, color, align, join,
+            outer: band.outer, inner: band.inner })
     }
 
     fn geometry_node(&self, id: &str) -> Result<GeometryNodeDelta, String> {
@@ -243,6 +347,8 @@ impl DocumentSession {
         // One structural edit can change three node identities. The editor's
         // command stack remains the only history; this is just a delta hint.
         let mut boolean: Option<([String; 2], String, bool)> = None;
+        let mut stroke_id: Option<String> = None;
+        let mut stroke_only = false;
         let changed = match command {
             SessionCommand::Rename { id, name } => {
                 self.target(id)?;
@@ -280,9 +386,22 @@ impl DocumentSession {
                 if node.w == w && node.h == h {
                     None
                 } else {
+                    let styled = node.stroke.width > 0.0;
+                    if styled {
+                        self.stroke_operand(id)?;
+                        let options = &node.stroke_layers[0].options;
+                        let corners = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)];
+                        aligned_stroke_band(&corners, node.stroke.width, options.align, options.join, 4.0)
+                            .map_err(str::to_string)?;
+                    }
                     let before = self.editor.undo_depth();
                     self.editor.resize(id, w, h);
-                    (self.editor.undo_depth() > before).then(|| id.to_string())
+                    if self.editor.undo_depth() > before {
+                        if styled { stroke_id = Some(id.to_string()); }
+                        Some(id.to_string())
+                    } else {
+                        None
+                    }
                 }
             }
             SessionCommand::Boolean { first, second, op } => {
@@ -303,11 +422,26 @@ impl DocumentSession {
                 boolean = Some(([first.to_string(), second.to_string()], result, true));
                 None
             }
+            SessionCommand::Stroke { id, width, color, align, join } => {
+                self.stroke_operand(id)?;
+                if self.editor.set_aligned_rect_stroke(id, width, color, align, join)
+                    .map_err(str::to_string)? {
+                    stroke_id = Some(id.to_string());
+                }
+                None
+            }
             SessionCommand::Undo => {
                 let id = self.editor.next_undo_node().map(str::to_string);
                 let structural = self.editor.next_undo_boolean();
+                let style = self.editor.next_undo_stroke().map(str::to_string);
+                let previous_size = id.as_ref().and_then(|id| self.node(id)).map(|n| (n.w, n.h));
                 if self.editor.undo() {
                     boolean = structural.map(|(ids, result)| (ids, result, false));
+                    stroke_only = style.is_some();
+                    stroke_id = style.or_else(|| id.as_ref().and_then(|id| {
+                        let node = self.target(id).ok()?;
+                        (previous_size != Some((node.w, node.h)) && node.stroke.width > 0.0).then(|| id.clone())
+                    }));
                     id
                 } else {
                     None
@@ -316,8 +450,15 @@ impl DocumentSession {
             SessionCommand::Redo => {
                 let id = self.editor.next_redo_node().map(str::to_string);
                 let structural = self.editor.next_redo_boolean();
+                let style = self.editor.next_redo_stroke().map(str::to_string);
+                let previous_size = id.as_ref().and_then(|id| self.node(id)).map(|n| (n.w, n.h));
                 if self.editor.redo() {
                     boolean = structural.map(|(ids, result)| (ids, result, true));
+                    stroke_only = style.is_some();
+                    stroke_id = style.or_else(|| id.as_ref().and_then(|id| {
+                        let node = self.target(id).ok()?;
+                        (previous_size != Some((node.w, node.h)) && node.stroke.width > 0.0).then(|| id.clone())
+                    }));
                     id
                 } else {
                     None
@@ -331,11 +472,14 @@ impl DocumentSession {
                 sources.to_vec()
             };
         }
-        if changed.is_some() || boolean.is_some() {
+        if changed.is_some() || boolean.is_some() || stroke_id.is_some() {
             self.revision += 1;
         }
         let mut delta = self.state();
-        delta.node = changed.and_then(|id| self.node(&id));
+        // A stroke change needs just the bounded style/contours, not a second
+        // copy of this same node's label and geometry.
+        delta.node = if stroke_only { None } else { changed.and_then(|id| self.node(&id)) };
+        delta.stroke = stroke_id.map(|id| self.stroke_node(&id)).transpose()?;
         if let Some((sources, result, applied)) = boolean {
             delta.boolean = Some(if applied {
                 BooleanDelta {
@@ -687,6 +831,51 @@ mod tests {
         };
         assert!(overflow.dispatch(move_overflow).is_err());
         assert_eq!(overflow.state().revision, 0);
+    }
+
+    #[test]
+    fn bounded_stroke_command_and_resize_share_rust_history_and_x_checkpoint() {
+        let mut session = DocumentSession::new(sample()).unwrap();
+        let style = SessionCommand::Stroke { id: "box", width: 8.0,
+            color: Color::from_rgb8(35, 107, 158),
+            align: StrokeAlign::Outside, join: StrokeJoin::Bevel };
+        let changed = session.dispatch(style).unwrap();
+        assert_eq!(changed.revision, 1);
+        assert!(changed.node.is_none() && changed.boolean.is_none());
+        let band = changed.stroke.unwrap();
+        assert_eq!(band.id, "box");
+        assert_eq!(band.color, "#236b9e");
+        assert_eq!(band.outer[0], (-8.0, 0.0));
+        assert_eq!(band.outer.len(), 8);
+        assert_eq!(band.inner.as_slice(), &[(0.0, 0.0), (30.0, 0.0), (30.0, 40.0), (0.0, 40.0)]);
+        assert_eq!(session.dispatch(style).unwrap(), session.state(), "no-op cannot push a new history entry");
+        assert!(session.dispatch(SessionCommand::Stroke { join: StrokeJoin::Round, ..style }).is_err());
+        assert!(session.dispatch(SessionCommand::Stroke { width: f64::NAN, ..style }).is_err());
+        assert_eq!(session.state().revision, 1);
+        let save = x_format::serialize::save_x(&session.snapshot());
+        let loaded = x_format::deserialize::load_x(&save).unwrap();
+        let layer = &loaded.pages[0].children[0];
+        assert!(layer.visual_stacks_materialized);
+        assert_eq!(layer.stroke_layers.len(), 1);
+        assert_eq!(layer.stroke_layers[0].options.align, StrokeAlign::Outside);
+        assert_eq!(layer.stroke_layers[0].options.join, StrokeJoin::Bevel);
+        assert_eq!(layer.stroke.width, 8.0);
+
+        let resize = session.dispatch(SessionCommand::Resize { id: "box", w: 50.0, h: 40.0 }).unwrap();
+        assert_eq!(resize.node.unwrap().w, 50.0);
+        assert_eq!(resize.stroke.unwrap().outer[2], (50.0, -8.0));
+        let undo_resize = session.dispatch(SessionCommand::Undo).unwrap();
+        assert_eq!(undo_resize.node.unwrap().w, 30.0);
+        assert_eq!(undo_resize.stroke.unwrap().outer[2], (30.0, -8.0));
+        let undo_style = session.dispatch(SessionCommand::Undo).unwrap();
+        assert!(undo_style.node.is_none());
+        assert_eq!(undo_style.stroke.unwrap().width, 0.0);
+        let redo_style = session.dispatch(SessionCommand::Redo).unwrap();
+        assert_eq!(redo_style.stroke.unwrap().outer[0], (-8.0, 0.0));
+        assert!(session.dispatch(SessionCommand::Stroke { id: "page", ..style }).is_err());
+        assert!(session.dispatch(SessionCommand::Stroke { id: "missing", ..style }).is_err());
+        assert_eq!(session.dispatch(SessionCommand::Stroke { width: 0.0, ..style }).unwrap().stroke.unwrap().width, 0.0);
+        assert!(session.snapshot().pages[0].children[0].stroke_layers.is_empty());
     }
 
     #[test]

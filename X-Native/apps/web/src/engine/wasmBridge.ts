@@ -10,9 +10,9 @@ import { decodeRustImport } from "./wasmImportAdapter";
 import { auditDecision, auditRustAsyncCall, auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 export const IMPORT_BRIDGE_VERSION = 1;
-// V3 adds an atomic Boolean command and bounded structural layer deltas.
-// Older bindgen classes cannot acknowledge a vector result or its undo safely.
-export const SESSION_BRIDGE_VERSION = 3;
+// V4 adds a bounded aligned-stroke command/contour delta. Older bindgen
+// classes cannot acknowledge its style or undo without losing stroke options.
+export const SESSION_BRIDGE_VERSION = 4;
 export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
 /** wasm-bindgen owns this stateful instance; JS never mirrors its document or
  * undo stack. The only large payload is an explicit open/export of native .x. */
@@ -23,6 +23,7 @@ export interface WasmDocumentSession {
   moveNode: (id: string, dx: number, dy: number) => string;
   resizeNode: (id: string, w: number, h: number) => string;
   booleanNode: (first: string, second: string, op: string) => string;
+  strokeNode: (id: string, width: number, color: string, align: string, join: string) => string;
   undo: () => string;
   redo: () => string;
   exportX: () => string;

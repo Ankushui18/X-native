@@ -2670,6 +2670,27 @@ impl Editor {
         }
     }
 
+    /// Read the actual ReplaceNode history for a style edit. Never maintain
+    /// a parallel list of stroke ids just to produce session undo deltas.
+    pub(crate) fn next_undo_stroke(&self) -> Option<&str> {
+        Self::stroke_history_id(self.undo_stack.last()?)
+    }
+
+    pub(crate) fn next_redo_stroke(&self) -> Option<&str> {
+        Self::stroke_history_id(self.redo_stack.last()?)
+    }
+
+    fn stroke_history_id(commands: &[Command]) -> Option<&str> {
+        match commands {
+            [Command::ReplaceNode { id, before, after }]
+                if before.stroke != after.stroke || before.stroke_layers != after.stroke_layers =>
+            {
+                Some(id)
+            }
+            _ => None,
+        }
+    }
+
     /// The next atomic Boolean edit's exact source/result ids. Session deltas
     /// come from the real Rust command log, never a parallel JS undo stack.
     pub(crate) fn next_undo_boolean(&self) -> Option<([String; 2], String)> {

@@ -9,6 +9,7 @@ const { docFromTemplate } = await import("../../engine/files.ts");
 const { node } = await import("../../engine/memory.ts");
 const { initWasmBridge, __resetWasmForTests } = await import("../../engine/wasmBridge.ts");
 const { RustDocumentView } = await import("../RustDocumentView.tsx");
+const { rectangleStrokeOracle } = await import("../../engine/strokeBandOracle.ts");
 const { readRoute, decideRouteChange } = await import("../fileRoute.ts");
 const { act } = React;
 const clone = x => JSON.parse(JSON.stringify(x));
@@ -25,11 +26,11 @@ const fixture = () => {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 3, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 4, RustDocumentSession: Session,
 });
 const calls = { opens: 0, exports: 0, queries: 0, edits: 0, closes: 0 };
 class FakeRust {
-  constructor(x) { calls.opens++; this.doc = JSON.parse(x); this.revision = 0; this.undos = []; this.redos = []; }
+  constructor(x) { calls.opens++; this.doc = JSON.parse(x); this.revision = 0; this.undos = []; this.redos = []; this.strokes = new Map(); }
   get(id) { return this.doc.pages[0].children.find(n => n.id === id); }
   state(node = null) { return JSON.stringify({ revision: this.revision, node, canUndo: this.undos.length > 0, canRedo: this.redos.length > 0 }); }
   getNode(id) {
@@ -55,6 +56,19 @@ class FakeRust {
   }
   renameNode(id, name) { return this.edit(id, n => { n.name = name.trim(); }); }
   resizeNode(id, w, h) { return this.edit(id, n => { n.w = w; n.h = h; }); }
+  strokeDelta(id, style) {
+    if (!style) return { id, width: 0, color: "#000000", align: "center", join: "miter", outer: [], inner: [] };
+    return { id, ...style, ...rectangleStrokeOracle(this.get(id).w, this.get(id).h, style) };
+  }
+  strokeNode(id, width, color, align, join) {
+    const before = this.strokes.get(id) ?? null;
+    const after = width ? { width, color, align, join } : null;
+    if (JSON.stringify(before) === JSON.stringify(after)) return this.state();
+    this.undos.push({ stroke: true, id, before, after }); this.redos.length = 0;
+    if (after) this.strokes.set(id, after); else this.strokes.delete(id);
+    this.revision++; calls.edits++;
+    return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(id, after) });
+  }
   booleanNode(first, second, name) {
     // A predetermined fixture response exercises the DOM/ABI, NOT a JS
     // implementation of Boolean geometry. Genuine contours are tested in CI.
@@ -84,6 +98,10 @@ class FakeRust {
     const op = this.undos.pop();
     if (!op) return this.state();
     this.redos.push(op); this.revision++;
+    if (op.stroke) {
+      if (op.before) this.strokes.set(op.id, op.before); else this.strokes.delete(op.id);
+      return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(op.id, op.before) });
+    }
     if (op.boolean) {
       this.doc.pages[0].children = clone(op.before);
       return JSON.stringify({ ...JSON.parse(this.state()), boolean: {
@@ -102,6 +120,10 @@ class FakeRust {
     const op = this.redos.pop();
     if (!op) return this.state();
     this.undos.push(op); this.revision++;
+    if (op.stroke) {
+      if (op.after) this.strokes.set(op.id, op.after); else this.strokes.delete(op.id);
+      return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(op.id, op.after) });
+    }
     if (op.boolean) {
       this.doc.pages[0].children = clone(op.after);
       return JSON.stringify({ ...JSON.parse(this.state()), boolean: {
@@ -270,6 +292,30 @@ assert.equal(savedVector.vectorNetwork.regions[0].loops.length, 1);
 assert.equal(savedVector.vectorNetwork.vertices.length, 4);
 await preview.close();
 console.log("  ok Boolean preview: two-layer selection, vector paint, atomic history, explicit vector checkpoint");
+
+const stroked = mount(fixture());
+await stroked.render();
+const beforeStrokeExports = calls.exports;
+await act(async () => {
+  const align = stroked.host.querySelector('select[aria-label="Stroke alignment"]');
+  const join = stroked.host.querySelector('select[aria-label="Stroke join"]');
+  align.value = "outside"; align.dispatchEvent(new win.Event("change", { bubbles: true }));
+  join.value = "bevel"; join.dispatchEvent(new win.Event("change", { bubbles: true }));
+});
+await stroked.click("Apply stroke");
+assert.match(stroked.host.querySelector(".rust-preview-stroke path").getAttribute("d"), /^M-8 0 L0 -8/);
+assert.equal(stroked.host.querySelector(".rust-preview-stroke path").getAttribute("fill"), "#202020");
+assert.equal(stroked.host.querySelector(".rust-preview-stroke").style.left, "-8px");
+assert.equal(stroked.byText("Remove stroke").disabled, false);
+await stroked.click("Undo");
+assert.equal(stroked.host.querySelector(".rust-preview-stroke"), null);
+await stroked.click("Redo");
+assert.ok(stroked.host.querySelector(".rust-preview-stroke path"));
+await stroked.click("Remove stroke");
+assert.equal(stroked.host.querySelector(".rust-preview-stroke"), null);
+assert.equal(calls.exports, beforeStrokeExports, "stroke/history never export .x just to paint");
+await stroked.close();
+console.log("  ok stroke preview: Rust-only join/alignment deltas, unclipped SVG band and undo/redo");
 
 const openedBeforeInvalid = calls.opens;
 const invalid = fixture(); invalid.styles.push({ name: "outside subset" });

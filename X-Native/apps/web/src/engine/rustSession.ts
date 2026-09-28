@@ -46,6 +46,18 @@ export interface RustBooleanChange {
   upsert: RustGeometryChange[];
   removed: string[];
 }
+// User-authored document ink, not chrome/theme color.
+export const DEFAULT_RECT_STROKE_COLOR = "#202020";
+export interface RustStrokeChange {
+  id: string;
+  width: number;
+  color: string;
+  align: "inside" | "center" | "outside";
+  join: "miter" | "bevel";
+  /** Two node-local contours; the second is an EVENODD hole if present. */
+  outer: [number, number][];
+  inner: [number, number][];
+}
 export interface RustStateChange {
   revision: number;
   node: RustNodeChange | null;
@@ -53,6 +65,8 @@ export interface RustStateChange {
   canRedo: boolean;
   /** Only structural Boolean apply/undo/redo returns this bounded patch. */
   boolean?: RustBooleanChange;
+  /** Only a style edit or a stroke-geometry resize emits this bounded patch. */
+  stroke?: RustStrokeChange;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -117,18 +131,51 @@ function booleanValue(value: unknown): RustBooleanChange {
   if (new Set(ids).size !== 3) throw new Error("Duplicate Rust Boolean identities");
   return { upsert, removed };
 }
+function strokeValue(value: unknown): RustStrokeChange {
+  const s = record(value, "stroke delta");
+  keys(s, ["id", "width", "color", "align", "join", "outer", "inner"], "stroke delta");
+  if (typeof s.id !== "string" || !s.id || s.id.length > 256 ||
+      typeof s.width !== "number" || !Number.isFinite(s.width) || s.width < 0 || s.width > 2048 ||
+      typeof s.color !== "string" || !/^#[0-9a-f]{6}$/.test(s.color) ||
+      !["inside", "center", "outside"].includes(s.align as string) ||
+      !["miter", "bevel"].includes(s.join as string)) throw new Error("Invalid Rust stroke style");
+  const contour = (ring: unknown, outer: boolean): [number, number][] => {
+    if (!Array.isArray(ring) || ![outer ? 4 : 0, outer ? 8 : 4].includes(ring.length)) {
+      throw new Error("Invalid Rust stroke contour size");
+    }
+    return ring.map(point => {
+      if (!Array.isArray(point) || point.length !== 2 ||
+          point.some(v => typeof v !== "number" || !Number.isFinite(v) || Math.abs(v) > 1e9 + 2048)) {
+        throw new Error("Invalid Rust stroke contour point");
+      }
+      return [point[0], point[1]] as [number, number];
+    });
+  };
+  if (s.width === 0 && (s.align !== "center" || s.join !== "miter" || s.color !== "#000000" ||
+      !Array.isArray(s.outer) || s.outer.length || !Array.isArray(s.inner) || s.inner.length)) {
+    throw new Error("Removed Rust stroke must have empty contours");
+  }
+  const outer = s.width === 0 ? [] as [number, number][] : contour(s.outer, true);
+  const inner = s.width === 0 ? [] as [number, number][] : contour(s.inner, false);
+  return { id: s.id, width: s.width, color: s.color, align: s.align as RustStrokeChange["align"],
+    join: s.join as RustStrokeChange["join"], outer, inner };
+}
 function stateValue(json: string): RustStateChange {
   const obj = record(JSON.parse(json) as unknown, "session delta");
-  keys(obj, ["revision", "node", "canUndo", "canRedo", ...(obj.boolean === undefined ? [] : ["boolean"])], "session delta");
+  keys(obj, ["revision", "node", "canUndo", "canRedo", ...(obj.boolean === undefined ? [] : ["boolean"]),
+    ...(obj.stroke === undefined ? [] : ["stroke"])], "session delta");
   if (typeof obj.revision !== "number" || !Number.isSafeInteger(obj.revision) || obj.revision < 0 ||
       typeof obj.canUndo !== "boolean" || typeof obj.canRedo !== "boolean" ||
-      (obj.boolean !== undefined && obj.node !== null)) throw new Error("Invalid Rust session delta");
+      (obj.boolean !== undefined && (obj.node !== null || obj.stroke !== undefined))) {
+    throw new Error("Invalid Rust session delta");
+  }
   return {
     revision: obj.revision,
     node: nodeValue(obj.node),
     canUndo: obj.canUndo,
     canRedo: obj.canRedo,
     ...(obj.boolean === undefined ? {} : { boolean: booleanValue(obj.boolean) }),
+    ...(obj.stroke === undefined ? {} : { stroke: strokeValue(obj.stroke) }),
   };
 }
 
@@ -138,7 +185,7 @@ export class RustSessionClient {
   constructor(binding: WasmDocumentSession) {
     // The version handshake alone is not enough if an optional asset was
     // partially deployed. Do not hand an incomplete Rust owner to the UI.
-    const methods = ["state", "getNode", "renameNode", "moveNode", "resizeNode", "booleanNode",
+    const methods = ["state", "getNode", "renameNode", "moveNode", "resizeNode", "booleanNode", "strokeNode",
       "undo", "redo", "exportX", "free"] as const;
     if (methods.some(method => typeof binding[method] !== "function")) {
       if (typeof binding.free === "function") auditRustCall("x-wasm.RustDocumentSession.free", () => binding.free());
@@ -162,6 +209,9 @@ export class RustSessionClient {
   resizeNode(id: string, w: number, h: number): RustStateChange { return stateValue(this.native("resizeNode", b => b.resizeNode(id, w, h))); }
   booleanNode(first: string, second: string, op: BooleanOp): RustStateChange {
     return stateValue(this.native("booleanNode", b => b.booleanNode(first, second, op)));
+  }
+  strokeNode(id: string, width: number, color: string, align: RustStrokeChange["align"], join: RustStrokeChange["join"]): RustStateChange {
+    return stateValue(this.native("strokeNode", b => b.strokeNode(id, width, color, align, join)));
   }
   undo(): RustStateChange { return stateValue(this.native("undo", b => b.undo())); }
   redo(): RustStateChange { return stateValue(this.native("redo", b => b.redo())); }

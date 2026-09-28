@@ -141,7 +141,7 @@ mod bindings {
     /// mutations and multi-node structural deltas to the Rust-owned session.
     #[wasm_bindgen(js_name = sessionBridgeVersion)]
     pub fn session_bridge_version() -> u32 {
-        3
+        4
     }
 
     #[wasm_bindgen]
@@ -193,6 +193,13 @@ mod bindings {
             self.bridge
                 .boolean_node(first, second, op)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = strokeNode)]
+        pub fn stroke_node(
+            &mut self, id: &str, width: f64, color: &str, align: &str, join: &str
+        ) -> Result<String, JsValue> {
+            self.bridge.stroke_node(id, width, color, align, join).map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

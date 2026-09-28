@@ -26,7 +26,7 @@ async function test(label, fn) {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 3, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 4, RustDocumentSession: Session,
 });
 
 await test("one-page rect document and persisted v1 metadata round-trip exactly", () => {
@@ -43,6 +43,37 @@ await test("one-page rect document and persisted v1 metadata round-trip exactly"
       assert.equal(raw.pages[0].children?.[0]?.show_name, false);
       assert.equal(raw.pages[0].children?.[0]?.visible, false);
     }
+  }
+});
+
+await test("native aligned stroke options survive strict explicit checkpoint; extra options cannot be dropped", () => {
+  const seed = fixture();
+  seed.pages[0].root.children[0].visible = true;
+  seed.pages[0].root.children[0].locked = false;
+  const raw = JSON.parse(admitWebDocument(seed));
+  const n = raw.pages[0].children[0];
+  n.stroke = { color: "#236b9e", width: 8 };
+  n.fill_layers = [{ paint: { t: "solid", c: n.fill.c }, opacity: 1, visible: true, blend: "normal" }];
+  n.stroke_layers = [{ color: "#236b9e", width: 8, opacity: 1, visible: true, blend: "normal",
+    align: "outside", cap_start: "none", cap_end: "none", join: "bevel", dash: [], dash_offset: 0, miter: 4 }];
+  n.effect_layers = [];
+  const saved = decodeWebDocument(JSON.stringify(raw), seed);
+  const expected = clone(seed);
+  Object.assign(expected.pages[0].root.children[0], {
+    strokePaint: "#236b9e", strokeWidth: 8, strokeVisible: true, strokeAlign: "outside", strokeJoin: "bevel",
+  });
+  assert.deepEqual(saved, expected);
+  assert.equal(admitWebDocument(saved), null, "preexisting web styles remain outside the *initial* admission gate");
+  for (const mutate of [
+    n => { n.stroke_layers[0].join = "round"; },
+    n => { n.stroke_layers[0].miter = 8; },
+    n => { n.stroke_layers[0].dash = [3, 2]; },
+    n => { delete n.fill_layers; },
+    n => { n.stroke_layers.push(clone(n.stroke_layers[0])); },
+    n => { n.stroke_layers[0].color = "#000000"; },
+  ]) {
+    const changed = clone(raw); mutate(changed.pages[0].children[0]);
+    assert.throws(() => decodeWebDocument(JSON.stringify(changed), seed), /Unsupported|stroke|layer/i);
   }
 });
 
@@ -178,6 +209,7 @@ await test("open gates without wasm and rejects mismatched native round trip, fr
     moveNode() { return "{}"; }
     resizeNode() { return "{}"; }
     booleanNode() { return "{}"; }
+    strokeNode() { return "{}"; }
     undo() { return "{}"; }
     redo() { return "{}"; }
     exportX() { const v = JSON.parse(this.x); v.pages[0].children[0].x++; return JSON.stringify(v); }
@@ -222,6 +254,7 @@ await test("once admitted, small commands go straight to Rust; full data only on
     moveNode(id, dx, dy) { return this.edit(id, n => { n.x += dx; n.y += dy; }); }
     resizeNode(id, w, h) { return this.edit(id, n => { n.w = w; n.h = h; }); }
     booleanNode() { throw Error("No mock Boolean geometry"); }
+    strokeNode() { throw Error("No mock stroke geometry"); }
     undo() { return this.state(); }
     redo() { return this.state(); }
     exportX() { counters.exports++; return JSON.stringify(this.data); }

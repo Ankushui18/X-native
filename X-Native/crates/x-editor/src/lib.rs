@@ -31,6 +31,7 @@ pub mod session;
 pub mod shape_builder;
 pub mod snapping;
 pub mod spatial;
+pub mod stroke_alignment;
 #[cfg(test)]
 mod tests_mod;
 pub mod transformed_resize;

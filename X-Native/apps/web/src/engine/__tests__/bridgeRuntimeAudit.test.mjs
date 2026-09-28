@@ -112,7 +112,7 @@ try {
   const state = JSON.stringify({ revision: 1, node: null, canUndo: true, canRedo: false });
   let freed = 0;
   const binding = { state: () => state, getNode: () => "null", renameNode: () => state,
-    moveNode: () => state, resizeNode: () => state, booleanNode: () => state,
+    moveNode: () => state, resizeNode: () => state, booleanNode: () => state, strokeNode: () => state,
     undo: () => state, redo: () => state,
     exportX: () => "{}", free: () => { freed++; } };
   window.location.hash = "#/file/private-id?engine=rust";
@@ -123,11 +123,13 @@ try {
   client.renameNode("private-id", "private-name");
   client.resizeNode("private-id", 20, 30);
   client.booleanNode("private-first", "private-second", "union");
+  client.strokeNode("private-id", 8, "#236b9e", "outside", "bevel");
   client.close();
   assert.equal(freed, 1);
   assert.equal(command.snapshot().modules.session.activeRustSessions, 0);
   assert.equal(command.snapshot().functions["x-wasm.RustDocumentSession.resizeNode"].calls, 1);
   assert.equal(command.snapshot().functions["x-wasm.RustDocumentSession.booleanNode"].calls, 1);
+  assert.equal(command.snapshot().functions["x-wasm.RustDocumentSession.strokeNode"].calls, 1);
   assert.ok(!JSON.stringify(command.snapshot()).includes("private-"), "no document data in audit snapshot");
 
   const fetchBefore = globalThis.fetch;

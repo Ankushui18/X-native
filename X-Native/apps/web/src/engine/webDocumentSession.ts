@@ -13,8 +13,9 @@ import { node } from "./memory";
 import type { DocSeed } from "./files";
 import type { PersistedDoc } from "./persist";
 import type { BooleanOp, Page, XNode } from "./types";
-import { openRustSession, type RustSessionClient } from "./rustSession";
+import { openRustSession, type RustSessionClient, type RustStateChange, type RustStrokeChange } from "./rustSession";
 import { auditDecision } from "./bridgeRuntimeAudit";
+import { verifyStrokeDelta } from "./strokeBandOracle";
 
 export const WEB_DOCUMENT_SESSION_VERSION = 1;
 export type WebDocument = DocSeed | PersistedDoc;
@@ -87,6 +88,9 @@ function admittedNode(value: unknown, root: boolean, fromNative = false): XNode 
   // Only a command result may add a vector. Initial web admission stays
   // rectangle-only; arbitrary vector documents have not passed this gate.
   const vector = fromNative && !root && n.kind === "vector";
+  // A styled rectangle can only be produced by the versioned Rust command;
+  // initial web admission still rejects every preexisting stroke/property.
+  const styled = fromNative && !root && !vector && n.kind === "rect" && finite(n.strokeWidth) && n.strokeWidth > 0;
   const base = root ? ROOT : vector ? VECTOR : RECT;
   exactKeys(base as unknown as Record<string, unknown>, NODE_KEYS_V1);
   exactKeys(n, NODE_KEYS_V1, vector ? ["vectorNetwork"] : []);
@@ -95,13 +99,19 @@ function admittedNode(value: unknown, root: boolean, fromNative = false): XNode 
       typeof n.visible !== "boolean" || typeof n.locked !== "boolean" ||
       (root ? n.fill !== "#00000000" : !label(n.fill) || !OPAQUE.test(n.fill)) ||
       !Array.isArray(n.children) || (!root && n.children.length !== 0) ||
-      (root && n.children.length > 2048)) throw new Error("Unsupported layer");
+      (root && n.children.length > 2048) ||
+      (styled && (!(n.strokeWidth as number <= 2048) || !label(n.strokePaint) || !OPAQUE.test(n.strokePaint) ||
+        n.strokeVisible !== true || !["inside", "center", "outside"].includes(n.strokeAlign as string) ||
+        !["miter", "bevel"].includes(n.strokeJoin as string)))) throw new Error("Unsupported layer");
   const children = root ? n.children.map(c => admittedNode(c, false, fromNative)) : [];
   const expected: XNode = {
     ...base, id: n.id, name: n.name, x: n.x as number, y: n.y as number,
     w: n.w as number, h: n.h as number, fill: n.fill as string,
     visible: n.visible, locked: n.locked, children,
     ...(vector ? { path: n.path as XNode["path"], vectorNetwork: n.vectorNetwork as NonNullable<XNode["vectorNetwork"]>, closed: true } : {}),
+    ...(styled ? { strokeWidth: n.strokeWidth as number, strokePaint: n.strokePaint as string,
+      strokeVisible: true, strokeAlign: n.strokeAlign as XNode["strokeAlign"],
+      strokeJoin: n.strokeJoin as XNode["strokeJoin"] } : {}),
   };
   if (!equal(n, expected)) throw new Error("Unsupported layer properties");
   return expected;
@@ -152,6 +162,14 @@ function nativeNode(n: XNode, root: boolean): Record<string, unknown> {
       ? { t: "vector", path: nativePath(n) } : { t: "rect", radius: 0 },
     x: n.x, y: n.y, w: n.w, h: n.h, rotation: 0, opacity: 1,
     visible: n.visible, locked: n.locked, fill: { t: "solid", c: n.fill },
+    ...(!root && n.kind === "rect" && n.strokeWidth > 0 ? {
+      stroke: { color: n.strokePaint, width: n.strokeWidth },
+      fill_layers: [{ paint: { t: "solid", c: n.fill }, opacity: 1, visible: true, blend: "normal" }],
+      stroke_layers: [{ color: n.strokePaint, width: n.strokeWidth, opacity: 1, visible: true,
+        blend: "normal", align: n.strokeAlign, cap_start: "none", cap_end: "none", join: n.strokeJoin,
+        dash: [], dash_offset: 0, miter: 4 }],
+      effect_layers: [],
+    } : {}),
     ...(n.name === n.id ? {} : { name: n.name }),
     show_name: false,
     ...(root ? { blend: "pass-through" } : {}),
@@ -208,13 +226,20 @@ function decodedNode(value: unknown, root: boolean): XNode {
       !label(paint.c) || !Array.isArray(n.children ?? [])) throw new Error("Invalid native layer");
   const kind = object(n.kind);
   const vector = !root && kind.t === "vector";
+  const style = !root && !vector && n.stroke !== undefined ? (() => {
+    const stroke = object(n.stroke);
+    if (!Array.isArray(n.stroke_layers) || n.stroke_layers.length !== 1) throw new Error("Unsupported stroke stack");
+    const layer = object(n.stroke_layers[0]);
+    return { strokePaint: stroke.color as string, strokeWidth: stroke.width as number, strokeVisible: true,
+      strokeAlign: layer.align as XNode["strokeAlign"], strokeJoin: layer.join as XNode["strokeJoin"] };
+  })() : {};
   const children = root ? (n.children as unknown[] | undefined ?? []).map(c => decodedNode(c, false)) : [];
   const base = root ? ROOT : vector ? VECTOR : RECT;
   const candidate: XNode = {
     ...base, id: n.id, name: n.name ?? n.id, x: n.x as number, y: n.y as number,
     w: n.w as number, h: n.h as number, fill: paint.c,
     visible: n.visible, locked: n.locked, children,
-    ...(vector ? nativeVector(kind) : {}),
+    ...(vector ? nativeVector(kind) : {}), ...style,
   };
   // Checks *every* native field, including extra properties the lenient .x
   // parser might expose in a future build. Nothing is stripped on export.
@@ -263,14 +288,20 @@ export class RustWebDocumentSession {
   static create(rust: RustSessionClient, input: WebDocument): RustWebDocumentSession {
     return new RustWebDocumentSession(rust, shellOf(input));
   }
+  private checked(change: RustStateChange): RustStateChange {
+    return verifyStrokeDelta(change, id => this.rust.getNode(id));
+  }
   state() { return this.rust.state(); }
   getNode(id: string) { return this.rust.getNode(id); }
   renameNode(id: string, name: string) { return this.rust.renameNode(id, name); }
   moveNode(id: string, dx: number, dy: number) { return this.rust.moveNode(id, dx, dy); }
-  resizeNode(id: string, w: number, h: number) { return this.rust.resizeNode(id, w, h); }
+  resizeNode(id: string, w: number, h: number) { return this.checked(this.rust.resizeNode(id, w, h)); }
   booleanNode(first: string, second: string, op: BooleanOp) { return this.rust.booleanNode(first, second, op); }
-  undo() { return this.rust.undo(); }
-  redo() { return this.rust.redo(); }
+  strokeNode(id: string, width: number, color: string, align: RustStrokeChange["align"], join: RustStrokeChange["join"]) {
+    return this.checked(this.rust.strokeNode(id, width, color, align, join));
+  }
+  undo() { return this.checked(this.rust.undo()); }
+  redo() { return this.checked(this.rust.redo()); }
   /** Whole document only on an explicit checkpoint; never per command/frame. */
   exportDocument(): WebDocument { return checkpoint(this.rust.exportX(), this.shell); }
   close(): void { this.rust.close(); }
