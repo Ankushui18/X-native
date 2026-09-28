@@ -5,6 +5,43 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: text baseline alignment)
+
+The first feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Use the horizontal and vertical flows in auto layout*
+(help.figma.com 31289464393751), section "Text baseline alignment" — *"such as
+when aligning an icon with a text layer"* … *"the bottoms of the icon and the
+word home are aligned on the red line"* — plus *Use auto layout with CSS
+Flexbox in mind* (42031586813719), which states auto layout mirrors how the web
+renders layouts.
+
+- **A layer without text now sits on the baseline by its bottom edge.** The row
+  modelled every non-text child's baseline as `h × 0.8`, so an icon in a
+  baseline-aligned row was 20% of its height too high and the shared line ran
+  through it. Flexbox (and Figma's own example) synthesise the baseline from the
+  bottom edge: `layout.ts::childBaseline`.
+- **A baseline row reserves its descenders.** The row's cross size is
+  `max baseline-above + max descent-below` — the flexbox baseline row — so a hug
+  no longer clips the text that hangs below the line (measured: 48px before,
+  56.8px for a 48px icon with 14px text).
+- **Every wrapped line aligns on its own baseline.** A `wrap` + baseline frame
+  used to top-align every line; `computeAutoLayout` now breaks the lines first
+  and gives each one its own baseline group (the earlier arithmetic is
+  unchanged: the existing wrap tests keep their numbers).
+- **The stored layout and the alignment box agree.** A `baseline` left over on
+  a flow that became vertical is normalized to the start edge
+  (`memory.ts::normalLayout`), because a vertical flow has no text baseline and
+  the panel offers no such control.
+- **Not a WASM change.** This is the TypeScript layout pass behind the existing
+  `autoLayout` command: no geometry crosses the WASM boundary, so every Rust
+  geometry guard is untouched.
+- **Tests:** `apps/web/src/engine/__tests__/baselineAlignment.test.mjs` (32) and
+  `apps/web/src/ui/__tests__/baselineAlignment.dom.test.mjs` (16), both in
+  `npm test`. Still open and recorded: the engine approximates a text's
+  first-line ascent as `fontSize × 0.8` (no font tables), and the Rust
+  `x-core` layout pass uses its own text heuristic.
+
 ## [Unreleased] — 2026-09-28 (Outline Stroke promoted in the opt-in Rust view)
 
 The genuine generated-WASM 30/30 outline corpus ran green with the promotion
