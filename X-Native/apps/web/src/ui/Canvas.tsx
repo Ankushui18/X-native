@@ -195,7 +195,7 @@ type Drag =
       zoom?: boolean;
       point?: number;
       segIndex?: number;
-      handle?: "in" | "out" | "g" | "h";
+      handle?: "in" | "out" | "start" | "g" | "h";
       /** Gradient-handle drag: which `fills` index the handles grabbed, -1 for the base fill. */
       gindex?: number;
       padEdge?: "top" | "right" | "bottom" | "left";
@@ -298,6 +298,69 @@ function nodeVisualBounds(wp: { x: number; y: number; node: XNode }): { x: numbe
     w: wp.node.w,
     h: wp.node.h,
   };
+}
+
+/**
+ * The arc controls of an ellipse in screen space, in the order the pointer path
+ * tests them (Figma help 360040450173, "Arc tool: create arcs, semi-circles,
+ * and rings"): the **Sweep** handle at the arc's end, the **Start** handle -
+ * "which has a dot inside it" - once the sweep has opened a gap, and the
+ * **Ratio** handle at `endingAngle * innerRadius`, which is the centre of a pie
+ * ("The Ratio handle at the center of the circle allows you to change the
+ * circle to a ring"). One owner for paint and hit-test, so the dot a user sees
+ * is the dot the pointer grabs.
+ */
+function arcHandlePoints(
+  node: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+): { kind: "out" | "start" | "in"; x: number; y: number }[] {
+  const cx = sx + sw / 2;
+  const cy = sy + sh / 2;
+  const rx = sw / 2;
+  const ry = sh / 2;
+  const d = node.arcData;
+  const sa = d?.startingAngle ?? 0;
+  const ea = d?.endingAngle ?? Math.PI * 2;
+  const ir = Math.max(0, Math.min(0.99, d?.innerRadius ?? 0));
+  const gap = !!d && Math.abs(ea - sa) < Math.PI * 2 - 0.001;
+  const out: { kind: "out" | "start" | "in"; x: number; y: number }[] = [
+    { kind: "out", x: cx + Math.cos(ea) * rx, y: cy + Math.sin(ea) * ry },
+  ];
+  if (gap) out.push({ kind: "start", x: cx + Math.cos(sa) * rx, y: cy + Math.sin(sa) * ry });
+  if (gap || ir > 0) out.push({ kind: "in", x: cx + Math.cos(ea) * rx * ir, y: cy + Math.sin(ea) * ry * ir });
+  return out;
+}
+
+/** Paint those controls. The caller has already applied the node's transform. */
+function paintArcHandles(
+  ctx: CanvasRenderingContext2D,
+  node: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  ink: string,
+  sel: string,
+) {
+  for (const h of arcHandlePoints(node, sx, sy, sw, sh)) {
+    ctx.fillStyle = ink;
+    ctx.strokeStyle = sel;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (h.kind === "start") {
+      // "The Start handle (which has a dot inside it)".
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 1.6, 0, Math.PI * 2);
+      ctx.fillStyle = sel;
+      ctx.fill();
+    }
+  }
 }
 
 export function Canvas({
@@ -2636,6 +2699,32 @@ export function Canvas({
       }
     }
 
+    // The article's first affordance: a hovered circle shows its arc controls
+    // ("When you hover over the circle, a single handle will appear on the
+    // right-hand side"), so the sweep can be grabbed without selecting first.
+    // A selected ellipse paints the same set in the selection pass below.
+    if (hovId && !snap.selection.includes(hovId) && snap.tool === "select" && !vecEdit) {
+      const ap = worldPos(root, hovId);
+      if (ap && ap.node.kind === "ellipse") {
+        const ab = nodeVisualBounds(ap);
+        const ax = snap.panX + ab.x * z;
+        const ay = snap.panY + ab.y * z;
+        const aw = ab.w * z;
+        const ah = ab.h * z;
+        if (aw >= 36 && ah >= 36) {
+          ctx.save();
+          if (ap.node.rotation || ap.node.flipH || ap.node.flipV) {
+            ctx.translate(ax + aw / 2, ay + ah / 2);
+            if (ap.node.rotation) ctx.rotate((ap.node.rotation * Math.PI) / 180);
+            if (ap.node.flipH || ap.node.flipV) ctx.scale(ap.node.flipH ? -1 : 1, ap.node.flipV ? -1 : 1);
+            ctx.translate(-(ax + aw / 2), -(ay + ah / 2));
+          }
+          paintArcHandles(ctx, ap.node, ax, ay, aw, ah, INK, SEL);
+          ctx.restore();
+        }
+      }
+    }
+
     // Frame tool: hovering a frame parks a + badge on each side edge for
     // one-click duplication; ⌥-click places a blank same-size frame instead.
     if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
@@ -2872,31 +2961,7 @@ export function Canvas({
         ctx.stroke();
       }
       if (wp.node.kind === "ellipse" && sw >= 36 && sh >= 36) {
-        const cx = sx + sw / 2;
-        const cy = sy + sh / 2;
-        const rx = sw / 2;
-        const ry = sh / 2;
-        const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
-        const ir = wp.node.arcData?.innerRadius ?? 0;
-        const hx = cx + Math.cos(ea) * rx;
-        const hy = cy + Math.sin(ea) * ry;
-
-        ctx.fillStyle = INK;
-        ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        if (ir > 0) {
-          const rhx = cx + Math.cos(ea) * rx * ir;
-          const rhy = cy + Math.sin(ea) * ry * ir;
-          ctx.beginPath();
-          ctx.arc(rhx, rhy, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-        }
+        paintArcHandles(ctx, wp.node, sx, sy, sw, sh, INK, SEL);
       }
       // Corner radius handles: only show these for a corner that is
       // actually rounded, and draws them as a small bracket hugging the corner.
@@ -4363,21 +4428,17 @@ export function Canvas({
           }
         }
         if (wp.node.kind === "ellipse") {
-          const sw = wp.node.w * z;
-          const sh = wp.node.h * z;
-          const cx = sx + sw / 2;
-          const cy = sy + sh / 2;
-          const rx = sw / 2;
-          const ry = sh / 2;
-          const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
-          const ir = wp.node.arcData?.innerRadius ?? 0;
-          const hx = cx + Math.cos(ea) * rx;
-          const hy = cy + Math.sin(ea) * ry;
-          if (Math.hypot(px - hx, py - hy) <= 9) {
+          // Sweep, then Start, then Ratio - the arc controls take the press
+          // ahead of the box's own resize handles, because the sweep dot sits
+          // on the ellipse's edge where a side handle also lives.
+          const dot = arcHandlePoints(wp.node, sx, sy, wp.node.w * z, wp.node.h * z).find(
+            (h) => Math.hypot(px - h.x, py - h.y) <= 9,
+          );
+          if (dot) {
             engine.dispatch({ type: "begin" });
             drag.current = {
               mode: "arc",
-              handle: "out",
+              handle: dot.kind,
               sx: e.clientX,
               sy: e.clientY,
               wx: wpt.x,
@@ -4385,23 +4446,6 @@ export function Canvas({
               id: wp.node.id,
             };
             return;
-          }
-          if (ir > 0) {
-            const rhx = cx + Math.cos(ea) * rx * ir;
-            const rhy = cy + Math.sin(ea) * ry * ir;
-            if (Math.hypot(px - rhx, py - rhy) <= 9) {
-              engine.dispatch({ type: "begin" });
-              drag.current = {
-                mode: "arc",
-                handle: "in",
-                sx: e.clientX,
-                sy: e.clientY,
-                wx: wpt.x,
-                wy: wpt.y,
-                id: wp.node.id,
-              };
-              return;
-            }
           }
         }
         if (
@@ -4662,6 +4706,48 @@ export function Canvas({
     const hit = e.metaKey || e.ctrlKey
       ? hitTest(root, wpt.x, wpt.y, { deep: true })
       : canvasClickTarget(root, wpt.x, wpt.y, snap.selection);
+    // A hovered, unselected ellipse shows its arc controls, so a press on one
+    // takes the handle - and selects the layer - instead of starting a move.
+    if (hit && hit.kind === "ellipse" && snap.tool === "select" && !vecEdit && !snap.selection.includes(hit.id)) {
+      const hp = worldPos(root, hit.id);
+      const r = wrap.current!.getBoundingClientRect();
+      if (hp) {
+        const hb = nodeVisualBounds(hp);
+        const z = snap.zoom;
+        const hsx = snap.panX + hb.x * z;
+        const hsy = snap.panY + hb.y * z;
+        const hsw = hb.w * z;
+        const hsh = hb.h * z;
+        if (hsw >= 36 && hsh >= 36) {
+          const rcx = hsx + hsw / 2;
+          const rcy = hsy + hsh / 2;
+          let px = e.clientX - r.left;
+          let py = e.clientY - r.top;
+          if (hit.rotation || hit.flipH || hit.flipV) {
+            const u = hit.rotation ? unrot(px, py, rcx, rcy, hit.rotation) : { x: px, y: py };
+            px = hit.flipH ? rcx - (u.x - rcx) : u.x;
+            py = hit.flipV ? rcy - (u.y - rcy) : u.y;
+          }
+          const dot = arcHandlePoints(hit, hsx, hsy, hsw, hsh).find(
+            (h) => Math.hypot(px - h.x, py - h.y) <= 9,
+          );
+          if (dot) {
+            engine.dispatch({ type: "select", ids: [hit.id] });
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "arc",
+              handle: dot.kind,
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: hit.id,
+            };
+            return;
+          }
+        }
+      }
+    }
     if (hit) {
       const ids = e.shiftKey
         ? snap.selection.includes(hit.id)
@@ -5480,7 +5566,22 @@ export function Canvas({
         const cx = wp.x + wp.node.w / 2;
         const cy = wp.y + wp.node.h / 2;
         const curArc = wp.node.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
-        if (d.handle === "in") {
+        const angleAt = () => {
+          let ang = Math.atan2(wpt.y - cy, wpt.x - cx);
+          if (ang < 0) ang += Math.PI * 2;
+          if (e.shiftKey) ang = Math.round((ang * 180) / Math.PI / 15) * (Math.PI / 12);
+          return ang;
+        };
+        if (d.handle === "start") {
+          // The Start handle drags the arc's beginning around the circle
+          // ("you can drag this around the circle to change the position of
+          // the ring"); ⇧ snaps to 15 degrees like the sweep does.
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { arcData: { ...curArc, startingAngle: angleAt() } },
+          });
+        } else if (d.handle === "in") {
           const maxR = Math.min(wp.node.w, wp.node.h) / 2;
           const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
           const ratio = Math.max(0, Math.min(0.95, curR / (maxR || 1)));
@@ -5490,9 +5591,7 @@ export function Canvas({
             patch: { arcData: { ...curArc, innerRadius: Math.round(ratio * 100) / 100 } },
           });
         } else {
-          let ang = Math.atan2(wpt.y - cy, wpt.x - cx);
-          if (ang < 0) ang += Math.PI * 2;
-          if (e.shiftKey) ang = Math.round((ang * 180) / Math.PI / 15) * (Math.PI / 12);
+          let ang = angleAt();
           if (ang > Math.PI * 2 - 0.05) ang = Math.PI * 2;
           engine.dispatch({
             type: "patch",
@@ -5632,6 +5731,7 @@ export function Canvas({
       d.mode === "autoPad" ||
       d.mode === "autoGap" ||
       d.mode === "smartGap" ||
+      d.mode === "arc" ||
       d.mode === "crop" ||
       d.mode === "cropMove" ||
       (d.mode === "marquee" && d.id === "erase")
