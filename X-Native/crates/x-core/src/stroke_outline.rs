@@ -163,33 +163,18 @@ pub fn outline_stroke_path(
             let samples = if centerline.closed {
                 closed_samples(&centerline, &options.width_profile)
             } else {
-                sample_range(
-                    &centerline,
-                    0.0,
-                    centerline.total,
-                    &options.width_profile,
-                )
+                sample_range(&centerline, 0.0, centerline.total, &options.width_profile)
             };
             if samples.len() < 2 {
                 continue;
             }
             if centerline.closed {
-                for contour in outline_closed(
-                    &samples,
-                    width,
-                    options,
-                    left_scale,
-                    right_scale,
-                ) {
+                for contour in outline_closed(&samples, width, options, left_scale, right_scale) {
                     retain_contour(&mut contours, &mut contour_anchor_budget, contour)?;
                 }
-            } else if let Some(contour) = outline_open(
-                &samples,
-                width,
-                options,
-                left_scale,
-                right_scale,
-            ) {
+            } else if let Some(contour) =
+                outline_open(&samples, width, options, left_scale, right_scale)
+            {
                 retain_contour(&mut contours, &mut contour_anchor_budget, contour)?;
             }
         } else {
@@ -201,13 +186,9 @@ pub fn outline_stroke_path(
                 if samples.len() < 2 {
                     continue;
                 }
-                if let Some(contour) = outline_open(
-                    &samples,
-                    width,
-                    options,
-                    left_scale,
-                    right_scale,
-                ) {
+                if let Some(contour) =
+                    outline_open(&samples, width, options, left_scale, right_scale)
+                {
                     retain_contour(&mut contours, &mut contour_anchor_budget, contour)?;
                 }
             }
