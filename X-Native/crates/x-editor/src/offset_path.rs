@@ -90,7 +90,9 @@ impl Editor {
         let Some(next) = self.preview_filled_offset(id, distance, join)? else {
             return Ok(false);
         };
-        let before = find(&self.root, id).ok_or("offset target not found")?.clone();
+        let before = find(&self.root, id)
+            .ok_or("offset target not found")?
+            .clone();
         self.push_replace(id, Box::new(before), next);
         Ok(true)
     }

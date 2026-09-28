@@ -205,14 +205,20 @@ impl CommandBridge {
 
     /// Geometry only; this bounded preview changes no native history.
     pub fn preview_offset(&self, id: &str, distance: f64, join: &str) -> Result<String, String> {
-        let shape = self.session.preview_offset(id, distance, offset_join(join)?)?;
+        let shape = self
+            .session
+            .preview_offset(id, distance, offset_join(join)?)?;
         Ok(shape.map(offset_value).unwrap_or(Value::Null).to_string())
     }
 
     /// One signed offset edit. A join is an existing native StrokeJoin;
     /// it is not approximated in the web host. A missing/unknown join fails.
     pub fn offset_node(&mut self, id: &str, distance: f64, join: &str) -> Result<String, String> {
-        self.dispatch(SessionCommand::Offset { id, distance, join: offset_join(join)? })
+        self.dispatch(SessionCommand::Offset {
+            id,
+            distance,
+            join: offset_join(join)?,
+        })
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -407,9 +413,13 @@ mod tests {
             serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"],
             0
         );
-        let preview: Value = serde_json::from_str(&bridge.preview_offset("box", 4.0, "round").unwrap()).unwrap();
+        let preview: Value =
+            serde_json::from_str(&bridge.preview_offset("box", 4.0, "round").unwrap()).unwrap();
         assert_eq!(preview["kind"], "vector");
-        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
+        assert_eq!(
+            serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"],
+            0
+        );
         let applied = bridge.offset_node("box", 4.0, "round").unwrap();
         let change: Value = serde_json::from_str(&applied).unwrap();
         assert_eq!(change["offset"], preview);
