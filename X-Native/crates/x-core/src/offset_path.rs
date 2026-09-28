@@ -89,7 +89,11 @@ pub fn offset_filled_path(
     // paths: it uses the same NONZERO fill as native vector painting, and
     // yields oriented outer/hole contours. Its output is a set of shapes, not
     // a guessed vertex-normal shift of the author's possibly crossing walk.
-    let valid = source.simplify_shape_as::<i64>(FillRule::NonZero);
+    // Use the overlay library's default i32 integer engine for both stages.
+    // Its i64 outline split solver traps with an out-of-bounds WASM memory
+    // access on even a four-corner rectangle; the bounded input coordinates
+    // above leave subpixel grid resolution with i32.
+    let valid = source.simplify_shape_as::<i32>(FillRule::NonZero);
     if valid.is_empty() {
         return Ok(vec![]);
     }
@@ -101,7 +105,7 @@ pub fn offset_filled_path(
         StrokeJoin::Round => LineJoin::Round(std::f64::consts::PI / 12.0),
     };
     let style = OutlineStyle::new(distance).line_join(join);
-    let shapes = valid.outline_as::<i64>(&style);
+    let shapes = valid.outline_as::<i32>(&style);
     if shapes.len() > 128 {
         return Err("offset result contains too many shapes");
     }
