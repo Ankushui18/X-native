@@ -11,6 +11,7 @@ import {
   isInstanceMember,
 } from "../engine/memory";
 import { shapePoly, shiftPoints } from "../engine/geometry";
+import { stopsMaskReach } from "../engine/paint";
 import { alignKey } from "../engine/layout";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize, type IconName } from "./icons";
@@ -222,8 +223,13 @@ function withMaskedBelow(kids: XNode[]): { n: XNode; maskedBelow: boolean }[] {
   let seenMask = false;
   for (let i = rows.length - 1; i >= 0; i--) {
     const n = rows[i];
-    out[i] = { n, maskedBelow: !n.isMask && seenMask };
+    // The same stopping rule the canvas partitions with: a frame or component
+    // with clip content on is outside the mask, and so is everything above it,
+    // so neither that row nor the ones past it may carry the arrow.
+    const boundary = stopsMaskReach(n);
+    out[i] = { n, maskedBelow: !n.isMask && seenMask && !boundary };
     if (n.isMask) seenMask = true;
+    else if (boundary) seenMask = false;
   }
   return out;
 }

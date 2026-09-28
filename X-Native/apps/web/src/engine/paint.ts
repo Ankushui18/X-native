@@ -551,20 +551,43 @@ export function coverCrop(iw: number, ih: number, w: number, h: number) {
 }
 
 /**
+ * Figma's third stopping rule for a mask's reach. The *Masks* article: "The
+ * mask applies to all siblings above it until it reaches: ... Another mask or
+ * mask object / The mask's parent frame or group / A frame or component with
+ * clip content on." So a frame-ish sibling that clips content ends the reach —
+ * and it is itself outside the mask, the same drop the article describes for a
+ * frame whose own clip content blocks it. A frame with clip content off lets
+ * the mask through, and groups have no such property, so neither stops it.
+ */
+export function stopsMaskReach(n: { kind?: string; overflow?: string }): boolean {
+  if (n.kind !== "frame" && n.kind !== "component" && n.kind !== "instance") return false;
+  return !!n.overflow && n.overflow !== "visible";
+}
+
+/**
  * Partition a child list into mask runs: plain children paint live, and a
  * visible mask opens a run that clips every sibling after it until the next
- * mask. A mask above content masks nothing (it opens an empty run), and a
- * hidden mask is an ordinary child.
+ * mask or a frame/component with clip content on. The boundary node and
+ * everything above it open a plain run — the mask's reach stops there, as the
+ * article's list of stopping rules says. A mask above content masks nothing
+ * (it opens an empty run), and a hidden mask is an ordinary child.
  */
-export function partitionMaskRuns<T extends { isMask?: boolean; visible?: boolean }>(
-  children: readonly T[],
-): { mask: T | null; kids: T[] }[] {
+export function partitionMaskRuns<
+  T extends { isMask?: boolean; visible?: boolean; kind?: string; overflow?: string },
+>(children: readonly T[]): { mask: T | null; kids: T[] }[] {
   const runs: { mask: T | null; kids: T[] }[] = [];
   let cur: { mask: T | null; kids: T[] } = { mask: null, kids: [] };
   for (const ch of children) {
     if (ch.isMask && ch.visible) {
       if (cur.mask || cur.kids.length) runs.push(cur);
       cur = { mask: ch, kids: [] };
+    } else if (cur.mask && stopsMaskReach(ch)) {
+      // Close the run the mask really covers, then paint the boundary and
+      // everything above it plainly. An empty run is dropped: a mask that
+      // reaches nothing paints nothing, and drawing it would put a green
+      // outline around a mask with no masked layers.
+      if (cur.kids.length) runs.push(cur);
+      cur = { mask: null, kids: [ch] };
     } else {
       cur.kids.push(ch);
     }
