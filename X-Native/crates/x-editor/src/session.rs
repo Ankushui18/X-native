@@ -1171,7 +1171,10 @@ mod tests {
             let undone = session.dispatch(SessionCommand::Undo).unwrap();
             assert_eq!(undone.revision, 2);
             assert!(undone.node.is_none() && undone.offset.is_some());
-            assert_eq!(x_format::serialize::save_x(&session.snapshot()), before_file);
+            assert_eq!(
+                x_format::serialize::save_x(&session.snapshot()),
+                before_file
+            );
             let redone = session.dispatch(SessionCommand::Redo).unwrap();
             assert_eq!(redone.revision, 3);
             assert!(redone.node.is_none() && redone.offset.is_some());
