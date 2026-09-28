@@ -58,39 +58,10 @@ pub enum PathCmd {
 }
 
 /// Ramer-Douglas-Peucker polyline simplification (pencil tool): drops
-/// points whose perpendicular deviation from the first-last chord is
-/// within `eps`. Keeps at least the endpoints.
+/// points within `eps` of the kept segment that replaces them. Keeps at least
+/// the endpoints. Iterative and segment-distance; see [`crate::simplify`].
 pub fn simplify_polyline(pts: &[(f64, f64)], eps: f64) -> Vec<(f64, f64)> {
-    if pts.len() <= 2 {
-        return pts.to_vec();
-    }
-    let (x0, y0) = pts[0];
-    let (x1, y1) = *pts.last().unwrap();
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let len = dx.hypot(dy);
-    let mut max_d = 0.0f64;
-    let mut idx = 0usize;
-    for (i, (x, y)) in pts.iter().enumerate().take(pts.len() - 1).skip(1) {
-        let d = if len < 1e-12 {
-            (x - x0).hypot(y - y0)
-        } else {
-            (dy * (x - x0) - dx * (y - y0)).abs() / len
-        };
-        if d > max_d {
-            max_d = d;
-            idx = i;
-        }
-    }
-    if max_d > eps {
-        let mut left = simplify_polyline(&pts[..=idx], eps);
-        let right = simplify_polyline(&pts[idx..], eps);
-        left.pop();
-        left.extend(right);
-        left
-    } else {
-        vec![pts[0], *pts.last().unwrap()]
-    }
+    crate::simplify::simplify_points(pts, eps)
 }
 
 /// Freehand path fitting (pencil tool): the sampled stroke is simplified with

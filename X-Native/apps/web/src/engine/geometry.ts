@@ -524,28 +524,110 @@ function edge(at: (x: number, y: number) => boolean, x: number, y: number) {
   return !at(x - 1, y) || !at(x + 1, y) || !at(x, y - 1) || !at(x, y + 1);
 }
 
+/**
+ * Legacy-metric RDP: distance to the *infinite line* through the chord ends.
+ * Pinned to that metric because the boolean contour shaping (both backends)
+ * and Rust's `web_raster::simplify_web_ring` must stay byte-comparable under
+ * the geometry equivalence guard, and because offset / outline / glyph output
+ * is out of scope for the simplify fix. Iterative (explicit stack, no slice
+ * copies): the recursive form overflowed the call stack from 8,000 points.
+ * Same comparisons and first-max tie-break as before, so the kept set is
+ * identical to the recursive version.
+ */
 function simplify(pts: PathPoint[], eps: number): PathPoint[] {
-  if (pts.length <= 2) return pts;
-  const [x0, y0] = [pts[0].x, pts[0].y];
-  const last = pts[pts.length - 1];
-  const dx = last.x - x0;
-  const dy = last.y - y0;
-  const len = Math.hypot(dx, dy) || 1;
-  let max = 0;
-  let idx = 0;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const d = Math.abs(dy * (pts[i].x - x0) - dx * (pts[i].y - y0)) / len;
-    if (d > max) {
-      max = d;
-      idx = i;
+  const n = pts.length;
+  if (n <= 2) return pts;
+  const keep = new Uint8Array(n);
+  keep[0] = 1;
+  keep[n - 1] = 1;
+  const stack: number[] = [0, n - 1];
+  while (stack.length) {
+    const hi = stack.pop()!;
+    const lo = stack.pop()!;
+    if (hi - lo < 2) continue;
+    const x0 = pts[lo].x;
+    const y0 = pts[lo].y;
+    const dx = pts[hi].x - x0;
+    const dy = pts[hi].y - y0;
+    const len = Math.hypot(dx, dy) || 1;
+    let max = 0;
+    let idx = 0;
+    for (let i = lo + 1; i < hi; i++) {
+      const d = Math.abs(dy * (pts[i].x - x0) - dx * (pts[i].y - y0)) / len;
+      if (d > max) {
+        max = d;
+        idx = i;
+      }
+    }
+    if (max > eps) {
+      keep[idx] = 1;
+      stack.push(lo, idx, idx, hi);
     }
   }
-  if (max > eps) {
-    const left = simplify(pts.slice(0, idx + 1), eps);
-    const right = simplify(pts.slice(idx), eps);
-    return left.slice(0, -1).concat(right);
+  const out: PathPoint[] = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i]);
+  return out;
+}
+
+/** Legacy line-metric simplification for glyph outlines (see `simplify`). */
+export function simplifyLineMetric(pts: PathPoint[], tolerance: number): PathPoint[] {
+  if (pts.length < 3 || tolerance <= 0) return pts;
+  return simplify(pts, tolerance);
+}
+
+/**
+ * Which points survive user-facing Simplify (first and last always kept):
+ * iterative Ramer–Douglas–Peucker measuring each point against the kept
+ * *segment* (foot clamped to the ends), so the tolerance is a guarantee —
+ * every dropped point is within `eps` of the output segment replacing it.
+ * Exact distance ties split nearest the middle of the range, which keeps
+ * zig-zags O(n log n); an adversarial input (a spiral keeping every point)
+ * is O(n²) time but still O(n) memory. Mirrors `x_core::simplify`.
+ */
+export function simplifyKeep(pts: readonly { x: number; y: number }[], eps: number): Uint8Array {
+  const n = pts.length;
+  const keep = new Uint8Array(n);
+  if (!n) return keep;
+  keep[0] = 1;
+  keep[n - 1] = 1;
+  const epsSq = eps > 0 ? eps * eps : 0;
+  const stack: number[] = [0, n - 1];
+  while (stack.length) {
+    const hi = stack.pop()!;
+    const lo = stack.pop()!;
+    if (hi - lo < 2) continue;
+    const ax = pts[lo].x;
+    const ay = pts[lo].y;
+    const dx = pts[hi].x - ax;
+    const dy = pts[hi].y - ay;
+    const len2 = dx * dx + dy * dy;
+    const mid2 = lo + hi;
+    let worst = lo;
+    let worstD = -1;
+    for (let i = lo + 1; i < hi; i++) {
+      const px = pts[i].x - ax;
+      const py = pts[i].y - ay;
+      let d: number;
+      if (len2 <= 0) {
+        d = px * px + py * py;
+      } else {
+        let t = (px * dx + py * dy) / len2;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const qx = px - t * dx;
+        const qy = py - t * dy;
+        d = qx * qx + qy * qy;
+      }
+      if (d > worstD || (d === worstD && Math.abs(2 * i - mid2) < Math.abs(2 * worst - mid2))) {
+        worstD = d;
+        worst = i;
+      }
+    }
+    if (worstD > epsSq) {
+      keep[worst] = 1;
+      stack.push(lo, worst, worst, hi);
+    }
   }
-  return [pts[0], last];
+  return keep;
 }
 
 /**
@@ -597,7 +679,9 @@ export function offsetPath(
     }
   }
 
-  return simplifyPath(out, 0.4);
+  // Offset output keeps the legacy metric: stroke/offset geometry is out of
+  // scope for the simplify fix (Sprint 3 phase 2 owns it).
+  return simplify(out, 0.4);
 }
 
 /**
@@ -850,8 +934,11 @@ export function normalizeVectorNode(n: {
  * expensive to hit-test.
  */
 export function simplifyPath(pts: PathPoint[], tolerance: number): PathPoint[] {
-  if (pts.length < 3 || tolerance <= 0) return pts;
-  return simplify(pts, tolerance);
+  if (pts.length < 3 || !(tolerance > 0)) return pts;
+  const keep = simplifyKeep(pts, tolerance);
+  const out: PathPoint[] = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
+  return out;
 }
 
 /**

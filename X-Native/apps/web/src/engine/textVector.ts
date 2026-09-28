@@ -1,5 +1,5 @@
 import type { PathPoint, VectorNetwork, VectorSegment, VectorVertex } from "./types";
-import { simplifyPath } from "./geometry";
+import { simplifyLineMetric } from "./geometry";
 
 export interface TextVectorResult {
   path: PathPoint[];
@@ -258,7 +258,7 @@ function traceAlphaContours(data: Uint8ClampedArray, w: number, h: number): Path
 
       if (ring.length >= 6) {
         // Simplify contour to remove redundant collinear pixels
-        const simplified = simplifyPath(ring, 1.2);
+        const simplified = simplifyLineMetric(ring, 1.2);
         if (simplified.length >= 3) {
           contours.push(simplified);
         }

@@ -236,56 +236,15 @@ fn transform_net(net: &VectorNetwork, m: [f64; 6]) -> VectorNetwork {
 // Simplify: Ramer–Douglas–Peucker over the flattened authored loops
 // ------------------------------------------------------------------
 
-fn perp_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
-    let dx = b.0 - a.0;
-    let dy = b.1 - a.1;
-    let len2 = dx * dx + dy * dy;
-    if len2 == 0.0 {
-        return ((p.0 - a.0).powi(2) + (p.1 - a.1).powi(2)).sqrt();
-    }
-    let t = ((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2;
-    let tc = t.clamp(0.0, 1.0);
-    let qx = a.0 + tc * dx;
-    let qy = a.1 + tc * dy;
-    ((p.0 - qx).powi(2) + (p.1 - qy).powi(2)).sqrt()
-}
-
 /// RDP on an open chain; returns the indices of kept points (endpoints
-/// always kept).
+/// always kept). Delegates to the shared iterative, segment-distance
+/// simplifier (the previous copy rescanned the whole chain for every range).
 fn rdp_open(points: &[(f64, f64)], tol: f64) -> Vec<usize> {
-    let n = points.len();
-    if n < 3 {
-        return (0..n).collect();
-    }
-    let mut keep = vec![false; n];
-    keep[0] = true;
-    keep[n - 1] = true;
-    let mut stack: Vec<(usize, usize)> = vec![(0, n - 1)];
-    while let Some((lo, hi)) = stack.pop() {
-        if hi - lo < 2 {
-            continue;
-        }
-        let a = points[lo];
-        let b = points[hi];
-        let mut max_d = f64::NEG_INFINITY;
-        let mut idx = lo;
-        for (i, &pt) in points.iter().enumerate() {
-            if i <= lo || i >= hi {
-                continue;
-            }
-            let d = perp_distance(pt, a, b);
-            if d > max_d {
-                max_d = d;
-                idx = i;
-            }
-        }
-        if max_d > tol {
-            keep[idx] = true;
-            stack.push((lo, idx));
-            stack.push((idx, hi));
-        }
-    }
-    (0..n).filter(|&i| keep[i]).collect()
+    crate::simplify::simplify_keep(points, tol)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, k)| k.then_some(i))
+        .collect()
 }
 
 /// RDP on a closed loop; returns kept indices into the original loop.
