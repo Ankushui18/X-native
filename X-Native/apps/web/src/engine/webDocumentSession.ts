@@ -20,6 +20,7 @@ import { auditDecision } from "./bridgeRuntimeAudit";
 import { guardOffsetPreview, offsetAuditRequested } from "./offsetPathOracle";
 import {
   outlineAuditRequested, outlineInkVerdict, outlineReferenceRect, recordOutlineAudit,
+  type OutlineAuditVerdict,
 } from "./outlineStrokeOracle";
 import { verifyStrokeDelta } from "./strokeBandOracle";
 
@@ -418,9 +419,17 @@ export class RustWebDocumentSession {
       throw new Error("Rust outline changed after the audit round trip; editing must pause");
     }
     const rect = outlineReferenceRect(restored);
-    recordOutlineAudit(rect
+    const verdict: OutlineAuditVerdict = rect
       ? outlineInkVerdict(rect, restored.stroke!, applied.outline!)
-      : { verified: false, decisive: false, reason: "source is not an unrounded rectangle with one live stroke" });
+      : { verified: false, decisive: false, reason: "source is not an unrounded rectangle with one live stroke" };
+    if (!verdict.verified && verdict.decisive) {
+      // Committed ink the reference rejects: return native history to the
+      // proven source before freezing, so the paused preview and the single
+      // Rust owner still describe the same document. The rejected command
+      // stays on the redo stack and the frozen UI never paints it.
+      this.rust.undo();
+    }
+    recordOutlineAudit(verdict);
     return redone;
   }
   private checkedOutline(change: RustStateChange, id: string): RustStateChange {

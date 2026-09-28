@@ -443,6 +443,7 @@ await test("opt-in outline audit proves committed ink against the independent re
     // Fabricated ink (a filled bounding box, not a band) is a decisive
     // disagreement: the command stands, but the preview must stop painting.
     resetBridgeAudit();
+    const undosBeforeFabricated = calls.undos;
     const fabricatedPath = [["M", 0, 0], ["L", 38, 0], ["L", 38, 48], ["L", 0, 48], ["Z"]];
     const fabricated = RustWebDocumentSession.create({
       outlineStroke() { return { ...banded, revision: 1, outline: { ...banded.outline, path: fabricatedPath } }; },
@@ -451,6 +452,8 @@ await test("opt-in outline audit proves committed ink against the independent re
     }, seed);
     assert.throws(() => fabricated.outlineStroke(id), /independent rectangle reference/);
     assert.equal(bridgeAuditSnapshot().decisions["session.outline"].last.guard, "blocked");
+    assert.equal(calls.undos, undosBeforeFabricated + 2,
+      "the rejected command is undone again, so native history rests on the proven source behind the freeze");
   } finally {
     if (previous === undefined) delete globalThis.location;
     else globalThis.location = previous;
