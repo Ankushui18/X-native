@@ -3105,11 +3105,12 @@ export function Canvas({
       }
       ctx.restore();
     }
-    // Gap pills: the red equal-spacing feedback from a move drag, and the
-    // smart-selection handles that sit between the layers of a 1D run - "a
-    // tooltip above your cursor shows the current space between layers, in
-    // pixels" (Figma help 360040450233), drawn as the pink handle.
-    const paintGapPills = (list: GapBadge[], fill: string) => {
+    // Gap pills, one painter: the equal-spacing feedback from a move drag and
+    // the smart-selection handles that sit between the layers of a 1D run -
+    // "a tooltip above your cursor shows the current space between layers, in
+    // pixels" (Figma help 360040450233). Both are the guide pink, the same
+    // chrome the measurement overlay uses.
+    const paintGapPills = (list: GapBadge[]) => {
       ctx.save();
       ctx.font = "500 10px Inter, system-ui";
       ctx.textAlign = "center";
@@ -3119,7 +3120,7 @@ export function Canvas({
         const cy = g.axis === "x" ? snap.panY + g.cross * z : snap.panY + g.at * z;
         const label = `${Math.round(g.size)}`;
         const bw = ctx.measureText(label).width + 10;
-        ctx.fillStyle = fill;
+        ctx.fillStyle = GUIDE;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
           ctx.roundRect(cx - bw / 2, cy - 8, bw, 16, 3);
@@ -3132,11 +3133,11 @@ export function Canvas({
       ctx.textBaseline = "alphabetic";
       ctx.restore();
     };
-    if (gapBadges.length) paintGapPills(gapBadges, GUIDE);
+    if (gapBadges.length) paintGapPills(gapBadges);
     // The at-rest handles step aside while another gesture is live so the two
     // pill sets never double up; during their own drag they move with the gaps.
     if (smartGaps.length && !band && (!drag.current || drag.current.mode === "smartGap")) {
-      paintGapPills(smartGaps, SEL);
+      paintGapPills(smartGaps);
     }
     // The drop target during a move drag: the frame's outline, plus the blue
     // insertion line in a flow - the same gap the drop would land in.
