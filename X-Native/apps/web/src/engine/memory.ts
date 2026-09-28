@@ -55,6 +55,7 @@ import {
   wraps,
   baselineRow,
   effectiveCrossAlign,
+  resolveFontMetrics,
   type Spacing,
 } from "./layout";
 import {
@@ -120,7 +121,7 @@ export function node(
   h: number,
   extra: Partial<XNode> = {},
 ): XNode {
-  return {
+  const res: XNode = {
     id: uid(kind),
     name,
     kind,
@@ -231,6 +232,21 @@ export function node(
     variant: "",
     ...extra,
   };
+  if (kind === "text") {
+    if (res.baseline === undefined) {
+      const fm = resolveFontMetrics(res.fontFamily, res.fontSize, res.fontWeight);
+      res.baseline = fm.ascent;
+      res.textMetrics = {
+        fontBoundingBoxAscent: fm.ascent,
+        fontBoundingBoxDescent: fm.descent,
+        actualBoundingBoxAscent: fm.actualAscent,
+        actualBoundingBoxDescent: fm.actualDescent,
+        fontAscentRatio: fm.ascentRatio,
+        fontSize: res.fontSize,
+      };
+    }
+  }
+  return res;
 }
 
 function clone<T>(v: T): T {
@@ -2704,6 +2720,18 @@ export class MemoryEngine implements Engine {
           }
           if (patch.aspectLocked === false) patch.aspectRatio = undefined;
           Object.assign(n, patch);
+          if (n.kind === "text") {
+            const fm = resolveFontMetrics(n.fontFamily, n.fontSize, n.fontWeight);
+            n.baseline = patch.baseline !== undefined ? patch.baseline : fm.ascent;
+            n.textMetrics = {
+              fontBoundingBoxAscent: fm.ascent,
+              fontBoundingBoxDescent: fm.descent,
+              actualBoundingBoxAscent: fm.actualAscent,
+              actualBoundingBoxDescent: fm.actualDescent,
+              fontAscentRatio: fm.ascentRatio,
+              fontSize: n.fontSize,
+            };
+          }
           // Text layers follow their content until renamed.
           if (n.kind === "text" && patch.text !== undefined && !n.nameLocked) {
             const first = (patch.text || "").split("\n")[0].trim();

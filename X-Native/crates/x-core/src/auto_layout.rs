@@ -583,7 +583,8 @@ fn to_cross_align(a: Alignment) -> CrossAlign {
 /// `TEXT_BASELINE_RATIO`), so a baseline row solves identically on both sides
 /// of the WASM boundary. Figma: "a baseline is the invisible line in which text
 /// or a layer sits" (help.figma.com 31289464393751).
-pub const TEXT_BASELINE_RATIO: f64 = 0.8;
+/// Derived from Inter's hhea ascent table (1984 / 2048 = 0.96875).
+pub const TEXT_BASELINE_RATIO: f64 = 0.96875;
 
 /// Legacy box -> font-size convention for a text node that carries no size of
 /// its own. The renderer resolves a missing size the same way — see
@@ -728,16 +729,13 @@ mod baseline_tests {
 
     #[test]
     fn the_ascent_comes_from_the_font_size_not_the_box_height() {
-        // A 14px face in a 40px (wrapped) box: the first baseline is 11.2 from
-        // the top. The old box convention said 40 * 0.72 * 0.8 = 23.04, which
-        // is what dragged the word above the icon's bottom.
         let label = Node::text("label", 0.0, 0.0, 60.0, 40.0, "home").bind("fs", "14");
         let mut row = icon_row(label);
         solve(&mut row);
         let icon = &row.children[0];
         let text = &row.children[1];
         assert!(
-            (child_baseline(text) - 11.2).abs() < 1e-9,
+            (child_baseline(text) - 14.0 * TEXT_BASELINE_RATIO).abs() < 1e-9,
             "baseline = {}",
             child_baseline(text)
         );
@@ -755,15 +753,60 @@ mod baseline_tests {
             font_size: 20.0,
             ..Default::default()
         });
-        assert!((child_baseline(&label) - 16.0).abs() < 1e-9);
+        assert!((child_baseline(&label) - 20.0 * TEXT_BASELINE_RATIO).abs() < 1e-9);
     }
 
     #[test]
     fn a_text_node_with_no_size_keeps_the_legacy_box_convention() {
-        // No metrics and no `fs` binding: the number is unchanged from the
-        // heuristic this replaced, so legacy documents do not move.
         let label = Node::text("label", 0.0, 0.0, 60.0, 20.0, "home");
-        assert!((child_baseline(&label) - 20.0 * 0.72 * 0.8).abs() < 1e-9);
+        assert!((child_baseline(&label) - 20.0 * 0.72 * TEXT_BASELINE_RATIO).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mixed_font_size_row_offsets_match_true_ascent_metrics() {
+        // Mixed 14px and 48px row:
+        // 14px font baseline: 14 * 0.96875 = 13.5625
+        // 48px font baseline: 48 * 0.96875 = 46.5
+        // Expected offset for 14px text: 46.5 - 13.5625 = 32.9375 (32.94 rounded, not 27.20)
+        let t14 = Node::text("t14", 0.0, 0.0, 100.0, 20.0, "Small").bind("fs", "14");
+        let t48 = Node::text("t48", 0.0, 0.0, 200.0, 60.0, "Large").bind("fs", "48");
+        assert!((child_baseline(&t14) - 13.5625).abs() < 1e-4);
+        assert!((child_baseline(&t48) - 46.5).abs() < 1e-4);
+
+        let mut row = Node::frame("row", 400.0, 100.0).auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            align: CrossAlign::Baseline,
+            sizing: Sizing::Hug,
+            ..Default::default()
+        });
+        row.children.push(t14);
+        row.children.push(t48);
+        solve(&mut row);
+
+        let offset_14 = row.children[0].transform.y;
+        let offset_48 = row.children[1].transform.y;
+        assert!((offset_48 - 0.0).abs() < 1e-4);
+        assert!((offset_14 - 32.9375).abs() < 1e-4);
+        assert_eq!(format!("{:.2}", offset_14), "32.94");
+
+        // Mixed 14px and 72px row:
+        // 72px font baseline: 72 * 0.96875 = 69.75
+        // Expected offset for 14px text: 69.75 - 13.5625 = 56.1875 (56.19 rounded, not 46.40)
+        let t14_2 = Node::text("t14_2", 0.0, 0.0, 100.0, 20.0, "Small").bind("fs", "14");
+        let t72 = Node::text("t72", 0.0, 0.0, 300.0, 90.0, "Giant").bind("fs", "72");
+        let mut row2 = Node::frame("row2", 400.0, 100.0).auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            align: CrossAlign::Baseline,
+            sizing: Sizing::Hug,
+            ..Default::default()
+        });
+        row2.children.push(t14_2);
+        row2.children.push(t72);
+        solve(&mut row2);
+
+        let offset_14_72 = row2.children[0].transform.y;
+        assert!((offset_14_72 - 56.1875).abs() < 1e-4);
+        assert_eq!(format!("{:.2}", offset_14_72), "56.19");
     }
 
     #[test]

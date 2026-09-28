@@ -97,8 +97,8 @@ const row = (over = {}) => ({
   // back reserves the descender.
   const ui = await mountPanel({ layer: frame(row({ align: "baseline" })) });
   const [icon, label] = ui.node().children;
-  t("the inspector's frame hugs the baseline row", Math.abs(ui.node().h - (48 + (20 - 14 * 0.8))) < 1e-6);
-  t("the icon's bottom edge is the shared line", Math.abs(icon.y + icon.h - (label.y + 14 * 0.8)) < 1e-6);
+  t("the inspector's frame hugs the baseline row", Math.abs(ui.node().h - (48 + (20 - 14 * 0.96875))) < 1e-6);
+  t("the icon's bottom edge is the shared line", Math.abs(icon.y + icon.h - (label.y + 14 * 0.96875)) < 1e-6);
   await ui.unmount();
 }
 

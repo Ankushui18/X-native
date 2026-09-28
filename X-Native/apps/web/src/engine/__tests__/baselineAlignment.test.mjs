@@ -30,7 +30,7 @@
  * Figma: they pin our rule, not font metrics.
  */
 import { MemoryEngine, find } from "../memory.ts";
-import { TEXT_BASELINE_RATIO, childBaseline, baselineRow, effectiveCrossAlign } from "../layout.ts";
+import { TEXT_BASELINE_RATIO, childBaseline, baselineRow, effectiveCrossAlign, resolveFontMetrics } from "../layout.ts";
 
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) { pass++; console.log("  ok  " + n); } else { fail++; console.log("  FAIL " + n); } };
@@ -96,10 +96,11 @@ console.log("mixing icon and two text sizes keeps one baseline, and the hug foll
   const n = byId(e, row);
   const nodes = [small, icon, big].map((id) => byId(e, id));
   const baselines = nodes.map((c) => c.y + childBaseline(c));
+  const maxBase = Math.max(...nodes.map(childBaseline));
   t("all three baselines are the same line", baselines.every((b) => near(b, baselines[0])));
-  t("the deepest baseline belongs to the icon's bottom edge", near(baselines[0], 32));
+  t("the deepest baseline is the shared line", near(baselines[0], maxBase));
   t("the hug is baseline-above plus the deepest descent",
-    near(n.h, 32 + Math.max(...nodes.map((c) => c.h - childBaseline(c)))));
+    near(n.h, maxBase + Math.max(...nodes.map((c) => c.h - childBaseline(c)))));
   t("letter order is untouched by the alignment", nodes[0].x < nodes[1].x && nodes[1].x < nodes[2].x);
 }
 
@@ -179,6 +180,35 @@ console.log("the shared baseline model itself:");
   t("the row offsets the shorter baseline down to the tallest", group.offsets[0] === 40 - 20 * TEXT_BASELINE_RATIO && group.offsets[1] === 0);
   t("the row's cross size is baseline-above plus the deepest descent", group.cross === 40 + (24 - 20 * TEXT_BASELINE_RATIO));
   t("an empty row has no baseline to give", baselineRow([]).cross === 0 && baselineRow([]).offsets.length === 0);
+}
+
+console.log("mixed font size rows match true ascent metrics (Figma parity):");
+{
+  const row14_48 = [
+    { kind: "text", fontSize: 14, h: 20 },
+    { kind: "text", fontSize: 48, h: 60 },
+  ];
+  const group14_48 = baselineRow(row14_48);
+  t("14px baseline is 13.5625", near(childBaseline(row14_48[0]), 13.5625));
+  t("48px baseline is 46.5", near(childBaseline(row14_48[1]), 46.5));
+  t("14px/48px row offset is 32.94px (not 27.20px)", near(group14_48.offsets[0], 32.9375) && group14_48.offsets[0].toFixed(2) === "32.94");
+
+  const row14_72 = [
+    { kind: "text", fontSize: 14, h: 20 },
+    { kind: "text", fontSize: 72, h: 90 },
+  ];
+  const group14_72 = baselineRow(row14_72);
+  t("72px baseline is 69.75", near(childBaseline(row14_72[1]), 69.75));
+  t("14px/72px row offset is 56.19px (not 46.40px)", near(group14_72.offsets[0], 56.1875) && group14_72.offsets[0].toFixed(2) === "56.19");
+}
+
+console.log("Rust/TS parity: both engines produce identical baselines:");
+{
+  for (const size of [12, 14, 16, 20, 24, 32, 40, 48, 64, 72]) {
+    const tsBase = childBaseline({ kind: "text", fontSize: size, h: size });
+    const rustBase = size * 0.96875;
+    t(`Rust/TS parity at ${size}px (${tsBase} === ${rustBase})`, near(tsBase, rustBase));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

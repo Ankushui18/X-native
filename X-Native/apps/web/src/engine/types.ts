@@ -817,6 +817,17 @@ export interface XNode {
   /** Explicit identity for smart animate transitions */
   animationId?: string;
   prototypeIdentity?: string;
+  /** First-line text baseline offset from top of box (px). Populated from real font metrics. */
+  baseline?: number;
+  /** Measured text metrics from browser Canvas or offline font table. */
+  textMetrics?: {
+    fontBoundingBoxAscent?: number;
+    fontBoundingBoxDescent?: number;
+    actualBoundingBoxAscent?: number;
+    actualBoundingBoxDescent?: number;
+    fontAscentRatio?: number;
+    fontSize?: number;
+  };
 }
 
 /** A single message inside a comment thread. */
