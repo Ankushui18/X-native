@@ -60,6 +60,18 @@ rule is an approximation, and the Rust engine
 shape) still differs from it for text. A font-metric-exact rule needs a metrics source in
 the engine and is its own task.
 
+### Sprint 3 phase 1 — Vector tools · iterative Simplify + Rust vector probe ✅ (2026-09-28)
+
+| step | result |
+| --- | --- |
+| Audit (TS, measured) | recursive `simplify` threw *Maximum call stack size exceeded* on an 8,000-point zig-zag; 223 ms at 5,000 (slice copying); at eps 1.5 points ended up 2.04 from the output (infinite-line metric). |
+| Fix | `x_core::simplify` (new): iterative RDP with an explicit stack, **segment** distance (tolerance is a guarantee), exact ties split nearest the middle. `simplify_polyline`, the `Simplify` modifier (which also rescanned the whole chain per range) and `x-editor::simplify_path` route through it. TS `simplifyPath`/`simplifyKeep` mirror it. The legacy line-metric `simplify` behind booleans, offset and glyph outlines is now iterative with **identical output** (200/200 random rings vs the recursive reference), so the equivalence guard with `web_raster::simplify_web_ring` is untouched. No stroke-outline logic changed. |
+| Tests | `simplify.test.mjs` **38/38** (8k/20k/100k hand-drawn, 8k/20k/100k zig-zag, adversarial spiral, segment metric, legacy identity); sabotage: dropping the clamp fails 4, recursive-shaped stack fails 1. Rust `simplify::tests` in the gate: `cargo test --workspace` **1054 passed**, clippy clean, dead code 10/82. |
+| CI probe (Rust release, `tests/vector_probe.rs`) | simplify: hand 100k → 35 pts in **2.6 ms** (maxDev 1.48 ≤ 1.5); zig-zag 100k **11.4 ms**; adversarial spiral 20k 23 ms / 100k **568 ms** (O(n²) worst case, recorded). |
+| CI probe — outline (D6, now measured) | joins/miter limit correct on clean inputs (square control 100%, star 99.7–100%, acute 10°/30° 0 self-crossings). **Variable width on a 10° corner: 2 self-crossings, 80.4–80.9% ink coverage** (all joins). **Hand-drawn 1,000 pts: 216 (miter) / 1,346 (round) / 2,304 (variable width) self-crossings**; dashed: 787 + 160 between dashes. Dashes overlap each other at corners (10 / 36 crossings on the 10° case). 5,000-point input **refused** by the 4,096-command budget. All ≤ 1.1 ms. |
+
+These numbers are Phase 2's baseline: the targets are 0 self-crossings, ≥ 99.5% coverage on the variable-width acute case, and no refusal below the new budget.
+
 ### Pipeline run 9 — Color · Pattern fills ✅ (2026-09-28)
 
 | step | result |
