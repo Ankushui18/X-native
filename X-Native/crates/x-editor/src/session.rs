@@ -50,6 +50,13 @@ pub enum SessionCommand<'a> {
         align: StrokeAlign,
         join: StrokeJoin,
     },
+    /// Signed inset/outset of one filled layer. The original shape and
+    /// resulting vector are one ReplaceNode entry in the Rust undo history.
+    Offset {
+        id: &'a str,
+        distance: f64,
+        join: StrokeJoin,
+    },
     Undo,
     Redo,
 }
@@ -96,6 +103,24 @@ pub struct StrokeDelta {
     pub inner: Vec<(f64, f64)>,
 }
 
+/// One affected layer, not a page. The full *original* path is needed on
+/// undo, including its cubic controls; straight result contours stay bounded
+/// by x-core's offset anchor budget. Paint, order and flags cannot change.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OffsetShapeDelta {
+    Rect { radius: f64 },
+    Ellipse,
+    Poly { sides: usize },
+    Star { points: usize, ratio: f64 },
+    Vector { path: Vec<PathCmd> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OffsetDelta {
+    pub node: NodeDelta,
+    pub shape: OffsetShapeDelta,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionDelta {
     /// Increases only after a successful document edit, including undo/redo.
@@ -106,6 +131,8 @@ pub struct SessionDelta {
     pub boolean: Option<BooleanDelta>,
     /// Mutually exclusive with the structural and simple-node projections.
     pub stroke: Option<StrokeDelta>,
+    /// The exact shape of just the layer changed by offset/undo/redo.
+    pub offset: Option<OffsetDelta>,
     pub can_undo: bool,
     pub can_redo: bool,
 }
@@ -166,6 +193,7 @@ impl DocumentSession {
             node: None,
             boolean: None,
             stroke: None,
+            offset: None,
             can_undo: self.editor.undo_depth() > 0,
             can_redo: self.editor.next_redo_node().is_some()
                 || self.editor.next_redo_boolean().is_some(),
@@ -273,6 +301,68 @@ impl DocumentSession {
         Ok(())
     }
 
+    fn offset_operand(&self, id: &str) -> Result<(), String> {
+        let node = self.target(id)?;
+        let shape = match &node.kind {
+            NodeKind::Rect { radius } => radius.is_finite() && *radius >= 0.0 && *radius <= node.w.min(node.h) / 2.0,
+            NodeKind::Ellipse => true,
+            NodeKind::Poly { sides } => (3..=256).contains(sides),
+            NodeKind::Star { points, ratio } =>
+                (3..=256).contains(points) && ratio.is_finite() && *ratio > 0.0 && *ratio < 1.0,
+            NodeKind::Vector { path } => path.len() <= x_core::offset_path::MAX_OFFSET_ANCHORS,
+            _ => false,
+        };
+        if !self.editor.root.children.iter().any(|child| child.id == id)
+            || !shape
+            || !node.children.is_empty()
+            || id.len() > 256
+            || node.name.len() > 1024
+            || !node.visible
+            || node.locked
+            || node.opacity != 1.0
+            || node.transform.rotation != 0.0
+            || node.transform.scale_x != 1.0
+            || node.transform.scale_y != 1.0
+            || node.transform.skew_x != 0.0
+            || node.transform.skew_y != 0.0
+            || node.corner_radii.is_some()
+            || node.corner_smoothing != 0.0
+            || node.stroke.width != 0.0
+            || !node.fill_layers.is_empty()
+            || !node.stroke_layers.is_empty()
+            || !node.effects.is_empty()
+            || !node.effect_layers.is_empty()
+            || ![node.transform.x, node.transform.y, node.w, node.h]
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 1e9)
+            || node.w <= 0.0
+            || node.h <= 0.0
+            || !matches!(&node.fill, Paint::Solid(c) if c.to_rgba8().a == 255)
+        {
+            return Err("offset session admits only direct, plain filled shapes".into());
+        }
+        Ok(())
+    }
+
+    fn offset_node(&self, id: &str) -> Result<OffsetDelta, String> {
+        let node = self.target(id)?;
+        // On undo the original may have nonzero curvature. Send PathCmds,
+        // not a lossy approximation made from the offset's straight rings.
+        let shape = match &node.kind {
+            NodeKind::Rect { radius } => OffsetShapeDelta::Rect { radius: *radius },
+            NodeKind::Ellipse => OffsetShapeDelta::Ellipse,
+            NodeKind::Poly { sides } => OffsetShapeDelta::Poly { sides: *sides },
+            NodeKind::Star { points, ratio } => OffsetShapeDelta::Star { points: *points, ratio: *ratio },
+            NodeKind::Vector { path } if path.len() <= x_core::offset_path::MAX_OFFSET_ANCHORS + 128 =>
+                OffsetShapeDelta::Vector { path: path.clone() },
+            _ => return Err("offset delta exceeds the path budget".into()),
+        };
+        Ok(OffsetDelta {
+            node: self.node(id).ok_or("offset layer missing")?,
+            shape,
+        })
+    }
+
     fn stroke_node(&self, id: &str) -> Result<StrokeDelta, String> {
         let node = self.target(id)?;
         self.stroke_operand(id)?;
@@ -368,6 +458,7 @@ impl DocumentSession {
         let mut boolean: Option<([String; 2], String, bool)> = None;
         let mut stroke_id: Option<String> = None;
         let mut stroke_only = false;
+        let mut offset_id: Option<String> = None;
         let changed = match command {
             SessionCommand::Rename { id, name } => {
                 self.target(id)?;
@@ -466,14 +557,27 @@ impl DocumentSession {
                 }
                 None
             }
+            SessionCommand::Offset { id, distance, join } => {
+                self.offset_operand(id)?;
+                if self
+                    .editor
+                    .offset_filled_node(id, distance, join)
+                    .map_err(str::to_string)?
+                {
+                    offset_id = Some(id.to_string());
+                }
+                None
+            }
             SessionCommand::Undo => {
                 let id = self.editor.next_undo_node().map(str::to_string);
                 let structural = self.editor.next_undo_boolean();
                 let style = self.editor.next_undo_stroke().map(str::to_string);
+                let offset = self.editor.next_undo_offset().map(str::to_string);
                 let previous_size = id.as_ref().and_then(|id| self.node(id)).map(|n| (n.w, n.h));
                 if self.editor.undo() {
                     boolean = structural.map(|(ids, result)| (ids, result, false));
                     stroke_only = style.is_some();
+                    offset_id = offset;
                     stroke_id = style.or_else(|| {
                         id.as_ref().and_then(|id| {
                             let node = self.target(id).ok()?;
@@ -490,10 +594,12 @@ impl DocumentSession {
                 let id = self.editor.next_redo_node().map(str::to_string);
                 let structural = self.editor.next_redo_boolean();
                 let style = self.editor.next_redo_stroke().map(str::to_string);
+                let offset = self.editor.next_redo_offset().map(str::to_string);
                 let previous_size = id.as_ref().and_then(|id| self.node(id)).map(|n| (n.w, n.h));
                 if self.editor.redo() {
                     boolean = structural.map(|(ids, result)| (ids, result, true));
                     stroke_only = style.is_some();
+                    offset_id = offset;
                     stroke_id = style.or_else(|| {
                         id.as_ref().and_then(|id| {
                             let node = self.target(id).ok()?;
@@ -514,18 +620,19 @@ impl DocumentSession {
                 sources.to_vec()
             };
         }
-        if changed.is_some() || boolean.is_some() || stroke_id.is_some() {
+        if changed.is_some() || boolean.is_some() || stroke_id.is_some() || offset_id.is_some() {
             self.revision += 1;
         }
         let mut delta = self.state();
-        // A stroke change needs just the bounded style/contours, not a second
-        // copy of this same node's label and geometry.
-        delta.node = if stroke_only {
+        // A shape or stroke edit needs only its affected-layer projection,
+        // not a second copy of the label/bounds and never a whole document.
+        delta.node = if stroke_only || offset_id.is_some() {
             None
         } else {
             changed.and_then(|id| self.node(&id))
         };
         delta.stroke = stroke_id.map(|id| self.stroke_node(&id)).transpose()?;
+        delta.offset = offset_id.map(|id| self.offset_node(&id)).transpose()?;
         if let Some((sources, result, applied)) = boolean {
             delta.boolean = Some(if applied {
                 BooleanDelta {
@@ -987,6 +1094,70 @@ mod tests {
         let reopened = x_format::deserialize::load_x(&saved).unwrap();
         assert_eq!(reopened.pages[0].children[0].transform.x, 13.0);
         assert_eq!(reopened.default_font.as_deref(), Some("Sample font"));
+    }
+
+    #[test]
+    fn offset_is_one_bounded_layer_edit_with_rust_owned_undo_for_all_shapes() {
+        let shapes = [
+            Node::rect("target", 10.0, 15.0, 90.0, 80.0, Color::BLACK),
+            Node::ellipse("target", 10.0, 15.0, 90.0, 80.0, Color::BLACK),
+            Node::poly("target", 10.0, 15.0, 90.0, 80.0, 6, Color::BLACK),
+            Node::star("target", 10.0, 15.0, 90.0, 80.0, 5, 0.45, Color::BLACK),
+            Node::vector("target", 10.0, 15.0, 90.0, 80.0, vec![
+                PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(90.0, 0.0),
+                PathCmd::LineTo(90.0, 80.0), PathCmd::LineTo(0.0, 80.0), PathCmd::Close,
+            ]),
+        ];
+        for shape in shapes {
+            let before = shape.clone();
+            let doc = Document {
+                pages: vec![Node::frame("page", 400.0, 300.0)
+                    .child(shape)
+                    .child(Node::rect("other", 150.0, 0.0, 20.0, 20.0, Color::WHITE))],
+                ..Default::default()
+            };
+            let mut session = DocumentSession::new(doc).unwrap();
+            let applied = session.dispatch(SessionCommand::Offset {
+                id: "target", distance: 6.0, join: StrokeJoin::Miter,
+            }).unwrap();
+            assert_eq!(applied.revision, 1);
+            assert!(applied.node.is_none() && applied.boolean.is_none() && applied.stroke.is_none());
+            let patch = applied.offset.unwrap();
+            assert_eq!(patch.node.id, "target");
+            assert!(matches!(patch.shape, OffsetShapeDelta::Vector { path } if path.last() == Some(&PathCmd::Close)));
+            assert_eq!(session.editor.undo_depth(), 1);
+            assert_eq!(session.snapshot().pages[0].children[1].id, "other");
+            assert_eq!(session.snapshot().pages[0].children[0].fill, before.fill);
+            let saved = x_format::serialize::save_x(&session.snapshot());
+            assert!(matches!(x_format::deserialize::load_x(&saved).unwrap().pages[0].children[0].kind, NodeKind::Vector { .. }));
+            let undone = session.dispatch(SessionCommand::Undo).unwrap();
+            assert_eq!(undone.revision, 2);
+            assert!(undone.node.is_none() && undone.offset.is_some());
+            assert_eq!(session.snapshot().pages[0].children[0], before);
+            let redone = session.dispatch(SessionCommand::Redo).unwrap();
+            assert_eq!(redone.revision, 3);
+            assert!(redone.node.is_none() && redone.offset.is_some());
+        }
+    }
+
+    #[test]
+    fn offset_rejects_strokes_and_bad_input_without_a_history_entry() {
+        let mut session = DocumentSession::new(sample()).unwrap();
+        for distance in [f64::NAN, 2049.0] {
+            assert!(session.dispatch(SessionCommand::Offset { id: "box", distance, join: StrokeJoin::Round }).is_err());
+        }
+        let unchanged = session.dispatch(SessionCommand::Offset {
+            id: "box", distance: 0.0, join: StrokeJoin::Bevel,
+        }).unwrap();
+        assert_eq!(unchanged.revision, 0);
+        assert!(unchanged.offset.is_none());
+        assert_eq!(session.editor.undo_depth(), 0);
+        session.dispatch(SessionCommand::Stroke {
+            id: "box", width: 5.0, color: Color::BLACK,
+            align: StrokeAlign::Center, join: StrokeJoin::Miter,
+        }).unwrap();
+        assert!(session.dispatch(SessionCommand::Offset { id: "box", distance: 4.0, join: StrokeJoin::Round }).is_err());
+        assert_eq!(session.editor.undo_depth(), 1);
     }
 
     #[test]

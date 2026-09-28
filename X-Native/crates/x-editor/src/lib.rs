@@ -24,6 +24,7 @@ pub mod constraints;
 pub mod devmode;
 pub mod editor_core;
 pub mod eraser;
+pub mod offset_path;
 pub mod parametric;
 pub mod prototype;
 pub mod selection;

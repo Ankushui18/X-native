@@ -2691,6 +2691,23 @@ impl Editor {
         }
     }
 
+    /// Read the single-layer kind rewrite from the actual Rust undo stack.
+    /// Offset edits preserve identity and paint; styles never change kind.
+    pub(crate) fn next_undo_offset(&self) -> Option<&str> {
+        Self::offset_history_id(self.undo_stack.last()?)
+    }
+
+    pub(crate) fn next_redo_offset(&self) -> Option<&str> {
+        Self::offset_history_id(self.redo_stack.last()?)
+    }
+
+    fn offset_history_id(commands: &[Command]) -> Option<&str> {
+        match commands {
+            [Command::ReplaceNode { id, before, after }] if before.kind != after.kind => Some(id),
+            _ => None,
+        }
+    }
+
     /// The next atomic Boolean edit's exact source/result ids. Session deltas
     /// come from the real Rust command log, never a parallel JS undo stack.
     pub(crate) fn next_undo_boolean(&self) -> Option<([String; 2], String)> {

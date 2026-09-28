@@ -137,11 +137,12 @@ mod bindings {
         JsValue::from_str(&error)
     }
 
-    /// Separate version from the import-only bridge: V3 adds bounded Boolean
-    /// mutations and multi-node structural deltas to the Rust-owned session.
+    /// Independently versioned command session. V3 added Booleans, V4 added
+    /// aligned strokes; V5 adds bounded single-layer signed offsets. Older
+    /// bindgen artifacts cannot safely acknowledge/undo the new shape delta.
     #[wasm_bindgen(js_name = sessionBridgeVersion)]
     pub fn session_bridge_version() -> u32 {
-        4
+        5
     }
 
     #[wasm_bindgen]
@@ -207,6 +208,11 @@ mod bindings {
             self.bridge
                 .stroke_node(id, width, color, align, join)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = offsetNode)]
+        pub fn offset_node(&mut self, id: &str, distance: f64, join: &str) -> Result<String, JsValue> {
+            self.bridge.offset_node(id, distance, join).map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

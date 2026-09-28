@@ -3,8 +3,11 @@
 
 use serde_json::{json, Value};
 use x_core::booleans::BoolOp;
-use x_core::{parse_hex_color, StrokeAlign, StrokeJoin};
-use x_editor::{DocumentSession, GeometryNodeDelta, NodeDelta, SessionCommand, SessionDelta};
+use x_core::{parse_hex_color, PathCmd, StrokeAlign, StrokeJoin};
+use x_editor::{
+    DocumentSession, GeometryNodeDelta, NodeDelta, OffsetDelta, OffsetShapeDelta, SessionCommand,
+    SessionDelta,
+};
 use x_format::{deserialize::load_x, serialize::save_x};
 
 fn node_value(node: NodeDelta) -> Value {
@@ -24,6 +27,36 @@ fn geometry_value(change: GeometryNodeDelta) -> Value {
     value["locked"] = json!(change.locked);
     if let Some(rings) = change.rings {
         value["rings"] = json!(rings);
+    }
+    value
+}
+
+fn offset_value(change: OffsetDelta) -> Value {
+    let mut value = node_value(change.node);
+    match change.shape {
+        OffsetShapeDelta::Rect { radius } => {
+            value["kind"] = json!("rect");
+            value["radius"] = json!(radius);
+        }
+        OffsetShapeDelta::Ellipse => value["kind"] = json!("ellipse"),
+        OffsetShapeDelta::Poly { sides } => {
+            value["kind"] = json!("poly");
+            value["count"] = json!(sides);
+        }
+        OffsetShapeDelta::Star { points, ratio } => {
+            value["kind"] = json!("star");
+            value["count"] = json!(points);
+            value["ratio"] = json!(ratio);
+        }
+        OffsetShapeDelta::Vector { path } => {
+            value["kind"] = json!("vector");
+            value["path"] = json!(path.into_iter().map(|cmd| match cmd {
+                PathCmd::MoveTo(x, y) => json!(["M", x, y]),
+                PathCmd::LineTo(x, y) => json!(["L", x, y]),
+                PathCmd::CurveTo(a, b, c, d, x, y) => json!(["C", a, b, c, d, x, y]),
+                PathCmd::Close => json!(["Z"]),
+            }).collect::<Vec<_>>());
+        }
     }
     value
 }
@@ -56,6 +89,9 @@ fn delta_json(delta: SessionDelta) -> String {
             "outer": stroke.outer,
             "inner": stroke.inner,
         });
+    }
+    if let Some(offset) = delta.offset {
+        value["offset"] = offset_value(offset);
     }
     value.to_string()
 }
@@ -147,6 +183,18 @@ impl CommandBridge {
             align,
             join,
         })
+    }
+
+    /// One signed offset edit. A join is an existing native StrokeJoin;
+    /// it is not approximated in the web host. A missing/unknown join fails.
+    pub fn offset_node(&mut self, id: &str, distance: f64, join: &str) -> Result<String, String> {
+        let join = match join {
+            "miter" => StrokeJoin::Miter,
+            "bevel" => StrokeJoin::Bevel,
+            "round" => StrokeJoin::Round,
+            _ => return Err("unknown offset join".into()),
+        };
+        self.dispatch(SessionCommand::Offset { id, distance, join })
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -330,6 +378,33 @@ mod tests {
         assert_eq!(undone["stroke"]["width"], 0.0);
         let redo: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
         assert_eq!(redo["stroke"], delta["stroke"]);
+    }
+
+    #[test]
+    fn signed_offset_serializes_only_the_affected_shape_and_supports_undo() {
+        let mut bridge = CommandBridge::open(&fixture()).unwrap();
+        assert!(bridge.offset_node("box", f64::NAN, "round").is_err());
+        assert!(bridge.offset_node("box", 3.0, "unknown").is_err());
+        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
+        let applied = bridge.offset_node("box", 4.0, "round").unwrap();
+        let change: Value = serde_json::from_str(&applied).unwrap();
+        assert_eq!(change["revision"], 1);
+        assert_eq!(change["node"], Value::Null);
+        assert_eq!(change["offset"]["kind"], "vector");
+        assert_eq!(change["offset"]["id"], "box");
+        assert!(change["offset"]["path"].as_array().unwrap().len() >= 5);
+        assert!(change.get("pages").is_none());
+        assert!(applied.len() < 10_000, "a one-layer command returned a page");
+        assert!(matches!(load_x(&bridge.export_x()).unwrap().pages[0].children[0].kind, x_core::NodeKind::Vector { .. }));
+        let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+        assert_eq!(undone["node"], Value::Null);
+        assert_eq!(undone["offset"]["kind"], "rect");
+        assert_eq!(undone["offset"]["radius"], 0.0);
+        let redone: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
+        assert_eq!(redone["offset"], change["offset"]);
+        let contracted: Value = serde_json::from_str(&bridge.offset_node("box", -100.0, "bevel").unwrap()).unwrap();
+        assert_eq!(contracted["offset"]["path"], json!([]));
+        assert!(bridge.undo().is_ok());
     }
 
     #[test]
