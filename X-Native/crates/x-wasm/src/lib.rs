@@ -215,6 +215,11 @@ mod bindings {
                 .map_err(js_error)
         }
 
+        #[wasm_bindgen(js_name = previewOffset)]
+        pub fn preview_offset(&self, id: &str, distance: f64, join: &str) -> Result<String, JsValue> {
+            self.bridge.preview_offset(id, distance, join).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = offsetNode)]
         pub fn offset_node(
             &mut self,

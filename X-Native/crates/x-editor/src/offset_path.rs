@@ -5,19 +5,18 @@
 use crate::{find, Editor};
 use x_core::booleans::node_to_path;
 use x_core::offset_path::offset_filled_path;
-use x_core::{NodeKind, Paint, PathCmd, StrokeJoin};
+use x_core::{Node, NodeKind, Paint, PathCmd, StrokeJoin};
 
 impl Editor {
-    /// Replace a closed, filled rect/ellipse/vector/polygon/star with the
-    /// actual offset contour(s), in one undoable step. Negative distances may
-    /// validly erase the contour, leaving an empty vector that can be undone.
-    /// A zero distance is a no-op; invalid geometry is refused before history.
-    pub fn offset_filled_node(
-        &mut self,
+    /// Pure, single-layer preview for the web equivalence guard. Returns the
+    /// very same proposed node the command will commit; no history or root
+    /// clone, and zero distance returns None. Never paints this optimistically.
+    pub fn preview_filled_offset(
+        &self,
         id: &str,
         distance: f64,
         join: StrokeJoin,
-    ) -> Result<bool, &'static str> {
+    ) -> Result<Option<Node>, &'static str> {
         let before = find(&self.root, id).ok_or("offset target not found")?;
         if !matches!(
             &before.kind,
@@ -37,7 +36,7 @@ impl Editor {
             return Err("offset requires a plain filled shape without a stroke or effects");
         }
         if distance == 0.0 {
-            return Ok(false);
+            return Ok(None);
         }
         let source = node_to_path(before).ok_or("unsupported offset source")?;
         let rings = offset_filled_path(&source, distance, join)?;
@@ -78,7 +77,21 @@ impl Editor {
             next.h = 1.0;
         }
         next.kind = NodeKind::Vector { path: cmds };
-        self.push_replace(id, Box::new(before.clone()), next);
+        Ok(Some(next))
+    }
+
+    /// Commit the exact preflight result as one ReplaceNode undo step.
+    pub fn offset_filled_node(
+        &mut self,
+        id: &str,
+        distance: f64,
+        join: StrokeJoin,
+    ) -> Result<bool, &'static str> {
+        let Some(next) = self.preview_filled_offset(id, distance, join)? else {
+            return Ok(false);
+        };
+        let before = find(&self.root, id).ok_or("offset target not found")?.clone();
+        self.push_replace(id, Box::new(before), next);
         Ok(true)
     }
 }

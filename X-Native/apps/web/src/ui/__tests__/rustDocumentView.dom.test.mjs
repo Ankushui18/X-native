@@ -26,7 +26,7 @@ const fixture = () => {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 4, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 5, RustDocumentSession: Session,
 });
 const calls = { opens: 0, exports: 0, queries: 0, edits: 0, closes: 0 };
 class FakeRust {
@@ -37,6 +37,31 @@ class FakeRust {
     calls.queries++;
     const n = this.get(id);
     return JSON.stringify(n ? { id, name: n.name ?? id, x: n.x, y: n.y, w: n.w, h: n.h } : null);
+  }
+  getShape(id) {
+    const n = this.get(id);
+    return JSON.stringify({ id, name: n.name ?? id, x: n.x, y: n.y, w: n.w, h: n.h,
+      kind: n.kind.t, ...(n.kind.t === "vector" ? { path: n.kind.path } : { radius: n.kind.radius ?? 0 }) });
+  }
+  previewOffset(id, distance, join) {
+    // A deterministic fake bridge answer for the UI contract. The real Rust
+    // geometry and independent TS coverage check run against WASM in CI.
+    if (join !== "miter" || distance <= 0) throw Error("mock supports only positive miter");
+    const n = this.get(id), w = FakeRust.badNextOffset ? n.w : n.w + 2 * distance;
+    const h = FakeRust.badNextOffset ? n.h : n.h + 2 * distance;
+    const x = FakeRust.badNextOffset ? n.x : n.x - distance;
+    const y = FakeRust.badNextOffset ? n.y : n.y - distance;
+    FakeRust.badNextOffset = false;
+    return JSON.stringify({ id, name: n.name ?? id, x, y, w, h,
+      kind: "vector", path: [["M", 0, 0], ["L", w, 0], ["L", w, h], ["L", 0, h], ["Z"]] });
+  }
+  offsetNode(id, distance, join) {
+    const before = clone(this.get(id)), next = JSON.parse(this.previewOffset(id, distance, join));
+    Object.assign(this.get(id), { x: next.x, y: next.y, w: next.w, h: next.h,
+      kind: { t: "vector", path: next.path } });
+    this.undos.push({ offset: true, id, before, after: clone(this.get(id)) });
+    this.redos.length = 0; this.revision++; calls.edits++;
+    return JSON.stringify({ ...JSON.parse(this.state()), offset: next });
   }
   edit(id, change) {
     calls.edits++;
@@ -98,6 +123,10 @@ class FakeRust {
     const op = this.undos.pop();
     if (!op) return this.state();
     this.redos.push(op); this.revision++;
+    if (op.offset) {
+      Object.assign(this.get(op.id), clone(op.before));
+      return JSON.stringify({ ...JSON.parse(this.state()), offset: JSON.parse(this.getShape(op.id)) });
+    }
     if (op.stroke) {
       if (op.before) this.strokes.set(op.id, op.before); else this.strokes.delete(op.id);
       return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(op.id, op.before) });
@@ -120,6 +149,10 @@ class FakeRust {
     const op = this.redos.pop();
     if (!op) return this.state();
     this.undos.push(op); this.revision++;
+    if (op.offset) {
+      Object.assign(this.get(op.id), clone(op.after));
+      return JSON.stringify({ ...JSON.parse(this.state()), offset: JSON.parse(this.getShape(op.id)) });
+    }
     if (op.stroke) {
       if (op.after) this.strokes.set(op.id, op.after); else this.strokes.delete(op.id);
       return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(op.id, op.after) });
@@ -316,6 +349,46 @@ assert.equal(stroked.host.querySelector(".rust-preview-stroke"), null);
 assert.equal(calls.exports, beforeStrokeExports, "stroke/history never export .x just to paint");
 await stroked.close();
 console.log("  ok stroke preview: Rust-only join/alignment deltas, unclipped SVG band and undo/redo");
+
+const offsetSeed = fixture(), offsetBefore = clone(offsetSeed);
+const offsetView = mount(offsetSeed);
+await offsetView.render();
+const exportsBeforeOffset = calls.exports;
+assert.equal(offsetView.byText("Offset path").disabled, false);
+await offsetView.click("Offset path");
+assert.equal(offsetView.host.querySelector(".rust-preview-rect").style.left, "4px");
+assert.equal(offsetView.host.querySelector(".rust-preview-rect").style.width, "82px");
+assert.match(offsetView.host.querySelector(".rust-preview-rect path").getAttribute("d"), /^M0 0 L82 0/);
+assert.equal(offsetView.byText("Wider 10").disabled, true, "vector cannot silently resize its native contours");
+assert.equal(calls.exports, exportsBeforeOffset, "guard and edit use shape-only requests, not page exports");
+await offsetView.click("Undo");
+assert.equal(offsetView.host.querySelector(".rust-preview-rect").style.left, "10px");
+assert.equal(offsetView.host.querySelector(".rust-preview-rect path"), null);
+await offsetView.click("Redo");
+assert.equal(offsetView.host.querySelector(".rust-preview-rect").style.left, "4px");
+await offsetView.click("Prepare download");
+const offsetLink = offsetView.host.querySelector("a[download]");
+const savedOffset = JSON.parse(await urls.get(offsetLink.href).text()).pages[0].root.children[0];
+assert.equal(savedOffset.kind, "vector");
+assert.equal(savedOffset.vectorNetwork.vertices.length, 4);
+assert.deepEqual(offsetSeed, offsetBefore, "the admitted caller is never rewritten");
+await offsetView.close();
+console.log("  ok guarded Rust offset: bounded preflight, vector patch and undo/redo without a page copy");
+
+const rejectedOffset = mount(fixture());
+await rejectedOffset.render();
+const editsBeforeRejection = calls.edits;
+FakeRust.badNextOffset = true;
+await rejectedOffset.click("Offset path");
+assert.ok(rejectedOffset.host.textContent.includes("no change was made"));
+assert.equal(rejectedOffset.host.querySelector(".rust-preview-rect").style.left, "10px");
+assert.equal(rejectedOffset.byText("Undo").disabled, true);
+assert.equal(calls.edits, editsBeforeRejection, "the rejected preview never dispatched an edit");
+await rejectedOffset.click("Move right 10");
+assert.equal(rejectedOffset.host.querySelector(".rust-preview-rect").style.left, "20px",
+  "a guard rejection does not freeze the still-unchanged Rust session");
+await rejectedOffset.close();
+console.log("  ok offset mismatch: no native mutation, no TS shadow owner, other edits still work");
 
 const openedBeforeInvalid = calls.opens;
 const invalid = fixture(); invalid.styles.push({ name: "outside subset" });

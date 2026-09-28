@@ -13,6 +13,7 @@ import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
 import { openRustSession } from "../../src/engine/rustSession.ts";
 import { admitWebDocument, openWebDocumentSession } from "../../src/engine/webDocumentSession.ts";
 import { rectangleStrokeOracle, strokeMatchesRectangle } from "../../src/engine/strokeBandOracle.ts";
+import { offsetCoverageEquivalent } from "../../src/engine/offsetPathOracle.ts";
 import { docFromTemplate } from "../../src/engine/files.ts";
 import { node } from "../../src/engine/memory.ts";
 import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
@@ -307,6 +308,92 @@ try {
   assert.equal(bridgeAuditSnapshot().decisions["session.stroke"]?.attempts, strokeAuditsBefore + 1,
     "only the one opt-in edit may run the TS oracle; 29 default edits stay Rust-owned");
   console.log(`PASS real-WASM Rust stroke alignment: ${parity}/30 rectangle oracle parity, one opt-in audit, 29 default Rust edits, bound checks, history, resize reprojection and lossless checkpoints`);
+
+  // Actual V5 bindgen/session class, not x-geo or a mock. The geometry guard
+  // compares a one-layer Rust preview to independent TS NONZERO coverage
+  // BEFORE committing; the old averaged-normal offset is not a filled oracle.
+  // Five geometries × 3 joins × 2 signs = 30, including a native-produced
+  // vector with a hole. All edits/undo live in the same Rust history.
+  const offsetBeforeAudit = bridgeAuditSnapshot().decisions["session.offset"]?.attempts ?? 0;
+  const offsetBeforeCalls = bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.offsetNode"]?.calls ?? 0;
+  let offsetParity = 0;
+  for (const shape of ["rect", "ellipse", "poly", "star", "vector"]) {
+    for (const join of ["miter", "bevel", "round"]) for (const distance of [4, -4]) {
+      const seed = docFromTemplate("blank");
+      const attrs = { fill: "#416a92", ...(shape === "poly" ? { count: 6 } : {}),
+        ...(shape === "star" ? { count: 5, starRatio: 0.42 } : {}) };
+      seed.pages[0].root.children.push(node(shape === "vector" ? "rect" : shape,
+        "Offset target", 12, 18, shape === "vector" ? 50 : 90,
+        shape === "vector" ? 44 : 72, attrs));
+      if (shape === "vector") seed.pages[0].root.children.push(
+        node("rect", "Cutout", 27, 31, 20, 16, { fill: "#ffffff" }));
+      const owner = await openWebDocumentSession(seed);
+      assert.ok(owner, `${shape}/${join}/${distance}: genuine WASM session must open`);
+      let id = seed.pages[0].root.children[0].id;
+      if (shape === "vector") {
+        const difference = owner.booleanNode(id, seed.pages[0].root.children[1].id, "subtract");
+        id = difference.boolean.upsert[0].id;
+      }
+      const original = owner.exportDocument();
+      const current = owner.getShape(id);
+      const firstRevision = owner.state().revision;
+      assert.throws(() => owner.offsetNode(id, 2049, join), /distance/i);
+      assert.equal(owner.state().revision, firstRevision, "invalid distance never creates history");
+      const result = owner.offsetNode(id, distance, join);
+      assert.equal(result.revision, firstRevision + 1);
+      assert.equal(result.node, null);
+      assert.equal(result.offset?.id, id);
+      assert.equal(result.offset?.kind, "vector");
+      assert.ok(offsetCoverageEquivalent(current, result.offset, distance, join),
+        `${shape}/${join}/${distance}: TS reference and Rust output differ`);
+      assert.equal(bridgeAuditSnapshot().decisions["session.offset"]?.last.guard, "passed",
+        `${shape}/${join}/${distance}: offset preflight must be checked, not bypassed`);
+      assert.ok(!JSON.stringify(result).includes('"pages"'), "bounded command must not return a document");
+      const saved = owner.exportDocument();
+      const layer = saved.pages[0].root.children[0];
+      assert.equal(layer.id, id);
+      assert.equal(layer.kind, "vector");
+      assert.equal(layer.fill, "#416a92");
+      assert.equal(layer.vectorNetwork.regions[0].windingRule, "EVENODD");
+      if (offsetParity === 0 || shape === "vector" && join === "round" && distance < 0) {
+        const undone = owner.undo();
+        assert.equal(undone.offset?.id, id);
+        assert.deepEqual(owner.exportDocument(), original, "one Rust undo restores exactly one affected layer");
+        const redone = owner.redo();
+        assert.deepEqual(redone.offset, result.offset);
+        assert.deepEqual(owner.exportDocument(), saved);
+      }
+      owner.close();
+      offsetParity++;
+    }
+  }
+  assert.equal(offsetParity, 30);
+  assert.equal(bridgeAuditSnapshot().decisions["session.offset"]?.attempts, offsetBeforeAudit + 30);
+  assert.equal(bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.offsetNode"]?.calls, offsetBeforeCalls + 30);
+  console.log(`PASS real-WASM signed offset: ${offsetParity}/30 guarded rect/ellipse/poly/star/hollow-vector cases, 3 joins, both signs, Rust undo/redo and bounded deltas`);
+
+  // A deliberately crossing vector is *not* initially admitted by the safe
+  // Web dialect. The same WASM class and x-core handle it natively with
+  // NONZERO winding rather than turning the figure-eight into a single box.
+  const crossingSeed = docFromTemplate("blank");
+  crossingSeed.pages[0].root.children.push(node("rect", "Crossing", 0, 0, 40, 40, { fill: "#335577" }));
+  const crossingFile = JSON.parse(admitWebDocument(crossingSeed));
+  const crossingId = crossingFile.pages[0].children[0].id;
+  crossingFile.pages[0].children[0].kind = { t: "vector", path: [
+    ["M", 0, 0], ["L", 40, 40], ["L", 0, 40], ["L", 40, 0], ["Z"],
+  ] };
+  const crossing = new glue.RustDocumentSession(JSON.stringify(crossingFile));
+  const crossSource = JSON.parse(crossing.getShape(crossingId));
+  const crossPreview = JSON.parse(crossing.previewOffset(crossingId, 3, "round"));
+  assert.ok(crossPreview.path.filter(cmd => cmd[0] === "Z").length >= 2,
+    "the self-crossing must separate into valid contours");
+  assert.ok(offsetCoverageEquivalent(crossSource, crossPreview, 3, "round"),
+    "crossing source must have TS NONZERO fill parity");
+  assert.deepEqual(JSON.parse(crossing.offsetNode(crossingId, 3, "round")).offset, crossPreview);
+  assert.equal(JSON.parse(crossing.undo()).offset.kind, "vector");
+  assert.deepEqual(JSON.parse(crossing.redo()).offset, crossPreview);
+  crossing.free();
+  console.log("PASS real-WASM crossing vector: NONZERO normalization, separate contours and Rust history");
 
   const extended = JSON.parse(glue.importSvgToX(plain));
   extended.doc.comments = [{ text: "do not discard me" }];

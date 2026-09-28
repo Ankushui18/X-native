@@ -64,6 +64,15 @@ fn offset_value(change: OffsetDelta) -> Value {
     value
 }
 
+fn offset_join(join: &str) -> Result<StrokeJoin, String> {
+    match join {
+        "miter" => Ok(StrokeJoin::Miter),
+        "bevel" => Ok(StrokeJoin::Bevel),
+        "round" => Ok(StrokeJoin::Round),
+        _ => Err("unknown offset join".into()),
+    }
+}
+
 fn delta_json(delta: SessionDelta) -> String {
     let node = delta.node.map(node_value);
     let mut value = json!({
@@ -194,16 +203,16 @@ impl CommandBridge {
         })
     }
 
+    /// Geometry only; this bounded preview changes no native history.
+    pub fn preview_offset(&self, id: &str, distance: f64, join: &str) -> Result<String, String> {
+        let shape = self.session.preview_offset(id, distance, offset_join(join)?)?;
+        Ok(shape.map(offset_value).unwrap_or(Value::Null).to_string())
+    }
+
     /// One signed offset edit. A join is an existing native StrokeJoin;
     /// it is not approximated in the web host. A missing/unknown join fails.
     pub fn offset_node(&mut self, id: &str, distance: f64, join: &str) -> Result<String, String> {
-        let join = match join {
-            "miter" => StrokeJoin::Miter,
-            "bevel" => StrokeJoin::Bevel,
-            "round" => StrokeJoin::Round,
-            _ => return Err("unknown offset join".into()),
-        };
-        self.dispatch(SessionCommand::Offset { id, distance, join })
+        self.dispatch(SessionCommand::Offset { id, distance, join: offset_join(join)? })
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -398,8 +407,12 @@ mod tests {
             serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"],
             0
         );
+        let preview: Value = serde_json::from_str(&bridge.preview_offset("box", 4.0, "round").unwrap()).unwrap();
+        assert_eq!(preview["kind"], "vector");
+        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
         let applied = bridge.offset_node("box", 4.0, "round").unwrap();
         let change: Value = serde_json::from_str(&applied).unwrap();
+        assert_eq!(change["offset"], preview);
         assert_eq!(change["revision"], 1);
         assert_eq!(change["node"], Value::Null);
         assert_eq!(change["offset"]["kind"], "vector");

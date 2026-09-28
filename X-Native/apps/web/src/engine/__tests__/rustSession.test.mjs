@@ -12,7 +12,7 @@ const patch = { revision: 1, node: { id: "box", name: "Card", x: 13, y: 16, w: 8
 const moduleWith = (session) => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 4, RustDocumentSession: session,
+  sessionBridgeVersion: () => 5, RustDocumentSession: session,
 });
 
 await test("optional older bindgen artifacts keep imports without advertising a command session", async () => {
@@ -21,7 +21,7 @@ await test("optional older bindgen artifacts keep imports without advertising a 
   assert.equal(getEngineInfo().hasWasm, true);
 });
 await test("old/future session ABIs decline without breaking import status", async () => {
-  for (const version of [1, 2, 3, 5]) {
+  for (const version of [1, 2, 3, 4, 6]) {
     __resetWasmForTests();
     assert.equal(await initWasmBridge(async () => ({ ...moduleWith(class {}), sessionBridgeVersion: () => version })), true);
     assert.equal(await openRustSession("native .x"), null);
@@ -34,6 +34,17 @@ await test("commands are forwarded to one Rust-owned instance, never a JS docume
     constructor(x) { calls.push(["open", x]); }
     state() { return JSON.stringify({ ...patch, revision: 0, node: null, canUndo: false }); }
     getNode(id) { calls.push(["getNode", id]); return JSON.stringify(patch.node); }
+    getShape(id) { calls.push(["getShape", id]); return JSON.stringify({ ...patch.node, kind: "rect", radius: 0 }); }
+    previewOffset(id, distance, join) {
+      calls.push(["previewOffset", id, distance, join]);
+      return JSON.stringify({ ...patch.node, kind: "vector", path: [
+        ["M", 0, 0], ["L", 80, 0], ["L", 80, 24.5], ["L", 0, 24.5], ["Z"]] });
+    }
+    offsetNode(id, distance, join) {
+      calls.push(["offsetNode", id, distance, join]);
+      return JSON.stringify({ ...patch, node: null, offset: { ...patch.node, kind: "vector", path: [
+        ["M", 0, 0], ["L", 80, 0], ["L", 80, 24.5], ["L", 0, 24.5], ["Z"]] } });
+    }
     renameNode(id, name) { calls.push(["rename", id, name]); return JSON.stringify(patch); }
     moveNode(id, dx, dy) { calls.push(["move", id, dx, dy]); return JSON.stringify(patch); }
     resizeNode(id, w, h) { calls.push(["resize", id, w, h]); return JSON.stringify(patch); }
@@ -56,6 +67,9 @@ await test("commands are forwarded to one Rust-owned instance, never a JS docume
   assert.deepEqual(session.resizeNode("box", 80, 24.5), patch);
   assert.deepEqual(session.booleanNode("box", "b", "exclude"), patch);
   assert.deepEqual(session.strokeNode("box", 3, "#123456", "outside", "bevel"), patch);
+  assert.equal(session.getShape("box").kind, "rect");
+  assert.equal(session.previewOffset("box", 4, "round").path.length, 5);
+  assert.equal(session.offsetNode("box", 4, "round").offset.kind, "vector");
   assert.deepEqual(session.undo(), patch);
   assert.deepEqual(session.redo(), patch);
   assert.equal(session.exportX(), '{"format":"x-native"}');
@@ -64,6 +78,7 @@ await test("commands are forwarded to one Rust-owned instance, never a JS docume
     ["open", "native .x"], ["getNode", "box"], ["rename", "box", "Card"],
     ["move", "box", 3, -4], ["resize", "box", 80, 24.5],
     ["boolean", "box", "b", "exclude"], ["stroke", "box", 3, "#123456", "outside", "bevel"],
+    ["getShape", "box"], ["previewOffset", "box", 4, "round"], ["offsetNode", "box", 4, "round"],
     ["undo"], ["redo"], ["exportX"], ["free"],
   ]);
   assert.throws(() => session.undo(), /closed/);
@@ -72,6 +87,9 @@ await test("malformed or whole-document command responses are rejected, not sile
   class BadSession {
     state() { return JSON.stringify(patch); }
     getNode() { return JSON.stringify(patch.node); }
+    getShape() { return "{}"; }
+    previewOffset() { return "{}"; }
+    offsetNode() { return "{}"; }
     renameNode() { return JSON.stringify({ ...patch, pages: [] }); }
     moveNode() { return JSON.stringify(patch); }
     resizeNode() { return JSON.stringify({ ...patch, node: { ...patch.node, w: "wide" } }); }
@@ -100,6 +118,9 @@ await test("bounded Boolean patches are parsed strictly, without a full document
   class Session {
     state() { return JSON.stringify({ ...patch, revision: 0, node: null }); }
     getNode() { return "null"; }
+    getShape() { return "{}"; }
+    previewOffset() { return "{}"; }
+    offsetNode() { return "{}"; }
     renameNode() { return JSON.stringify(patch); }
     moveNode() { return JSON.stringify(patch); }
     resizeNode() { return JSON.stringify(patch); }
@@ -135,6 +156,9 @@ await test("bounded stroke deltas reject unexpected fields, nonfinite geometry a
   class Styled {
     state() { return JSON.stringify({ ...patch, revision: 0, node: null }); }
     getNode() { return JSON.stringify(patch.node); }
+    getShape() { return "{}"; }
+    previewOffset() { return "{}"; }
+    offsetNode() { return "{}"; }
     renameNode() { return JSON.stringify(patch); }
     moveNode() { return JSON.stringify(patch); }
     resizeNode() { return JSON.stringify(patch); }
@@ -165,7 +189,46 @@ await test("bounded stroke deltas reject unexpected fields, nonfinite geometry a
   assert.equal(session.undo().stroke.width, 0);
   session.close();
 });
-await test("incomplete v4 binding frees itself before exposing a Rust owner", async () => {
+await test("offset paths are bounded, closed, typed and never whole-page deltas", async () => {
+  const shape = { id: "box", name: "Card", x: -4, y: 8, w: 20, h: 12, kind: "vector",
+    path: [["M", 0, 0], ["L", 20, 0], ["L", 20, 12], ["L", 0, 12], ["Z"]] };
+  const good = { revision: 1, node: null, canUndo: true, canRedo: false, offset: shape };
+  let response = good;
+  class OffsetSession {
+    state() { return JSON.stringify({ revision: 0, node: null, canUndo: false, canRedo: false }); }
+    getNode() { return JSON.stringify(patch.node); }
+    getShape() { return JSON.stringify({ ...patch.node, kind: "rect", radius: 0 }); }
+    previewOffset() { return JSON.stringify(shape); }
+    offsetNode() { return JSON.stringify(response); }
+    renameNode() { return JSON.stringify(patch); }
+    moveNode() { return JSON.stringify(patch); }
+    resizeNode() { return JSON.stringify(patch); }
+    booleanNode() { return JSON.stringify(patch); }
+    strokeNode() { return JSON.stringify(patch); }
+    undo() { return JSON.stringify(response); }
+    redo() { return JSON.stringify(response); }
+    exportX() { return "{}"; }
+    free() {}
+  }
+  await initWasmBridge(async () => moduleWith(OffsetSession));
+  const session = await openRustSession("native .x");
+  assert.deepEqual(session.offsetNode("box", 5, "round").offset, shape);
+  assert.deepEqual(session.previewOffset("box", 5, "round"), shape);
+  for (const invalid of [
+    { ...good, offset: { ...shape, path: [["M", 0, 0], ["L", 5, 0]] } },
+    { ...good, offset: { ...shape, path: [["M", 0, 0], ["C", 0, 1, 1, 1, 2, 2], ["Z"]] } },
+    { ...good, offset: { ...shape, path: [["M", Infinity, 0], ["L", 5, 0], ["L", 5, 5], ["Z"]] } },
+    { ...good, offset: { ...shape, pages: [] } },
+    { ...good, node: patch.node },
+    { ...good, boolean: { removed: [], upsert: [] } },
+    { ...good, stroke: {} },
+  ]) {
+    response = invalid;
+    assert.throws(() => session.offsetNode("box", 5, "round"), /Invalid|Unexpected|Unclosed/);
+  }
+  session.close();
+});
+await test("incomplete v5 binding frees itself before exposing a Rust owner", async () => {
   let freed = 0;
   class IncompleteSession {
     state() { return "{}"; }

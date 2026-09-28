@@ -10,20 +10,23 @@ import { decodeRustImport } from "./wasmImportAdapter";
 import { auditDecision, auditRustAsyncCall, auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 export const IMPORT_BRIDGE_VERSION = 1;
-// V4 adds a bounded aligned-stroke command/contour delta. Older bindgen
-// classes cannot acknowledge its style or undo without losing stroke options.
-export const SESSION_BRIDGE_VERSION = 4;
+// V5 adds a bounded single-layer offset command/shape delta to V4's strokes.
+// Older bindgen classes cannot acknowledge or undo this shape rewrite safely.
+export const SESSION_BRIDGE_VERSION = 5;
 export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
 /** wasm-bindgen owns this stateful instance; JS never mirrors its document or
  * undo stack. The only large payload is an explicit open/export of native .x. */
 export interface WasmDocumentSession {
   state: () => string;
   getNode: (id: string) => string;
+  getShape: (id: string) => string;
   renameNode: (id: string, name: string) => string;
   moveNode: (id: string, dx: number, dy: number) => string;
   resizeNode: (id: string, w: number, h: number) => string;
   booleanNode: (first: string, second: string, op: string) => string;
   strokeNode: (id: string, width: number, color: string, align: string, join: string) => string;
+  previewOffset: (id: string, distance: number, join: string) => string;
+  offsetNode: (id: string, distance: number, join: string) => string;
   undo: () => string;
   redo: () => string;
   exportX: () => string;

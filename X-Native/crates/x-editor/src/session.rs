@@ -354,8 +354,28 @@ impl DocumentSession {
         self.offset_node(id)
     }
 
+    /// Check the candidate before changing Rust history. The opt-in Web host
+    /// compares this one-layer projection to the independent TS geometry
+    /// oracle and can decline without having to undo a rejected edit.
+    pub fn preview_offset(
+        &self,
+        id: &str,
+        distance: f64,
+        join: StrokeJoin,
+    ) -> Result<Option<OffsetDelta>, String> {
+        self.offset_operand(id)?;
+        self.editor
+            .preview_filled_offset(id, distance, join)
+            .map_err(str::to_string)?
+            .map(|node| Self::offset_projection(&node))
+            .transpose()
+    }
+
     fn offset_node(&self, id: &str) -> Result<OffsetDelta, String> {
-        let node = self.target(id)?;
+        Self::offset_projection(self.target(id)?)
+    }
+
+    fn offset_projection(node: &Node) -> Result<OffsetDelta, String> {
         // On undo the original may have nonzero curvature. Send PathCmds,
         // not a lossy approximation made from the offset's straight rings.
         let shape = match &node.kind {
@@ -374,7 +394,14 @@ impl DocumentSession {
             _ => return Err("offset delta exceeds the path budget".into()),
         };
         Ok(OffsetDelta {
-            node: self.node(id).ok_or("offset layer missing")?,
+            node: NodeDelta {
+                id: node.id.clone(),
+                name: node.name.clone(),
+                x: node.transform.x,
+                y: node.transform.y,
+                w: node.w,
+                h: node.h,
+            },
             shape,
         })
     }

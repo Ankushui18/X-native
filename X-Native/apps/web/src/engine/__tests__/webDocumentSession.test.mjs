@@ -26,11 +26,11 @@ async function test(label, fn) {
 const moduleWith = Session => ({
   default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 4, RustDocumentSession: Session,
+  sessionBridgeVersion: () => 5, RustDocumentSession: Session,
 });
 
 await test("one-page rect document and persisted v1 metadata round-trip exactly", () => {
-  assert.equal(WEB_DOCUMENT_SESSION_VERSION, 1);
+  assert.equal(WEB_DOCUMENT_SESSION_VERSION, 2);
   for (const seed of [docFromTemplate("blank"), fixture(), { ...fixture(), version: 1 }]) {
     const x = admitWebDocument(seed);
     assert.ok(x, "supported doc should be admitted");
@@ -43,6 +43,29 @@ await test("one-page rect document and persisted v1 metadata round-trip exactly"
       assert.equal(raw.pages[0].children?.[0]?.show_name, false);
       assert.equal(raw.pages[0].children?.[0]?.visible, false);
     }
+  }
+});
+
+await test("ellipse, polygon and star admit losslessly; unsafe shape parameters decline", () => {
+  const seed = docFromTemplate("blank");
+  seed.pages[0].root.children.push(
+    node("ellipse", "Ellipse", 14, 20, 80, 50, { fill: "#224466" }),
+    node("poly", "Polygon", 94, 50, 78, 72, { count: 6, fill: "#7799aa" }),
+    node("star", "Star", -16, 0, 90, 90, { count: 7, starRatio: 0.35, fill: "#bc88dd" }),
+  );
+  const raw = JSON.parse(admitWebDocument(seed));
+  assert.deepEqual(raw.pages[0].children.map(n => n.kind),
+    [{ t: "ellipse" }, { t: "poly", sides: 6 }, { t: "star", points: 7, ratio: 0.35 }]);
+  assert.deepEqual(decodeWebDocument(JSON.stringify(raw), seed), seed);
+  for (const change of [
+    n => n.count = 61,
+    n => n.count = 2,
+    n => n.starRatio = 1.5,
+    n => n.starRatio = 0.01,
+    n => n.strokeWidth = 1,
+  ]) {
+    const unsafe = clone(seed); change(unsafe.pages[0].root.children[2]);
+    assert.equal(admitWebDocument(unsafe), null);
   }
 });
 
@@ -205,6 +228,9 @@ await test("open gates without wasm and rejects mismatched native round trip, fr
     constructor(x) { this.x = x; }
     state() { return "{}"; }
     getNode() { return "null"; }
+    getShape() { return "{}"; }
+    previewOffset() { return "{}"; }
+    offsetNode() { return "{}"; }
     renameNode() { return "{}"; }
     moveNode() { return "{}"; }
     resizeNode() { return "{}"; }
@@ -245,6 +271,9 @@ await test("once admitted, small commands go straight to Rust; full data only on
     node(id) { const n = this.data.pages[0].children.find(v => v.id === id); return n && { id, name: n.name, x: n.x, y: n.y, w: n.w, h: n.h }; }
     state() { return JSON.stringify({ revision: this.revision, node: null, canUndo: this.revision > 0, canRedo: false }); }
     getNode(id) { return JSON.stringify(this.node(id) ?? null); }
+    getShape() { return "{}"; }
+    previewOffset() { return "{}"; }
+    offsetNode() { return "{}"; }
     edit(id, change) {
       counters.commands++; this.revision++;
       change(this.data.pages[0].children.find(v => v.id === id));

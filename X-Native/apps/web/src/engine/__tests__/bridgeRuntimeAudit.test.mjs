@@ -111,9 +111,9 @@ try {
 
   const state = JSON.stringify({ revision: 1, node: null, canUndo: true, canRedo: false });
   let freed = 0;
-  const binding = { state: () => state, getNode: () => "null", renameNode: () => state,
+  const binding = { state: () => state, getNode: () => "null", getShape: () => "null", renameNode: () => state,
     moveNode: () => state, resizeNode: () => state, booleanNode: () => state, strokeNode: () => state,
-    undo: () => state, redo: () => state,
+    previewOffset: () => "null", offsetNode: () => state, undo: () => state, redo: () => state,
     exportX: () => "{}", free: () => { freed++; } };
   window.location.hash = "#/file/private-id?engine=rust";
   assert.equal(command.snapshot().modules.session.rustRouteRequested, true);

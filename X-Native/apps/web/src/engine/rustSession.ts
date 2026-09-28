@@ -46,6 +46,15 @@ export interface RustBooleanChange {
   upsert: RustGeometryChange[];
   removed: string[];
 }
+/** Native PathCmds preserve even cubic controls on undo. Result offsets are
+ * straight, closed contours; neither direction transfers a page or paint. */
+export type RustPathCommand = ["M" | "L", number, number] |
+  ["C", number, number, number, number, number, number] | ["Z"];
+export type RustOffsetChange = RustNodeChange & (
+  { kind: "rect"; radius: number } | { kind: "ellipse" } |
+  { kind: "poly"; count: number } | { kind: "star"; count: number; ratio: number } |
+  { kind: "vector"; path: RustPathCommand[] }
+);
 // User-authored document ink, not chrome/theme color.
 export const DEFAULT_RECT_STROKE_COLOR = "#202020";
 export interface RustStrokeChange {
@@ -67,6 +76,8 @@ export interface RustStateChange {
   boolean?: RustBooleanChange;
   /** Only a style edit or a stroke-geometry resize emits this bounded patch. */
   stroke?: RustStrokeChange;
+  /** Only an offset edit/undo/redo emits this bounded affected-layer patch. */
+  offset?: RustOffsetChange;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -160,13 +171,61 @@ function strokeValue(value: unknown): RustStrokeChange {
   return { id: s.id, width: s.width, color: s.color, align: s.align as RustStrokeChange["align"],
     join: s.join as RustStrokeChange["join"], outer, inner };
 }
+function offsetValue(value: unknown): RustOffsetChange {
+  const obj = record(value, "offset layer delta");
+  const kind = obj.kind;
+  const extra = kind === "rect" ? ["radius"] : kind === "poly" ? ["count"] :
+    kind === "star" ? ["count", "ratio"] : kind === "vector" ? ["path"] : [];
+  keys(obj, ["id", "name", "x", "y", "w", "h", "kind", ...extra], "offset layer delta");
+  const node = nodeValue({ id: obj.id, name: obj.name, x: obj.x, y: obj.y, w: obj.w, h: obj.h });
+  if (!node || node.id.length > 256 || node.name.length > 1024 || node.w <= 0 || node.h <= 0 ||
+      Math.abs(node.x) > 1e9 + 2048 || Math.abs(node.y) > 1e9 + 2048) {
+    throw new Error("Invalid Rust offset layer");
+  }
+  if (kind === "rect") {
+    if (typeof obj.radius !== "number" || !Number.isFinite(obj.radius) ||
+        obj.radius < 0 || obj.radius > Math.min(node.w, node.h) / 2) throw new Error("Invalid Rust offset radius");
+    return { ...node, kind, radius: obj.radius };
+  }
+  if (kind === "ellipse") return { ...node, kind };
+  if (kind === "poly" || kind === "star") {
+    if (!Number.isSafeInteger(obj.count) || (obj.count as number) < 3 || (obj.count as number) > 256 ||
+        (kind === "star" && (typeof obj.ratio !== "number" || !Number.isFinite(obj.ratio) ||
+          obj.ratio <= 0 || obj.ratio >= 1))) throw new Error("Invalid Rust offset polygon");
+    return kind === "poly" ? { ...node, kind, count: obj.count as number } :
+      { ...node, kind, count: obj.count as number, ratio: obj.ratio as number };
+  }
+  if (kind !== "vector" || !Array.isArray(obj.path) || obj.path.length > 4224) {
+    throw new Error("Invalid Rust offset path");
+  }
+  let opened = false, contourSize = 0, count = 0, contours = 0;
+  const path: RustPathCommand[] = obj.path.map((item): RustPathCommand => {
+    if (!Array.isArray(item) || !["M", "L", "C", "Z"].includes(item[0])) {
+      throw new Error("Invalid Rust offset path command");
+    }
+    const tag = item[0];
+    if (tag === "Z") {
+      if (item.length !== 1 || !opened || contourSize < 3) throw new Error("Unclosed Rust offset contour");
+      opened = false; contourSize = 0; contours++;
+      return ["Z"];
+    }
+    if ((tag === "C" ? item.length !== 7 : item.length !== 3) ||
+        item.slice(1).some(v => typeof v !== "number" || !Number.isFinite(v) || Math.abs(v) > 1e7) ||
+        (tag === "M") === opened || ++count > 4096) throw new Error("Invalid Rust offset anchor");
+    opened = true; contourSize++;
+    return item as RustPathCommand;
+  });
+  if (opened || contours > 128 || (path.length > 0 && !contours)) throw new Error("Unclosed Rust offset path");
+  return { ...node, kind, path };
+}
 function stateValue(json: string): RustStateChange {
   const obj = record(JSON.parse(json) as unknown, "session delta");
   keys(obj, ["revision", "node", "canUndo", "canRedo", ...(obj.boolean === undefined ? [] : ["boolean"]),
-    ...(obj.stroke === undefined ? [] : ["stroke"])], "session delta");
+    ...(obj.stroke === undefined ? [] : ["stroke"]), ...(obj.offset === undefined ? [] : ["offset"])], "session delta");
   if (typeof obj.revision !== "number" || !Number.isSafeInteger(obj.revision) || obj.revision < 0 ||
       typeof obj.canUndo !== "boolean" || typeof obj.canRedo !== "boolean" ||
-      (obj.boolean !== undefined && (obj.node !== null || obj.stroke !== undefined))) {
+      (obj.boolean !== undefined && (obj.node !== null || obj.stroke !== undefined || obj.offset !== undefined)) ||
+      (obj.offset !== undefined && (obj.node !== null || obj.stroke !== undefined))) {
     throw new Error("Invalid Rust session delta");
   }
   return {
@@ -176,6 +235,7 @@ function stateValue(json: string): RustStateChange {
     canRedo: obj.canRedo,
     ...(obj.boolean === undefined ? {} : { boolean: booleanValue(obj.boolean) }),
     ...(obj.stroke === undefined ? {} : { stroke: strokeValue(obj.stroke) }),
+    ...(obj.offset === undefined ? {} : { offset: offsetValue(obj.offset) }),
   };
 }
 
@@ -185,7 +245,7 @@ export class RustSessionClient {
   constructor(binding: WasmDocumentSession) {
     // The version handshake alone is not enough if an optional asset was
     // partially deployed. Do not hand an incomplete Rust owner to the UI.
-    const methods = ["state", "getNode", "renameNode", "moveNode", "resizeNode", "booleanNode", "strokeNode",
+    const methods = ["state", "getNode", "getShape", "renameNode", "moveNode", "resizeNode", "booleanNode", "strokeNode", "previewOffset", "offsetNode",
       "undo", "redo", "exportX", "free"] as const;
     if (methods.some(method => typeof binding[method] !== "function")) {
       if (typeof binding.free === "function") auditRustCall("x-wasm.RustDocumentSession.free", () => binding.free());
@@ -204,6 +264,7 @@ export class RustSessionClient {
   }
   state(): RustStateChange { return stateValue(this.native("state", b => b.state())); }
   getNode(id: string): RustNodeChange | null { return nodeValue(JSON.parse(this.native("getNode", b => b.getNode(id))) as unknown); }
+  getShape(id: string): RustOffsetChange { return offsetValue(JSON.parse(this.native("getShape", b => b.getShape(id))) as unknown); }
   renameNode(id: string, name: string): RustStateChange { return stateValue(this.native("renameNode", b => b.renameNode(id, name))); }
   moveNode(id: string, dx: number, dy: number): RustStateChange { return stateValue(this.native("moveNode", b => b.moveNode(id, dx, dy))); }
   resizeNode(id: string, w: number, h: number): RustStateChange { return stateValue(this.native("resizeNode", b => b.resizeNode(id, w, h))); }
@@ -212,6 +273,13 @@ export class RustSessionClient {
   }
   strokeNode(id: string, width: number, color: string, align: RustStrokeChange["align"], join: RustStrokeChange["join"]): RustStateChange {
     return stateValue(this.native("strokeNode", b => b.strokeNode(id, width, color, align, join)));
+  }
+  previewOffset(id: string, distance: number, join: "miter" | "bevel" | "round"): RustOffsetChange | null {
+    const value: unknown = JSON.parse(this.native("previewOffset", b => b.previewOffset(id, distance, join)));
+    return value === null ? null : offsetValue(value);
+  }
+  offsetNode(id: string, distance: number, join: "miter" | "bevel" | "round"): RustStateChange {
+    return stateValue(this.native("offsetNode", b => b.offsetNode(id, distance, join)));
   }
   undo(): RustStateChange { return stateValue(this.native("undo", b => b.undo())); }
   redo(): RustStateChange { return stateValue(this.native("redo", b => b.redo())); }
