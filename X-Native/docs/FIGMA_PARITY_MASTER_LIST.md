@@ -117,7 +117,7 @@ Figma's canvas is a small set of gestures with modifiers; the shape-tool drags a
 | 2.11 | `⌥` resize | from the centre | resize arm | MATCH |
 | 2.12 | `Space` during resize | *"Hold Space while in the middle of another action to move the points. Release Space to return to the previous action"* (`360039957634`; the shortcut tables list it as **Move while resizing**) | `Drag::ResizeSel`'s `space`/`offset` riders: while `Space` is held the box travels with the pointer at the size the resize gave it (`smart_move`, so it snaps like any drag), the first event only anchors, and letting go re-bases the resize on the box's new place | MATCH |
 | 2.13 | Scale-tool drag | box + contents scale | `Drag::ScaleSel`, `Drag::ScaleBody` | MATCH |
-| 2.14 | Arc handles | hover the ellipse, drag sweep / start / ratio | `Drag::ArcHandle` (`360040450173`) | MATCH |
+| 2.14 | Arc handles | hover the ellipse, drag sweep / start / ratio | `Drag::ArcHandle` (`360040450173`); the web canvas carries the same three controls — `Canvas.tsx::arcHandlePoints` paints and hit-tests the **Sweep**, the **Start** (with the article's dot inside it) and the **Ratio** handle, the press takes a dot ahead of the box's resize handles, the Start drag patches `startingAngle`, the Ratio handle appears as soon as a gap exists so a pie can become a ring on canvas, and the arc drag closes its own undo step; pinned by `apps/web/src/ui/__tests__/arcHandles.test.mjs` (22) | MATCH |
 | 2.15 | Star / Polygon handles | Count (and Ratio) drag, live redraw | `Drag::ShapeHandle` | MATCH |
 | 2.16 | Prototype noodle | drag the edge circle onto a frame, it snaps | `Drag::ProtoConnect` (`31011968186007`) | MATCH |
 | 2.17 | Ruler guides | drag off a ruler; guides snap | `Drag::Guide` | MATCH |

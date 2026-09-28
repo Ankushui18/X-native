@@ -5,6 +5,42 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: the arc tool's canvas handles)
+
+The fourth feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Arc tool: create arcs, semi-circles, and rings* (help
+360040450173) — *"When you hover over the circle, a single handle will appear on
+the right-hand side"* … *"Now there will be three handles shown: The Sweep …
+The Start handle (which has a dot inside it) indicates where the arc begins …
+The Ratio handle at the center of the circle allows you to change the circle to
+a ring."*
+
+- **The Start handle exists.** `Canvas.tsx::arcHandlePoints` is the one owner of
+  the three controls — Sweep at the arc's end, Start at `startingAngle` (with
+  the article's dot inside it) and Ratio at `endingAngle × innerRadius` — used
+  by both the painter and the pointer path, so the dot a user sees is the dot
+  the pointer grabs. Before this, an arc showed only Sweep and Ratio: dragging
+  the start point ran the box's bottom-middle resize instead (`h` 100 → 50).
+- **A pie can become a ring on canvas.** The Ratio handle now appears as soon
+  as the sweep has opened a gap, at the centre of a pie, where dragging it out
+  sets `innerRadius` (measured 0 → 0.5). Before, it existed only once the
+  inspector had set `innerRadius > 0`, so the centre of a pie just moved the
+  ellipse.
+- **The hover affordance.** Figma's *"when you hover over the circle"*: an
+  unselected ellipse now paints its controls on hover, and a press on one
+  selects the layer and takes the handle rather than starting a move.
+- **The drag closes its own undo step.** `arc` was missing from the on-up `end`
+  list, so an arc drag leaked into the next gesture — measured: one undo after
+  an arc drag and a move drag reverted both.
+- Measured after (100px circle, zoom 1): Sweep drag → `endingAngle 90°` with the
+  box untouched; Start drag (50,100) → (0,50) → `startingAngle 90° → 180°`; Ratio
+  drag from a pie's centre → `innerRadius 0.5`; one undo now takes back only the
+  move. Pinned by `apps/web/src/ui/__tests__/arcHandles.test.mjs` (22
+  assertions, wired into `npm test`) — the undo case verified to fail without
+  the on-up fix. TypeScript only: no Rust file changed and the geometry guard
+  was not touched.
+
 ## [Unreleased] — 2026-09-28 (Figma parity: Smart selection gap handles)
 
 The third feature through the eight-step Figma parity pipeline recorded in
