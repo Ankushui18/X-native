@@ -1164,7 +1164,9 @@ const COALESCABLE = new Set<string>(["nudge", "move", "resize", "patch", "autoLa
 function coalesceKey(cmd: Command, lastType: string | null = null): string {
   if (cmd.type === "patch") {
     const c = cmd as Extract<Command, { type: "patch" }>;
-    const ids = "id" in c && c.id ? String(c.id) : "";
+    const ids = Array.isArray(c.ids) && c.ids.length > 0
+      ? c.ids.slice().sort().join(",")
+      : c.id ? String(c.id) : "";
     return `patch:${ids}:${Object.keys(c.patch ?? {}).sort().join(",")}`;
   }
   if (cmd.type === "moveGuide") {
@@ -2478,11 +2480,18 @@ export class MemoryEngine implements Engine {
         // `reorder`, which the panel drag goes through.
         if (isEffectivelyLocked(this.root(), dest.id)) break;
         if (dest !== this.root() && (isInstanceMember(this.root(), dest.id) || (!!dest.componentId && !dest.isComponent))) break;
+        const destWorld = dest === this.root() ? { x: 0, y: 0 } : (worldPos(this.root(), dest.id) ?? { x: 0, y: 0 });
         for (const id of cmd.ids) {
           const p = findParent(this.root(), id);
           const n = find(this.root(), id);
           if (!p || !n || id === dest.id || !!find(n, dest.id)) continue;
           if (isEffectivelyLocked(this.root(), id)) continue;
+
+          // Compute the node's world position before detaching
+          const wp = worldPos(this.root(), id);
+          const worldX = wp ? wp.x : n.x;
+          const worldY = wp ? wp.y : n.y;
+
           // Figma refuses to add an object that is larger than an auto layout
           // parent ("you won't see the option"), unless the drop bypasses with
           // ⌘/Ctrl. A hug axis always fits, since the frame grows around the
@@ -2499,14 +2508,18 @@ export class MemoryEngine implements Engine {
           // before this object joins it: an explicit slot wins, then the grid
           // cell under the point, then the flow gap under the point. Anything
           // else appends, as before.
-          const spot = this.gridSpotFor(dest, cmd.x, cmd.y);
+          const spotX = cmd.x !== undefined ? cmd.x : (worldX - destWorld.x);
+          const spotY = cmd.y !== undefined ? cmd.y : (worldY - destWorld.y);
+          const spot = this.gridSpotFor(dest, spotX, spotY);
           p.children = p.children.filter((c) => c.id !== id);
-          n.x = cmd.x;
-          n.y = cmd.y;
+          if (!dest.layout || cmd.absolute) {
+            n.x = cmd.x !== undefined ? cmd.x : (worldX - destWorld.x);
+            n.y = cmd.y !== undefined ? cmd.y : (worldY - destWorld.y);
+          }
           if (cmd.absolute) n.absolutePosition = true;
           const flowIdx =
             cmd.index === undefined && !spot && dest.layout && dest.layout.direction !== "grid"
-              ? flowInsertIndex(dest, cmd.x, cmd.y)
+              ? flowInsertIndex(dest, spotX, spotY)
               : null;
           const at = cmd.index ?? spot?.index ?? flowIdx ?? dest.children.length;
           dest.children.splice(Math.max(0, Math.min(at, dest.children.length)), 0, n);
@@ -2640,16 +2653,20 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "patch": {
-        const n = find(this.root(), cmd.id);
-        if (n) {
+        const targetIds: string[] = Array.isArray(cmd.ids) && cmd.ids.length > 0
+          ? cmd.ids
+          : cmd.id ? [cmd.id] : [];
+        for (const targetId of targetIds) {
+          const n = find(this.root(), targetId);
+          if (!n) continue;
           // Members inside an instance only override paint/text/effects: the
           // refused keys never reach the node or its override record.
           // (A local, not a cmd reassign: reassigning the switch discriminant
           // invalidates narrowing for every other case in this dispatch.)
           let incoming = n.kind === "text" || cmd.patch.kind === "text" ? textDimensionRule(cmd.patch) : cmd.patch;
-          if (isInstanceMember(this.root(), cmd.id)) {
+          if (isInstanceMember(this.root(), targetId)) {
             const stripped = stripMemberPatch(incoming);
-            if (!stripped) break;
+            if (!stripped) continue;
             incoming = stripped;
           }
           // Layout belongs to the main component: members were already stripped
@@ -2658,7 +2675,7 @@ export class MemoryEngine implements Engine {
           // the fragment is refused, exactly like a member's.
           let rootLayoutFrag: Partial<AutoLayout> | null = null;
           let prevLayoutFrag: unknown = null;
-          if (incoming.layout !== undefined && findInstanceRoot(this.root(), cmd.id)) {
+          if (incoming.layout !== undefined && findInstanceRoot(this.root(), targetId)) {
             rootLayoutFrag = layoutSpacingFragment(incoming.layout);
             const rest = { ...incoming };
             if (!rootLayoutFrag || !n.layout) {
@@ -2680,7 +2697,7 @@ export class MemoryEngine implements Engine {
                 if (Object.keys(n.variableBindings).length === 0) delete n.variableBindings;
               }
             }
-            if (!Object.keys(rest).length) break;
+            if (!Object.keys(rest).length) continue;
             incoming = rest;
           }
           // A hand-typed name pins the layer name; automatic naming stops.
@@ -2757,7 +2774,7 @@ export class MemoryEngine implements Engine {
           }
           // Content edits anywhere under a master republish it, so every
           // instance receives the update (master roots publish above).
-          if (!n.isComponent) this.publishIfMasterEdit(cmd.id);
+          if (!n.isComponent) this.publishIfMasterEdit(targetId);
         }
         break;
       }
@@ -5261,6 +5278,10 @@ function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: numbe
   const dh = newH - oldH;
   if (!dw && !dh) return;
   for (const c of parent.children) {
+    // Skip constraint solver for flow children in auto-layout parents
+    if (parent.layout && !c.absolutePosition) {
+      continue; // Let auto-layout handle positioning
+    }
     // After a hug the flow children are already packed where they belong, so
     // only the absolutely positioned ones follow the resize; constraints never
     // move a flow child. The cascade below still runs whole subtrees.

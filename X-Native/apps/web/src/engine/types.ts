@@ -1014,8 +1014,8 @@ export type Command =
       type: "reparent";
       ids: string[];
       parent: string;
-      x: number;
-      y: number;
+      x?: number;
+      y?: number;
       /** Explicit child-list slot; without it the point picks the slot in a
        *  flow or grid, and anything else appends. */
       index?: number;
@@ -1035,7 +1035,7 @@ export type Command =
   | { type: "duplicate"; dx?: number; dy?: number }
   | { type: "undo" }
   | { type: "redo" }
-  | { type: "patch"; id: string; patch: Partial<XNode> }
+  | { type: "patch"; id?: string; ids?: string[]; patch: Partial<XNode> }
   | { type: "autoLayout"; id: string; layout: AutoLayout | null }
   // "Auto layout is only supported on frames. If you have one or more layers
   // selected, an auto layout frame wraps them." Selecting a

@@ -46,13 +46,16 @@ function painted(n: XNode, kind: "fill" | "stroke"): string[] {
         if (c) out.push(c);
       }
     }
-  } else if (n.strokeVisible !== false && n.strokeWidth > 0) {
-    const base = hex(n.strokePaint);
-    if (base) out.push(base);
-    for (const s of n.strokes ?? []) {
-      if (s.visible === false) continue;
-      const c = hex(s.color);
-      if (c) out.push(c);
+  } else {
+    const isStrokeVisible = n.strokeVisible !== false; // undefined defaults to true
+    if (isStrokeVisible && n.strokeWidth > 0) {
+      const base = hex(n.strokePaint);
+      if (base) out.push(base);
+      for (const s of n.strokes ?? []) {
+        if (s.visible === false) continue;
+        const c = hex(s.color);
+        if (c) out.push(c);
+      }
     }
   }
   return [...new Set(out)];
