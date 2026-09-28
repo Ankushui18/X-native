@@ -85,6 +85,45 @@ function rectangleReference(x: number, y: number, w: number, h: number, d: numbe
   return { inside, boundary };
 }
 
+/** Intersections of adjacent *outward* offset edge lines at prominent convex
+ * tips. This is an analytical point reference, not a TS offset implementation:
+ * it cannot produce a complete outline or modify a document. Comparing these
+ * points catches a bevel/round result accidentally accepted as a miter, while
+ * avoiding the Euclidean disk's false rejection of valid long star miters. */
+export function prominentMiterTips(shape: RustOffsetChange, distance: number): Point[] {
+  if (distance <= 0 || (shape.kind !== "poly" && shape.kind !== "star")) return [];
+  const rings = inputRings(shape);
+  if (!rings) return [];
+  const tips: Point[] = [];
+  for (const ring of rings) {
+    const area = ring.reduce((sum, [x, y], i) => {
+      const [u, v] = ring[(i + 1) % ring.length];
+      return sum + x * v - y * u;
+    }, 0);
+    if (Math.abs(area) < 1e-8) continue;
+    const direction = Math.sign(area);
+    for (let i = 0; i < ring.length; i++) {
+      const prev = ring[(i - 1 + ring.length) % ring.length], p = ring[i], next = ring[(i + 1) % ring.length];
+      const ax = p[0] - prev[0], ay = p[1] - prev[1];
+      const bx = next[0] - p[0], by = next[1] - p[1];
+      const cross = ax * by - ay * bx;
+      const al = Math.hypot(ax, ay), bl = Math.hypot(bx, by);
+      if (cross * direction <= 1e-8 || al < 1e-8 || bl < 1e-8) continue;
+      const ox = p[0] + direction * distance * ay / al;
+      const oy = p[1] - direction * distance * ax / al;
+      const qx = p[0] + direction * distance * by / bl;
+      const qy = p[1] - direction * distance * bx / bl;
+      const t = ((qx - ox) * by - (qy - oy) * bx) / cross;
+      const tip: Point = [ox + t * ax, oy + t * ay];
+      const reach = Math.hypot(tip[0] - p[0], tip[1] - p[1]);
+      // Ignore nearly straight corners (no visible join difference) and
+      // corners beyond the Rust 4x miter limit (the intended fallback is bevel).
+      if (reach > 1.5 * distance && reach < 3.98 * distance) tips.push(tip);
+    }
+  }
+  return tips;
+}
+
 /** No canvas rasterization, native output or TS offset implementation is used
  * to produce the expected membership. Capped work happens once per proposed
  * edit (never in the paint loop). At least 96 decisive points must agree. */
@@ -111,6 +150,16 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
   }
   const width = x1 - x0, height = y1 - y0, step = Math.max(width, height) / 40;
   const epsilon = Math.max(0.04, step * 0.35, Math.abs(distance) * 0.01);
+  // A sharp star miter can extend almost four times the requested offset,
+  // well past any Euclidean disk around its vertex. Verify its actual tip
+  // analytically; bevel/round MUST NOT contain or touch the same tip.
+  const anchors = output.flat();
+  for (const [x, y] of prominentMiterTips(before, distance)) {
+    const px = x + before.x - after.x, py = y + before.y - after.y;
+    const atTip = anchors.some(([ax, ay]) => Math.hypot(ax - px, ay - py) < 0.1);
+    const filled = insideAndDistance(output, px, py).inside;
+    if (join === "miter" ? !atTip : atTip || filled) return false;
+  }
   let compared = 0, expectedInk = 0, observedInk = 0;
   for (let iy = 0; iy < 41; iy++) for (let ix = 0; ix < 41; ix++) {
     const x = x0 + (ix + 0.5) * width / 41, y = y0 + (iy + 0.5) * height / 41;
@@ -123,11 +172,13 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
       const signed = start.inside ? -start.distance : start.distance;
       expected = signed < distance;
       boundary = Math.abs(signed - distance);
-      // Signed Euclidean distance models ROUND corners exactly. For the
-      // other joins, a point within the affected vertex wedge cannot prove
-      // equivalence; compare only straight edge interiors and gross topology.
+      // Signed Euclidean distance models ROUND corners exactly. Miter tips
+      // can extend to the 4x limit: points in that wedge must be checked by
+      // the independent edge-line intersection above, not a circular SDF.
+      // Outside wedges, still compare straight edges and gross topology.
+      const wedge = join === "miter" ? 4 * Math.abs(distance) : Math.abs(distance);
       if (before.kind !== "ellipse" && join !== "round" &&
-          start.vertex <= Math.abs(distance) + epsilon) continue;
+          start.vertex <= wedge + epsilon) continue;
     }
     const end = insideAndDistance(output, x - after.x, y - after.y);
     if (boundary <= epsilon || end.distance <= epsilon) continue;
