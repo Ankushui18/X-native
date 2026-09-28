@@ -2,6 +2,7 @@
 use crate::*;
 use kurbo::{Affine, Circle, Rect, RoundedRect, RoundedRectRadii, Shape};
 use peniko::{Brush, Color, Fill, Gradient, Mix};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // -------------------------------------------------------------------- paint
@@ -526,7 +527,7 @@ pub enum StrokeJoin {
 /// The persisted model deliberately stores a small piecewise-linear profile,
 /// rather than sampled geometry: the renderer, exporter and Outline Stroke
 /// command can all resolve the same stations at their own flattening tolerance.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct VariableWidthPoint {
     pub position: f64,
     pub width_multiplier: f64,
