@@ -455,8 +455,10 @@ Three fixes to the section we borrowed from Sketch:
 
 ### Still open in this area
 
-- **Pattern fills**, Figma's fifth fill type, have no UI and no painter. Scaling
-  an image fill is the workaround we have.
+- **Pattern fills** are implemented for fills (run 9): source layer, Rectangular
+  or Hexagonal tiling, Direction, Scale, X/Y spacing and Alignment, live to the
+  source and kept by a snapshot if it is deleted, exported as SVG `<pattern>`.
+  Still open: pattern *strokes*, and text/effects inside a pattern's source.
 - The **crop tool** is the other real gap. We have Crop as an image *fit mode* -
   the fill moves inside the layer - but not Figma's modal: crop handles, a crop
   value slider, an aspect-ratio picker, Resize to fit, ⌥ mirroring the opposite
@@ -1689,7 +1691,7 @@ fields (exposure, contrast, saturation).
   own project, none a defect today.
 - The panel split handle (dragging the inspector wider) exists but has not been
   reviewed for the Dev Mode layout at narrow widths.
-- Colour: pattern fills are not implemented, and image cropping is a fit mode
+- Colour: pattern strokes are not implemented (pattern fills are), and image cropping is a fit mode
   rather than the interactive modal Figma has; both are written up at the end of
   the colour section above.
 - Layers: no multi-edit text or variants, no tidy up, no rotation-origin drag,

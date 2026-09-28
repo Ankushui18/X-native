@@ -47,6 +47,7 @@ import {
 } from "../engine/snapping";
 import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
+import { setPatternLookup } from "../engine/pattern";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
 import { coverCrop, normalizeCropRect } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
@@ -395,6 +396,16 @@ export function Canvas({
   /** Place-image queue: sources picked from the file dialog, placed one per
    *  click (a click on a shape fills it instead of adding a layer). */
   const [placing, setPlacing] = useState<{ srcs: { src: string; name: string }[]; i: number } | null>(null);
+  // Pattern fills resolve their source layer live, from any page, so an
+  // edit to the source repaints every layer that repeats it.
+  setPatternLookup((id) => {
+    const s = engine.snapshot();
+    for (const pg of s.pages) {
+      const hit = find(pg.root, id);
+      if (hit) return hit;
+    }
+    return undefined;
+  });
   const imgOf = (src: string) => {
     let im = imgs.current.get(src);
     if (!im && src) {

@@ -129,7 +129,8 @@ import { XButton, XPopover, XSegmentedControl, XSelect, XTabs } from "./x-ui";
 function isFractional(n: XNode) {
   return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
 }
-import { FillPicker, type FillValue } from "./FillPicker";
+import { FillPicker, type FillValue, type PatternSourceOption } from "./FillPicker";
+import { containsId } from "../engine/pattern";
 import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
 import {
@@ -5930,6 +5931,8 @@ function Design({
               imageHighlights={p.imageHighlights}
               imageShadows={p.imageShadows}
               imageTile={p.imageTile}
+              pattern={p.pattern}
+              patternSources={patternSourcesFor(snap, n)}
               recents={collectColors(snap.pages[snap.page].root)}
               background={fillBackground(snap.pages[snap.page].root, n)}
               largeText={isLargeText(n)}
@@ -5975,6 +5978,7 @@ function Design({
                   imageTint: patch.imageTint,
                   imageHighlights: patch.imageHighlights,
                   imageShadows: patch.imageShadows,
+                  pattern: patch.pattern,
                 });
               }}
             />
@@ -6004,6 +6008,8 @@ function Design({
             imageHighlights={n.imageHighlights}
             imageShadows={n.imageShadows}
             imageTile={n.imageTile}
+            pattern={n.pattern}
+            patternSources={patternSourcesFor(snap, n)}
             onCrop={() => window.dispatchEvent(new CustomEvent("x-native-crop-image", { detail: { id: n.id } }))}
             gx={n.fillGX}
             gy={n.fillGY}
@@ -8717,6 +8723,22 @@ export function copyPngNodes(nodes: XNode[]) {
   );
 }
 
+/** Every layer across the file a Pattern fill on `n` may repeat: not `n`,
+ *  nothing inside it, none of its ancestors, and not the page roots. */
+function patternSourcesFor(snap: Snapshot, n: XNode): PatternSourceOption[] {
+  const out: PatternSourceOption[] = [];
+  const walk = (m: XNode) => {
+    for (const c of m.children ?? []) {
+      if (containsId(n, c.id)) continue;
+      // An ancestor would contain the pattern itself: repeatable only below it.
+      if (c.w > 0 && c.h > 0 && !containsId(c, n.id)) out.push({ id: c.id, name: c.name || c.kind, node: c });
+      walk(c);
+    }
+  };
+  for (const pg of snap.pages) walk(pg.root);
+  return out;
+}
+
 function fillValuePatch(v: FillValue): Partial<XNode> {
   const type = v.type || "solid";
   const handles = handlesForFill(type);
@@ -8739,6 +8761,7 @@ function fillValuePatch(v: FillValue): Partial<XNode> {
     imageHighlights: v.imageHighlights || 0,
     imageShadows: v.imageShadows || 0,
     imageTile: v.imageTile ?? 100,
+    pattern: type === "pattern" ? v.pattern ?? {} : undefined,
     ...(v.gx != null
       ? { fillGX: v.gx, fillGY: v.gy, fillHX: v.hx, fillHY: v.hy }
       : handles
@@ -9094,6 +9117,8 @@ function ColorRow({
   imageHighlights = 0,
   imageShadows = 0,
   imageTile = 100,
+  pattern,
+  patternSources,
   gx,
   gy,
   hx,
@@ -9136,6 +9161,8 @@ function ColorRow({
   imageHighlights?: number;
   imageShadows?: number;
   imageTile?: number;
+  pattern?: FillValue["pattern"];
+  patternSources?: PatternSourceOption[];
   onCrop?: () => void;
   /** Property-first binding affordance (BindControl) after the row buttons. */
   bind?: ReactNode;
@@ -9276,6 +9303,7 @@ function ColorRow({
             imageHighlights,
             imageShadows,
             imageTile,
+            pattern,
             gx,
             gy,
             hx,
@@ -9289,6 +9317,7 @@ function ColorRow({
           noImage={noImage}
           stroke={stroke}
           onCrop={onCrop}
+          patternSources={patternSources}
           onChange={(v) => {
             if (onValueChange) {
               onValueChange(v);

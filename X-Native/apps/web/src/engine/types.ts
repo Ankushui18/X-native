@@ -92,7 +92,29 @@ export interface VariableWidthProfile {
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
-export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
+export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern";
+/**
+ * Figma's Pattern fill (help.figma.com 33025308147223): a *source layer*
+ * repeated across the fill, with Tile type, Direction, Scale, X/Y spacing and
+ * Alignment. Rendering reads the live source by id, so editing the source
+ * repaints every layer using it; `snapshot` is a copy taken when the source
+ * was chosen, so the fill keeps painting if the source is deleted.
+ */
+export interface PatternSpec {
+  source?: string;
+  snapshot?: XNode;
+  /** Rectangular grid, or hexagonal (alternate rows/columns offset by half a step). */
+  tile?: "grid" | "hex";
+  /** Hexagonal offset axis: horizontal offsets alternate rows, vertical alternate columns. */
+  direction?: "horizontal" | "vertical";
+  /** Tile size as a fraction of the source's size (1 = 100%). */
+  scale?: number;
+  /** Step between tile origins as a fraction of the scaled tile (1 = edge to edge). */
+  spacingX?: number;
+  spacingY?: number;
+  /** Where the lattice is anchored inside the layer box. */
+  align?: "start" | "center" | "end";
+}
 export type ImageFit = "fill" | "fit" | "crop" | "tile";
 export type EffectKind =
   | "drop-shadow"
@@ -433,6 +455,8 @@ export interface Paint {
   imageTint?: number;
   imageHighlights?: number;
   imageShadows?: number;
+  /** Pattern fill settings (type "pattern"). */
+  pattern?: PatternSpec;
 }
 
 /**
@@ -612,6 +636,8 @@ export interface XNode {
    * stacked order. Absent/empty means the node has a single fill.
    */
   fills?: Paint[];
+  /** Base-fill pattern settings when `fillType` is "pattern". */
+  pattern?: PatternSpec;
   /** Extra strokes painted over the base stroke; see StrokeLayer. */
   strokes?: StrokeLayer[];
   /** Id of the SharedStyle driving `fill`, if the fill is bound to one.
