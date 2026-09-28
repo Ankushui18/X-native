@@ -397,12 +397,14 @@ try {
   ] };
   const crossing = new glue.RustDocumentSession(JSON.stringify(crossingFile));
   const crossSource = JSON.parse(crossing.getShape(crossingId));
-  const crossPreview = JSON.parse(crossing.previewOffset(crossingId, 3, "round"));
+  // Insetting, rather than expanding, keeps the two touching lobes separate.
+  // A positive expansion can legitimately join them at their shared vertex.
+  const crossPreview = JSON.parse(crossing.previewOffset(crossingId, -3, "round"));
   assert.ok(crossPreview.path.filter(cmd => cmd[0] === "Z").length >= 2,
-    "the self-crossing must separate into valid contours");
-  assert.ok(offsetCoverageEquivalent(crossSource, crossPreview, 3, "round"),
+    "the self-crossing inset must separate into valid contours");
+  assert.ok(offsetCoverageEquivalent(crossSource, crossPreview, -3, "round"),
     "crossing source must have TS NONZERO fill parity");
-  assert.deepEqual(JSON.parse(crossing.offsetNode(crossingId, 3, "round")).offset, crossPreview);
+  assert.deepEqual(JSON.parse(crossing.offsetNode(crossingId, -3, "round")).offset, crossPreview);
   assert.equal(JSON.parse(crossing.undo()).offset.kind, "vector");
   assert.deepEqual(JSON.parse(crossing.redo()).offset, crossPreview);
   crossing.free();
