@@ -23,6 +23,119 @@
   src: url(/fonts/inter-latin-700-normal.woff2) format("woff2");
 }
 
+/* Bundled editor font choices: do not silently fall back to Inter. */
+@font-face {
+  font-family: "Roboto";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/roboto-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Geist";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/geist-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/plus-jakarta-sans-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Outfit";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/outfit-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Fira Code";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/fira-code-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/jetbrains-mono-latin-wght-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 100;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-100-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 200;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-200-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 300;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-300-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-400-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-500-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-600-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-700-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 800;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-800-normal.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: Poppins;
+  font-weight: 900;
+  font-display: swap;
+  src: url(/fonts/poppins-latin-900-normal.woff2) format("woff2");
+}
+
 /* X-Native signature theme (Light) — warm studio white, graphite canvas, emerald accent. Distinct from violet/indigo clones. */
 :root,
 html[data-theme="light"] {
@@ -635,9 +748,11 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   position: absolute;
   margin: 0;
   padding: 0;
-  border: 1.5px solid var(--blue);
+  /* An inset border moved the glyph origin 1.5px when Canvas text was
+     replaced by the editor. Draw the focus ring outside the content box. */
+  border: 0;
   background: transparent;
-  outline: none;
+  outline: 1.5px solid var(--blue);
   resize: none;
   overflow: hidden;
   caret-color: var(--blue);

@@ -408,6 +408,8 @@ export interface GradientStop {
 /**
  * A character-level rich text styling run (matching x-core::TextRun).
  */
+/** Styled text range in textarea-compatible UTF-16 [start, end) offsets.
+ * Overrides fall back to the text layer's properties. */
 export interface TextRun {
   start: number;
   end: number;
