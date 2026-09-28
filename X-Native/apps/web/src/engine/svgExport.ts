@@ -22,6 +22,7 @@ import { outlineStroke, outlineVariableStroke, shapePoly } from "./geometry";
 import { applyTextCase, valignApplies } from "../ui/textLayout";
 import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
+import { patternPeriod, patternSettings, patternSourceNode } from "./pattern";
 
 export function escXml(value: string) {
   return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[ch] || ch);
@@ -477,6 +478,46 @@ function outlinedText(n: XNode, paint: string, filter: string): string {
 }
 
 /** One layer, its effects, and the layers inside it. */
+let patternDepth = 0;
+
+/** The `<pattern>` def for a pattern fill, sharing the canvas lattice (pattern.ts). */
+export function patternDef(n: XNode, id: string, opts: SvgOpts = {}): { def: string; paint: string } | null {
+  const src = patternSourceNode(n.pattern);
+  if (!src || src.w <= 0 || src.h <= 0 || patternDepth > 2) return null;
+  const p = patternSettings(n.pattern);
+  const per = patternPeriod(p, src.w, src.h, n.w, n.h);
+  const pw = per.hex && per.vertical ? per.stepX * 2 : per.stepX;
+  const ph = per.hex && !per.vertical ? per.stepY * 2 : per.stepY;
+  const base: [number, number][] = [[0, 0]];
+  if (per.hex && !per.vertical) base.push([per.stepX / 2, per.stepY]);
+  if (per.hex && per.vertical) base.push([per.stepX, per.stepY / 2]);
+  patternDepth++;
+  let inner: string;
+  try {
+    inner = svgNode({ ...src, x: 0, y: 0, rotation: 0 }, true, opts);
+  } finally {
+    patternDepth--;
+  }
+  // Neighbouring copies so tiles larger than a step (spacing under 100%) or
+  // offset past the cell edge still wrap seamlessly.
+  const copies: string[] = [];
+  for (const [bx, by] of base) {
+    for (const dx of [-pw, 0, pw]) {
+      for (const dy of [-ph, 0, ph]) {
+        const x = bx + dx;
+        const y = by + dy;
+        if (x >= pw || y >= ph || x + per.tw <= 0 || y + per.th <= 0) continue;
+        copies.push(`<g transform="translate(${round(x)} ${round(y)}) scale(${round(p.scale)})">${inner}</g>`);
+      }
+    }
+  }
+  const pid = `${id}-pattern`;
+  return {
+    def: `<pattern id="${pid}" patternUnits="userSpaceOnUse" x="${round(per.ox)}" y="${round(per.oy)}" width="${round(pw)}" height="${round(ph)}">${copies.join("")}</pattern>`,
+    paint: `url(#${pid})`,
+  };
+}
+
 export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
   if (!n.visible) return "";
   // Slices never render: they are a crop region, not artwork. A frame that
@@ -488,7 +529,13 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
   const stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
   const defs: string[] = [];
   let paint = fill;
-  if (fill !== "none" && !n.imageSrc) {
+  if (fill !== "none" && n.fillType === "pattern") {
+    // A pattern exports as a real <pattern> of its source layer; with no
+    // resolvable source it paints nothing, matching the canvas.
+    const pd = patternDef(n, id, opts);
+    if (pd) defs.push(pd.def);
+    paint = pd ? pd.paint : "none";
+  } else if (fill !== "none" && !n.imageSrc) {
     const g = gradientDefs(n, id);
     if (g) {
       defs.push(g.def);

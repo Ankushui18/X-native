@@ -1,4 +1,6 @@
-import type { GradientStop, XNode } from "./types";
+import type { GradientStop, PathPoint, XNode } from "./types";
+import { patternCells, patternPeriod, patternSettings, patternSourceNode } from "./pattern";
+import { shapePoly } from "./geometry";
 import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
 import { dashArray, dashOffset, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
@@ -245,6 +247,7 @@ export function paintStack(
       imageHighlights: p.imageHighlights ?? 0,
       imageShadows: p.imageShadows ?? 0,
       imageCrop: undefined,
+      pattern: p.pattern,
       fills: undefined,
     };
     ctx.save();
@@ -268,6 +271,10 @@ function paintOnePaint(
   if (n.fillType === "image") {
     const im = n.imageSrc ? imgOf?.(n.imageSrc) : undefined;
     if (im) paintImageFill(ctx, n, im, sx, sy, sw, sh);
+    return;
+  }
+  if (n.fillType === "pattern") {
+    paintPatternFill(ctx, n, sx, sy, sw, sh, imgOf);
     return;
   }
   const a = n.fill;
@@ -318,6 +325,144 @@ function paintOnePaint(
   }
   ctx.fillStyle = cssRgba(a);
   ctx.fill(fillRule);
+}
+
+/* ---- pattern fills ------------------------------------------------------ */
+
+const tileCache = new Map<string, HTMLCanvasElement>();
+let patternDepth = 0;
+
+function tracePoly(ctx: CanvasRenderingContext2D, pts: PathPoint[], ox: number, oy: number, k: number, closed: boolean) {
+  ctx.beginPath();
+  pts.forEach((pt, i) => {
+    const x = ox + pt.x * k;
+    const y = oy + pt.y * k;
+    if (i === 0) return ctx.moveTo(x, y);
+    const pr = pts[i - 1];
+    if (pr.ox || pr.oy || pt.ix || pt.iy) {
+      ctx.bezierCurveTo(ox + (pr.x + (pr.ox || 0)) * k, oy + (pr.y + (pr.oy || 0)) * k, ox + (pt.x + (pt.ix || 0)) * k, oy + (pt.y + (pt.iy || 0)) * k, x, y);
+    } else ctx.lineTo(x, y);
+  });
+  if (closed && pts.length > 2) {
+    const f = pts[0];
+    const l = pts[pts.length - 1];
+    if (l.ox || l.oy || f.ix || f.iy) {
+      ctx.bezierCurveTo(ox + (l.x + (l.ox || 0)) * k, oy + (l.y + (l.oy || 0)) * k, ox + (f.x + (f.ix || 0)) * k, oy + (f.y + (f.iy || 0)) * k, ox + f.x * k, oy + f.y * k);
+    }
+    ctx.closePath();
+  }
+}
+
+/** Trace a source layer's outline at device scale `k`, origin (ox, oy). */
+function traceSource(ctx: CanvasRenderingContext2D, m: XNode, ox: number, oy: number, k: number) {
+  const radii = m.cornerRadii ?? [];
+  const square = !radii.some((r) => r > 0) && !(m.cornerSmoothing ?? 0);
+  if ((m.kind === "rect" || m.kind === "frame" || m.kind === "component" || m.kind === "instance") && square) {
+    ctx.beginPath();
+    ctx.rect(ox, oy, m.w * k, m.h * k);
+    return;
+  }
+  const closed = m.kind === "vector" || m.kind === "boolean" ? m.closed !== false : m.kind !== "line" && m.kind !== "arrow";
+  tracePoly(ctx, shapePoly(m), ox, oy, k, closed);
+}
+
+/** Paint a source subtree (fills and plain strokes) into a tile context. */
+function drawSourceTree(
+  ctx: CanvasRenderingContext2D,
+  m: XNode,
+  ox: number,
+  oy: number,
+  k: number,
+  imgOf?: (src: string) => HTMLImageElement | undefined,
+) {
+  if (m.visible === false) return;
+  ctx.save();
+  ctx.globalAlpha *= m.opacity ?? 1;
+  const w = m.w * k;
+  const h = m.h * k;
+  if (m.kind !== "text" && m.kind !== "group") {
+    traceSource(ctx, m, ox, oy, k);
+    if (m.fillVisible !== false && m.fill && (!isNone(m.fill) || m.fillType === "image" || m.fillType === "pattern")) {
+      ctx.save();
+      ctx.globalAlpha *= m.fillOpacity ?? 1;
+      paintFill(ctx, m, ox, oy, w, h, imgOf);
+      ctx.restore();
+    } else if (m.fills?.length) {
+      paintStack(ctx, m, ox, oy, w, h, imgOf);
+    }
+    if (m.strokeVisible && m.strokeWidth > 0 && !isNone(m.strokePaint)) {
+      traceSource(ctx, m, ox, oy, k);
+      ctx.save();
+      ctx.globalAlpha *= m.strokeOpacity ?? 1;
+      ctx.strokeStyle = cssRgba(m.strokePaint);
+      ctx.lineWidth = m.strokeWidth * k;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  for (const c of m.children ?? []) drawSourceTree(ctx, c, ox + c.x * k, oy + c.y * k, k, imgOf);
+  ctx.restore();
+}
+
+/** The source rasterised at device scale `k` (cached by content + scale). */
+function patternTile(src: XNode, k: number, imgOf?: (src: string) => HTMLImageElement | undefined): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const tw = Math.ceil(src.w * k);
+  const th = Math.ceil(src.h * k);
+  if (tw < 1 || th < 1 || tw > 2048 || th > 2048) return null;
+  const key = `${k.toFixed(4)}|${JSON.stringify(src)}`;
+  const hit = tileCache.get(key);
+  if (hit) {
+    tileCache.delete(key);
+    tileCache.set(key, hit);
+    return hit;
+  }
+  const c = document.createElement("canvas");
+  c.width = tw;
+  c.height = th;
+  const tctx = c.getContext("2d");
+  if (!tctx) return null;
+  drawSourceTree(tctx, src, 0, 0, k, imgOf);
+  tileCache.set(key, c);
+  while (tileCache.size > 48) tileCache.delete(tileCache.keys().next().value as string);
+  return c;
+}
+
+/**
+ * Pattern fill: the source layer tiled over the layer box on a rectangular or
+ * hexagonal lattice (see pattern.ts), clipped to the current path. No source
+ * (never picked, or deleted with no snapshot) paints nothing — never a flat
+ * colour pretending to be a pattern.
+ */
+export function paintPatternFill(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  imgOf?: (src: string) => HTMLImageElement | undefined,
+) {
+  const src = patternSourceNode(n.pattern);
+  if (!src || src.w <= 0 || src.h <= 0 || n.w <= 0 || n.h <= 0 || patternDepth > 2) return;
+  const p = patternSettings(n.pattern);
+  // Device px per layer unit (the canvas folds zoom into sx/sw; sh agrees).
+  const z = sw / n.w;
+  void sh;
+  const per = patternPeriod(p, src.w, src.h, n.w, n.h);
+  patternDepth++;
+  try {
+    const tile = patternTile({ ...src, x: 0, y: 0 }, z * p.scale, imgOf);
+    if (!tile) return;
+    ctx.save();
+    ctx.clip();
+    for (const cell of patternCells(per, n.w, n.h)) {
+      ctx.drawImage(tile, sx + cell.x * z, sy + cell.y * z, per.tw * z, per.th * z);
+    }
+    ctx.restore();
+  } finally {
+    patternDepth--;
+  }
 }
 
 function paintDiamond(
@@ -673,10 +818,14 @@ export function fillCompositeAlpha(n: XNode): number {
   let t = 1;
   const paints = (n.fills ?? []).filter((p) => p.visible !== false);
   for (const p of paints) {
+    // A pattern leaves gaps between tiles, so it never guarantees coverage.
+    if (p.type === "pattern") continue;
     t *= 1 - Math.min(p.opacity ?? 1, parseHex(p.color).a, stopMin(p.stops));
   }
   if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
     t *= 1 - (n.fillOpacity ?? 1);
+  } else if (n.fillType === "pattern") {
+    /* gaps between tiles: no guaranteed coverage */
   } else if (n.fillVisible !== false && !!n.fill && !isNone(n.fill)) {
     t *= 1 - Math.min(n.fillOpacity ?? 1, parseHex(n.fill).a, stopMin(n.gradientStops));
   }

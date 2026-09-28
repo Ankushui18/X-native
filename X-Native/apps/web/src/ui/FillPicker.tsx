@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { GradientStop } from "../engine/types";
+import type { GradientStop, PatternSpec, XNode } from "../engine/types";
+import { PATTERN_ALIGNS, PATTERN_DIRECTIONS, PATTERN_TILES, patternSettings, snapshotForPattern } from "../engine/pattern";
 import { Icon, caretSize } from "./icons";
 import { useRestoreFocus } from "./a11y";
 import {
@@ -33,6 +34,8 @@ import {
   type ImageFit,
 } from "./color";
 import { rememberImage } from "../engine/assets";
+import { Tooltip } from "./Tooltip";
+import { XSegmentedControl, XSelect } from "./x-ui";
 import { mixHex } from "../engine/paint";
 import { useEscape } from "./escape";
 
@@ -59,6 +62,15 @@ export interface FillValue {
   hy?: number;
   /** Multi-stop ramp; empty falls back to the `color`/`second` pair. */
   stops?: GradientStop[];
+  /** Pattern fill settings (type "pattern"). */
+  pattern?: PatternSpec;
+}
+
+/** A layer the Pattern fill can repeat. */
+export interface PatternSourceOption {
+  id: string;
+  name: string;
+  node: XNode;
 }
 
 /** Resolve the ramp a gradient should show, materialising the legacy pair. */
@@ -80,6 +92,7 @@ export function FillPicker({
   noImage,
   stroke,
   onCrop,
+  patternSources,
   onChange,
   onClose,
 }: {
@@ -92,6 +105,9 @@ export function FillPicker({
   noImage?: boolean;
   /** Enter the canvas crop tool (image fills only; base fill only). */
   onCrop?: () => void;
+  /** Layers a Pattern fill may use as its source (the layer itself and its
+   *  descendants are excluded by the caller). */
+  patternSources?: PatternSourceOption[];
   /** Stroke paint: gradient/image/blend strokes are unimplemented, so the
    *  picker offers Solid only and hides the dead blend menu. */
   stroke?: boolean;
@@ -279,6 +295,7 @@ export function FillPicker({
   const rgb = hsvToRgb(hsv.h, hsv.s, hsv.v);
   const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
   const image = value.type === "image";
+  const pattern = value.type === "pattern";
   const gradient =
     value.type === "linear" || value.type === "radial" || value.type === "angular" || value.type === "diamond";
   const docs = useMemo(() => {
@@ -437,7 +454,7 @@ export function FillPicker({
         </button>
         {typeOpen && (
           <div className="type-menu">
-            {FILL_TYPES.filter((t) => (stroke ? t.id === "solid" : !noImage || t.id !== "image")).map((t) => (
+            {FILL_TYPES.filter((t) => (stroke ? t.id === "solid" : !noImage || (t.id !== "image" && t.id !== "pattern"))).map((t) => (
               <button
                 key={t.id}
                 className={value.type === t.id ? "on" : ""}
@@ -461,7 +478,7 @@ export function FillPicker({
         </button>
       </div>
 
-      {!image && (
+      {!image && !pattern && (
         <>
           <div
             className="sv"
@@ -517,7 +534,7 @@ export function FillPicker({
         <i className="hue-mark" style={{ left: `${value.opacity}%` }} />
       </div>
 
-      {!image && (
+      {!image && !pattern && (
         <div className="hex-row">
           <span className="swatch" style={{ background: toHex(rgb.r, rgb.g, rgb.b) }} />
           <button
@@ -543,7 +560,7 @@ export function FillPicker({
         </div>
       )}
 
-      {!image && (
+      {!image && !pattern && (
         <div className="a11y-row">
           <button
             className={`blend-row${a11y ? " on" : ""}`}
@@ -710,6 +727,96 @@ export function FillPicker({
         </div>
       )}
 
+      {pattern && (() => {
+        const ps = patternSettings(value.pattern);
+        const setP = (patch: Partial<PatternSpec>) =>
+          onChange({ ...value, type: "pattern", pattern: { ...value.pattern, ...patch } });
+        const pct = (label: string, key: "scale" | "spacingX" | "spacingY", title: string) => (
+          <label className="adj-row">
+            <Tooltip label={title}>
+              <span>{label}</span>
+            </Tooltip>
+            <input
+              type="number"
+              min={key === "scale" ? 1 : 5}
+              max={10000}
+              aria-label={`Pattern ${label}`}
+              value={Math.round(ps[key] * 100)}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v)) setP({ [key]: v / 100 } as Partial<PatternSpec>);
+              }}
+            />
+            <em>%</em>
+          </label>
+        );
+        const sources = patternSources ?? [];
+        const missing = !!value.pattern?.source && !sources.some((o) => o.id === value.pattern?.source);
+        return (
+          <div className="img-fill pattern-fill">
+            <label className="adj-row">
+              <Tooltip label="The layer repeated across this fill">
+                <span>Source</span>
+              </Tooltip>
+              <XSelect
+                ariaLabel="Pattern source"
+                value={value.pattern?.source ?? ""}
+                options={[
+                  ...(value.pattern?.source ? [] : [{ value: "", label: "Select source" }]),
+                  ...(missing
+                    ? [{ value: value.pattern?.source ?? "", label: `${value.pattern?.snapshot?.name ?? "Deleted layer"} (deleted)` }]
+                    : []),
+                  ...sources.map((o) => ({ value: o.id, label: o.name })),
+                ]}
+                onChange={(id) => {
+                  const o = sources.find((x) => x.id === id);
+                  if (o) setP({ source: o.id, snapshot: snapshotForPattern(o.node) });
+                }}
+              />
+            </label>
+            <div className="adj-label">Tile type</div>
+            <XSegmentedControl
+              ariaLabel="Pattern tile type"
+              value={ps.tile}
+              options={PATTERN_TILES.map((t) => ({ value: t.id, label: t.label }))}
+              onChange={(v) => setP({ tile: v as PatternSpec["tile"] })}
+            />
+            <div className="adj-label">Direction</div>
+            <XSegmentedControl
+              ariaLabel="Pattern direction"
+              value={ps.direction}
+              options={PATTERN_DIRECTIONS.map((t) => ({ value: t.id, label: t.label }))}
+              onChange={(v) => setP({ direction: v as PatternSpec["direction"] })}
+            />
+            {pct("Scale", "scale", "Tile size as a percent of the source layer")}
+            {pct("X spacing", "spacingX", "Horizontal step between tiles; 100% places tiles edge to edge")}
+            {pct("Y spacing", "spacingY", "Vertical step between tiles; 100% places tiles edge to edge")}
+            <div className="adj-label">Alignment</div>
+            <XSegmentedControl
+              ariaLabel="Pattern alignment"
+              value={ps.align}
+              options={PATTERN_ALIGNS.map((t) => ({ value: t.id, label: t.label }))}
+              onChange={(v) => setP({ align: v as PatternSpec["align"] })}
+            />
+            <label className="adj-row">
+              <span>Opacity</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                aria-label="Pattern opacity"
+                value={Math.round(value.opacity)}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (Number.isFinite(v)) onChange({ ...value, opacity: Math.max(0, Math.min(100, v)) });
+                }}
+              />
+              <em>%</em>
+            </label>
+          </div>
+        );
+      })()}
+
       {gradient && (
         <GradientStops
           value={value}
@@ -720,7 +827,7 @@ export function FillPicker({
         />
       )}
 
-      {!image && (
+      {!image && !pattern && (
         <div className="swatch-grid">
           {docs.map((c) => (
             <button

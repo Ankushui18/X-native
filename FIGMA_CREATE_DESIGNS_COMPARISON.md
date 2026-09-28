@@ -60,6 +60,21 @@ rule is an approximation, and the Rust engine
 shape) still differs from it for text. A font-metric-exact rule needs a metrics source in
 the engine and is its own task.
 
+### Pipeline run 9 — Color · Pattern fills ✅ (2026-09-28)
+
+| step | result |
+| --- | --- |
+| 1 · Figma docs | *Create a strawberry illustration using pattern fills, vector networks, and effects* ([33025308147223](https://help.figma.com/hc/en-us/articles/33025308147223)): *"click the plus to add another fill and choose **Pattern** as the fill type. Click **Select source**, then select the **Seed** layer. Use the settings to configure the pattern: Tile type: Hexagonal, Direction: Horizontal, Scale: 100%, X spacing: 370%, Y spacing: 100%, Alignment: Center"*; *"Pattern fills persist even if the source layer is deleted"*; *"Pattern fills are dynamic. If you update the pattern's source, the pattern will automatically update on each layer where its used."* Corroborated by [33990671683607](https://help.figma.com/hc/en-us/articles/33990671683607). |
+| 2 · Living record | the **Patterns as a fill** row in §5 below; `docs/notes/editor-interface-parity.md` colour section. |
+| 3 · Audit (**measured**) | Probe (deleted): `FILL_TYPES` = Solid, Linear, Radial, Angular, Diamond, Image — no Pattern (source-measured; the jsdom picker popover was not opened in that probe). A base `"pattern"` fill painted **r=255 g=0 b=0** at (50,50), byte-identical to a solid control; a stacked one painted flat green; no node field could name a source; `svgNode` emitted `fill="#ff0000"` with no `<pattern>`. |
+| 4 · Deviation | **D1** no Pattern in the menu. **D2/D3** `"pattern"` silently painted as a flat colour (base and stacked). **D4** no source / tile / direction / scale / spacing / alignment model. **D5** export flattened it. |
+| 5 · Command / WASM | **No new command** (`patch` carries `pattern`). **TypeScript only**: no Rust file, no WASM boundary, no geometry guard touched. `pattern` is optional and deliberately *not* in `webDocumentSession`'s frozen `NODE_KEYS_V1`, so a document using it stays on the TS path until its native semantics are reviewed. |
+| 6 · UI / Canvas | `PatternSpec { source, snapshot, tile: grid\|hex, direction, scale, spacingX, spacingY, align }` on the base fill and on `Paint`. The canvas registers a live lookup (`setPatternLookup`, all pages), so editing the source repaints every user; choosing a source stores a snapshot, so deleting it keeps the fill painting. The source subtree is rasterised at device scale into a cached tile and drawn on the lattice (`patternCells`, shared with export), clipped to the shape. No source paints **nothing**, never a flat colour. The picker's **Pattern** entry shows Source (`XSelect`), Tile type / Direction / Alignment (`XSegmentedControl`), Scale, X/Y spacing and Opacity; the colour area is hidden. SVG exports a real `<pattern patternUnits="userSpaceOnUse">` (hex doubles the cell). |
+| 7 · Tests | `apps/web/src/ui/__tests__/patternFill.test.mjs` — **44 passed**, wired into `npm test`: device pixels are periodic (10 on / 10 off), scale 200% and X spacing 150% change the period, horizontal and vertical hex offsets, Start/Center/End alignment, recolouring the source repaints the target, deleting the source keeps tiling, unset source leaves the page white, stacked pattern fills, SVG `<pattern>`, and the real picker (menu lists Pattern, all 8 controls, source stores id + snapshot, tile/direction write through). Load-bearing: removing the painter branch fails 15, zeroing the hex offset fails 1, dropping the menu entry fails 3. Whole `npm test` green; `tsc -b` + `vite build` clean; drift ratchet unchanged (`FillPicker.tsx` stays at 12/2/15/19/1). |
+| 8 · Checklist | the §5 row moves MISSING → MATCH for fills; strokes stay MISSING. |
+
+**Residual, recorded rather than hidden:** (1) **pattern strokes** are not implemented (the picker's stroke mode stays Solid-only); (2) the tile rasteriser paints a source's fills, stacked fills and plain centre strokes, but not its **text, effects, masks or stroke alignment/dashes**; (3) **spacing semantics** are our reading — 100% = tiles edge to edge, step = tile × spacing — the article gives values but not the definition; (4) the snapshot is taken when the source is *picked*, so after deletion the fill shows the source as it was then, not its last edit; (5) SVG export covers the **base** pattern fill only, like the other stacked paints; (6) tiles over 2048 device px are skipped rather than downsampled.
+
 ### Pipeline run 8 — Inspector polish · a section has no clip-content property ✅ (2026-09-28)
 
 | step | result |
@@ -242,7 +257,7 @@ the task's constraint and the geometry guard.
 | Blend modes | per layer, fill and effect | `blendMode`; `effects.test.mjs` | MATCH | carried §8 |
 | Images | place, adjust, crop | `engine/assets.ts` + image fills; `images.test.mjs` | MATCH | carried §9 |
 | Eyedropper | sample a colour from the canvas | armed from the colour picker (`FillPicker.tsx:454`, tooltip "Eyedropper (I)") and bound to `I` in `ui/chrome.tsx:2107` | MATCH | measured |
-| Patterns as a fill or stroke | Figma's repeating-pattern paint | no pattern paint type in `engine/types.ts` / `paint.ts` | MISSING | measured |
+| Patterns as a fill | Pattern is a fill type: a source layer + Tile type, Direction, Scale, X/Y spacing, Alignment; dynamic, persists if the source is deleted ([33025308147223](https://help.figma.com/hc/en-us/articles/33025308147223)) | `FillType` `"pattern"` + `PatternSpec` (`engine/types.ts`), lattice in `engine/pattern.ts`, painter `paintPatternFill` (`engine/paint.ts`), `<pattern>` export (`engine/svgExport.ts`), Pattern controls in `ui/FillPicker.tsx`; `patternFill.test.mjs` (44) | MATCH (fill) · stroke MISSING | measured, run 9 |
 
 ### 6 · Additional properties
 

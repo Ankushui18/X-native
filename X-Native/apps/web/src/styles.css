@@ -2078,6 +2078,22 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   font-variant-numeric: tabular-nums;
 }
 .hex-row .css-field { text-transform: none; font-size: 10px; }
+/* Pattern fill controls (Source, Tile type, Direction, Scale, spacing, Alignment). */
+.pattern-fill .seg { display: flex; }
+.pattern-fill .seg button { flex: 1; }
+.pattern-fill .adj-label { font-size: 10px; color: var(--muted); margin-top: 4px; }
+.pattern-fill .adj-row input[type="number"],
+.pattern-fill .adj-row .x-select {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  font-size: 11px;
+  background: var(--input);
+  color: var(--text);
+  border: 0;
+  border-radius: 4px;
+  padding: 0 6px;
+}
 
 .ctx {
   position: fixed;

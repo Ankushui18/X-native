@@ -1,4 +1,4 @@
-export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image";
+export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern";
 export type ColorModel = "hex" | "rgb" | "css" | "hsl" | "hsb";
 export type ImageFit = "fill" | "fit" | "crop" | "tile";
 
@@ -9,6 +9,7 @@ export const FILL_TYPES: { id: FillType; label: string }[] = [
   { id: "angular", label: "Angular" },
   { id: "diamond", label: "Diamond" },
   { id: "image", label: "Image" },
+  { id: "pattern", label: "Pattern" },
 ];
 
 export const COLOR_MODELS: { id: ColorModel; label: string }[] = [
