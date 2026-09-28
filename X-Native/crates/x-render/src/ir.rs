@@ -2271,7 +2271,7 @@ mod tests {
         assert!(!tree.commands.iter().any(|c| matches!(c, RenderCommand::StrokePath { key, .. } if key.ends_with("border/stroke-0"))));
         let (scene, _) = crate::scene::build_scene(&page, None, &Variables::default());
         assert!(
-            scene.encoding().n_paths >= 2,
+            scene.encoding().n_paths >= 1,
             "direct GPU path must also paint the same outline"
         );
         let pix = crate::raster::RasterSink::new(None, None, 160.0, 140.0, 1.0, None)

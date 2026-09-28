@@ -514,7 +514,7 @@ fn dash_intervals(
             return Err("stroke dash expansion exceeds the geometry budget");
         }
         let take = remaining.min(line.total - cursor);
-        if index % 2 == 0 && take > EPS {
+        if index.is_multiple_of(2) && take > EPS {
             out.push((cursor, cursor + take));
         }
         cursor += take;

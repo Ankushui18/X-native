@@ -989,7 +989,7 @@ const OUTLINE_SESSION_COORD_LIMIT: f64 = 1_100_000_000.0;
 /// anchors at `MAX_OUTLINE_ANCHORS`, so this is the largest possible number of
 /// anchors plus `Close` commands (without accepting a larger hostile JSON path).
 const OUTLINE_SESSION_MAX_PATH_COMMANDS: usize =
-    MAX_OUTLINE_ANCHORS + (MAX_OUTLINE_ANCHORS + 2) / 3;
+    MAX_OUTLINE_ANCHORS + MAX_OUTLINE_ANCHORS.div_ceil(3);
 
 fn path_command_is_session_safe(command: &PathCmd) -> bool {
     let finite = |value: f64| value.is_finite() && value.abs() <= OUTLINE_SESSION_COORD_LIMIT;
