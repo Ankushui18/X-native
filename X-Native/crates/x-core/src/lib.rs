@@ -22,6 +22,7 @@ pub mod library;
 pub mod lint;
 pub mod modifier;
 pub mod node;
+pub mod offset_path;
 pub mod paint;
 pub mod pins;
 pub mod plugin;
