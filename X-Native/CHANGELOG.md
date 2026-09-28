@@ -5,6 +5,43 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: Smart selection gap handles)
+
+The third feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Arrange layers with Smart selection* (help 360040450233) —
+*"To make a Smart selection, all layers must be an equal distance apart and
+overlap on either the x or y axis (1D) ... additional pink handles will appear
+between each layer. These handles allow you to adjust the vertical or horizontal
+spacing between layers."* … *"Click and drag the handle to adjust the space
+between layers. A tooltip above your cursor shows the current space between
+layers, in pixels."*
+
+- **Equal-gap dragging.** `snapping.ts::smartSelectionGaps` is the one owner of
+  the 1D run: the selected boxes must share a cross-axis band and every gap must
+  equal the first (a drifting pair ends the run, touching boxes have nothing to
+  drag), and it returns one `GapBadge` per gap — the same shape the move-snapping
+  feedback already painted. `Canvas.tsx` keeps those handles in `smartGaps`,
+  recomputed from the snapshot so a nudge that breaks the equality drops them,
+  paints one pink pill per gap at rest (Figma's pink handles, with the gap shown
+  in pixels) and hit-tests them in the multi-selection press path, ahead of the
+  marquee fall-through.
+- **`distributeSpacing`.** A drag dispatches the new command
+  (`engine/types.ts`, `engine/memory.ts`), which anchors the run at its first
+  layer and re-places every following layer at `size + gap`, so the space grows
+  away from the handle in the direction dragged, order and sizes untouched,
+  locked layers and instance members skipped exactly as `distribute` skips them.
+  Shift steps by the Big nudge setting and a negative value clamps to 0.
+- **Measured before → after** (three 100px squares, gaps 20/20, all selected): a
+  press on the handle at (110, 50) used to clear the selection and leave the row
+  at 0 / 120 / 240; the same drag by 40px now lands 0 / 160 / 320 with both gaps
+  at 60. A move drag of a layer itself is unchanged.
+- Pinned by `apps/web/src/ui/__tests__/smartSelection.test.mjs` (26 assertions,
+  wired into `npm test`); TypeScript only — no Rust file changed and the
+  geometry guard was not touched. The article's Tidy up tool, its per-object
+  pink rings, the sidebar "space between" fields and the ⌘-swap reorder remain
+  open (master list §5.9 / §5.15).
+
 ## [Unreleased] — 2026-09-28 (Figma parity: fill children use the border-box model)
 
 The second feature through the eight-step Figma parity pipeline recorded in

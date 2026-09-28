@@ -36,7 +36,7 @@ recon task, not a settled fact.
 | 2 Canvas gestures (drag) | 28 | 26 | 1 | 0 | 1 | 0 |
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
 | 4 Menus & palettes | 10 | 10 | 0 | 0 | 0 | 0 |
-| 5 Layers, pages, sections | 14 | 13 | 1 | 0 | 0 | 0 |
+| 5 Layers, pages, sections | 15 | 14 | 1 | 0 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 20 | 0 | 0 | 0 | 0 |
 | 7 Auto layout | 16 | 15 | 0 | 0 | 0 | 1 |
 | 8 Fill, stroke, effects, colour | 25 | 25 | 0 | 0 | 0 | 0 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **286** | **34** | **0** | **16** | **4** |
+| **total** | **341** | **287** | **34** | **0** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -206,12 +206,13 @@ sections, groups and frames").
 | 5.6 | Group / ungroup / frame selection | `⌘G` `⇧⌘G` `⌥⌘G` | same | MATCH |
 | 5.7 | Select all with same property | "Select matching" | `SelectMatching` | MATCH |
 | 5.8 | **Sections** | labelled container, distinct hit/hue, arrow key nav; place one with the Section tool (`⇧S`) or **Wrap in new section** (right-click); "sections … cannot be contained within frames or groups"; a section takes in the layers it is dragged or drawn over; `Delete` removes it **and its contents**, `⌘⌫`/`Ctrl+Backspace` **without** them ([help 9771500257687](https://help.figma.com/hc/en-us/articles/9771500257687)) | `Tool::Section` (⇧S, sharing `App::frame_slot` with Frame through `App::select_tool`), `Editor::section_selection` / `lift_into_section` / `section_absorb` / `delete_keeping_contents`, `CtxCmd::SectionSelection`; pinned by `a_section_lifts_layers_out_of_a_frame_and_keeps_their_place`, `a_section_never_lands_inside_a_frame_or_a_group`, `a_section_takes_in_the_layers_it_covers`, `deleting_a_section_can_keep_its_layers`, `the_section_tool_is_shift_s_and_shares_the_frame_slot`, `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`, `the_canvas_menu_wraps_a_selection_in_a_section` | MATCH |
-| 5.9 | Clean up layers | Owner-confirmed 2026-09-20 to the chapter-4 framing: flatten redundant nests; **rename stays manual** (Figma's layer-namer is an AI agent). The chapter-16 FD4B reading ([help 30979556779159](https://help.figma.com/hc/en-us/articles/30979556779159): align → distribute → Smart-selection tidy-up, [help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233)) is a separate remainder: engine has `align` + `distribute_horizontal`, no `distribute_vertical` / smart selection. | `Editor::clean_up_layers` unwraps single-child, visually-inert groups bottom-up (positions preserved, one undo entry); exposed as right-click **Clean up layers** + command palette; pinned by `clean_up_layers_flattens_redundant_nests_in_one_undo` | PARTIAL — rename (manual by choice) + FD4B smart selection remain |
+| 5.9 | Clean up layers | Owner-confirmed 2026-09-20 to the chapter-4 framing: flatten redundant nests; **rename stays manual** (Figma's layer-namer is an AI agent). The chapter-16 FD4B reading ([help 30979556779159](https://help.figma.com/hc/en-us/articles/30979556779159): align → distribute → Smart-selection tidy-up, [help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233)) is a separate remainder: engine has `align` + `distribute_horizontal`, no `distribute_vertical` / smart selection (the canvas's gap-handle drag is 5.15; the Tidy up half of that article is still open). | `Editor::clean_up_layers` unwraps single-child, visually-inert groups bottom-up (positions preserved, one undo entry); exposed as right-click **Clean up layers** + command palette; pinned by `clean_up_layers_flattens_redundant_nests_in_one_undo` | PARTIAL — rename (manual by choice) + FD4B smart selection remain |
 | 5.10 | Duplicate naming | Figma: "… copy" style naming on duplicate | `duplicateNaming` in `memory.ts` names sequential duplicates `"Card copy"`, `"Card copy 2"`, etc., pinned by `parity.test.mjs` | MATCH |
 | 5.11 | Per-frame "Show name" | toggle on the frame | `ToggleShowName` | MATCH |
 | 5.12 | Clip content | per-frame tick | `ClipContent` | MATCH |
 | 5.13 | Layer search | filter the tree | `TreeSearchClear`, find/replace | MATCH |
 | 5.14 | Collapse/expand all | yes | `CollapseAllLayers` | MATCH |
+| 5.15 | **Smart selection — drag the gap handles** | with layers selected an equal distance apart on one axis, pink handles appear between them: *"When you hover over your Smart selection, additional pink handles will appear between each layer"* … *"Click and drag the handle to adjust the space between layers. A tooltip above your cursor shows the current space between layers, in pixels"* — right/down increases the space, left/up decreases it, **every gap in the run moving together** ([help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233-Arrange-layers-with-Smart-selection)) | `snapping.ts::smartSelectionGaps` is the one owner of the 1D run (an equal gap on every pair, one shared cross-axis band) and returns one `GapBadge` per gap; `Canvas.tsx` paints a pill per gap at rest, recomputes them from the snapshot so a nudge that breaks the equality drops them, and hit-tests them in the multi-selection press path before the marquee; the drag dispatches the new `distributeSpacing` command (`engine/types.ts`, `engine/memory.ts`), which anchors the run at its first layer and re-places every following layer at the dragged gap (⇧ steps by the Big nudge, a negative value clamps to 0); pinned by `ui/__tests__/smartSelection.test.mjs` (26) — a 40px drag of a handle turns gaps 20/20 into 60/60 at 0/160/320 | MATCH |
 
 ## 6. Frame & shape properties (Design tab)
 
