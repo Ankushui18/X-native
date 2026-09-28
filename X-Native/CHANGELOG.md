@@ -5,6 +5,38 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: fill children use the border-box model)
+
+The second feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Use auto layout with CSS Flexbox in mind* (help 42031586813719),
+section "Children set to fill container now use the border-box model" — *"Figma
+distributes space amongst fill container children by the children's content area
+instead of by their size ... a layer with a thicker stroke will take up slightly
+more of the available width or height, so that its inner content area matches
+its sibling's."*
+
+- **Fill children share the content area, not the box.** `layout.ts::contentInset`
+  is now the one owner of a child's own inset — its padding plus its inside
+  stroke on both sides, with outside and center strokes never counting — and the
+  fillers loop in `computeAutoLayout` adds it back to each child's share.
+  Measured before, a 300px row with two fill children where the second carries
+  an 8px inside stroke: 150/150 with content areas 150/134. Now 142/158 with
+  content 142/142. With the second child a frame padded 16: 150/150 (content
+  150/118) becomes 134/166 (content 134/134).
+- **Nothing else moved.** The frame's own padding keeps its room
+  (`clampToPadding`), a lone filler still takes the whole padded content box,
+  a cross-axis fill is still a plain stretch, and grid `fr` tracks still split
+  exactly — which is the article's own escape hatch for "always split space
+  exactly regardless of stroke width".
+- **Not a WASM change:** the fix sits inside the TypeScript layout pass behind
+  the existing `autoLayout` command; no Rust file changed and every geometry
+  guard is intact. Recorded for follow-up: the Rust pass adds only the child's
+  inside stroke to a grow child's share (`x-core/src/auto_layout.rs:176`, `:418`),
+  so a padded fill child still differs there.
+- **Tests:** `apps/web/src/engine/__tests__/autolayout.test.mjs`, block
+  AL-038-046 (10 assertions). Whole suite: 2815 passed, 0 failed.
+
 ## [Unreleased] — 2026-09-28 (Figma parity: text baseline alignment)
 
 The first feature through the eight-step Figma parity pipeline recorded in

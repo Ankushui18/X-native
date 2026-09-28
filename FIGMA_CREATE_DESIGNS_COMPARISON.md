@@ -60,6 +60,26 @@ rule is an approximation, and the Rust engine
 shape) still differs from it for text. A font-metric-exact rule needs a metrics source in
 the engine and is its own task.
 
+### Pipeline run 2 — Auto layout · fill children use the border-box model ✅ (2026-09-28)
+
+| step | result |
+| --- | --- |
+| 1 · Figma docs | *Use auto layout with CSS Flexbox in mind* ([42031586813719](https://help.figma.com/hc/en-us/articles/42031586813719)), section **"Children set to fill container now use the border-box model"**: *"Previously, children set to fill container would evenly occupy the available space—the length of space minus padding, gap, and strokes. … In the new version, Figma distributes space amongst fill container children by the children's content area instead of by their size, matching the CSS border-box model. A layer with a thicker stroke will take up slightly more of the available width or height, so that its inner content area matches its sibling's."* The same article carries the two neighbouring rules this run checked: padding always gets its room (*"that same frame can't be narrower than 60px"*), and only inside strokes count (outside and center strokes are CSS outlines and never do). |
+| 2 · Living record | the **Flexbox parity rules** row below; master list **7.7** (Sizing per axis) |
+| 3 · Audit (**measured**) | Probe against `layout.ts::fillPatch` + `memory.ts::computeAutoLayout` (deleted after use). 300px row, two fill children, the second with an 8px inside stroke → **150 / 150** (content **150 / 134**). Second child instead a frame padded 16 → **150 / 150** (content **150 / 118**). A lone filler with 30px frame padding → 240 ✓ (padding measured first). Cross fill → 100 / 100 ✓ (a stretch). Grid `fr` tracks → 150 / 150 ✓ (the article's own exact-split escape hatch). |
+| 4 · Deviation | **D1** the fillers shared the *box*, so a child's own padding and inside stroke came out of its content area — the pre-CSS behaviour this Figma section replaces; the measured content areas differed by exactly the child's inset (16 and 32 above). Nothing else moved: the padding floor, a lone filler, cross stretch and grid `fr` splits already matched. |
+| 5 · Command / WASM | **None needed** — `computeAutoLayout` is the TypeScript layout pass behind the existing `autoLayout` command; no geometry crosses the WASM boundary, so no guard was touched and **no Rust file changed in this run**. |
+| 6 · UI / Canvas | **None** — the inspector's Fill dropdown and the canvas both read the sizes the layout produced. |
+| 7 · Tests | `apps/web/src/engine/__tests__/autolayout.test.mjs`, block **AL-038-046** (10 assertions: the 142/158 and 134/166 splits, the equal content areas, the pair still filling the frame exactly, a lone filler with a center and then an inside stroke, cross stretch, grid `fr`). Whole suite **2815 passed, 0 failed**; `tsc -b` clean. |
+| 8 · Checklist | master list **7.7** now names the rule, the single owner (`layout.ts::contentInset`) and the test block. No scoreboard move: the row was already `MATCH` and is now actually tested. |
+
+**Residual, recorded rather than hidden:** the Rust pass adds only the child's *inside
+stroke* back when it distributes grow children (`crates/x-core/src/auto_layout.rs:176`,
+`:418` — `2.0 * inside_stroke_width()`), so a fill child that is itself a padded auto-layout
+frame gets no padding term there, while the TypeScript pass now adds the child's padding
+too (which is what the article's sentence says). Rust was left untouched for this run, per
+the task's constraint and the geometry guard.
+
 ---
 
 ## Core features, section by section
@@ -146,7 +166,7 @@ the engine and is its own task.
 | Alignment box | nine positions; three cross options when the gap is Auto; `B` toggles baseline | `alignmentCells` / `layoutKeyPatch` (`layout.ts`), `Nine` (`inspector.tsx`); `parity.test.mjs`, `baselineAlignment.dom.test.mjs` | MATCH | measured |
 | **Text baseline alignment** | an icon's bottom sits on the text baseline; varying font sizes share one line; descenders are reserved | `layout.ts::{childBaseline, baselineRow, effectiveCrossAlign}`, `normalLayout` (`memory.ts`); `baselineAlignment.test.mjs` (32), `baselineAlignment.dom.test.mjs` (16) | MATCH | measured — **pipeline run 1** (see the residual above) |
 | Padding and gap, incl. Auto spacing | between / evenly / around = CSS `space-between` / `space-evenly` / `space-around`; the gap never goes negative | `autoSpacing` + `Math.max(0, slack)` (`layout.ts`) | MATCH | measured |
-| Flexbox parity rules | padding always gets its room, only inside strokes count, fill children use the border-box model | padding floor + inside-stroke accounting in `computeAutoLayout` | MATCH | carried §7 — the border-box distribution rule is the newest Figma behavior; its row needs its own pipeline run |
+| Flexbox parity rules | padding always gets its room first, only inside strokes count, fill children share space by *content area* (the CSS border-box model) | `contentInset` (`layout.ts`) is the one owner of a child's own inset; the fillers loop in `memory.ts::computeAutoLayout` shares the leftover content area and adds each child's inset back; `clampToPadding` keeps the padding floor | MATCH | measured — **pipeline run 2** (142/158 and 134/166 splits, test block AL-038-046); master list 7.7 |
 | Canvas stacking | first/last on top, visual only | canvas stacking order in the painter; `autolayout.test.mjs` | MATCH | carried §7.10 |
 | Auto layout suggestions | Figma proposes a layout from the arrangement | not built — deliberate non-goal (owner decision) | OUT | carried §7.16 |
 
