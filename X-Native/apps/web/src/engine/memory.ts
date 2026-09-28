@@ -52,6 +52,8 @@ import {
   widthIsMain,
   textDimensionRule,
   wraps,
+  baselineRow,
+  effectiveCrossAlign,
   type Spacing,
 } from "./layout";
 import {
@@ -685,46 +687,89 @@ function applyLayout(n: XNode, gesture = false) {
   const hugMain = hugsMain(l, n, flow);
   const hugCross = hugsCross(l, n, flow);
   if (doesWrap && flow.length) {
-    let x = pl;
-    let y = pt;
-    let rowH = 0;
-    let rowW = 0;
     // A wrapping flow has two gaps: `gap` spaces the objects within a line,
     // `gapCross` spaces the lines themselves (rows, or columns in a vertical
     // wrap). Older documents only have the one, which both fall back to.
     const gapBetween = typeof l.gapCross === "number" ? l.gapCross : gap;
     const limit = horiz ? n.w - pr : n.h - pb;
-    for (const c of flow) {
-      const main = horiz ? c.w : c.h;
-      const cur = horiz ? x : y;
-      if (cur > (horiz ? pl : pt) && cur + main > limit) {
-        if (horiz) {
-          x = pl;
-          y += rowH + gapBetween;
-        } else {
-          y = pt;
-          x += rowW + gapBetween;
+    // Break the lines first, with the same rule as before. A line has to be
+    // known as a whole before it can be placed: a baseline row sizes itself
+    // from the tallest baseline and the deepest descender in *that* line.
+    const rows: XNode[][] = [];
+    {
+      let current: XNode[] = [];
+      let x = pl;
+      let y = pt;
+      let rowH = 0;
+      let rowW = 0;
+      for (const c of flow) {
+        const main = horiz ? c.w : c.h;
+        const cur = horiz ? x : y;
+        if (cur > (horiz ? pl : pt) && cur + main > limit) {
+          rows.push(current);
+          current = [];
+          if (horiz) {
+            x = pl;
+            y += rowH + gapBetween;
+          } else {
+            y = pt;
+            x += rowW + gapBetween;
+          }
+          rowH = 0;
+          rowW = 0;
         }
-        rowH = 0;
-        rowW = 0;
+        current.push(c);
+        if (horiz) {
+          x += c.w + gap;
+          rowH = Math.max(rowH, c.h);
+        } else {
+          y += c.h + gap;
+          rowW = Math.max(rowW, c.w);
+        }
       }
-      c.x = x;
-      c.y = y;
-      if (horiz) {
-        x += c.w + gap;
-        rowH = Math.max(rowH, c.h);
-      } else {
-        y += c.h + gap;
-        rowW = Math.max(rowW, c.w);
+      if (current.length) rows.push(current);
+    }
+    // Every wrapped horizontal line gets its own baseline group, so line 2
+    // aligns on its own line rather than on line 1's. A baseline line's cross
+    // size is `max baseline-above + max descent-below`, which is what the hug
+    // below reserves; without baseline alignment the line is its tallest child.
+    const usesBaseline = horiz && effectiveCrossAlign(l) === "baseline";
+    const lineStart = horiz ? pl : pt;
+    let mainEnd = lineStart;
+    let crossCursor = horiz ? pt : pl;
+    let crossEnd = crossCursor;
+    for (const row of rows) {
+      const group = usesBaseline ? baselineRow(row) : null;
+      const offsets = group ? group.offsets : row.map(() => 0);
+      // Every line starts its run at the flow's own origin; only the cross
+      // cursor moves from line to line.
+      let m = lineStart;
+      for (let k = 0; k < row.length; k++) {
+        const c = row[k];
+        if (horiz) {
+          c.x = m;
+          c.y = crossCursor + offsets[k];
+          m += c.w + gap;
+        } else {
+          c.y = m;
+          c.x = crossCursor + offsets[k];
+          m += c.h + gap;
+        }
       }
+      const cross = group
+        ? group.cross
+        : row.reduce((s, c) => Math.max(s, horiz ? c.h : c.w), 0);
+      mainEnd = m;
+      crossEnd = crossCursor + cross;
+      crossCursor = crossEnd + gapBetween;
     }
     if (hugMain) {
-      if (horiz) n.w = Math.max(n.w, x + pr);
-      else n.h = Math.max(n.h, y + pb);
+      if (horiz) n.w = Math.max(n.w, mainEnd + pr);
+      else n.h = Math.max(n.h, mainEnd + pb);
     }
     if (hugCross) {
-      if (horiz) n.h = y + rowH + pb;
-      else n.w = x + rowW + pr;
+      if (horiz) n.h = crossEnd + pb;
+      else n.w = crossEnd + pr;
     }
     for (const c of flow) clampDims(c);
     clampToPadding(n);
@@ -749,29 +794,29 @@ function applyLayout(n: XNode, gesture = false) {
   }
   let cursor = origin + pack.lead;
   let crossMax = 0;
-  const maxBaseline =
-    horiz && l.align === "baseline"
-      ? Math.max(
-          ...flow.map((c) => (c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8)),
-        )
-      : 0;
+  // A baseline is a cross-axis position of its own: the line is placed so the
+  // tallest item's baseline sits on the shared line and the others are offset
+  // down to meet it. The group is anchored at the content edge (Rust's session
+  // does the same), and the descent below the baseline is part of the row's
+  // cross size, so a hug reserves the descenders rather than clipping them.
+  const crossAlign = effectiveCrossAlign(l);
+  const group = horiz && crossAlign === "baseline" ? baselineRow(flow) : null;
   for (let i = 0; i < flow.length; i++) {
     const c = flow[i];
     if (horiz) {
       c.x = cursor;
       const extra = crossInner - c.h;
-      if (l.align === "baseline") {
-        const itemBaseline = c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8;
-        c.y = pt + (maxBaseline - itemBaseline);
+      if (group) {
+        c.y = pt + group.offsets[i];
       } else {
-        c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+        c.y = pt + (crossAlign === "center" ? extra / 2 : crossAlign === "max" ? extra : 0);
       }
       cursor += c.w + (i < flow.length - 1 ? pack.gap : 0);
-      crossMax = Math.max(crossMax, c.h);
+      crossMax = Math.max(crossMax, group ? 0 : c.h);
     } else {
       c.y = cursor;
       const extra = crossInner - c.w;
-      c.x = pl + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      c.x = pl + (crossAlign === "center" ? extra / 2 : crossAlign === "max" ? extra : 0);
       cursor += c.h + (i < flow.length - 1 ? pack.gap : 0);
       crossMax = Math.max(crossMax, c.w);
     }
@@ -784,7 +829,7 @@ function applyLayout(n: XNode, gesture = false) {
     : contentMain + packedGap * Math.max(0, flow.length - 1);
   if (horiz) {
     if (hugMain) n.w = Math.max(1, pl + packedMain + pr);
-    if (hugCross) n.h = Math.max(1, crossMax + pt + pb);
+    if (hugCross) n.h = Math.max(1, (group ? group.cross : crossMax) + pt + pb);
   } else {
     if (hugMain) n.h = Math.max(1, pt + packedMain + pb);
     if (hugCross) n.w = Math.max(1, crossMax + pl + pr);
@@ -793,6 +838,17 @@ function applyLayout(n: XNode, gesture = false) {
   clampToPadding(n);
   clampDims(n);
   applyConstraints(n, entryW, entryH, n.w, n.h, true);
+}
+
+/** The layout a frame actually stores.
+ *
+ * Baseline alignment is a horizontal-flow setting: the line it aligns to is a
+ * text baseline, and its cross axis is vertical. A flow that has just become
+ * vertical cannot have one, so the value is normalized to the start edge rather
+ * than left in the model to disagree with what the alignment box shows. */
+export function normalLayout(layout: AutoLayout | null): AutoLayout | null {
+  if (!layout || layout.align !== "baseline" || layout.direction === "horizontal") return layout;
+  return { ...layout, align: "min" };
 }
 
 export function demoPage(): Page {
@@ -2639,7 +2695,11 @@ export class MemoryEngine implements Engine {
             }
           }
         } else if (n && !insideInstance(this.root(), cmd.id)) {
-          n.layout = cmd.layout;
+          // A vertical flow has no text baseline to align to, so a stale
+          // `baseline` left over from a horizontal flow is normalized to the
+          // flow's start edge. The alignment box does not offer baseline for a
+          // vertical flow either, so the panel and the model cannot disagree.
+          n.layout = normalLayout(cmd.layout);
           // A fresh preset wins over gap/padding bindings; without the
           // detach the next relayout would snap the preset back.
           if (n.variableBindings) {

@@ -577,6 +577,66 @@ export const SPACING_MODES: { id: Spacing; label: string; hint: string }[] = [
 ];
 
 /**
+ * Text baseline alignment on the cross axis of a horizontal flow.
+ *
+ * Figma's help article for the horizontal and vertical flows documents the
+ * behaviour with its own example:
+ *
+ * > *"In some cases, aligning the baselines of layers can create more balance —
+ * > such as when aligning baselines of text layers with varying font sizes, or
+ * > when aligning an icon with a text layer."* … *"the bottoms of the icon and
+ * > the word home are aligned on the red line."*
+ *
+ * It also says auto layout mirrors how the web renders layouts, which is why the
+ * row rules here are CSS flexbox's: an item that has a baseline (text) is offset
+ * so its baseline lands on the row's shared line, an item that has none (a
+ * shape) synthesises one from its **bottom** edge, and the row's cross size is
+ * the distance from the highest baseline to the lowest descent below it —
+ * `max baseline-above + max descent-below` — so a hug reserves the descenders
+ * instead of clipping the line.
+ *
+ * The engine has no font tables, so a text layer's first-line baseline is
+ * modelled as `fontSize * TEXT_BASELINE_RATIO` from its top edge — the same box
+ * top the canvas painter draws its first line at. Every consumer goes through
+ * `childBaseline`/`baselineRow` so the row, the hug and the wrap cannot drift
+ * apart.
+ */
+export const TEXT_BASELINE_RATIO = 0.8;
+
+/** The baseline of one child, measured from the top of its own box. */
+export function childBaseline(child: Pick<XNode, "kind" | "fontSize" | "h">): number {
+  if (child.kind === "text") return (child.fontSize || 14) * TEXT_BASELINE_RATIO;
+  // A layer without text has no baseline of its own; flexbox synthesises one
+  // from the bottom edge, which is what Figma's icon-on-the-line example shows.
+  return child.h;
+}
+
+/** One row's shared baseline: every child's offset from the row's top edge,
+ * and the cross size the row needs (`max baseline-above + max descent-below`). */
+export function baselineRow(children: Pick<XNode, "kind" | "fontSize" | "h">[]): {
+  offsets: number[];
+  cross: number;
+} {
+  const baselines = children.map(childBaseline);
+  const maxBase = baselines.reduce((m, b) => Math.max(m, b), 0);
+  const maxAfter = children.reduce((m, c, i) => Math.max(m, c.h - baselines[i]), 0);
+  return { offsets: baselines.map((b) => maxBase - b), cross: maxBase + maxAfter };
+}
+
+/** A flow's effective cross-axis alignment.
+ *
+ * Baseline is a horizontal-flow setting: its cross axis is vertical, and the
+ * line it aligns to is a text baseline. A vertical flow has no such line, so a
+ * stale `baseline` (a document written before the flow was switched, say) falls
+ * back to the flow's start edge, which is also what the alignment box shows —
+ * it does not offer baseline for a vertical flow at all.
+ */
+export function effectiveCrossAlign(layout: AutoLayout): LayoutAlign {
+  if (layout.direction === "horizontal") return layout.align;
+  return layout.align === "baseline" ? "min" : layout.align;
+}
+
+/**
  * Where the space goes when the gap is set to Auto.
  *
  * `free` is what is left over once the objects and the padding have taken their
