@@ -333,6 +333,7 @@ try {
     const owner = await openWebDocumentSession(seed);
     assert.ok(owner, "the promoted slice must admit a plain rectangle");
     owner.strokeNode(id, 8, "#236b9e", "center", "miter");
+    const strokeRevision = owner.state().revision;
     const before = owner.exportDocument();
     const counters = () => bridgeAuditSnapshot().functions;
     const callsBefore = counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0;
@@ -405,17 +406,19 @@ try {
     assert.deepEqual(audited.exportDocument(), saved, "the audited checkpoint equals the default one");
     audited.close();
 
-    // A source the reference cannot cover is reported, never asserted: a
-    // stroke narrower than the sampling clearance has no decisive ink sample,
-    // so the audit says `not-run` while the one native command still runs.
+    // A source the reference cannot cover is reported, never asserted as a
+    // pass or a finding: a 1-wide stroke on a 4x4 rectangle has no decisive ink
+    // sample (every band sample sits inside the facet clearance), so the round
+    // trip still runs but its verdict is `not-run`, and the edit stands.
     const tinySeed = docFromTemplate("blank");
     tinySeed.pages[0].root.children.push(node("rect", "Tiny", 10, 12, 4, 4, { fill: "#8a6f4e" }));
     const tinyId = tinySeed.pages[0].root.children[0].id;
     const tinyOwner = await openWebDocumentSession(tinySeed);
     assert.ok(tinyOwner, "an empty 4x4 rectangle is admitted");
-    tinyOwner.strokeNode(tinyId, 1, "#236b9e", "center", "miter");
+    const tinyStrokeRevision = tinyOwner.strokeNode(tinyId, 1, "#236b9e", "center", "miter").revision;
     const tinyCallsBefore = counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0;
     const tinyUndoBefore = counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0;
+    const tinyRedoBefore = counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0;
     try {
       globalThis.location = { search: "?outline=audit" };
       assert.equal(tinyOwner.outlineStroke(tinyId).outline?.kind, "vector");
@@ -426,7 +429,10 @@ try {
     assert.deepEqual([
       (counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0) - tinyCallsBefore,
       (counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0) - tinyUndoBefore,
-    ], [1, 0], "an uncovered source still dispatches exactly one outline command and no round trip");
+      (counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0) - tinyRedoBefore,
+    ], [1, 1, 1], "an uncovered source still runs the one command and the bounded round trip");
+    assert.equal(tinyOwner.state().revision, tinyStrokeRevision + 3,
+      "the round trip ends on the redo, so the next user undo still removes the outline");
     assert.equal(bridgeAuditSnapshot().decisions["session.outline"]?.last.guard, "not-run");
     assert.match(bridgeAuditSnapshot().decisions["session.outline"]?.last.reason ?? "", /did not cover this source/);
     assert.equal(bridgeAuditSnapshot().decisions["session.outline"]?.blocked, 0,
