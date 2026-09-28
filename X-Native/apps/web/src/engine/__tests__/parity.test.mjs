@@ -64,7 +64,7 @@ import {
   wraps,
 } from "../layout.ts";
 import { ASSET_PREFIX, assetCount, dehydrateDoc, hydrateDoc, putAsset, resetAssets } from "../assets.ts";
-import { hasExpression } from "../../ui/fieldExpr.ts";
+import { hasExpression, evalField } from "../../ui/fieldExpr.ts";
 import { rotateAboutOrigin, scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
 import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
 import {
