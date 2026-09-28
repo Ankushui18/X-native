@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { docFromTemplate } from "../files.ts";
 import { node } from "../memory.ts";
 import { __resetWasmForTests, initWasmBridge } from "../wasmBridge.ts";
-import { admitWebDocument, decodeWebDocument, openWebDocumentSession, WEB_DOCUMENT_SESSION_VERSION } from "../webDocumentSession.ts";
+import { admitWebDocument, decodeWebDocument, openWebDocumentSession, RustWebDocumentSession, WEB_DOCUMENT_SESSION_VERSION } from "../webDocumentSession.ts";
 
 const clone = x => JSON.parse(JSON.stringify(x));
 const fixture = () => {
@@ -309,6 +309,23 @@ await test("once admitted, small commands go straight to Rust; full data only on
   session.close(); session.close();
   assert.equal(counters.frees, 1);
   assert.throws(() => session.exportDocument(), /closed/);
+});
+
+await test("promoted offset bypasses the TS oracle but freezes on a wrong affected-layer ID", () => {
+  const seed = fixture();
+  const id = seed.pages[0].root.children[0].id;
+  let commands = 0;
+  const native = {
+    getShape() { throw Error("default edit must not query a TS oracle input"); },
+    previewOffset() { throw Error("default edit must not preflight a second geometry result"); },
+    offsetNode() {
+      commands++;
+      return { revision: 1, node: null, canUndo: true, canRedo: false, offset: { id: "other" } };
+    },
+  };
+  const owner = RustWebDocumentSession.create(native, seed);
+  assert.throws(() => owner.offsetNode(id, 4, "miter"), /different layer; editing must pause/);
+  assert.equal(commands, 1, "bad native acknowledgement must freeze, not silently replay in TS");
 });
 
 console.log(`Web document admission: ${passed} passed, ${failed} failed`);

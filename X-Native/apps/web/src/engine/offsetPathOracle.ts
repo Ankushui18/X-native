@@ -5,8 +5,10 @@
  * filled-path oracle. This reference classifies sampled points under NONZERO
  * winding and signed Euclidean distance. Rect joins are checked analytically;
  * for other shapes, bevel/miter samples close to corners are inconclusive and
- * conservatively skipped. An unprovable/oversized case is BLOCKED, never
- * promoted based on a guess. `?offset=audit` remains available after parity.
+ * conservatively skipped. The genuine-WASM 30/30 corpus passed in CI run
+ * 36384662971, so normal session edits use Rust without consulting this TS
+ * oracle. `?offset=audit` still blocks an unprovable/oversized proposal
+ * before editing; this module never paints or stores undo history.
  */
 import { auditDecision } from "./bridgeRuntimeAudit";
 import type { RustOffsetChange, RustPathCommand } from "./rustSession";
@@ -213,12 +215,12 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
   return true;
 }
 
-/** A failed preview never enters Rust history. The regular editor remains
- * TypeScript-owned; the opt-in Rust owner cannot spawn a shadow TS editor. */
+/** An opt-in audit failure never enters Rust history. The regular editor
+ * remains TypeScript-owned; the opt-in Rust owner cannot spawn a shadow. */
 export function guardOffsetPreview(before: RustOffsetChange, after: RustOffsetChange,
     distance: number, join: Join): RustOffsetChange {
   const passes = offsetCoverageEquivalent(before, after, distance, join);
-  const mode = offsetAuditRequested() ? "opt-in offset audit" : "default offset guard";
+  const mode = offsetAuditRequested() ? "opt-in offset audit" : "explicit offset reference test";
   auditDecision({ bridge: "session", operation: "offset", result: passes ? "rust" : "none",
     guard: passes ? "passed" : "blocked", candidate: true,
     reason: passes ? `${mode}: Rust preview equals independent TS winding/offset coverage` :

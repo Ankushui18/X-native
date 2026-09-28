@@ -17,7 +17,7 @@ import type { PersistedDoc } from "./persist";
 import type { BooleanOp, Page, XNode } from "./types";
 import { openRustSession, type RustSessionClient, type RustStateChange, type RustStrokeChange } from "./rustSession";
 import { auditDecision } from "./bridgeRuntimeAudit";
-import { guardOffsetPreview } from "./offsetPathOracle";
+import { guardOffsetPreview, offsetAuditRequested } from "./offsetPathOracle";
 import { verifyStrokeDelta } from "./strokeBandOracle";
 
 export const WEB_DOCUMENT_SESSION_VERSION = 2;
@@ -323,9 +323,18 @@ export class RustWebDocumentSession {
   strokeNode(id: string, width: number, color: string, align: RustStrokeChange["align"], join: RustStrokeChange["join"]) {
     return this.checked(this.rust.strokeNode(id, width, color, align, join));
   }
-  /** Pure bounded Rust preview, independently checked in TS BEFORE mutation.
-   * No JS document or second undo stack; a mismatch leaves Rust untouched. */
+  /** Genuine-WASM 30/30 offset parity: ordinary edits dispatch directly to
+   * Rust. The opt-in ?offset=audit mode compares a bounded pure preview to the
+   * independent TS coverage reference BEFORE changing native history. Neither
+   * path owns a JS document tree or an additional undo stack. */
   offsetNode(id: string, distance: number, join: "miter" | "bevel" | "round") {
+    if (!offsetAuditRequested()) {
+      const applied = this.rust.offsetNode(id, distance, join);
+      if (applied.offset && applied.offset.id !== id) {
+        throw new Error("Native offset changed a different layer; editing must pause");
+      }
+      return applied;
+    }
     const before = this.rust.getShape(id);
     const preview = this.rust.previewOffset(id, distance, join);
     if (preview) guardOffsetPreview(before, preview, distance, join);

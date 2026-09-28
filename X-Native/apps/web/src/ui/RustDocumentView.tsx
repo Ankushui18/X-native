@@ -294,7 +294,7 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
   return (
     <div className="rust-preview" data-file-id={fileId}>
       <header className="rust-preview-head">
-        <div><strong>Rust document preview</strong><span>Experimental · filled shapes, Boolean vectors, strokes and guarded offsets · not autosaved</span></div>
+        <div><strong>Rust document preview</strong><span>Experimental · filled shapes, Boolean vectors, strokes and Rust-owned offsets · not autosaved</span></div>
         <div className="rust-preview-actions">
           <XButton onClick={onHome}>Back to files</XButton>
           <XButton onClick={onStandard}>Standard editor</XButton>
@@ -416,7 +416,7 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
                   e.preventDefault();
                   if (canOffset) apply(s => s.offsetNode(selectedLayer.id, offsetDistance, offsetDraft.join));
                 }}>
-                  <strong>Rust offset path · geometry guard active</strong>
+                  <strong>Rust offset path · optional ?offset=audit preflight</strong>
                   <label htmlFor="rust-offset-distance">Signed distance (outward +, inward −)</label>
                   <input id="rust-offset-distance" type="number" min="-2048" max="2048" step="any"
                     value={offsetDraft.distance} onChange={e => setOffsetDraft(v => ({ ...v, distance: e.target.value }))} />

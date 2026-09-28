@@ -309,13 +309,16 @@ try {
     "only the one opt-in edit may run the TS oracle; 29 default edits stay Rust-owned");
   console.log(`PASS real-WASM Rust stroke alignment: ${parity}/30 rectangle oracle parity, one opt-in audit, 29 default Rust edits, bound checks, history, resize reprojection and lossless checkpoints`);
 
-  // Actual V5 bindgen/session class, not x-geo or a mock. The geometry guard
-  // compares a one-layer Rust preview to independent TS NONZERO coverage
-  // BEFORE committing; the old averaged-normal offset is not a filled oracle.
-  // Five geometries × 3 joins × 2 signs = 30, including a native-produced
-  // vector with a hole. All edits/undo live in the same Rust history.
+  // Actual V5 bindgen/session class, not x-geo or a mock. The independent TS
+  // NONZERO reference verifies all 30 committed Rust results here. Only the
+  // first case opts into BEFORE-edit ?offset=audit preflight; 29 edits use
+  // Rust directly with NO default TS oracle. The old averaged-normal offset
+  // is not a filled-path reference. All edits/undo share Rust history.
   const offsetBeforeAudit = bridgeAuditSnapshot().decisions["session.offset"]?.attempts ?? 0;
   const offsetBeforeCalls = bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.offsetNode"]?.calls ?? 0;
+  const offsetBeforeFailed = bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.offsetNode"]?.failed ?? 0;
+  const offsetBeforePreviews = bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.previewOffset"]?.calls ?? 0;
+  const offsetBeforeShapes = bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.getShape"]?.calls ?? 0;
   let offsetParity = 0;
   for (const shape of ["rect", "ellipse", "poly", "star", "vector"]) {
     for (const join of ["miter", "bevel", "round"]) for (const distance of [4, -4]) {
@@ -384,6 +387,8 @@ try {
       }
       if (offsetParity === 0) {
         assert.match(bridgeAuditSnapshot().decisions["session.offset"]?.last.reason ?? "", /opt-in offset audit/);
+        assert.equal(bridgeAuditSnapshot().decisions["session.offset"]?.last.guard, "passed",
+          "the opt-in case must compare the pure Rust preview before editing");
       }
       assert.equal(result.revision, firstRevision + 1);
       assert.equal(result.node, null);
@@ -395,8 +400,6 @@ try {
       }
       assert.ok(offsetCoverageEquivalent(current, result.offset, distance, join),
         `${shape}/${join}/${distance}: TS reference and Rust output differ`);
-      assert.equal(bridgeAuditSnapshot().decisions["session.offset"]?.last.guard, "passed",
-        `${shape}/${join}/${distance}: offset preflight must be checked, not bypassed`);
       assert.ok(!JSON.stringify(result).includes('"pages"'), "bounded command must not return a document");
       const saved = owner.exportDocument();
       const layer = saved.pages[0].root.children[0];
@@ -417,9 +420,16 @@ try {
     }
   }
   assert.equal(offsetParity, 30);
-  assert.equal(bridgeAuditSnapshot().decisions["session.offset"]?.attempts, offsetBeforeAudit + 30);
-  assert.equal(bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.offsetNode"]?.calls, offsetBeforeCalls + 30);
-  console.log(`PASS real-WASM signed offset: ${offsetParity}/30 guarded rect/ellipse/poly/star/hollow-vector cases, 3 joins, both signs, Rust undo/redo and bounded deltas`);
+  assert.equal(bridgeAuditSnapshot().decisions["session.offset"]?.attempts, offsetBeforeAudit + 1,
+    "the 29 default edits cannot consult the TS oracle");
+  assert.equal(bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.previewOffset"]?.calls, offsetBeforePreviews + 1,
+    "only the opt-in edit queries a pure native preview");
+  assert.equal(bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.getShape"]?.calls, offsetBeforeShapes + 31,
+    "30 corpus reference queries and one optional preflight; no shadow document");
+  assert.equal(bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.offsetNode"]?.calls, offsetBeforeCalls + 60,
+    "30 native refusals and 30 committed edits, with no TS command fallback");
+  assert.equal(bridgeAuditSnapshot().functions["x-wasm.RustDocumentSession.offsetNode"]?.failed, offsetBeforeFailed + 30);
+  console.log(`PASS real-WASM signed offset: ${offsetParity}/30 rect/ellipse/poly/star/hollow-vector cases, 3 joins, both signs, one opt-in audit, 29 direct Rust edits, Rust undo/redo and bounded deltas`);
 
   // A deliberately crossing vector is *not* initially admitted by the safe
   // Web dialect. The same WASM class and x-core handle it natively with

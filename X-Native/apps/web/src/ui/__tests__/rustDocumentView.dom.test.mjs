@@ -28,7 +28,7 @@ const moduleWith = Session => ({
   importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
   sessionBridgeVersion: () => 5, RustDocumentSession: Session,
 });
-const calls = { opens: 0, exports: 0, queries: 0, edits: 0, closes: 0 };
+const calls = { opens: 0, exports: 0, queries: 0, shapes: 0, previews: 0, edits: 0, closes: 0 };
 class FakeRust {
   constructor(x) { calls.opens++; this.doc = JSON.parse(x); this.revision = 0; this.undos = []; this.redos = []; this.strokes = new Map(); }
   get(id) { return this.doc.pages[0].children.find(n => n.id === id); }
@@ -39,11 +39,13 @@ class FakeRust {
     return JSON.stringify(n ? { id, name: n.name ?? id, x: n.x, y: n.y, w: n.w, h: n.h } : null);
   }
   getShape(id) {
+    calls.shapes++;
     const n = this.get(id);
     return JSON.stringify({ id, name: n.name ?? id, x: n.x, y: n.y, w: n.w, h: n.h,
       kind: n.kind.t, ...(n.kind.t === "vector" ? { path: n.kind.path } : { radius: n.kind.radius ?? 0 }) });
   }
   previewOffset(id, distance, join) {
+    calls.previews++;
     // A deterministic fake bridge answer for the UI contract. The real Rust
     // geometry and independent TS coverage check run against WASM in CI.
     if (join !== "miter" || distance <= 0) throw Error("mock supports only positive miter");
@@ -354,13 +356,17 @@ const offsetSeed = fixture(), offsetBefore = clone(offsetSeed);
 const offsetView = mount(offsetSeed);
 await offsetView.render();
 const exportsBeforeOffset = calls.exports;
+const shapesBeforeOffset = calls.shapes, previewsBeforeOffset = calls.previews;
 assert.equal(offsetView.byText("Offset path").disabled, false);
 await offsetView.click("Offset path");
+assert.equal(calls.shapes, shapesBeforeOffset, "default Rust edit does not query a TS oracle input");
+assert.equal(calls.previews, previewsBeforeOffset + 1,
+  "only the fake native command's internal preview ran; the Web host did not preflight");
 assert.equal(offsetView.host.querySelector(".rust-preview-rect").style.left, "4px");
 assert.equal(offsetView.host.querySelector(".rust-preview-rect").style.width, "82px");
 assert.match(offsetView.host.querySelector(".rust-preview-rect path").getAttribute("d"), /^M0 0 L82 0/);
 assert.equal(offsetView.byText("Wider 10").disabled, true, "vector cannot silently resize its native contours");
-assert.equal(calls.exports, exportsBeforeOffset, "guard and edit use shape-only requests, not page exports");
+assert.equal(calls.exports, exportsBeforeOffset, "edit uses bounded deltas, not page exports");
 await offsetView.click("Undo");
 assert.equal(offsetView.host.querySelector(".rust-preview-rect").style.left, "10px");
 assert.equal(offsetView.host.querySelector(".rust-preview-rect path"), null);
@@ -373,13 +379,23 @@ assert.equal(savedOffset.kind, "vector");
 assert.equal(savedOffset.vectorNetwork.vertices.length, 4);
 assert.deepEqual(offsetSeed, offsetBefore, "the admitted caller is never rewritten");
 await offsetView.close();
-console.log("  ok guarded Rust offset: bounded preflight, vector patch and undo/redo without a page copy");
+console.log("  ok promoted Rust offset: direct bounded delta, vector patch and undo/redo without a page copy");
 
 const rejectedOffset = mount(fixture());
 await rejectedOffset.render();
 const editsBeforeRejection = calls.edits;
-FakeRust.badNextOffset = true;
-await rejectedOffset.click("Offset path");
+const shapesBeforeAudit = calls.shapes, previewsBeforeAudit = calls.previews;
+const previousLocation = globalThis.location;
+try {
+  globalThis.location = { search: "?offset=audit" };
+  FakeRust.badNextOffset = true;
+  await rejectedOffset.click("Offset path");
+} finally {
+  if (previousLocation === undefined) delete globalThis.location;
+  else globalThis.location = previousLocation;
+}
+assert.equal(calls.shapes, shapesBeforeAudit + 1, "opt-in audit reads only the affected Rust shape");
+assert.equal(calls.previews, previewsBeforeAudit + 1, "opt-in audit preflights before mutation");
 assert.ok(rejectedOffset.host.textContent.includes("no change was made"));
 assert.equal(rejectedOffset.host.querySelector(".rust-preview-rect").style.left, "10px");
 assert.equal(rejectedOffset.byText("Undo").disabled, true);
@@ -388,7 +404,7 @@ await rejectedOffset.click("Move right 10");
 assert.equal(rejectedOffset.host.querySelector(".rust-preview-rect").style.left, "20px",
   "a guard rejection does not freeze the still-unchanged Rust session");
 await rejectedOffset.close();
-console.log("  ok offset mismatch: no native mutation, no TS shadow owner, other edits still work");
+console.log("  ok opt-in offset audit rejection: no native mutation or TS shadow owner");
 
 const openedBeforeInvalid = calls.opens;
 const invalid = fixture(); invalid.styles.push({ name: "outside subset" });
