@@ -63,6 +63,9 @@ function makeContext(el) {
     strokes,
     /** Every filter the paint asked for, so a mask blur is provable. */
     filters: [],
+    /** Every string the paint drew, so canvas text (frame labels, section
+     *  titles) is measurable without a real font rasteriser. */
+    texts: [],
   };
   Object.defineProperty(ctx, "filter", {
     configurable: true,
@@ -373,6 +376,17 @@ function makeContext(el) {
             }
             break;
           }
+          case "fillText":
+          case "strokeText":
+            target.texts.push({
+              text: String(args[0] ?? ""),
+              x: args[1],
+              y: args[2],
+              fillStyle: String(target.fillStyle),
+              font: String(target.font),
+              inDoc: inDoc(),
+            });
+            break;
           case "stroke":
             strokes.push({ color: target.strokeStyle, inDoc: inDoc(), id: ctx.__id });
             break;
@@ -479,6 +493,12 @@ export async function mountCanvas(children, view = {}) {
     },
     async dispatch(cmd) {
       await act(async () => engine.dispatch(cmd));
+    },
+    /** Flush a React update the test caused outside act (a real DOM event). */
+    async act(fn) {
+      await act(async () => {
+        fn();
+      });
     },
     async close() {
       await act(async () => reactRoot.unmount());

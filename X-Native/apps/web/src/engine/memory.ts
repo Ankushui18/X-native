@@ -96,6 +96,19 @@ import {
 let seq = 1;
 export const uid = (p: string) => `${p}_${seq++}`;
 
+/** Figma: "Sections in Figma Design are a top-level element on the canvas by
+ *  default. Sections can contain all layer types, including other sections, but
+ *  cannot be contained within frames or groups." Both creation routes - the
+ *  Section tool's add and the selection's Wrap in new section - ask this one
+ *  question, so neither can nest a section inside a frame or a group. */
+function sectionStaysTopLevel(kind: NodeKind, into: XNode, root: XNode): XNode {
+  return kind === "section" ? root : into;
+}
+
+/** The border colour a fresh section paints: the article's "background and
+ *  border color for a section", neutral enough to read on a white page. */
+const SECTION_STROKE = "#e6e6e6";
+
 /** Node factory. Exported so the file store can seed new documents from the
  *  dashboard templates with exactly the same defaults the editor uses. */
 export function node(
@@ -117,8 +130,11 @@ export function node(
     h,
     rotation: 0,
     rotOrigin: [0.5, 0.5],
+    // A section carries its own background and border, the two colours the
+    // sections article points at in the right sidebar's Fill and Stroke
+    // sections; a frame is a plain white surface, a shape a grey fill.
     fill:
-      kind === "frame"
+      kind === "frame" || kind === "section"
         ? "#ffffff"
         : kind === "text"
           ? "#0d1220"
@@ -131,10 +147,15 @@ export function node(
     fillB: "#ffffff",
     gradientStops: [],
     fillBlend: "Normal",
-    strokePaint: kind === "line" || kind === "arrow" ? "#1e1e1e" : "#00000000",
+    strokePaint:
+      kind === "line" || kind === "arrow"
+        ? "#1e1e1e"
+        : kind === "section"
+          ? SECTION_STROKE
+          : "#00000000",
     strokeOpacity: 1,
-    strokeVisible: kind === "line" || kind === "arrow",
-    strokeWidth: kind === "line" || kind === "arrow" ? 1 : 0,
+    strokeVisible: kind === "line" || kind === "arrow" || kind === "section",
+    strokeWidth: kind === "line" || kind === "arrow" || kind === "section" ? 1 : 0,
     effects: [] as Effect[],
     strokeAlign: kind === "line" || kind === "arrow" ? "center" : "inside",
     strokeDash: 0,
@@ -2291,7 +2312,10 @@ export class MemoryEngine implements Engine {
           grid ? Math.max(1, Math.round(cmd.h)) : cmd.h,
           cmd.extra,
         );
-        const into = parent ?? this.root();
+        // "Sections ... are a top-level element on the canvas by default ...
+        // but cannot be contained within frames or groups", so a section is
+        // created at the page root whatever host the pointer was over.
+        const into = sectionStaysTopLevel(cmd.kind, parent ?? this.root(), this.root());
         // Instances take no new children: structure belongs to the master.
         if (into !== this.root() && (isInstanceMember(this.root(), into.id) || (!!into.componentId && !into.isComponent))) break;
         const spot = this.gridSpotFor(into, cmd.x, cmd.y);
@@ -3053,12 +3077,14 @@ export class MemoryEngine implements Engine {
       }
       case "group":
       case "wrapSection": {
-        this.wrapSel(cmd.type === "wrapSection" ? "Section" : "Group", {
-          kind: cmd.type === "wrapSection" ? "frame" : "group",
-          fill: "#00000000",
-          fillVisible: false,
-          overflow: "visible",
-        });
+        this.wrapSel(
+          cmd.type === "wrapSection" ? "Section" : "Group",
+          cmd.type === "wrapSection"
+            ? // A real section: the tool's kind, with the article's background
+              // and border from the node defaults.
+              { kind: "section" }
+            : { kind: "group", fill: "#00000000", fillVisible: false, overflow: "visible" },
+        );
         break;
       }
       case "frameSelection": {
@@ -4633,8 +4659,12 @@ export class MemoryEngine implements Engine {
     const ids = s.selection;
     if (ids.length < 1) return;
     const rt = this.root();
-    const parent = findParent(rt, ids[0]);
-    if (!parent) return;
+    const found = findParent(rt, ids[0]);
+    if (!found) return;
+    // Wrapping a selection that sits inside a frame lifts a section to the
+    // canvas, the same rule the add command applies (a section can never be
+    // contained within a frame or group).
+    const parent = sectionStaysTopLevel((extra.kind ?? "group") as NodeKind, found, rt);
     const nodes: XNode[] = [];
     for (const id of ids) {
       const n = find(rt, id);

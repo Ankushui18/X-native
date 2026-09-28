@@ -5,6 +5,7 @@
 
 export type NodeKind =
   | "frame"
+  | "section"
   | "group"
   | "rect"
   | "ellipse"

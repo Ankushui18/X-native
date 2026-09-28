@@ -551,6 +551,20 @@ export function coverCrop(iw: number, ih: number, w: number, h: number) {
 }
 
 /**
+ * Figma's canvas stacks sections behind everything else they share a list with:
+ * a section is the backdrop its frames are placed on, so it paints first
+ * whatever order the document holds it in (the Layers panel keeps document
+ * order). Stable, so sections stay in their own relative order and moves
+ * between the two groups cannot shuffle anything else.
+ */
+export function sectionsFirst<T extends { kind?: string }>(kids: readonly T[]): T[] {
+  const out: T[] = [];
+  for (const k of kids) if (k.kind === "section") out.push(k);
+  for (const k of kids) if (k.kind !== "section") out.push(k);
+  return out;
+}
+
+/**
  * Figma's third stopping rule for a mask's reach. The *Masks* article: "The
  * mask applies to all siblings above it until it reaches: ... Another mask or
  * mask object / The mask's parent frame or group / A frame or component with

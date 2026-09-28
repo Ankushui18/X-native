@@ -45,7 +45,7 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
 import { coverCrop, normalizeCropRect } from "../engine/paint";
@@ -139,7 +139,7 @@ function worldGuides(root: XNode, guides: RulerGuide[]): { axis: "x" | "y"; at: 
 }
 
 function kindOf(t: Tool): NodeKind | null {
-  if (t === "section") return "frame";
+  if (t === "section") return "section";
   if (t === "slice") return "rect";
   if (t === "pen" || t === "pencil" || t === "brush") return null;
   if (t === "image") return "rect";
@@ -2044,7 +2044,9 @@ export function Canvas({
         ctx.stroke();
         ctx.restore();
       };
-      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
+      // Sections paint first: Figma keeps a section behind the objects it
+      // holds, whatever order the document lists them in.
+      const renderChildren = sectionsFirst(n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children);
       for (const run of partitionMaskRuns(renderChildren)) {
         if (!run.mask) {
           for (const k of run.kids) paint(k, x, y);
@@ -2180,7 +2182,9 @@ export function Canvas({
         }
       }
     } else {
-      for (const ch of root.children) paint(ch, 0, 0);
+      // The page's own children take the same section-first order a container's
+      // do: Figma keeps a section behind the frames that sit on it.
+      for (const ch of sectionsFirst(root.children)) paint(ch, 0, 0);
     }
 
     // View > Pixel preview. Frames are re-read as the raster they would export
@@ -2242,19 +2246,31 @@ export function Canvas({
       const screenX = snap.panX + x * z;
       const screenY = snap.panY + y * z;
       const selected = snap.selection.includes(n.id);
-      if (
+      // Skip labels whose layer is off-screen: at any zoom a page can hold
+      // hundreds of them, and fillText for each is the one thing on this
+      // canvas that runs per layer rather than per visible pixel.
+      const labelOnScreen =
+        screenX > -400 && screenX < w + 400 && screenY > -40 && screenY < h + 400;
+      if (n.kind === "section") {
+        // "Double-click the section title on the canvas or Layers panel. Edit
+        // the title." The title is the section's own chrome, so it draws
+        // whatever the selection is, inside the box's top-left, at a constant
+        // 12px while the canvas zooms.
+        if (labelOnScreen) {
+          ctx.save();
+          ctx.font = "600 12px Inter, system-ui";
+          ctx.fillStyle = canvasLabel;
+          ctx.textBaseline = "alphabetic";
+          ctx.fillText(n.name, screenX + 8, screenY + 16);
+          ctx.restore();
+        }
+      } else if (
         n.kind === "frame" &&
         n.showName !== false &&
         // Nested names stay out of the content flow unless explicitly selected.
         // A selected ancestor suppresses unselected descendant names only.
         (selected || (!parentIsFrame && !selectedAncestor)) &&
-        // Skip names whose frame is off-screen: at any zoom a page can hold
-        // hundreds of them, and fillText for each is the one thing on this
-        // canvas that runs per layer rather than per visible pixel.
-        screenX > -400 &&
-        screenX < w + 400 &&
-        screenY > -40 &&
-        screenY < h + 400
+        labelOnScreen
       ) {
         const active = selected || hoverId === n.id || panelHover === n.id;
         ctx.save();
@@ -5896,7 +5912,9 @@ export function Canvas({
       }
       const extra: Partial<XNode> =
         snap.tool === "section"
-          ? { name: "Section", fill: "#00000000", overflow: "visible" }
+          ? // A real section: the node defaults give it the article's
+            // background and border, and it never clips.
+            { name: "Section" }
           : snap.tool === "slice"
             ? {
                 name: "Slice",
@@ -6127,10 +6145,17 @@ export function Canvas({
           const x = px + n.x;
           const y = py + n.y;
           const selected = snap.selection.includes(n.id);
-          if (n.kind === "frame" && n.showName !== false && (selected || (!parentIsFrame && !selectedAncestor))) {
+          const nameW = Math.max(40, n.name.length * 6.5);
+          if (n.kind === "section") {
+            // The title sits inside the section's top-left (see labelNames).
             const sx = snap.panX + x * z;
             const sy = snap.panY + y * z;
-            const nameW = Math.max(40, n.name.length * 6.5);
+            if (mx >= sx && mx <= sx + nameW + 8 && my >= sy + 2 && my <= sy + 20) {
+              hitFrame = n;
+            }
+          } else if (n.kind === "frame" && n.showName !== false && (selected || (!parentIsFrame && !selectedAncestor))) {
+            const sx = snap.panX + x * z;
+            const sy = snap.panY + y * z;
             if (mx >= sx - 2 && mx <= sx + nameW + 10 && my >= sy - 18 && my <= sy - 2) {
               hitFrame = n;
             }
@@ -6149,7 +6174,10 @@ export function Canvas({
       if (wp) {
         const sx = snap.panX + wp.x * snap.zoom;
         const sy = snap.panY + wp.y * snap.zoom;
-        setFrameEdit({ id: (frameLabelHit as XNode).id, name: (frameLabelHit as XNode).name, x: sx, y: sy - 22 });
+        // A section's title sits inside its top-left corner; a frame's label
+        // hangs above the frame, so the editor follows the label it replaces.
+        const onSection = (frameLabelHit as XNode).kind === "section";
+        setFrameEdit({ id: (frameLabelHit as XNode).id, name: (frameLabelHit as XNode).name, x: sx, y: onSection ? sy - 1 : sy - 22 });
         engine.dispatch({ type: "select", ids: [(frameLabelHit as XNode).id] });
         return;
       }
