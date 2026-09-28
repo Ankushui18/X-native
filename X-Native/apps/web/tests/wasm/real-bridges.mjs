@@ -355,6 +355,7 @@ try {
           const probeId = shape === "vector" ? JSON.parse(probe.booleanNode(
             id, seed.pages[0].root.children[1].id, "subtract")).boolean.upsert[0].id : id;
           const preview = JSON.parse(probe.previewOffset(probeId, distance, join));
+          offsetCoverageEquivalent(current, preview, distance, join, reason => { details += `; ${reason}`; });
           const concise = s => ({ id: s.id, kind: s.kind, x: s.x, y: s.y,
             w: s.w, h: s.h, path: s.path?.slice(0, 9), rings: s.path?.filter(c => c[0] === "Z").length });
           details += `; ${JSON.stringify({ source: concise(current), preview: concise(preview) }).slice(0, 1800)}`;

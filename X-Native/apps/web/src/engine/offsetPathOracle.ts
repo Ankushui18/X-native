@@ -128,25 +128,26 @@ export function prominentMiterTips(shape: RustOffsetChange, distance: number): P
  * to produce the expected membership. Capped work happens once per proposed
  * edit (never in the paint loop). At least 96 decisive points must agree. */
 export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOffsetChange,
-    distance: number, join: Join): boolean {
+    distance: number, join: Join, onFailure?: (reason: string) => void): boolean {
+  const reject = (reason: string): false => { onFailure?.(reason); return false; };
   if (before.id !== after.id || before.name !== after.name || after.kind !== "vector" ||
-      !Number.isFinite(distance) || Math.abs(distance) > 2048 || distance === 0) return false;
+      !Number.isFinite(distance) || Math.abs(distance) > 2048 || distance === 0) return reject("identity/kind/distance");
   const source = inputRings(before), output = offsetRings(after.path);
   if (!source || !output || !source.length || source.reduce((n, r) => n + r.length, 0) > 512 ||
-      output.reduce((n, r) => n + r.length, 0) > 4096) return false;
+      output.reduce((n, r) => n + r.length, 0) > 4096) return reject("invalid or excessive contours");
   const xs = [...source.flat().map(p => p[0] + before.x), ...output.flat().map(p => p[0] + after.x)];
   const ys = [...source.flat().map(p => p[1] + before.y), ...output.flat().map(p => p[1] + after.y)];
   const margin = Math.min(4, Math.abs(distance) + 1);
   const x0 = Math.min(...xs) - margin, x1 = Math.max(...xs) + margin;
   const y0 = Math.min(...ys) - margin, y1 = Math.max(...ys) + margin;
-  if (![x0, x1, y0, y1].every(Number.isFinite) || x1 - x0 > 1024 || y1 - y0 > 1024) return false;
+  if (![x0, x1, y0, y1].every(Number.isFinite) || x1 - x0 > 1024 || y1 - y0 > 1024) return reject("unbounded coverage grid");
   // Check the reported box too. If the contour is empty Rust keeps a stable
   // 1x1 layer solely for undo; non-empty bounds must describe every anchor.
   if (output.length) {
     const outX = output.flat().map(p => p[0]), outY = output.flat().map(p => p[1]);
     if (Math.abs(Math.min(...outX)) > 1e-7 || Math.abs(Math.min(...outY)) > 1e-7 ||
         Math.abs(Math.max(1, ...outX) - after.w) > 1e-7 ||
-        Math.abs(Math.max(1, ...outY) - after.h) > 1e-7) return false;
+        Math.abs(Math.max(1, ...outY) - after.h) > 1e-7) return reject("reported bounds do not enclose the output path");
   }
   const width = x1 - x0, height = y1 - y0, step = Math.max(width, height) / 40;
   const epsilon = Math.max(0.04, step * 0.35, Math.abs(distance) * 0.01);
@@ -156,9 +157,12 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
   const anchors = output.flat();
   for (const [x, y] of prominentMiterTips(before, distance)) {
     const px = x + before.x - after.x, py = y + before.y - after.y;
-    const atTip = anchors.some(([ax, ay]) => Math.hypot(ax - px, ay - py) < 0.1);
+    const nearest = Math.min(Infinity, ...anchors.map(([ax, ay]) => Math.hypot(ax - px, ay - py)));
+    const atTip = nearest < 0.1;
     const filled = insideAndDistance(output, px, py).inside;
-    if (join === "miter" ? !atTip : atTip || filled) return false;
+    if (join === "miter" ? !atTip : atTip || filled) {
+      return reject(`angular join at (${x.toFixed(2)},${y.toFixed(2)}): nearest=${nearest.toFixed(3)}, filled=${filled}`);
+    }
   }
   let compared = 0, expectedInk = 0, observedInk = 0;
   for (let iy = 0; iy < 41; iy++) for (let ix = 0; ix < 41; ix++) {
@@ -183,7 +187,9 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
     const end = insideAndDistance(output, x - after.x, y - after.y);
     if (boundary <= epsilon || end.distance <= epsilon) continue;
     compared++; expectedInk += Number(expected); observedInk += Number(end.inside);
-    if (expected !== end.inside) return false;
+    if (expected !== end.inside) {
+      return reject(`coverage at (${x.toFixed(2)},${y.toFixed(2)}): expected=${expected}, native=${end.inside}, vertex=${start.vertex.toFixed(2)}, boundary=${boundary.toFixed(2)}`);
+    }
   }
   // A coarse grid can miss the small triangular differences between miter,
   // bevel and round joins. Interior corner probes enforce the actual join,
@@ -195,11 +201,13 @@ export function offsetCoverageEquivalent(before: RustOffsetChange, after: RustOf
       const px = x * distance, py = y * distance;
       const expected = rectangleReference(px, py, before.w, before.h, distance, join).inside;
       const actual = insideAndDistance(output, before.x + px - after.x, before.y + py - after.y).inside;
-      if (expected !== actual) return false;
+      if (expected !== actual) return reject(`analytical rectangle corner (${px.toFixed(2)},${py.toFixed(2)}): expected=${expected}, native=${actual}`);
     }
   }
-  return compared >= 96 && (expectedInk > 0 || !output.length) &&
-    (observedInk > 0 || !output.length);
+  if (compared < 96 || (!expectedInk && output.length) || (!observedInk && output.length)) {
+    return reject(`insufficient decisive samples: compared=${compared}, expectedInk=${expectedInk}, observedInk=${observedInk}`);
+  }
+  return true;
 }
 
 /** A failed preview never enters Rust history. The regular editor remains

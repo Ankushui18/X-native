@@ -22,6 +22,9 @@ assert.equal(offsetCoverageEquivalent(source, { ...expanded, x: 10, y: 20, w: 1,
 const bevel = vector(4, 14, 82, 52, [[0, 6], [6, 0], [76, 0], [82, 6],
   [82, 46], [76, 52], [6, 52], [0, 46]]);
 assert.equal(offsetCoverageEquivalent(source, bevel, 6, "bevel"), true);
+const failureReasons = [];
+assert.equal(offsetCoverageEquivalent(source, bevel, 6, "miter", reason => failureReasons.push(reason)), false);
+assert.ok(failureReasons[0]?.includes("coverage") || failureReasons[0]?.includes("corner"));
 // Inversion, wrong winding/identity/bounds and unproved curves must block.
 for (const bad of [
   [expanded, -6, "miter"],
