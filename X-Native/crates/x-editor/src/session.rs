@@ -889,7 +889,9 @@ mod tests {
             align: StrokeAlign::Outside,
             join,
         };
-        let changed = session.dispatch(style("box", 8.0, StrokeJoin::Bevel)).unwrap();
+        let changed = session
+            .dispatch(style("box", 8.0, StrokeJoin::Bevel))
+            .unwrap();
         assert_eq!(changed.revision, 1);
         assert!(changed.node.is_none() && changed.boolean.is_none());
         let band = changed.stroke.unwrap();
@@ -902,7 +904,9 @@ mod tests {
             &[(0.0, 0.0), (30.0, 0.0), (30.0, 40.0), (0.0, 40.0)]
         );
         assert_eq!(
-            session.dispatch(style("box", 8.0, StrokeJoin::Bevel)).unwrap(),
+            session
+                .dispatch(style("box", 8.0, StrokeJoin::Bevel))
+                .unwrap(),
             session.state(),
             "no-op cannot push a new history entry"
         );
