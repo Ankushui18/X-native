@@ -70,7 +70,9 @@ pub fn export_pdf_full(
     // Uniform strokes deliberately remain native PDF strokes: that preserves
     // existing compact gradient-stroke handling while profiles cannot degrade
     // into a visually incorrect uniform width.
-    let mut export_tree = outlined.unwrap_or_else(|| tree.clone());
+    let mut export_tree = outlined.unwrap_or_else(|| RenderTree {
+        commands: tree.commands.clone(),
+    });
     crate::text_geometry::materialize_variable_strokes(&mut export_tree);
     let tree = &export_tree;
     let mut content = String::new();

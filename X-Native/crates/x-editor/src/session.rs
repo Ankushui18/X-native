@@ -1694,7 +1694,11 @@ mod tests {
                 applied.outline.unwrap().shape,
                 OutlineShapeDelta::Vector { ref path } if path.iter().any(|command| matches!(command, PathCmd::Close))
             ));
-            let restored = session.dispatch(SessionCommand::Undo).unwrap().outline.unwrap();
+            let restored = session
+                .dispatch(SessionCommand::Undo)
+                .unwrap()
+                .outline
+                .unwrap();
             assert!(matches!(restored.shape, OutlineShapeDelta::Line));
             assert_eq!(restored.node.w, w);
             assert_eq!(restored.node.h, h);
