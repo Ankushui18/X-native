@@ -142,7 +142,10 @@ fn outline_value(change: OutlineDelta) -> Value {
         }
     }
     value["fill"] = json!(change.fill);
-    value["stroke"] = change.stroke.map(outline_stroke_value).unwrap_or(Value::Null);
+    value["stroke"] = change
+        .stroke
+        .map(outline_stroke_value)
+        .unwrap_or(Value::Null);
     value
 }
 
@@ -546,7 +549,14 @@ mod tests {
 
     #[test]
     fn outline_stroke_serializes_a_reversible_profiled_dash_cap_delta() {
-        let mut line = Node::line("ink", 10.0, 20.0, 72.0, 36.0, Color::from_rgb8(0x91, 0x42, 0xd4));
+        let mut line = Node::line(
+            "ink",
+            10.0,
+            20.0,
+            72.0,
+            36.0,
+            Color::from_rgb8(0x91, 0x42, 0xd4),
+        );
         line.visual_stacks_materialized = true;
         line.fill_layers = vec![PaintLayer::new(line.fill.clone())];
         line.stroke = Stroke::solid(Color::from_rgb8(0x91, 0x42, 0xd4), 7.0);
@@ -562,9 +572,18 @@ mod tests {
                 dash: vec![11.0, 4.0],
                 dash_offset: 8.0,
                 width_profile: vec![
-                    VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
-                    VariableWidthPoint { position: 0.4, width_multiplier: 1.75 },
-                    VariableWidthPoint { position: 1.0, width_multiplier: 0.75 },
+                    VariableWidthPoint {
+                        position: 0.0,
+                        width_multiplier: 0.5,
+                    },
+                    VariableWidthPoint {
+                        position: 0.4,
+                        width_multiplier: 1.75,
+                    },
+                    VariableWidthPoint {
+                        position: 1.0,
+                        width_multiplier: 0.75,
+                    },
                 ],
                 ..Default::default()
             },
@@ -576,7 +595,10 @@ mod tests {
         let mut bridge = CommandBridge::open(&source).unwrap();
 
         let applied_wire = bridge.outline_stroke("ink").unwrap();
-        assert!(applied_wire.len() < 100_000, "outline command returned a page");
+        assert!(
+            applied_wire.len() < 100_000,
+            "outline command returned a page"
+        );
         let applied: Value = serde_json::from_str(&applied_wire).unwrap();
         assert_eq!(applied["revision"], 1);
         assert_eq!(applied["node"], Value::Null);
@@ -585,7 +607,11 @@ mod tests {
         assert_eq!(applied["outline"]["kind"], "vector");
         assert_eq!(applied["outline"]["fill"], "#9142d4");
         assert_eq!(applied["outline"]["stroke"], Value::Null);
-        assert!(applied["outline"]["path"].as_array().unwrap().iter().any(|cmd| cmd == &json!(["Z"])));
+        assert!(applied["outline"]["path"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cmd| cmd == &json!(["Z"])));
         assert!(matches!(
             load_x(&bridge.export_x()).unwrap().pages[0].children[0].kind,
             x_core::NodeKind::Vector { .. }
@@ -601,8 +627,18 @@ mod tests {
         assert_eq!(undone["outline"]["stroke"]["join"], "round");
         assert_eq!(undone["outline"]["stroke"]["dash"], json!([11.0, 4.0]));
         assert_eq!(undone["outline"]["stroke"]["dashOffset"], 8.0);
-        assert_eq!(undone["outline"]["stroke"]["widthProfile"].as_array().unwrap().len(), 3);
-        assert_eq!(bridge.export_x(), source, "undo restores the exact native source");
+        assert_eq!(
+            undone["outline"]["stroke"]["widthProfile"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            bridge.export_x(),
+            source,
+            "undo restores the exact native source"
+        );
 
         let redone: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
         assert_eq!(redone["revision"], 3);

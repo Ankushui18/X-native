@@ -276,19 +276,37 @@ mod variable_stroke_tests {
             join: x_core::StrokeJoin::Round,
             dash: vec![12.0, 6.0],
             width_profile: vec![
-                x_core::VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
-                x_core::VariableWidthPoint { position: 0.5, width_multiplier: 2.0 },
-                x_core::VariableWidthPoint { position: 1.0, width_multiplier: 0.75 },
+                x_core::VariableWidthPoint {
+                    position: 0.0,
+                    width_multiplier: 0.5,
+                },
+                x_core::VariableWidthPoint {
+                    position: 0.5,
+                    width_multiplier: 2.0,
+                },
+                x_core::VariableWidthPoint {
+                    position: 1.0,
+                    width_multiplier: 0.75,
+                },
             ],
             ..Default::default()
         };
-        let outline = variable_stroke_outline(&path, 8.0, &options).expect("profile takes fill path");
+        let outline =
+            variable_stroke_outline(&path, 8.0, &options).expect("profile takes fill path");
         assert!(
-            outline.elements().iter().filter(|el| matches!(el, PathEl::ClosePath)).count() >= 3,
+            outline
+                .elements()
+                .iter()
+                .filter(|el| matches!(el, PathEl::ClosePath))
+                .count()
+                >= 3,
             "each painted dash is a closed filled contour"
         );
         let bounds = outline.bounding_box();
-        assert!(bounds.height() > 12.0, "mid-path width peak survives: {bounds:?}");
+        assert!(
+            bounds.height() > 12.0,
+            "mid-path width peak survives: {bounds:?}"
+        );
         assert!(bounds.x0 < -1.9, "round start cap survives");
 
         let uniform = x_core::StrokeOptions::default();
@@ -307,7 +325,8 @@ mod variable_stroke_tests {
             }],
             ..Default::default()
         };
-        let outline = variable_stroke_outline(&path, 2.0, &options).expect("nonempty profile is handled");
+        let outline =
+            variable_stroke_outline(&path, 2.0, &options).expect("nonempty profile is handled");
         assert!(outline.elements().is_empty());
     }
 }

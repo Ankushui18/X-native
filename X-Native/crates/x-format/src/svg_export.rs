@@ -472,7 +472,9 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     body.push_str(&format!("<rect width=\"{}\" height=\"{}\" rx=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w, n.h, r, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
@@ -486,7 +488,9 @@ fn svg_node(
                 body.push_str(&format!("<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{}\" opacity=\"{}\"{}/>", n.w / 2.0, n.h / 2.0, n.w / 2.0, n.h / 2.0, fill, layer.opacity, svg_blend(layer.blend)));
             }
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     body.push_str(&format!("<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w / 2.0, n.h / 2.0, n.w / 2.0, n.h / 2.0, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
@@ -496,7 +500,9 @@ fn svg_node(
         NodeKind::Line => {
             let stroke_source = svg_stroke_source(n);
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     body.push_str(&format!("<line x1=\"0\" y1=\"0\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w, n.h, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width.max(1.0), layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
@@ -601,7 +607,9 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(path, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(path, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     body.push_str(&format!("<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", d.trim_end(), svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
@@ -625,7 +633,9 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     body.push_str(&format!(
@@ -662,7 +672,9 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
@@ -692,7 +704,9 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
@@ -723,7 +737,9 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                if let Some(profiled) = svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets) {
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
                     body.push_str(&profiled);
                 } else {
                     body.push_str(&format!("<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", d.trim_end(), svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));

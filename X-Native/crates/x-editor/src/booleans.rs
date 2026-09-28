@@ -11,8 +11,7 @@ pub use x_core::booleans::{
 use crate::{find, parent_id, Command, Editor};
 use x_core::web_raster::boolean_web_raster_shaped;
 use x_core::{
-    outline_stroke_path, Color, Node, NodeKind, Paint, PaintLayer, PathCmd, Stroke,
-    StrokeLayer,
+    outline_stroke_path, Color, Node, NodeKind, Paint, PaintLayer, PathCmd, Stroke, StrokeLayer,
 };
 
 // The web raster's cell-centre boundary walker deliberately preserves the TS
@@ -403,14 +402,21 @@ impl Editor {
     /// x-native supplies genuinely shaped glyph paths, while x-editor owns the
     /// parent slot, selection and one Rust undo entry. It intentionally does
     /// not know anything about fonts and never manufactures a fallback glyph.
-    pub fn replace_node_with_siblings(&mut self, id: &str, replacements: Vec<Node>) -> Option<Vec<String>> {
+    pub fn replace_node_with_siblings(
+        &mut self,
+        id: &str,
+        replacements: Vec<Node>,
+    ) -> Option<Vec<String>> {
         if replacements.is_empty() {
             return None;
         }
         let parent = parent_id(&self.root, id)?;
         let (index, source) = {
             let parent_node = find(&self.root, &parent)?;
-            let index = parent_node.children.iter().position(|child| child.id == id)?;
+            let index = parent_node
+                .children
+                .iter()
+                .position(|child| child.id == id)?;
             (index, parent_node.children[index].clone())
         };
         if !replacement_ids_are_fresh(&self.root, id, &replacements) {
@@ -448,7 +454,12 @@ impl Editor {
 /// public structural helper must not let a future caller smuggle a duplicate
 /// descendant into the document tree.
 fn replacement_ids_are_fresh(root: &Node, source_id: &str, replacements: &[Node]) -> bool {
-    fn visit(root: &Node, source_id: &str, node: &Node, ids: &mut std::collections::HashSet<String>) -> bool {
+    fn visit(
+        root: &Node,
+        source_id: &str,
+        node: &Node,
+        ids: &mut std::collections::HashSet<String>,
+    ) -> bool {
         if node.id.is_empty()
             || node.id == source_id
             || !ids.insert(node.id.clone())
@@ -471,7 +482,11 @@ fn replacement_ids_are_fresh(root: &Node, source_id: &str, replacements: &[Node]
 /// outline's min corner to x/y breaks rotated, flipped or skewed layers. Keep
 /// the old affine's linear part and solve the new translation after rebasing
 /// local path coordinates to (0, 0).
-fn outline_node_from_layer(source: &Node, layer: &StrokeLayer, outline: x_core::StrokeOutline) -> Node {
+fn outline_node_from_layer(
+    source: &Node,
+    layer: &StrokeLayer,
+    outline: x_core::StrokeOutline,
+) -> Node {
     let old_w = source.w;
     let old_h = source.h;
     let matrix = source.transform.matrix(old_w, old_h);
@@ -933,9 +948,18 @@ mod tests {
                 dash: vec![18.0, 7.0],
                 dash_offset: 3.0,
                 width_profile: vec![
-                    x_core::VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
-                    x_core::VariableWidthPoint { position: 0.45, width_multiplier: 2.0 },
-                    x_core::VariableWidthPoint { position: 1.0, width_multiplier: 0.75 },
+                    x_core::VariableWidthPoint {
+                        position: 0.0,
+                        width_multiplier: 0.5,
+                    },
+                    x_core::VariableWidthPoint {
+                        position: 0.45,
+                        width_multiplier: 2.0,
+                    },
+                    x_core::VariableWidthPoint {
+                        position: 1.0,
+                        width_multiplier: 0.75,
+                    },
                 ],
                 ..Default::default()
             },
@@ -960,7 +984,9 @@ mod tests {
         assert_eq!(outlined.fill, source.stroke_layers[0].stroke.paint);
         assert!(matches!(&outlined.kind, NodeKind::Vector { .. }));
         let new_matrix = outlined.transform.matrix(outlined.w, outlined.h);
-        let NodeKind::Vector { path } = &outlined.kind else { unreachable!() };
+        let NodeKind::Vector { path } = &outlined.kind else {
+            unreachable!()
+        };
         let expected_points = expected.path.iter().filter_map(|command| match *command {
             PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => Some((x, y)),
             PathCmd::CurveTo(..) | PathCmd::Close => None,
@@ -974,13 +1000,21 @@ mod tests {
             let before = (a * x + c * y + e, b * x + d * y + f);
             let [a, b, c, d, e, f] = new_matrix.as_coeffs();
             let after = (a * qx + c * qy + e, b * qx + d * qy + f);
-            assert!((before.0 - after.0).abs() < 1e-8 && (before.1 - after.1).abs() < 1e-8,
-                "world anchor changed: before={before:?}, after={after:?}");
+            assert!(
+                (before.0 - after.0).abs() < 1e-8 && (before.1 - after.1).abs() < 1e-8,
+                "world anchor changed: before={before:?}, after={after:?}"
+            );
         }
         assert!(editor.undo(), "one undo restores the source stroke");
-        assert!(matches!(&find(&editor.root, "ink").unwrap().kind, NodeKind::Rect { .. }));
+        assert!(matches!(
+            &find(&editor.root, "ink").unwrap().kind,
+            NodeKind::Rect { .. }
+        ));
         assert!(editor.redo(), "one redo restores the outlined vector");
-        assert!(matches!(&find(&editor.root, "ink").unwrap().kind, NodeKind::Vector { .. }));
+        assert!(matches!(
+            &find(&editor.root, "ink").unwrap().kind,
+            NodeKind::Vector { .. }
+        ));
     }
 
     #[test]
@@ -990,18 +1024,43 @@ mod tests {
             .child(Node::text("text", 0.0, 0.0, 30.0, 20.0, "Hi"))
             .child(Node::rect("after", 0.0, 0.0, 1.0, 1.0, Color::BLACK));
         let mut editor = Editor::new(page);
-        let first = Node::vector("glyph-a", 0.0, 0.0, 4.0, 5.0, vec![
-            PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(4.0, 0.0), PathCmd::LineTo(0.0, 5.0), PathCmd::Close,
-        ]);
-        let second = Node::vector("glyph-b", 5.0, 0.0, 4.0, 5.0, vec![
-            PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(4.0, 0.0), PathCmd::LineTo(0.0, 5.0), PathCmd::Close,
-        ]);
+        let first = Node::vector(
+            "glyph-a",
+            0.0,
+            0.0,
+            4.0,
+            5.0,
+            vec![
+                PathCmd::MoveTo(0.0, 0.0),
+                PathCmd::LineTo(4.0, 0.0),
+                PathCmd::LineTo(0.0, 5.0),
+                PathCmd::Close,
+            ],
+        );
+        let second = Node::vector(
+            "glyph-b",
+            5.0,
+            0.0,
+            4.0,
+            5.0,
+            vec![
+                PathCmd::MoveTo(0.0, 0.0),
+                PathCmd::LineTo(4.0, 0.0),
+                PathCmd::LineTo(0.0, 5.0),
+                PathCmd::Close,
+            ],
+        );
         assert_eq!(
             editor.replace_node_with_siblings("text", vec![first.clone(), second.clone()]),
             Some(vec!["glyph-a".into(), "glyph-b".into()])
         );
         assert_eq!(
-            editor.root.children.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(),
+            editor
+                .root
+                .children
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["before", "glyph-a", "glyph-b", "after"],
             "siblings occupy the source slot in order"
         );
@@ -1009,7 +1068,8 @@ mod tests {
         assert_eq!(editor.root.children[1].id, "text");
         assert!(editor.redo());
         let duplicate = Node::vector("glyph-a", 0.0, 0.0, 1.0, 1.0, vec![]);
-        assert!(editor.replace_node_with_siblings("glyph-a", vec![duplicate]).is_none());
+        assert!(editor
+            .replace_node_with_siblings("glyph-a", vec![duplicate])
+            .is_none());
     }
-
 }

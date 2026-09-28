@@ -503,9 +503,7 @@ impl DocumentSession {
             || !outline.path.iter().all(path_command_is_session_safe)
             || ![output_x, output_y, output_w, output_h]
                 .iter()
-                .all(|value| {
-                    value.is_finite() && value.abs() <= OUTLINE_SESSION_COORD_LIMIT
-                })
+                .all(|value| value.is_finite() && value.abs() <= OUTLINE_SESSION_COORD_LIMIT)
         {
             return Err("outline result exceeds the session projection budget".into());
         }
@@ -517,9 +515,7 @@ impl DocumentSession {
     }
 
     fn outline_projection(node: &Node) -> Result<OutlineDelta, String> {
-        let finite = |value: f64| {
-            value.is_finite() && value.abs() <= OUTLINE_SESSION_COORD_LIMIT
-        };
+        let finite = |value: f64| value.is_finite() && value.abs() <= OUTLINE_SESSION_COORD_LIMIT;
         if node.id.is_empty()
             || node.id.len() > 256
             || node.name.len() > 1024
@@ -592,10 +588,7 @@ impl DocumentSession {
         if strokes.len() > 1 {
             return Err("outline session permits exactly one stroke layer".into());
         }
-        let stroke = strokes
-            .first()
-            .map(outline_stroke_style)
-            .transpose()?;
+        let stroke = strokes.first().map(outline_stroke_style).transpose()?;
 
         if node.visual_stacks_materialized {
             if node.fill_layers.len() != 1
@@ -841,7 +834,9 @@ impl DocumentSession {
             SessionCommand::OutlineStroke { id } => {
                 self.outline_operand(id)?;
                 let before = self.editor.undo_depth();
-                if self.editor.outline_stroke_node(id).is_some() && self.editor.undo_depth() > before {
+                if self.editor.outline_stroke_node(id).is_some()
+                    && self.editor.undo_depth() > before
+                {
                     outline_id = Some(id.to_string());
                 }
                 None
@@ -1000,9 +995,7 @@ fn path_command_is_session_safe(command: &PathCmd) -> bool {
     let finite = |value: f64| value.is_finite() && value.abs() <= OUTLINE_SESSION_COORD_LIMIT;
     match *command {
         PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => finite(x) && finite(y),
-        PathCmd::CurveTo(a, b, c, d, x, y) => {
-            [a, b, c, d, x, y].iter().all(|value| finite(*value))
-        }
+        PathCmd::CurveTo(a, b, c, d, x, y) => [a, b, c, d, x, y].iter().all(|value| finite(*value)),
         PathCmd::Close => true,
     }
 }
@@ -1580,7 +1573,14 @@ mod tests {
 
     #[test]
     fn outline_stroke_session_returns_a_bounded_vector_delta_and_round_trips_history() {
-        let mut source = Node::rect("ink", 10.0, 20.0, 64.0, 28.0, Color::from_rgb8(0x12, 0x34, 0x56));
+        let mut source = Node::rect(
+            "ink",
+            10.0,
+            20.0,
+            64.0,
+            28.0,
+            Color::from_rgb8(0x12, 0x34, 0x56),
+        );
         source.visual_stacks_materialized = true;
         source.fill_layers = vec![PaintLayer::new(source.fill.clone())];
         source.stroke = x_core::Stroke::solid(Color::from_rgb8(0x99, 0x55, 0x11), 6.0);
@@ -1596,9 +1596,18 @@ mod tests {
                 dash: vec![13.0, 5.0],
                 dash_offset: 8.0,
                 width_profile: vec![
-                    VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
-                    VariableWidthPoint { position: 0.5, width_multiplier: 1.75 },
-                    VariableWidthPoint { position: 1.0, width_multiplier: 0.75 },
+                    VariableWidthPoint {
+                        position: 0.0,
+                        width_multiplier: 0.5,
+                    },
+                    VariableWidthPoint {
+                        position: 0.5,
+                        width_multiplier: 1.75,
+                    },
+                    VariableWidthPoint {
+                        position: 1.0,
+                        width_multiplier: 0.75,
+                    },
                 ],
                 ..Default::default()
             },
@@ -1607,7 +1616,8 @@ mod tests {
             pages: vec![Node::frame("page", 160.0, 90.0).child(source.clone())],
             ..Default::default()
         });
-        let mut session = DocumentSession::new(x_format::deserialize::load_x(&before_file).unwrap()).unwrap();
+        let mut session =
+            DocumentSession::new(x_format::deserialize::load_x(&before_file).unwrap()).unwrap();
 
         let applied = session
             .dispatch(SessionCommand::OutlineStroke { id: "ink" })
@@ -1617,8 +1627,13 @@ mod tests {
         let outline = applied.outline.expect("one bounded outline delta");
         assert_eq!(outline.node.id, "ink");
         assert_eq!(outline.fill.as_deref(), Some("#995511"));
-        assert!(outline.stroke.is_none(), "the result is a fill, not a live stroke");
-        assert!(matches!(outline.shape, OutlineShapeDelta::Vector { ref path } if path.iter().any(|cmd| matches!(cmd, PathCmd::Close))));
+        assert!(
+            outline.stroke.is_none(),
+            "the result is a fill, not a live stroke"
+        );
+        assert!(
+            matches!(outline.shape, OutlineShapeDelta::Vector { ref path } if path.iter().any(|cmd| matches!(cmd, PathCmd::Close)))
+        );
         assert_eq!(session.editor.undo_depth(), 1);
 
         let undone = session.dispatch(SessionCommand::Undo).unwrap();
@@ -1630,11 +1645,17 @@ mod tests {
         assert_eq!(restored_stroke.dash, vec![13.0, 5.0]);
         assert_eq!(restored_stroke.dash_offset, 8.0);
         assert_eq!(restored_stroke.width_profile.len(), 3);
-        assert_eq!(x_format::serialize::save_x(&session.snapshot()), before_file);
+        assert_eq!(
+            x_format::serialize::save_x(&session.snapshot()),
+            before_file
+        );
 
         let redone = session.dispatch(SessionCommand::Redo).unwrap();
         assert_eq!(redone.revision, 3);
-        assert!(matches!(redone.outline.unwrap().shape, OutlineShapeDelta::Vector { .. }));
+        assert!(matches!(
+            redone.outline.unwrap().shape,
+            OutlineShapeDelta::Vector { .. }
+        ));
     }
 
     #[test]
@@ -1650,7 +1671,10 @@ mod tests {
             blend: x_core::BlendKind::Normal,
             options: x_core::StrokeOptions {
                 dash: vec![0.0, 4.0],
-                width_profile: vec![VariableWidthPoint { position: 0.0, width_multiplier: 1.0 }],
+                width_profile: vec![VariableWidthPoint {
+                    position: 0.0,
+                    width_multiplier: 1.0,
+                }],
                 ..Default::default()
             },
         }];
@@ -1659,13 +1683,17 @@ mod tests {
             ..Default::default()
         };
         let mut session = DocumentSession::new(doc).unwrap();
-        assert!(session.dispatch(SessionCommand::OutlineStroke { id: "ink" }).is_err());
+        assert!(session
+            .dispatch(SessionCommand::OutlineStroke { id: "ink" })
+            .is_err());
         assert_eq!(session.revision, 0);
         assert_eq!(session.editor.undo_depth(), 0);
 
         let child = Node::rect("nested", 0.0, 0.0, 10.0, 10.0, Color::WHITE);
         session.editor.root.children[0].children.push(child);
-        assert!(session.dispatch(SessionCommand::OutlineStroke { id: "ink" }).is_err());
+        assert!(session
+            .dispatch(SessionCommand::OutlineStroke { id: "ink" })
+            .is_err());
         assert_eq!(session.editor.undo_depth(), 0);
     }
 

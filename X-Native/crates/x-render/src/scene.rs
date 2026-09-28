@@ -316,11 +316,9 @@ fn encode_vector_layers(
         // the common materialized geometry below instead.
         if let Some(aligned) = crate::ir::aligned_rectangle_stroke_path(node, layer) {
             scene.fill(Fill::NonZero, world, &brush, None, &aligned);
-        } else if let Some(outline) = crate::text_geometry::variable_stroke_outline(
-            path,
-            layer.stroke.width,
-            &layer.options,
-        ) {
+        } else if let Some(outline) =
+            crate::text_geometry::variable_stroke_outline(path, layer.stroke.width, &layer.options)
+        {
             scene.fill(Fill::NonZero, world, &brush, None, &outline);
         } else {
             let stroke = crate::text_geometry::stroke_style(layer.stroke.width, &layer.options);

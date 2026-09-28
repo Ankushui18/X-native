@@ -24,7 +24,8 @@ fn text_outlines_to_ordered_editable_glyph_vectors() {
     text.transform.origin_x = 0.25;
     text.transform.origin_y = 0.75;
 
-    let glyphs = outline_text_glyph_nodes(&text, &fonts, &Variables::default()).expect("glyph paths");
+    let glyphs =
+        outline_text_glyph_nodes(&text, &fonts, &Variables::default()).expect("glyph paths");
     // The space advances but has no outline; H, i and i each remain editable
     // groups (the dot and stem of each i stay in the same vector node).
     assert_eq!(glyphs.len(), 3);
@@ -45,13 +46,23 @@ fn glyph_outline_replaces_one_sibling_slot_with_one_undo_entry() {
     let before = Node::rect("before", 0.0, 0.0, 10.0, 10.0, Color::BLACK);
     let text = Node::text("title", 20.0, 10.0, 180.0, 40.0, "Hi");
     let after = Node::rect("after", 0.0, 0.0, 10.0, 10.0, Color::BLACK);
-    let mut editor = Editor::new(Node::frame("page", 300.0, 100.0).child(before).child(text).child(after));
+    let mut editor = Editor::new(
+        Node::frame("page", 300.0, 100.0)
+            .child(before)
+            .child(text)
+            .child(after),
+    );
 
     let ids = outline_text_glyph_layers(&mut editor, "title", &fonts, &Variables::default())
         .expect("atomic text outline");
     assert_eq!(ids.len(), 2);
     assert_eq!(
-        editor.root.children.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(),
+        editor
+            .root
+            .children
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<Vec<_>>(),
         vec!["before", ids[0].as_str(), ids[1].as_str(), "after"],
         "glyph siblings replace the text at its original stacking slot"
     );

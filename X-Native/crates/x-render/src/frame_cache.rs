@@ -1288,8 +1288,14 @@ mod variable_width_cache_tests {
             blend: BlendKind::Normal,
             options: StrokeOptions {
                 width_profile: vec![
-                    VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
-                    VariableWidthPoint { position: 1.0, width_multiplier: 1.5 },
+                    VariableWidthPoint {
+                        position: 0.0,
+                        width_multiplier: 0.5,
+                    },
+                    VariableWidthPoint {
+                        position: 1.0,
+                        width_multiplier: 1.5,
+                    },
                 ],
                 ..StrokeOptions::default()
             },

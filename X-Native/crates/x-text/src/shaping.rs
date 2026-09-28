@@ -2410,7 +2410,9 @@ mod tests {
     #[test]
     fn outline_glyph_group_keeps_multi_contour_glyphs_together() {
         let fonts = fonts();
-        let Some(default_font) = fonts.default_font() else { return };
+        let Some(default_font) = fonts.default_font() else {
+            return;
+        };
         // A lowercase i normally contains a stem and detached dot. They may
         // become several path contours, but editable Outline Text must receive
         // one glyph group rather than separate sibling layers.
@@ -2424,5 +2426,4 @@ mod tests {
         let group = glyphs[0].group;
         assert!(glyphs.iter().all(|glyph| glyph.group == group));
     }
-
 }

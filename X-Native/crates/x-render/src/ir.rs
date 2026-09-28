@@ -1428,7 +1428,16 @@ fn lower(
             shape.move_to((0.0, 0.0));
             shape.line_to((node.w, node.h));
             let override_color = node_fill_override(overrides, node.id.as_str());
-            emit_visual_layers(tree, node, &key, world, &shape, vars, opacity, override_color);
+            emit_visual_layers(
+                tree,
+                node,
+                &key,
+                world,
+                &shape,
+                vars,
+                opacity,
+                override_color,
+            );
         }
         NodeKind::Vector { path: p } => {
             if !p.is_empty() {
@@ -2035,7 +2044,9 @@ impl<'a> VelloSink<'a> {
                     options,
                     ..
                 } => {
-                    if let Some(outline) = crate::text_geometry::variable_stroke_outline(path, *width, options) {
+                    if let Some(outline) =
+                        crate::text_geometry::variable_stroke_outline(path, *width, options)
+                    {
                         scene.fill(Fill::NonZero, *transform, brush, None, &outline)
                     } else {
                         let stroke = crate::text_geometry::stroke_style(*width, options);

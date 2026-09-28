@@ -297,7 +297,8 @@ impl<'a> RasterSink<'a> {
                     options,
                     ..
                 } => {
-                    let profiled = crate::text_geometry::variable_stroke_outline(path, *width, options);
+                    let profiled =
+                        crate::text_geometry::variable_stroke_outline(path, *width, options);
                     let draw_path = profiled.as_ref().unwrap_or(path);
                     if let Some(p) = to_path(draw_path) {
                         let mut paint = to_paint(brush);

@@ -177,8 +177,8 @@ pub fn outline_text_glyph_nodes(
         }
         // Plain shaping carries BLACK as its internal brush marker; only a
         // real rich-text run color overrides the cloned source fill stack.
-        let color = (!node.text_runs.is_empty() && glyph.color.components[3] != 0.0)
-            .then_some(glyph.color);
+        let color =
+            (!node.text_runs.is_empty() && glyph.color.components[3] != 0.0).then_some(glyph.color);
         match groups.last_mut() {
             Some((group, prior_color, paths)) if *group == glyph.group => {
                 // A grapheme normally has one style. If a fallback shaper did
@@ -357,9 +357,14 @@ fn shaped_text_outline_glyphs(
 /// local to its tight bounds. Text nodes can be rotated, flipped or skewed, so
 /// changing `w`/`h` without solving the origin-pivot translation would move the
 /// glyph on canvas.
-fn text_vector_node(node: &Node, prefix: &str, commands: Vec<PathCmd>, color: Option<Color>) -> Node {
-    let (min_x, min_y, max_x, max_y) = path_cmd_bounds(&commands)
-        .expect("shaped text paths contain finite anchors");
+fn text_vector_node(
+    node: &Node,
+    prefix: &str,
+    commands: Vec<PathCmd>,
+    color: Option<Color>,
+) -> Node {
+    let (min_x, min_y, max_x, max_y) =
+        path_cmd_bounds(&commands).expect("shaped text paths contain finite anchors");
     let old_matrix = node.transform.matrix(node.w, node.h);
     let [a, b, c, d, e, f] = old_matrix.as_coeffs();
     let w = (max_x - min_x).max(1.0);

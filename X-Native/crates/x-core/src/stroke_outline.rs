@@ -324,14 +324,8 @@ fn finite_point((x, y): Point) -> Result<(), &'static str> {
 fn cubic(p0: Point, p1: Point, p2: Point, p3: Point, t: f64) -> Point {
     let mt = 1.0 - t;
     (
-        mt * mt * mt * p0.0
-            + 3.0 * mt * mt * t * p1.0
-            + 3.0 * mt * t * t * p2.0
-            + t * t * t * p3.0,
-        mt * mt * mt * p0.1
-            + 3.0 * mt * mt * t * p1.1
-            + 3.0 * mt * t * t * p2.1
-            + t * t * t * p3.1,
+        mt * mt * mt * p0.0 + 3.0 * mt * mt * t * p1.0 + 3.0 * mt * t * t * p2.0 + t * t * t * p3.0,
+        mt * mt * mt * p0.1 + 3.0 * mt * mt * t * p1.1 + 3.0 * mt * t * t * p2.1 + t * t * t * p3.1,
     )
 }
 
@@ -384,7 +378,9 @@ fn make_centerline(mut points: Vec<Point>, requested_closed: bool) -> Option<Cen
 
 fn closed_samples(line: &Centerline, profile: &[VariableWidthPoint]) -> Vec<Sample> {
     let mut samples = sample_range(line, 0.0, line.total, profile);
-    if samples.len() > 1 && distance(samples[0].point, samples.last().expect("len checked").point) <= EPS {
+    if samples.len() > 1
+        && distance(samples[0].point, samples.last().expect("len checked").point) <= EPS
+    {
         samples.pop();
     }
     samples
@@ -771,7 +767,13 @@ fn append_round_join(out: &mut Vec<Point>, center: Point, from: Point, to: Point
     }
 }
 
-fn append_end_cap(contour: &mut Vec<Point>, point: Point, direction: Point, radius: f64, cap: StrokeCap) {
+fn append_end_cap(
+    contour: &mut Vec<Point>,
+    point: Point,
+    direction: Point,
+    radius: f64,
+    cap: StrokeCap,
+) {
     if radius <= EPS {
         return;
     }
@@ -815,10 +817,7 @@ fn append_start_cap(
                 let a = std::f64::consts::PI * i as f64 / 6.0;
                 contour.push(add(
                     point,
-                    mul(
-                        add(mul(normal, -a.cos()), mul(direction, -a.sin())),
-                        radius,
-                    ),
+                    mul(add(mul(normal, -a.cos()), mul(direction, -a.sin())), radius),
                 ));
             }
         }
@@ -863,7 +862,11 @@ fn append_contour(output: &mut Vec<PathCmd>, contour: Vec<Point>) -> Result<(), 
     }
     let first = points.remove(0);
     output.push(PathCmd::MoveTo(first.0, first.1));
-    output.extend(points.into_iter().map(|point| PathCmd::LineTo(point.0, point.1)));
+    output.extend(
+        points
+            .into_iter()
+            .map(|point| PathCmd::LineTo(point.0, point.1)),
+    );
     output.push(PathCmd::Close);
     Ok(())
 }
@@ -1082,7 +1085,10 @@ mod tests {
         // path starts in its gap, so the first painted cap moves forward.
         style.dash_offset = 8.0;
         let shifted = outline_stroke_path(&path, 4.0, &style).unwrap();
-        assert!(shifted.bounds.min_x > -0.1, "positive phase begins in the first gap");
+        assert!(
+            shifted.bounds.min_x > -0.1,
+            "positive phase begins in the first gap"
+        );
         assert_ne!(zero.path, shifted.path);
     }
 
@@ -1106,7 +1112,9 @@ mod tests {
         ];
         let result = outline_stroke_path(&path, 10.0, &style).unwrap();
         let points = path_points(&result.path);
-        assert!(points.iter().any(|&(x, y)| (x - 50.0).abs() < 1e-6 && y.abs() >= 9.99));
+        assert!(points
+            .iter()
+            .any(|&(x, y)| (x - 50.0).abs() < 1e-6 && y.abs() >= 9.99));
         assert!(points
             .iter()
             .filter(|&&(x, _)| x > 99.9)
@@ -1195,7 +1203,10 @@ mod tests {
         assert!(outline_stroke_path(&path, 2.0, &style).is_err());
         assert!(outline_stroke_path(&path, f64::NAN, &options()).is_err());
         assert!(validate_width_profile(&vec![
-            VariableWidthPoint { position: 0.0, width_multiplier: 1.0 };
+            VariableWidthPoint {
+                position: 0.0,
+                width_multiplier: 1.0
+            };
             MAX_VARIABLE_WIDTH_POINTS + 1
         ])
         .is_err());
