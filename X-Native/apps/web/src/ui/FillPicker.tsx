@@ -454,7 +454,7 @@ export function FillPicker({
         </button>
         {typeOpen && (
           <div className="type-menu">
-            {FILL_TYPES.filter((t) => (stroke ? t.id === "solid" : !noImage || (t.id !== "image" && t.id !== "pattern"))).map((t) => (
+            {FILL_TYPES.filter((t) => (stroke ? t.id === "solid" || t.id === "pattern" : !noImage || (t.id !== "image" && t.id !== "pattern"))).map((t) => (
               <button
                 key={t.id}
                 className={value.type === t.id ? "on" : ""}

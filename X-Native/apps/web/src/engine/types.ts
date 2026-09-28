@@ -662,7 +662,11 @@ export interface XNode {
    */
   ownBindings?: Record<string, string>;
   fillBlend: string;
+  /** Legacy solid stroke colour; pattern strokes keep it as the fallback swatch. */
   strokePaint: string;
+  /** Pattern stroke paint is distinct from the numeric dash `StrokeLayer.pattern`. */
+  strokeType?: "solid" | "pattern";
+  strokePattern?: PatternSpec;
   strokeOpacity: number;
   strokeVisible: boolean;
   strokeWidth: number;

@@ -45,9 +45,9 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
-import { setPatternLookup } from "../engine/pattern";
+import { patternSourceNode, setPatternLookup } from "../engine/pattern";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
 import { coverCrop, normalizeCropRect } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
@@ -1464,9 +1464,11 @@ export function Canvas({
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
-        if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+        if (n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint))) {
           ctx.save();
-          ctx.strokeStyle = cssRgba(n.strokePaint);
+          ctx.strokeStyle = n.strokeType === "pattern"
+            ? patternStrokeStyle(ctx, n, sx, sy, z, imgOf) ?? "rgba(0,0,0,0)"
+            : cssRgba(n.strokePaint);
           ctx.globalAlpha *= n.strokeOpacity ?? 1;
           ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
           ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
@@ -1526,7 +1528,7 @@ export function Canvas({
         n.kind !== "text" &&
         (!!n.imageSrc ||
           paintsAnyFill(n) ||
-          (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)));
+          (n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" ? !!patternSourceNode(n.strokePattern) : !isNone(n.strokePaint))));
       if (canShadow) paintDropShadowsMasked(ctx, fxNode, z, { trace: traceShape });
       if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
         // A hidden base image paints nothing, but the stack above it still
@@ -1611,10 +1613,13 @@ export function Canvas({
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
       paintInnerShadows(ctx, fxNode, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
-      if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+      if (n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint))) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
-        ctx.strokeStyle = cssRgba(n.strokePaint);
+        const strokeStyle = n.strokeType === "pattern"
+          ? patternStrokeStyle(ctx, n, sx, sy, z, imgOf) ?? "rgba(0,0,0,0)"
+          : cssRgba(n.strokePaint);
+        ctx.strokeStyle = strokeStyle;
         ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
         ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
@@ -1693,7 +1698,7 @@ export function Canvas({
         }
         if (varOutline && varOutline.length >= 2) {
           tracePath(ctx, varOutline, snap.panX + x * z, snap.panY + y * z, z, true);
-          ctx.fillStyle = cssRgba(n.strokePaint);
+          ctx.fillStyle = strokeStyle;
           ctx.fill();
         } else if (perSide) {
           const cones = sideCones(sx, sy, sw, sh);
@@ -1783,7 +1788,7 @@ export function Canvas({
               // Ring on the endpoint, stroked at the path's own weight.
               ctx.arc(e.ex, e.ey, Math.max(1, eah * 0.55), 0, Math.PI * 2);
               ctx.lineWidth = Math.max(0.5, n.strokeWidth * tipScale(e.at) * z);
-              ctx.strokeStyle = cssRgba(n.strokePaint);
+              ctx.strokeStyle = strokeStyle;
               ctx.stroke();
               continue;
             }
@@ -1805,7 +1810,7 @@ export function Canvas({
               ctx.lineTo(back(e, eah * 0.75, -1).x, back(e, eah * 0.75, -1).y);
             }
             ctx.closePath();
-            ctx.fillStyle = cssRgba(n.strokePaint);
+            ctx.fillStyle = strokeStyle;
             ctx.fill();
           }
         }
@@ -7970,7 +7975,10 @@ function paintText(
     ctx.shadowOffsetY = drop.y * z;
   };
   const fillOn = n.fillVisible !== false && !isNone(n.fill);
-  const strokeOn = n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint);
+  const strokeOn = n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint));
+  const textStroke = n.strokeType === "pattern"
+    ? patternStrokeStyle(ctx, n, sx, sy, z) ?? "rgba(0,0,0,0)"
+    : cssRgba(n.strokePaint);
   const paintFillLine = (str: string, x: number, y: number, maxW?: number) => {
     if (!fillOn) return;
     ctx.save();
@@ -7983,7 +7991,7 @@ function paintText(
     if (!strokeOn) return;
     ctx.save();
     ctx.shadowColor = "transparent";
-    ctx.strokeStyle = cssRgba(n.strokePaint);
+    ctx.strokeStyle = textStroke;
     ctx.globalAlpha *= n.strokeOpacity ?? 1;
     ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
     ctx.strokeText(str, x, y, maxW);

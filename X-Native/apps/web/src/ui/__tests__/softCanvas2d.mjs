@@ -175,19 +175,32 @@ function makeContext(el) {
     const k = Math.max(0, Math.min(1, (u - a.pos) / span));
     return [0, 1, 2, 3].map((c) => a.rgba[c] + (b.rgba[c] - a.rgba[c]) * k);
   };
+  const patternColor = (style, x, y) => {
+    const m = style.m;
+    const u = (x + 0.5 - m.e) / m.a;
+    const v = (y + 0.5 - m.f) / m.d;
+    const tile = style.tile;
+    const tx = ((Math.floor(u) % tile.width) + tile.width) % tile.width;
+    const ty = ((Math.floor(v) % tile.height) + tile.height) % tile.height;
+    const pixels = tile.__ctx.__pixels();
+    const i = (ty * tile.width + tx) * 4;
+    return [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3] / 255];
+  };
+  const styleColor = (style, x, y) =>
+    style?.tile ? patternColor(style, x, y) : style?.stops ? gradColor(style, x, y) : parse(style);
   const fill = (x0, y0, x1, y1, style) => {
     const b = ensure();
     const op = ctx.globalCompositeOperation;
     const alpha = ctx.globalAlpha;
-    const isGrad = style && typeof style === "object" && style.stops;
-    const solid = isGrad ? null : parse(style);
+    const variable = style && typeof style === "object" && (style.stops || style.tile);
+    const solid = variable ? null : parse(style);
     const dx0 = Math.max(0, Math.floor(x0));
     const dy0 = Math.max(0, Math.floor(y0));
     const dx1 = Math.min(bw, Math.ceil(x1));
     const dy1 = Math.min(bh, Math.ceil(y1));
     for (let y = dy0; y < dy1; y++) {
       for (let x = dx0; x < dx1; x++) {
-        write(x, y, isGrad ? gradColor(style, x, y) : solid, alpha, op);
+        write(x, y, variable ? styleColor(style, x, y) : solid, alpha, op);
       }
     }
     void b;
@@ -205,6 +218,8 @@ function makeContext(el) {
               target.fillStyle,
               target.strokeStyle,
               clip ? [...clip] : null,
+              target.lineJoin,
+              target.lineWidth,
             ]);
             break;
           case "restore": {
@@ -216,6 +231,8 @@ function makeContext(el) {
               target.fillStyle = s[3];
               target.strokeStyle = s[4];
               clip = s[5];
+              target.lineJoin = s[6];
+              target.lineWidth = s[7];
             }
             break;
           }
@@ -338,8 +355,6 @@ function makeContext(el) {
             g.addColorStop = (pos, color) => g.stops.push({ pos, rgba: parse(color) });
             return g;
           }
-          case "createPattern":
-            return null;
           case "measureText":
             return { width: String(args[0] ?? "").length * 6, actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 3 };
           case "getImageData": {
@@ -387,12 +402,41 @@ function makeContext(el) {
               inDoc: inDoc(),
             });
             break;
+          case "createPattern": {
+            const [tile] = args;
+            if (!tile?.__ctx) return null;
+            return {
+              tile,
+              m: { a: 1, d: 1, e: 0, f: 0 },
+              setTransform(m) { this.m = m; },
+            };
+          }
           case "stroke":
-            strokes.push({ color: target.strokeStyle, inDoc: inDoc(), id: ctx.__id });
+          case "strokeRect": {
+            strokes.push({ color: target.strokeStyle, inDoc: inDoc(), id: ctx.__id, join: target.lineJoin, width: target.lineWidth });
+            // Rasterise rectangle stroke bands for pixel-level paint assertions.
+            // Other paths still use the recording backend; do not approximate
+            // their joins or claim their pixels are covered by this helper.
+            const rects = key === "strokeRect" ? [[...args]] : path;
+            for (const rect of rects) {
+              if (!rect) continue;
+              const [x0, y0, x1, y1] = bbox(target.m, ...rect);
+              const w = target.lineWidth / 2;
+              const b = ensure();
+              for (let y = Math.max(0, Math.floor(y0 - w)); y < Math.min(bh, Math.ceil(y1 + w)); y++) {
+                for (let x = Math.max(0, Math.floor(x0 - w)); x < Math.min(bw, Math.ceil(x1 + w)); x++) {
+                  const px = x + 0.5, py = y + 0.5;
+                  if (px >= x0 + w && px < x1 - w && py >= y0 + w && py < y1 - w) continue;
+                  const dx = px < x0 ? x0 - px : px > x1 ? px - x1 : 0;
+                  const dy = py < y0 ? y0 - py : py > y1 ? py - y1 : 0;
+                  if (dx && dy && (target.lineJoin === "bevel" ? dx + dy > w : target.lineJoin === "round" && dx * dx + dy * dy > w * w)) continue;
+                  write(x, y, styleColor(target.strokeStyle, x, y), target.globalAlpha, target.globalCompositeOperation);
+                }
+              }
+              void b;
+            }
             break;
-          case "strokeRect":
-            strokes.push({ color: target.strokeStyle, inDoc: inDoc(), id: ctx.__id });
-            break;
+          }
           case "setLineDash":
           case "getLineDash":
             return key === "getLineDash" ? [] : undefined;

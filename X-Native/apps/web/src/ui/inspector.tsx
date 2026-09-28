@@ -6092,6 +6092,9 @@ function Design({
           <ColorRow
             title="Stroke"
             stroke
+            type={n.strokeType ?? "solid"}
+            pattern={n.strokePattern}
+            patternSources={patternSourcesFor(snap, n)}
             value={n.strokePaint}
             bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="strokePaint" onOpenVariables={onOpenVariables} />}
             mixed={!!mixedProp((m) => m.strokePaint)}
@@ -6102,9 +6105,16 @@ function Design({
             largeText={isLargeText(n)}
             onChange={(strokePaint) =>
               multi
-                ? patchMany({ strokePaint, strokeVisible: true })
-                : engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeVisible: true } })
+                ? patchMany({ strokePaint, strokeType: "solid", strokeVisible: true })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeType: "solid", strokeVisible: true } })
             }
+            onValueChange={(v) => {
+              const stroke = { strokePaint: v.color, strokeType: v.type === "pattern" ? "pattern" as const : "solid" as const,
+                strokePattern: v.type === "pattern" ? v.pattern : undefined,
+                strokeOpacity: v.opacity / 100, strokeVisible: true };
+              if (multi) patchMany(stroke);
+              else engine.dispatch({ type: "patch", id: n.id, patch: stroke });
+            }}
             onOpacity={(v) =>
               multi
                 ? patchMany({ strokeOpacity: v / 100 })
@@ -6117,11 +6127,11 @@ function Design({
             }
             onRemove={() =>
               multi
-                ? patchMany({ strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 })
+                ? patchMany({ strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 })
                 : engine.dispatch({
                     type: "patch",
                     id: n.id,
-                    patch: { strokePaint: "#00000000", strokeVisible: false, strokeWidth: 0 },
+                    patch: { strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 },
                   })
             }
           />
@@ -9176,7 +9186,7 @@ function ColorRow({
   background?: string;
   largeText?: boolean;
   noImage?: boolean;
-  /** Stroke paint: solid only, no blend — gradient/image/blend strokes are unimplemented. */
+  /** Stroke paint: solid or pattern (other paint types remain unavailable). */
   stroke?: boolean;
   /** Multi-select disagreement: the swatch splits between this layer's
    *  colour and grey, the hex reads Mixed, and a commit applies to every
@@ -9193,7 +9203,8 @@ function ColorRow({
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const isImage = type === "image" || !!image;
-  const hidden = !isImage && (!visible || isNone(value));
+  const isPattern = type === "pattern";
+  const hidden = !isImage && !isPattern && (!visible || isNone(value));
   const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
   // The hex field keeps its own draft while typing. Committing on every
   // keystroke meant an in-progress value like "f" was parsed as an invalid
@@ -9201,7 +9212,7 @@ function ColorRow({
   // the control impossible to type into. Commit only complete hex values,
   // matching how FillPicker already handles the same input.
   const [draft, setDraft] = useState<string | null>(null);
-  const shown = mixed ? "Mixed" : hidden ? "" : isImage ? "Image" : hex.replace("#", "");
+  const shown = mixed ? "Mixed" : hidden ? "" : isImage ? "Image" : isPattern ? "Pattern" : hex.replace("#", "");
   return (
     <div className="color-row">
       <button
@@ -9212,7 +9223,9 @@ function ColorRow({
             ? { backgroundImage: `url(${image})`, backgroundSize: "cover", backgroundPosition: "center" }
             : mixed
               ? { background: `linear-gradient(135deg, ${hex} 50%, var(--dim) 50%)` }
-              : { background: hidden ? "transparent" : hex }
+              : isPattern
+                ? { background: `repeating-conic-gradient(${hex} 0% 25%, transparent 0% 50%) 0 / 8px 8px` }
+                : { background: hidden ? "transparent" : hex }
         }
         title="Color picker"
         onClick={(e) => {
@@ -9227,9 +9240,9 @@ function ColorRow({
         placeholder="None"
         title={mixed ? "Mixed — a typed colour applies to every selected layer" : undefined}
         spellCheck={false}
-        readOnly={isImage}
+        readOnly={isImage || isPattern}
         onChange={(e) => {
-          if (isImage) return;
+          if (isImage || isPattern) return;
           const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
           setDraft(v);
           if (v.length === 3 || v.length === 4 || v.length === 6 || v.length === 8) {
