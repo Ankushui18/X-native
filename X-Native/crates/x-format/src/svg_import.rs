@@ -32,8 +32,27 @@ pub fn import_svg_with_report(svg: &str) -> Result<(Node, crate::ImportReport), 
     loop {
         match lexer.next_tag()? {
             XmlTag::Open(name, attrs) | XmlTag::SelfClose(name, attrs) if name == "svg" => {
-                let w = attr_num(&attrs, "width").unwrap_or(800.0);
-                let h = attr_num(&attrs, "height").unwrap_or(600.0);
+                // The web SVG importer uses viewBox dimensions for missing (or
+                // zero) width/height, then 100x100 when neither is specified.
+                // Only accept a finite four-number viewBox here; malformed
+                // source remains subject to the complete TS import guard.
+                let view_box = attr(&attrs, "viewBox").and_then(|value| {
+                    let values: Vec<f64> = value
+                        .split(|c: char| c.is_ascii_whitespace() || c == ',')
+                        .filter(|part| !part.is_empty())
+                        .map(str::parse)
+                        .collect::<Result<_, _>>()
+                        .ok()?;
+                    (values.len() == 4 && values.iter().all(|v| v.is_finite()))
+                        .then_some((values[2], values[3]))
+                });
+                let (fallback_w, fallback_h) = view_box.unwrap_or((100.0, 100.0));
+                let w = attr_num(&attrs, "width")
+                    .filter(|value| value.is_finite() && *value != 0.0)
+                    .unwrap_or(fallback_w);
+                let h = attr_num(&attrs, "height")
+                    .filter(|value| value.is_finite() && *value != 0.0)
+                    .unwrap_or(fallback_h);
                 let mut root = ImportNode::new(ImportKind::Frame).id("svg-root").size(w, h);
                 apply_transform_attr(&mut root, &attrs);
                 let css_rules = parse_css_rules(svg);
@@ -356,6 +375,20 @@ fn computed_value(
 fn attr_num(attrs: &[(String, String)], key: &str) -> Option<f64> {
     attr_or_style(attrs, key)
         .and_then(|v| v.trim().strip_suffix("px").unwrap_or(v.trim()).parse().ok())
+}
+
+/// The current web SVG importer reads only the element's `font-weight`
+/// attribute with parseInt. Emit a source fact only for a complete positive
+/// decimal integer in the CSS numeric range; partial/named/out-of-range values
+/// stay guarded by the whole-result TS comparison, not coerced or inferred.
+fn numeric_text_weight(attrs: &[(String, String)]) -> Option<u16> {
+    let raw = attr(attrs, "font-weight")?.trim();
+    if !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<u16>()
+        .ok()
+        .filter(|weight| (1..=1000).contains(weight))
 }
 
 fn css_number(value: &str) -> Option<f32> {
@@ -803,6 +836,30 @@ fn parse_svg_transform(value: &str) -> Option<Affine> {
         rest = rest[close + 1..].trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
     }
     parsed.then_some(result)
+}
+
+/// Only a *single*, complete translate() can be flattened without inventing
+/// structural group layers in the web import contract. Reject transform lists,
+/// partial numbers, and other affine operations; those groups remain structural
+/// native candidates, and the whole-result guard keeps the TS result.
+fn simple_group_translation(value: &str) -> Option<(f64, f64)> {
+    let args = value
+        .trim()
+        .strip_prefix("translate")?
+        .trim_start()
+        .strip_prefix('(')?
+        .strip_suffix(')')?;
+    let values: Vec<f64> = args
+        .split(|c: char| c.is_ascii_whitespace() || c == ',')
+        .filter(|s| !s.is_empty())
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    match values.as_slice() {
+        [dx] if dx.is_finite() => Some((*dx, 0.0)),
+        [dx, dy] if dx.is_finite() && dy.is_finite() => Some((*dx, *dy)),
+        _ => None,
+    }
 }
 
 fn apply_transform_attr(node: &mut ImportNode, attrs: &[(String, String)]) {
@@ -1298,46 +1355,64 @@ fn parse_children(
         node: ImportNode,
         pending_text: Option<ImportNode>,
         style: SvgStyle,
-        flatten_on_close: bool,
+        /// None retains an unsupported transform as a native group.
+        /// Some(dx, dy) flattens the group and offsets its children.
+        flatten_translation: Option<(f64, f64)>,
+    }
+    fn attach_frame(parent: &mut ImportNode, mut frame: Frame) {
+        if let Some((dx, dy)) = frame.flatten_translation {
+            if dx != 0.0 || dy != 0.0 {
+                let translation = Affine::translate((dx, dy));
+                for child in &mut frame.node.children {
+                    if let Some(matrix) = child.source_transform.take() {
+                        // Parent then child transform, in source order.
+                        child.source_transform = Some(translation * matrix);
+                    } else {
+                        child.x += dx;
+                        child.y += dy;
+                    }
+                }
+            }
+            parent.children.append(&mut frame.node.children);
+        } else {
+            parent.children.push(frame.node);
+        }
     }
     let base = std::mem::replace(root, ImportNode::new(ImportKind::Frame));
     let mut stack: Vec<Frame> = vec![Frame {
         node: base,
         pending_text: None,
         style: root_style,
-        flatten_on_close: false,
+        flatten_translation: None,
     }];
     let mut gradients: HashMap<String, SvgPaint> = HashMap::new();
     loop {
         match lexer.next_tag()? {
             XmlTag::Eof => {
-                // unterminated file: unwind whatever is open into the root
-                while let Some(mut f) = stack.pop() {
-                    if let Some(t) = f.pending_text.take() {
-                        f.node.children.push(t);
-                    }
+                // Unterminated file: unwind whatever is open into the root.
+                // A pending text node has no content and must not be imported.
+                while let Some(f) = stack.pop() {
                     match stack.last_mut() {
-                        Some(top) if f.flatten_on_close => {
-                            top.node.children.append(&mut f.node.children);
-                        }
-                        Some(top) => top.node.children.push(f.node),
-                        None => {
-                            *root = f.node;
-                        }
+                        Some(top) => attach_frame(&mut top.node, f),
+                        None => *root = f.node,
                     }
                 }
                 return Ok(());
             }
-            XmlTag::Close(_) => {
-                let mut f = stack.pop().ok_or("unbalanced close tag")?;
-                if let Some(t) = f.pending_text.take() {
-                    f.node.children.push(t);
-                }
-                match stack.last_mut() {
-                    Some(top) if f.flatten_on_close => {
-                        top.node.children.append(&mut f.node.children);
+            XmlTag::Close(name) if name != "g" && name != "svg" => {
+                // Only <g> pushes a frame. </text> used to pop the group (or
+                // root), losing all following siblings. Drop empty text on
+                // close; nonempty text was added in XmlTag::Text above.
+                if name == "text" {
+                    if let Some(top) = stack.last_mut() {
+                        top.pending_text = None;
                     }
-                    Some(top) => top.node.children.push(f.node),
+                }
+            }
+            XmlTag::Close(_) => {
+                let f = stack.pop().ok_or("unbalanced close tag")?;
+                match stack.last_mut() {
+                    Some(top) => attach_frame(&mut top.node, f),
                     None => {
                         *root = f.node;
                         return Ok(());
@@ -1360,7 +1435,11 @@ fn parse_children(
                                     (content.encode_utf16().count() as f64 * *size * 0.6).max(8.0);
                                 t.h = *size * 1.4;
                             }
-                            t.name = content.chars().take(40).collect();
+                            // Like the web importer, an explicit SVG id is the
+                            // layer name; otherwise use a content preview.
+                            if t.name.is_empty() {
+                                t.name = content.chars().take(40).collect();
+                            }
                             top.node.children.push(t);
                         }
                     }
@@ -1389,23 +1468,27 @@ fn parse_children(
                     SvgStyle::from_parent(&inherited, &attrs, &gradients, &css_rules, &name);
                 match name.as_str() {
                     "g" => {
-                        // The web SVG importer flattens ordinary groups into
-                        // their children. Match that contract when no transform
-                        // has to be represented structurally. Inherited paints,
-                        // stroke options and opacity already live in current_style.
-                        let flatten = attr(&attrs, "transform").is_none();
+                        // The web importer flattens groups and accumulates
+                        // their matrices on each child. Flatten untransformed
+                        // groups and one complete translate() only; leave other
+                        // affines structural so the TS whole-result guard wins.
+                        // Inherited styles already live in current_style.
+                        let flatten_translation = match attr(&attrs, "transform") {
+                            None => Some((0.0, 0.0)),
+                            Some(value) => simple_group_translation(value),
+                        };
                         if self_closed {
                             continue;
                         }
                         if stack.len() >= MAX_SVG_DEPTH {
                             return Err(format!("SVG nesting deeper than {MAX_SVG_DEPTH} levels"));
                         }
-                        let mut g = if flatten {
+                        let mut g = if flatten_translation.is_some() {
                             ImportNode::new(ImportKind::Group)
                         } else {
                             with_id(ImportNode::new(ImportKind::Group))
                         };
-                        if !flatten {
+                        if flatten_translation.is_none() {
                             g.opacity = current_style.opacity;
                             apply_transform_attr(&mut g, &attrs);
                         }
@@ -1413,7 +1496,7 @@ fn parse_children(
                             node: g,
                             pending_text: None,
                             style: current_style.clone(),
-                            flatten_on_close: flatten,
+                            flatten_translation,
                         });
                     }
                     "rect" => {
@@ -1554,7 +1637,11 @@ fn parse_children(
                         )
                         .size(width, height)
                         .fill(current_style.fill_paint(width, height));
-                        n.name.clear();
+                        // Keep the source id as the web importer's display name,
+                        // even if lowering deduplicates the native node id.
+                        // A missing/empty id gets a content preview on Text.
+                        n.name = src_id.clone().unwrap_or_default();
+                        n.source_font_weight = numeric_text_weight(&attrs);
                         n.text_align = Some(match attr(&attrs, "text-anchor") {
                             Some("middle") => TextAlign::Center,
                             Some("end") => TextAlign::Right,
@@ -1634,11 +1721,35 @@ mod tests {
     }
 
     #[test]
+    fn svg_view_box_supplies_missing_dimensions_without_overriding_explicit_sizes() {
+        for (source, expected) in [
+            (
+                r#"<svg viewBox="0, 0, 96, 48"><rect id="box" x="10" y="12" width="20" height="15" fill="red"/></svg>"#,
+                (96.0, 48.0),
+            ),
+            (
+                r#"<svg width="200" viewBox="0 0 96 48"><rect id="box" width="20" height="15" fill="red"/></svg>"#,
+                (200.0, 48.0),
+            ),
+            (
+                r#"<svg><rect id="box" width="20" height="15" fill="red"/></svg>"#,
+                (100.0, 100.0),
+            ),
+        ] {
+            let page = import_svg(source).expect("SVG should import");
+            assert_eq!((page.w, page.h), expected, "source: {source}");
+        }
+    }
+
+    #[test]
     fn svg_text_metrics_match_web_baseline_width_name_and_anchor_contract() {
         let (page, report) = import_svg_with_report(r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##).unwrap();
         let text = &page.children[0];
         assert_eq!(text.id, "label");
-        assert_eq!(text.name, "Keep this text");
+        assert_eq!(
+            text.name, "label",
+            "an explicit SVG id wins over text content"
+        );
         assert_eq!((text.transform.x, text.transform.y), (10.0, 10.0));
         assert_eq!((text.w, text.h), (168.0, 20.0));
         assert_eq!(text.text_align, TextAlign::Center);
@@ -1647,6 +1758,38 @@ mod tests {
             (metrics.width, metrics.height, metrics.font_size),
             (168.0, 28.0, Some(20.0))
         );
+    }
+
+    #[test]
+    fn svg_text_weight_only_carries_unambiguous_element_numbers() {
+        for (attribute, expected) in [
+            ("font-weight=\"700\"", Some(700)),
+            ("font-weight=\" 500 \"", Some(500)),
+            ("font-weight=\"bold\"", None),
+            ("font-weight=\"700bold\"", None),
+            ("font-weight=\"1001\"", None),
+            ("", None),
+        ] {
+            let svg = format!(
+                "<svg width=\"200\" height=\"120\"><text id=\"label\" x=\"10\" y=\"30\" {attribute}>Keep this text</text></svg>"
+            );
+            let (page, report) = import_svg_with_report(&svg).unwrap();
+            let text = &page.children[0];
+            let weight = report.text_metrics[&text.id].font_weight;
+            assert_eq!(weight, expected, "{attribute}");
+            assert!(text.bindings.is_empty(), "weight must not enter .x");
+        }
+    }
+
+    #[test]
+    fn svg_text_without_a_source_id_uses_a_content_preview_as_its_name() {
+        let (page, report) = import_svg_with_report(
+            r#"<svg width="200" height="120"><text x="10" y="30" font-size="20">Keep this text</text></svg>"#,
+        )
+        .unwrap();
+        let text = &page.children[0];
+        assert_eq!(text.name, "Keep this text");
+        assert_eq!(report.text_metrics[&text.id].height, 28.0);
     }
 
     #[test]
@@ -1662,6 +1805,56 @@ mod tests {
         assert!(
             matches!(rect.fill, Paint::Solid(c) if c.to_rgba8() == Color::from_rgb8(0x12, 0x34, 0x56).to_rgba8())
         );
+    }
+
+    #[test]
+    fn svg_import_flattens_nested_translations_and_keeps_siblings_after_text() {
+        let svg = r##"<svg width="120" height="80">
+          <g id="outer" transform="translate(10 20)" fill="#123456" opacity=".5">
+            <g id="inner" transform="translate(-2 5)"><rect id="box" x="3" y="4" width="20" height="10"/></g>
+            <text id="label" x="10" y="30" font-size="10">Hi</text>
+            <rect id="after" x="0" y="1" width="4" height="4"/>
+          </g>
+          <rect id="outside" x="5" y="6" width="3" height="2" fill="red"/>
+        </svg>"##;
+        let (page, report) = import_svg_with_report(svg).unwrap();
+        let nodes = &page.children;
+        assert_eq!(nodes.len(), 4);
+        let ids: Vec<_> = nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["box", "label", "after", "outside"]);
+        assert_eq!((nodes[0].transform.x, nodes[0].transform.y), (11.0, 29.0));
+        assert_eq!((nodes[1].transform.x, nodes[1].transform.y), (20.0, 40.0));
+        assert_eq!((nodes[2].transform.x, nodes[2].transform.y), (10.0, 21.0));
+        assert_eq!((nodes[3].transform.x, nodes[3].transform.y), (5.0, 6.0));
+        assert_eq!(nodes[0].opacity, 0.5);
+        assert_eq!(nodes[1].opacity, 0.5);
+        assert_eq!(report.text_metrics["label"].height, 14.0);
+        assert_eq!(nodes[1].h, 10.0); // native h is font size, not source box height
+    }
+
+    #[test]
+    fn svg_group_translation_precomposes_a_child_matrix() {
+        let page = import_svg(r#"<svg width="120" height="80"><g transform="translate(7 -2)">
+          <rect id="matrix" x="3" y="4" width="9" height="5" transform="matrix(1 0 0 1 2 3)" fill="red"/>
+        </g></svg>"#).unwrap();
+        assert_eq!(page.children.len(), 1);
+        let rect = &page.children[0];
+        assert_eq!(rect.id, "matrix");
+        assert_eq!((rect.transform.x, rect.transform.y), (12.0, 5.0));
+    }
+
+    #[test]
+    fn svg_group_does_not_flatten_compound_or_ambiguous_transforms() {
+        for transform in ["translate(10) rotate(15)", "translate(10-20)", "rotate(15)"] {
+            let svg = format!(
+                "<svg><g id=\"complex\" transform=\"{transform}\"><rect width=\"20\" height=\"10\"/></g></svg>"
+            );
+            let page = import_svg(&svg).unwrap();
+            assert_eq!(page.children.len(), 1);
+            let group = &page.children[0];
+            assert_eq!(group.id, "complex", "{transform}");
+            assert_eq!(group.children.len(), 1);
+        }
     }
 
     #[test]

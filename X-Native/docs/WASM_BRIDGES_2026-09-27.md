@@ -7,12 +7,14 @@ Date: 2026-09-27. Priority: complete the existing bridges before further Figma-p
 **Both bridges compile, package and execute in CI. Native geometry promotion has
 FAILED the differential check; the TS guards remain enabled.** The sandbox itself
 still has no cargo/rustc, and artifact/log CDN downloads remain inaccessible.
-After user authorization, the current work was committed and pushed only to
-`arena/01a0e1ff-x-native`. No generated binaries are checked in; the local preview
-still uses the TypeScript fallback.
+The earlier work was committed on `arena/01a0e1ff-x-native`; this import-only
+continuation is on `arena/01a0e36f-x-native`. No generated binaries are checked
+in; the local preview still uses the TypeScript fallback.
 
-Latest verified code/CI checkpoint: `ddf4472`, [CI run 36323243749](https://github.com/Ankushui18/X-native/actions/runs/36323243749).
-The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`; see §§13–14.
+Latest verified code/CI checkpoint: `acb24b3`, [CI run 36336138062](https://github.com/Ankushui18/X-native/actions/runs/36336138062).
+The basic FIG and both effects fixtures pass complete-result gates with `backend=wasm`;
+plain/numeric-weight SVG text, SVG viewport defaults, and standalone group
+translations now do too (see §§13–19).
 The user selected **keep geometry guarded for now**; subsequent work is import-only.
 The Rust workspace gate, packaging, real-module smoke and web tests/build passed.
 The geometry promotion diagnostic is explicitly non-blocking while auto retains
@@ -29,8 +31,8 @@ TypeScript remains authoritative, as required by `ARCHITECTURE_BOUNDARY.md`:
   `?geo=wasm` deliberately bypasses that comparison for diagnostics; invalid
   traffic/traps still fall back. `?geo=ts` disables the geometry bridge.
 - Neither core geometry algorithm was rewritten or replaced. Rich native import
-  mapping (text, gradients, resources, components, layout, layered paints) is not
-  promoted; those files retain their existing TS result. No new product feature.
+  mapping (text runs, gradients, resources, components, layout, layered paints) is
+  not promoted; those files retain their existing TS result. No new product feature.
 - Prior parity changes are preserved. This work does not claim to close the
   previously reported full-browser failures or certify Figma parity.
 
@@ -701,6 +703,7 @@ fell back. The shared full-result oracle remains unchanged.
 | --- | --- | --- |
 | W28 — basic SVG text could never satisfy the web contract | Emit shared versioned text metrics for SVG imports; capture text content/name, UTF-16-compatible width estimate, source-box height, baseline top position, font size and `text-anchor` alignment | New Rust importer and wasm-envelope regression for “Keep this text” (200×120 SVG, 20px, middle anchor); real-module smoke requires the decoded candidate and wrapper to match the complete TS result |
 | W29 — rich SVG weight could be silently implied if routed natively | No weight inference added: the native adapter still reports only its existing 400 default, so non-400 text must fail the strict comparator and keep the TS result | Real-module smoke asserts weight 700 stays on the TS fallback |
+| W30 — initial real-module smoke rejected SVG text with an explicit `id` | Preserve the source id as the native display name; use a content preview only without an id. Native `.x` omits `name` when it equals `id`, so the adapter uses the serialized id as the effective name. Neither path borrows values from the TS result | Rust importer/envelope tests, TS whole-result guard regression (including omitted `name`), real-module named/unnamed text and bold fallback smoke |
 
 Only plain text representable by the current native typography contract is
 promoted. Complex SVG text/tspan/font styling remains guarded. Metrics describe
@@ -709,10 +712,321 @@ rendering or visual equivalence.
 
 ### Verification
 
-- Rust workspace and actual-module smoke are **pending CI**; local Cargo/rustc are
-  unavailable.
-- Serial local web suite: **3,081/0**, 51 summaries; `tsc -b` and production build
-  pass. Local Chromium remains unavailable (`/tmp/chromium` missing).
-- Native-browser visual fidelity and complex SVG text remain **NOT VERIFIED**.
+- The first SVG-text runs, including the merge commit, **failed** real-WASM smoke
+  because native named `<text>` used its content rather than its SVG id; the
+  initial follow-up also expected `.x` to serialize a redundant name. Both
+  issues were corrected without changing the TS comparator or persisted schema.
+- **CI [36329391845](https://github.com/Ankushui18/X-native/actions/runs/36329391845) SUCCESS**
+  on `9b2f31c`: Rust workspace fmt/clippy/tests, matched WASM packaging, genuine
+  generated-module smoke and web tests/build all pass. The native candidate and
+  production wrapper select `backend=wasm` for named and unnamed basic SVG text;
+  weight 700 safely falls back to TS. `x-wasm` and verification artifacts uploaded.
+- Local `npm test` and production `npm run build` pass. Local Cargo/rustc and
+  Chromium remain unavailable, so no local real-WASM or browser-visual claim.
+- Native geometry promotion remains **NOT APPROVED** (1/30 equivalent, 29 failed
+  in that CI run); `auto` keeps its TS comparator. Native-browser visual fidelity
+  and complex SVG text remain **NOT VERIFIED**.
 
-Evidence: `/home/user/wasm-svg-text-{unit,tsc,build}.log`.
+Evidence: CI run above and its `wasm-verification` artifact/annotations. The local
+preview does not contain the CI-built WASM assets and uses the TS fallback.
+
+## 17. Fail-closed document envelopes and SVG viewport sizing (2026-09-27)
+
+Import-only continuation. TypeScript remains the whole-result oracle; no WASM
+editor replacement, persisted `.x` schema change or geometry promotion.
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W31 — unknown document-level fields and malformed empty resources could disappear silently | The web adapter now admits only known success-envelope and `.x` v1 document fields. It validates empty styles, component props, comments, assets and libraries with their native container types; present default fonts, nonempty resources, unexpected fields and null variable tables decline to the complete TS import. Missing optional fields still work with old envelopes | Red-first web regressions for unknown fields, wrong types, nonempty resources, complete-wrapper fallback, and typed empty native tables; real-module smoke mutates a valid envelope to check rejection |
+| W32 — native SVG root defaulted to 800×600 even when web import used a `viewBox` or 100×100 | Read a finite four-number `viewBox` for missing/zero width or height; explicit nonzero dimensions win. Without either, use the web importer's 100×100 defaults. Malformed/unsupported geometry remains subject to the unchanged complete-result comparator | Rust importer/envelope tests; actual-module smoke compares three entire SVG results (viewBox-only, explicit width + viewBox height, and no dimensions) and requires `backend=wasm` for each |
+
+These checks protect the conversion boundary, not native rendering or support
+for nonempty component/resource tables. No TypeScript oracle fields are copied
+into the native candidate; resources without a lossless mapping still fall back.
+
+### Verification
+
+- Local `npm test`, `npm run build` and `git diff --check` pass. This sandbox
+  still cannot build Rust or run native-browser visual checks.
+- **CI [36330628149](https://github.com/Ankushui18/X-native/actions/runs/36330628149) SUCCESS**
+  on `1e89edf`: Rust formatting/clippy/workspace tests, matching WASM packaging,
+  real generated-module smoke, and web tests/build. The actual candidate logs
+  `Diff SVG viewBox dimensions: none`, `Diff SVG explicit width over viewBox:
+  none`, and `Diff SVG default dimensions: none`; each production wrapper
+  selects WASM after complete equivalence.
+- The documentation/smoke follow-up **CI [36330943567](https://github.com/Ankushui18/X-native/actions/runs/36330943567) SUCCESS**
+  on `ad16bf0` additionally exercised an actual generated-module envelope
+  mutated with unsupported document metadata; the adapter declined it. The
+  three whole-result viewport matches were still verified.
+- Geometry stays guarded: **1/30 equivalent, 29 differential failures** in this
+  run; the `auto` mode TS check is unchanged. Broader SVG fidelity, browser
+  visual parity, and native speedup remain **NOT VERIFIED**.
+
+## 18. Guarded numeric SVG text weight (2026-09-27)
+
+Import-only continuation. This narrows §16's *historical* weight-700 fallback:
+explicit numeric element `font-weight` values can now enter the candidate through
+native source facts; no TS-oracle value is copied into the candidate.
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W33 — numeric SVG text weight always fell back even when the rest of the native text result agreed | The SVG parser records only complete decimal element attributes in the positive 1–1000 CSS numeric range. Shared lowering keys this import-only fact by the final deduplicated text ID. The SVG envelope uses `textMetrics.version=2` with `fontWeight` set to a number or `null` (no supported numeric attribute); FIG/Sketch remain on version 1. The web adapter accepts both versions, requires the v2 field, rejects malformed/out-of-range values, and uses the unstyled 400 default only when no supported weight was reported | Red-first `wasmText` regressions for valid/invalid versions, range and keyed IDs; Rust SVG/import-IR/envelope regressions; real generated-module smoke checks weight 700, the unchanged persisted `.x`, whole-result equivalence, wrapper backend, malformed-metadata rejection and partial-numeric fallback |
+
+The `.x` document schema, WASM function ABI, import comparator and native text
+rendering model are unchanged. No PostScript-name inference, rich text, inherited
+CSS styling, or broad SVG text support is claimed. E.g. `700bold` is not emitted
+as a numeric source fact; the current TS importer parses it as 700, so the
+complete-result check retains TS rather than dropping its value.
+
+### Verification
+
+- Local red-first `wasmText` run failed on v2 metadata as expected; the focused
+  suite then passed **45/0**. The full local `npm test`, `npx tsc -b`,
+  `npm run build`, and `git diff --check` pass (pre-existing large-chunk warning).
+- The initial push's Rust gate caught a test-assertion formatting error; after
+  that was corrected, the real-module smoke caught its stale SVG call-count
+  assertion (9 instead of 10 with the new fallback case). No comparator or
+  format/schema guard was relaxed. The smoke now emits a bounded error annotation
+  if a future assertion fails where runner logs are inaccessible.
+- **CI [36334336133](https://github.com/Ankushui18/X-native/actions/runs/36334336133) SUCCESS**
+  on `dbacb2c`: Rust formatting, clippy/workspace tests, both WASM builds,
+  real generated-module smoke, web tests/build and screenshot jobs passed.
+  Annotations confirm `Diff SVG numeric weight: none` and
+  `PASS actual-module SVG numeric weight selects guarded WASM result`. The
+  production wrapper selects WASM for the complete weight-700 candidate;
+  `700bold` retains TS, and malformed source metadata is rejected.
+- Local Cargo/rustc and a generated WASM module are unavailable. The native
+  geometry promotion diagnostic is still **NOT APPROVED: 1/30 equivalent**;
+  `auto` keeps the TS comparator. Wider SVG and browser-visual parity and
+  native import speedup are **NOT VERIFIED**.
+
+## 19. Standalone SVG group translations and text siblings (2026-09-27)
+
+Import-only continuation. The Rust importer now matches the existing web
+importer's flat layer contract for a bounded group-transform subset. This
+supersedes §15's transform-free-only boundary **only** for single translations.
+TypeScript remains the complete-result oracle; this does not promote general
+SVG transforms.
+
+| Finding | Change | Regression evidence |
+| --- | --- | --- |
+| W34 — native `<g transform="translate(...)">` kept an extra group layer, while the web importer applied its offset to each child | Flatten only a **single complete `translate()`** with one or two finite numeric arguments. Apply its offset to child positions, or precompose it before an existing child affine; nested offsets retain source order. Do not flatten ambiguous/compound/rotated groups; they remain structural candidates behind the TS guard | Rust regressions for nested offsets, inherited style and child matrix composition, plus real generated-WASM whole-result checks with `Diff translated SVG group with text and siblings: none` and `Diff translated SVG group with child matrix: none`. Both production wrappers select WASM; rotated and compound groups remain on TS |
+| W35 — `</text>` popped the current `<g>` or root frame and could discard subsequent siblings | Close only the group/root frames actually pushed by the importer. Clear pending empty text on `</text>`; nonempty text is already appended when read. An empty or unsupported child is not an excuse to close its parent early | Web-oracle regression pins the four sibling names/positions; Rust importer and WASM envelope tests pin following shapes; the real module matches the entire text-plus-shapes import |
+
+The earlier generic native test expected a `grp` wrapper for a pure translation;
+that expectation was replaced with the web-compatible absence of the wrapper.
+Dedicated importer tests now assert its children's actual coordinates. The `.x`
+schema, WASM ABI, TypeScript parser, whole-result comparator, and geometry kernels
+are unchanged. General group matrices/rotation/scale/skew, rich text and
+resource imports are not declared equivalent by this slice.
+
+### Verification
+
+- Local TS oracle/focused bridge test: **50/0**; full `npm test`, `npm run build`,
+  `node --check` of real-module smoke and `git diff --check` pass. Local Cargo
+  and generated WASM assets remain unavailable.
+- CI first caught the outdated legacy-group expectation, then Rust-formatting
+  differences in that updated assertion. The expected group contract was
+  corrected; the assertion was kept in the dedicated offset regression. No
+  comparator was loosened and no unsupported group transform was promoted.
+- **CI [36336138062](https://github.com/Ankushui18/X-native/actions/runs/36336138062) SUCCESS**
+  on `acb24b3`: Rust fmt/clippy/workspace tests, both WASM packages, genuine
+  module smoke, web tests/build and screenshot job passed. Annotations show
+  both translated-group diffs as `none`, production WASM selection, and TS
+  fallback for rotation/compound transforms.
+- Native geometry promotion remains **NOT APPROVED (1/30 equivalent, 29 failed)**.
+  `auto` retains the TS comparator. Browser-visual parity, broad SVG coverage
+  and import speedup are **NOT VERIFIED**.
+
+## 20. Opt-in Rust document command/state session (2026-09-27)
+
+The requested **destination** is one Rust document/command/undo/layout engine
+shared by web (WASM) and native (direct Rust), with TypeScript limited to UI and
+application concerns. This is the first **command-boundary** slice, not a claim
+that the production web editor has already reached that destination.
+
+`x-editor::DocumentSession` owns one `x-core::Document` page and delegates edits
+and undo/redo to the existing Rust `Editor`; the remaining native document
+metadata stays in Rust. `x-native::editor` re-exports the exact same Rust API
+for a future native UI. `x-wasm` exports an independently versioned
+`RustDocumentSession` wasm-bindgen class over native `.x` JSON. Web's
+`rustSession.ts` calls that class; it has **no JS node tree, layout or history**.
+
+| Operation | Transport | Owner / boundary |
+| --- | --- | --- |
+| Open | Native `.x` once; refuses malformed/zero/multiple pages or duplicate IDs | `x-format::load_x` → `x-editor::DocumentSession` |
+| `getNode(id)`, `state()` | One node's id/name/x/y or revision + history flags | Explicit read, no document snapshot |
+| `renameNode`, `moveNode`, `undo`, `redo` | One affected node's id/name/x/y, monotonic revision, canUndo/canRedo | `x-editor` command log and inverse, **not** TS undo |
+| `exportX()` | Complete native `.x` only at explicit save/checkpoint | `x-format::save_x`; never called for paint or command acknowledgement |
+| Close | wasm-bindgen `free()` | No global mutable session shared across files |
+
+This slice supports only **one page** and two layer mutations (rename and
+relative move). It rejects a page-root target and invalid/nonfinite moves;
+no-op commands do not add history or erase redo. Name history now copies only
+the edited subtree rather than an entire page. There is no hand-written
+parallel undo implementation in JavaScript or extra document model in Rust.
+An absent/older optional WASM module leaves the existing import bridge intact.
+
+**Not migrated:** the current web editor uses `MemoryEngine` with a different
+persisted document shape (`Page.root`) and TS Auto Layout, undo, hit testing and
+rendering. The new session is deliberately **not routed into** `App.tsx` or
+`MemoryEngine` while the web/native document contract is not lossless; doing so
+would create two sources of truth and could drop unsupported styling/resources.
+Native desktop currently has no GUI; the direct Rust-host test demonstrates the
+shared API, not a shipped desktop application. Geometry `auto` keeps its
+unchanged TS equivalence guard, and the SVG/FIG/Sketch import comparator is
+unchanged. Next gates: lossless document conversion and round-trip, command and
+layout/undo parity, persisted-format safety, then a single UI-owner swap per
+proven slice, followed by removal of the TS duplicate.
+
+### Verification
+
+- Local `npm test`, `npm run build`, `node --check tests/wasm/real-bridges.mjs`
+  and `git diff --check` pass; local Cargo/wasm-bindgen are unavailable.
+- Rust session and native-host tests cover status, no-op/invalid commands,
+  rename/move/undo/redo, metadata preservation, explicit `.x` round-trip,
+  one-page/unique-ID limits and per-node rather than whole-page rename history.
+- **CI [36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226) SUCCESS**
+  on `3db4253`: Rust formatting, clippy/workspace tests (including the direct
+  native-host regression), matched WASM packages, real-module smoke, web
+  tests/build and the screenshot job passed. The smoke opens a genuine native
+  `.x` result from SVG, calls the generated wasm-bindgen class and TS transport
+  wrapper, and logs `PASS real Rust command session: open, per-node deltas,
+  move/rename, Rust undo/redo, explicit .x export, isolation and refusals`.
+  The initial CI run caught the architecture-test allowlist for the new
+  `x-wasm → x-editor` leaf edge; it was updated without introducing a cycle.
+  Rustfmt-only test fixture differences were corrected before this green run.
+- The unchanged geometry diagnostic remains **NOT APPROVED (1/30 equivalent)**.
+  A passed command ABI does not promote geometry, the full web editor, native
+  desktop UI or per-frame rendering parity.
+
+## 21. Gated web-document V1 admission (opt-in; not a live editor switch)
+
+`apps/web/src/engine/webDocumentSession.ts` translates **only** a one-page
+`DocSeed`/`PersistedDoc` with its transparent `Page.root` and up to 2048 direct
+solid, opaque rectangle children to native `.x` at open. Required web node keys
+are frozen to V1; every other node value must match the explicitly reviewed
+factory defaults. File/page metadata must have the supported shape; unsupported
+pages, styles, components, variables, annotations, guides, interactions,
+strokes, gradients, effects, text, layout, nested layers and unknown keys cause
+the **whole file** to decline (`null`), with the existing `MemoryEngine` left
+as its owner. The bridge requires the existing session ABI, and its own dialect
+constant is `WEB_DOCUMENT_SESSION_VERSION = 1`.
+
+On admission, the generated WASM class loads native `.x`, immediately exports
+one checkpoint, and the adapter compares the **entire** reconstructed web file
+with the input. Mismatched native defaults/precision/metadata close that Rust
+session rather than losing data. The retained JavaScript shell has only
+file/page/viewport metadata and a root ID — not the original node tree or a
+parallel undo stack. Commands call the one Rust-owned session and return
+single-node deltas; a full JSON document is read **only** at admission and an
+explicit `exportDocument()` checkpoint. Export validates every native field
+and refuses native features or metadata the dialect cannot represent. The FIG,
+Sketch and SVG import adapters and geometry equivalence guards are unchanged.
+
+Local `npm test` (including negative document/node/native-field cases),
+`npm run build`, and `node --check tests/wasm/real-bridges.mjs` passed. The
+real-generated-WASM smoke now also exercises actual web-document admission,
+Rust rename/move/undo/redo, full metadata round trips and strict fallback.
+**CI [36340690212](https://github.com/Ankushui18/X-native/actions/runs/36340690212)
+SUCCESS** on `8252cf7`: the workspace gate, web tests/build, generated-WASM
+smoke and screenshot job all passed. Native geometry remains independently
+**NOT APPROVED** by the unchanged nonblocking diagnostic. Local Cargo/WASM
+builds are unavailable. This **does not** migrate production rendering, layout, file store,
+undo or `App.tsx` to Rust. Wider schemas and a single production document owner
+remain prerequisites before retiring the TS engine.
+
+## 22. Explicit Rust-owned web rectangle preview (not the default editor)
+
+For a stored, V1-admissible file, open `#/file/<id>?engine=rust`. `App.tsx`
+mounts `ui/RustDocumentView.tsx` **instead of**, never inside, the standard
+`MemoryEngine` editor. The view opens through the existing admission/checkpoint
+gate, queries Rust's node IDs and current node values once, then paints only
+rectangle presentation. Rename, move and undo/redo send individual commands to
+one Rust session. Each response has one optional changed node and small status
+fields; no document JSON is exchanged per command/frame. There is no shadow TS
+edit engine, document history, layout calculation, or Rust/TS dual-write.
+
+The V1 **format restriction** from §21 is unchanged. The view is a deliberately
+narrow interface, not a claim of canvas renderer/viewport parity: it displays
+flat solid rectangles with native-returned positions/names and seed paint/size;
+there are no text, groups, effects, layout, variable edits or other standard
+editor tools. Nonadmitted files, WASM load failure or a mismatched Rust open
+show a refusal and an explicit standard-editor link; they never switch engines
+after an edit. A malformed command delta pauses editing but keeps the session
+available for strict recovery export. The explicit "Prepare download" control
+runs `exportDocument()` once, verifies its native→web checkpoint, and offers a
+**copy** of the `.x` web document. It never writes the original browser file
+store. Renaming/moving followed by "Standard editor" therefore does **not**
+import those changes; the user must knowingly leave and discard them or first
+download the copy. File/route changes with edits require confirmation, as does
+browser unload. A same-file Rust query change does not reopen stale stored data.
+
+Router and lifecycle safeguards: `ui/fileRoute.ts` requires the literal
+`engine=rust` query; the ordinary `#/file/<id>` route is unchanged. A route
+owner change synchronously closes Rust before React mounts the next editor;
+opening is abortable across a pending optional-WASM load. When leaving the
+standard editor, its pending autosave flushes before the Rust route reads a
+fresh, mode-matched seed. No edit or history is copied between engines. Strict
+Mode remounts and cross-file route changes dispose sessions and blob URLs.
+The existing FIG/Sketch/SVG import equivalence gates and geometry guard are
+unchanged; native geometry is still **NOT APPROVED (1/30 equivalent)**.
+
+Verification layers: jsdom view interaction tests mount the real React view
+over a fake session, assert one owner, small node deltas, Rust-owned history,
+strict explicit export, disabled unsafe states and cleanup; adapter tests cover
+cancellation during WASM initialization. `npm test`, TypeScript and the web
+build run without generated binaries. `npm run test:wasm` now also mounts the
+React view against the **real generated** `x-wasm` class in jsdom, checks a
+move/undo round trip and release; it requires CI-built artifacts and is not a
+browser paint test. Browser rendering parity, native desktop integration,
+advanced document schemas, durable Rust-owned persistence and default-route
+promotion are still **unverified** and outside this slice.
+
+**Verification (2026-09-28):**
+[CI 36342756975](https://github.com/Ankushui18/X-native/actions/runs/36342756975)
+passed on `06e6a81`: Rust workspace gate, generated WASM packaging and real
+bridge/React preview smoke, full web test/build and the screenshot job. The
+native geometry diagnostic is nonblocking and does not change its NOT APPROVED
+status. This proves the bounded generated-WASM host path, not a production
+editor swap or visual browser parity.
+
+## 23. Version-2 Rust resize command and sized node deltas (2026-09-28)
+
+The optional command ABI now advertises `sessionBridgeVersion() == 2`, **separate**
+from the import bridge's version 1 and the web-document dialect's version 1.
+`x-editor::DocumentSession` dispatches absolute `Resize { id, w, h }` into the
+existing native `Editor::resize` command log; native hosts call the same Rust
+session directly. The editor's own next-undo/redo-node query now recognizes
+`Resize`, so Rust reports its changed node without a second ID history. Renames, moves, resizes and undo/redo return one node's
+`id/name/x/y/w/h`, monotonic revision and history flags. There is still no
+full-document transfer per command or frame. The web adapter rejects any
+missing/extra/nonfinite response field. A V1 or incomplete V2 optional WASM
+class cannot start a Rust preview; guarded import remains independently usable.
+
+Rust refuses a missing/root target and dimensions below 1 or nonfinite values
+**before** touching history; exact no-ops retain redo. The web V1 format gate
+still accepts its previously admitted positive subpixel rectangles. The preview
+disables resizing those layers because the underlying Rust editor clamps sizes
+below 1; rename/move remain available rather than silently rewriting an
+untouched small dimension. For safe rectangles, the UI paints native-returned
+sizes after resize and after Rust undo/redo, retaining only presentation data,
+not a second edit engine. Explicit export still validates the entire native
+checkpoint, and the stored browser file is not changed. This is a bounded
+rectangle command, **not** drag-handle, layout, browser-renderer, persistence
+or default-route promotion.
+
+Tests exercise the same command and undo in `x-editor`, the direct `x-native`
+host, the `x-wasm` bridge, the strict TS transport, the web document adapter and
+the opt-in mounted view. `npm run test:wasm` exercises the **real generated**
+V2 artifact's resize/undo and view paint path when CI builds it. The import
+parity gates and native geometry NOT APPROVED guard are unchanged.
+
+**Verified:** [CI 36344250983](https://github.com/Ankushui18/X-native/actions/runs/36344250983)
+passed on `7145cfa`: Rust formatting/clippy/workspace tests (including native
+resize undo), full web tests/build, matched WASM packages, genuine-artifact
+command/web-document/React smoke, and screenshots. The first V2 run caught an
+actual Rust undo-ID omission for `Resize` as well as formatting; the same Rust
+history inspection now reports resized nodes on undo/redo. Green CI does **not**
+promote native geometry (still NOT APPROVED), general web file schemas, or the
+default production editor.

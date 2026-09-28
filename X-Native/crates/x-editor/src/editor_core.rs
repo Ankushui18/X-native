@@ -217,14 +217,11 @@ impl Editor {
         if node.name == new_name {
             return false;
         }
-        let before = Box::new(self.root.clone());
-        let mut after = self.root.clone();
-        if let Some(node) = find_mut(&mut after, id) {
-            node.name = new_name.to_string();
-        }
-        let root_id = self.root.id.clone();
-        self.push_replace(&root_id, before, after);
-        true
+        // History should retain just this subtree, not clone the entire page
+        // for a single layer label (especially important at the WASM boundary).
+        let mut after = node.clone();
+        after.name = new_name.to_string();
+        self.replace_node(id, after)
     }
     pub fn new(root: Node) -> Self {
         Self {
@@ -2650,6 +2647,87 @@ impl Editor {
     /// Number of undo entries (lets the UI count a gesture's commands).
     pub fn undo_depth(&self) -> usize {
         self.undo_stack.len()
+    }
+
+    /// The command session exposes only single-node edits. Ask the editor's
+    /// actual history which id the next undo/redo will touch, rather than
+    /// maintaining a second history of ids beside the real command stack.
+    pub(crate) fn next_undo_node(&self) -> Option<&str> {
+        match self.undo_stack.last()?.first()? {
+            Command::Move { id, .. }
+            | Command::Resize { id, .. }
+            | Command::ReplaceNode { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn next_redo_node(&self) -> Option<&str> {
+        match self.redo_stack.last()?.first()? {
+            Command::Move { id, .. }
+            | Command::Resize { id, .. }
+            | Command::ReplaceNode { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Read the actual ReplaceNode history for a style edit. Never maintain
+    /// a parallel list of stroke ids just to produce session undo deltas.
+    pub(crate) fn next_undo_stroke(&self) -> Option<&str> {
+        Self::stroke_history_id(self.undo_stack.last()?)
+    }
+
+    pub(crate) fn next_redo_stroke(&self) -> Option<&str> {
+        Self::stroke_history_id(self.redo_stack.last()?)
+    }
+
+    fn stroke_history_id(commands: &[Command]) -> Option<&str> {
+        match commands {
+            [Command::ReplaceNode { id, before, after }]
+                if before.stroke != after.stroke || before.stroke_layers != after.stroke_layers =>
+            {
+                Some(id)
+            }
+            _ => None,
+        }
+    }
+
+    /// Read the single-layer kind rewrite from the actual Rust undo stack.
+    /// Offset edits preserve identity and paint; styles never change kind.
+    pub(crate) fn next_undo_offset(&self) -> Option<&str> {
+        Self::offset_history_id(self.undo_stack.last()?)
+    }
+
+    pub(crate) fn next_redo_offset(&self) -> Option<&str> {
+        Self::offset_history_id(self.redo_stack.last()?)
+    }
+
+    fn offset_history_id(commands: &[Command]) -> Option<&str> {
+        match commands {
+            [Command::ReplaceNode { id, before, after }] if before.kind != after.kind => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The next atomic Boolean edit's exact source/result ids. Session deltas
+    /// come from the real Rust command log, never a parallel JS undo stack.
+    pub(crate) fn next_undo_boolean(&self) -> Option<([String; 2], String)> {
+        Self::boolean_history_ids(self.undo_stack.last()?)
+    }
+
+    pub(crate) fn next_redo_boolean(&self) -> Option<([String; 2], String)> {
+        Self::boolean_history_ids(self.redo_stack.last()?)
+    }
+
+    fn boolean_history_ids(commands: &[Command]) -> Option<([String; 2], String)> {
+        match commands {
+            [Command::Delete { node: first, .. }, Command::Delete { node: second, .. }, Command::Insert { node: result, .. }]
+                if matches!(&result.kind, NodeKind::Vector { .. }) =>
+            {
+                // Deletes run back-to-front; restore/paint low-to-high.
+                Some(([second.id.clone(), first.id.clone()], result.id.clone()))
+            }
+            _ => None,
+        }
     }
 
     /// Drop oldest undo groups together with their structural snapshots.

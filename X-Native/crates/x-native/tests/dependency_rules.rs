@@ -12,7 +12,7 @@
 //!   x-ui        -> x-text
 //!   x-board -> x-core, x-editor, x-render, x-format, x-ui
 //!   x-native (facade) -> all crates except x-board
-//!   x-wasm -> x-core, x-format (leaf)
+//!   x-wasm -> x-core, x-editor, x-format (leaf)
 //!   x-geo -> x-core (leaf)
 //!   x-designer -> x-native, x-board
 
@@ -96,7 +96,7 @@ fn dependency_direction_is_enforced() {
         // The wasm bridge deliberately sits at the edge of the graph: it may
         // depend on the engine, and nothing may depend on it. See
         // docs/ARCHITECTURE_BOUNDARY.md.
-        ("x-wasm", vec!["x-core", "x-format"]),
+        ("x-wasm", vec!["x-core", "x-editor", "x-format"]),
         ("x-geo", vec!["x-core"]),
         ("x-designer", vec!["x-native", "x-board"]),
     ]);

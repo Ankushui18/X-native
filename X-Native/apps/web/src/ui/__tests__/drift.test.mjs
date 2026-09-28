@@ -55,6 +55,10 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  newly created sections/slices, a noise renderer's black, a boolean mask's
  *  white. Those are written into saved files and their SVG exports, so they must
  *  NOT answer the theme; canvasChrome.test.mjs pins that boundary instead.
+ *  RustDocumentView's two inline values are document root geometry and node
+ *  ink/geometry (not chrome); three native buttons provide aria-pressed layer
+ *  selection/canvas semantics and form submission. Other controls use XButton;
+ *  its title/colour debt starts at zero.
  *  Minimap.tsx and Rulers.tsx are at zero: they have no literals left to drift. */
 const CEILING = {
   //                 inline colour title button select
@@ -70,6 +74,7 @@ const CEILING = {
   "PresentationPlayer.tsx": [5, 0, 12, 9, 2],
   "RadialMenu.tsx": [3, 6, 0, 0, 0],
   "Rulers.tsx": [0, 0, 0, 0, 0],
+  "RustDocumentView.tsx": [2, 0, 0, 3, 0],
   "Tooltip.tsx": [1, 0, 0, 0, 0],
   "ZenHUD.tsx": [16, 14, 9, 6, 0],
   "announce.tsx": [0, 0, 0, 0, 0],

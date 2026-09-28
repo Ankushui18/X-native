@@ -17,6 +17,16 @@ const rect = (extra = {}) => ({ id: "box", kind: { t: "rect", radius: 0 }, x: 10
 const page = (children = [rect()], name = "Page 1") => rect({ id: name, name, kind: { t: "frame" }, x: 0, y: 0, w: 200, h: 120, children });
 const envelope = (pages = [page()]) => JSON.stringify({ ok: true, doc: { format: "x-native", version: 1, pages } });
 const svg = '<svg width="200" height="120"><rect id="box" x="10" y="10" width="80" height="50" fill="#ff0000"/></svg>';
+const translatedGroupSvg = '<svg width="120" height="80"><g id="outer" transform="translate(10 20)" fill="#123456" opacity=".5"><g id="inner" transform="translate(-2 5)"><rect id="box" x="3" y="4" width="20" height="10"/></g><text id="label" x="10" y="30" font-size="10">Hi</text><rect id="after" x="0" y="1" width="4" height="4"/></g><rect id="outside" x="5" y="6" width="3" height="2" fill="red"/></svg>';
+await test("TS SVG oracle flattens nested translations and retains siblings after text", () => {
+  const { nodes, width, height, skipped } = svgTs(translatedGroupSvg);
+  assert.deepEqual([width, height, skipped], [120, 80, 0]);
+  assert.deepEqual(nodes.map(n => [n.name, n.x, n.y, n.opacity]), [
+    ["box", 11, 29, 0.5], ["label", 20, 40, 0.5], ["after", 10, 21, 0.5], ["outside", 5, 6, 1],
+  ]);
+  assert.deepEqual([nodes[1].kind, nodes[1].text, nodes[1].w, nodes[1].h], ["text", "Hi", 12, 14]);
+  assert.ok(nodes.slice(0, 3).every(n => n.fill === "#123456"));
+});
 let calls = 0;
 const glue = (extra = {}) => ({ default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)", importFigToX: () => envelope(), importSketchToX: () => envelope(), importSvgToX: () => { calls++; return envelope(); }, ...extra });
 await test("direct native pages (not pages[0].root), dimensions and names", () => {
@@ -84,6 +94,37 @@ for (const payload of ["bad", JSON.stringify({ ok: false, error: "nope" }), JSON
 }
 await test("asset-bearing document cannot silently lose assets", () => {
   const r = JSON.parse(envelope()); r.doc.assets = { image: "data:abc" }; assert.throws(() => decodeRustImport(JSON.stringify(r)));
+});
+await test("accept typed empty native document tables", () => {
+  const r = JSON.parse(envelope());
+  Object.assign(r.doc, { variables: { colors: {}, numbers: {}, strings: {}, bools: {}, collections: {}, modes: {}, num_modes: {}, str_modes: {}, bool_modes: {} },
+    styles: {}, component_props: {}, comments: [], assets: [], libraries: [] });
+  assert.equal(decodeRustImport(JSON.stringify(r)).nodes[0].name, "box");
+});
+await test("unknown envelope and document fields must decline rather than disappear", () => {
+  for (const scope of ["envelope", "doc"]) {
+    const r = JSON.parse(envelope());
+    (scope === "doc" ? r.doc : r).futurePaints = ["lost"];
+    assert.throws(() => decodeRustImport(JSON.stringify(r)), /properties: futurePaints/);
+  }
+});
+for (const [field, value] of [
+  ["default_font", "Other Face"], ["assets", "none"], ["styles", null],
+  ["component_props", { Button: [] }], ["comments", [{ text: "keep me" }]],
+  ["libraries", {}], ["variables", null],
+]) await test(`decline unsupported/malformed document ${field}`, () => {
+  const r = JSON.parse(envelope()); r.doc[field] = value;
+  assert.throws(() => decodeRustImport(JSON.stringify(r)), /Unsupported Rust|Invalid Rust/);
+});
+await test("unsupported document fields fall back through the production SVG wrapper", async () => {
+  const r = JSON.parse(envelope()); r.doc.comments = [{ text: "keep me" }];
+  __resetWasmForTests();
+  try {
+    await initWasmBridge(async () => glue({ importSvgToX: () => JSON.stringify(r) }));
+    assert.deepEqual(importSvg(svg), svgTs(svg));
+    assert.equal(getEngineInfo().importBackend, "ts");
+    assert.match(getEngineInfo().lastImportFallback, /comments/);
+  } finally { __resetWasmForTests(); }
 });
 await test("single-page shape equivalence expands absent defaults", () => assert.equal(importsEquivalent(svgTs(svg), { ...decodeRustImport(envelope()), pages: undefined }), true));
 await test("equivalence includes optional paints and additional pages", () => {

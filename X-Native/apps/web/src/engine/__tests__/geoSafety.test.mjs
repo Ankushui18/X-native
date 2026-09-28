@@ -107,11 +107,21 @@ await test("TS override does not poison a later explicit load", async () => {
   const fetch = globalThis.fetch; let called = false; globalThis.fetch = async () => { called = true; return { ok: false }; };
   try { await ensureGeo(); assert.equal(called, true); } finally { globalThis.fetch = fetch; __resetGeoForTests(); }
 });
-await test("auto declines unequal native geometry instead of changing documents", () => {
-  __setGeoModuleForTests({ version: 1, call: () => response() }); assert.deepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
+await test("auto returns the native Boolean without consulting TS", () => {
+  __setGeoModuleForTests({ version: 1, call: () => response() });
+  assert.notDeepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
 });
-await test("auto does not trust a false empty result", () => {
-  __setGeoModuleForTests({ version: 1, call: () => response(1) }); assert.deepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
+await test("auto accepts a native empty result without running the oracle", () => {
+  __setGeoModuleForTests({ version: 1, call: () => response(1) }); assert.equal(booleanPath("union", shapes), null);
+});
+await test("audit rejects unequal geometry and false emptiness, then falls back to TS", () => {
+  globalThis.location = { search: "?geo=audit" };
+  try {
+    __setGeoModuleForTests({ version: 1, call: () => response() });
+    assert.deepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
+    __setGeoModuleForTests({ version: 1, call: () => response(1) });
+    assert.deepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
+  } finally { delete globalThis.location; }
 });
 await test("explicit wasm mode exposes real empty result for differential testing", () => {
   globalThis.location = { search: "?geo=wasm" }; __setGeoModuleForTests({ version: 1, call: () => response(1) }); assert.equal(booleanPath("union", shapes), null); delete globalThis.location;

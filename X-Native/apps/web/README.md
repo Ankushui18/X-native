@@ -12,10 +12,11 @@ Chrome belongs in the DOM.
 
 An earlier version of this file said the document, undo and auto layout "stay
 in Rust". That was never true of the shipped app: `src/engine/` implements all
-of them in TypeScript and nothing here calls into the Rust crates.
+of them in TypeScript. Optional WASM import and geometry bridges now reach Rust,
+but neither replaces the TypeScript command engine.
 
-**This package is the production engine as well as the UI.** Rust is a future
-candidate, not the current authority. See
+**This package is the production engine as well as the UI.** TypeScript is still
+the authority for imports and geometry until native parity is proven. See
 [docs/ARCHITECTURE_BOUNDARY.md](../../docs/ARCHITECTURE_BOUNDARY.md) for the
 boundary rule, the per-capability ownership table, and the migration sequence.
 
@@ -23,15 +24,20 @@ boundary rule, the per-capability ownership table, and the migration sequence.
 
 | Layer | Owner | Status |
 | --- | --- | --- |
-| Document model, layout, undo, `.x` | `crates/x-core`, `x-editor`, `x-format` | untouched |
+| Separate native/CLI document model, layout, undo, `.x` | `crates/x-core`, `x-editor`, `x-format` | not the web command engine |
 | Headless GPU canvas, export | `crates/x-render`, `render_headless` | CLI / tests |
 | Command API | `apps/web/src/engine/types.ts` | this package |
-| In-memory engine (dev) | `apps/web/src/engine/memory.ts` | this package |
+| In-memory web engine (production) | `apps/web/src/engine/memory.ts` | this package |
+| Optional import and geometry bridges | `apps/web/src/engine/{wasmBridge,geoBridge}.ts` | guarded by TypeScript parity checks |
 | Designer chrome | React (this package) | Figma UI3 light |
 
-When `wasm-bindgen` is available, `MemoryEngine` is replaced by a WASM
-`x-editor` that implements the same `Engine.dispatch(Command)` interface.
-The UI does not import node internals.
+`MemoryEngine` is **not** replaced by WASM today. `npm run build:wasm` packages
+the optional generated `x-wasm` import glue and `x-geo.wasm`; without them the
+web app still works via TypeScript. Native import results are accepted only when
+the entire converted result matches the TypeScript importer. Geometry in `auto`
+mode falls back when its native result differs (the current corpus does not pass
+native promotion). Run `npm run test:wasm` after packaging to test the real
+modules. See [WASM bridge verification](../../docs/WASM_BRIDGES_2026-09-27.md).
 
 ## Run
 
@@ -72,3 +78,22 @@ closed which half.
 
 The e2e suite points `CHROMIUM_PATH` / `CHROMIUM_LIBS` at a local Chromium
 (e.g. the binary inside `@sparticuz/chromium`) and `APP_URL` at the dev server.
+
+## Experimental Rust document preview
+
+With the optional WASM artifacts installed (`npm run build:wasm` in a Rust-enabled
+environment), open a stored, flat rectangle-only file at
+`#/file/<id>?engine=rust`. The standard `#/file/<id>` editor and its TypeScript
+document engine remain unchanged. The preview has Rust-owned move, rename,
+resize and undo/redo commands; it does not autosave or support the full editor
+toolset. The resize control uses the version-2 command ABI and requires both
+rectangle dimensions to be at least 1; older WASM session artifacts refuse the
+preview while leaving guarded imports available.
+"Prepare download" gives you a copy, not an update to the stored file. You will
+be prompted before leaving with edits. An unsupported file or unavailable WASM
+stays read-only and offers an explicit return to the standard editor; there is
+no automatic fallback after Rust editing starts.
+
+To verify the genuine module after packaging, run `npm run test:wasm`. The CI
+smoke mounts the React preview over real generated WASM in jsdom, but it does
+not prove browser rendering or production editor parity.

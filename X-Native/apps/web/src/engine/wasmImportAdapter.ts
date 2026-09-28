@@ -205,17 +205,30 @@ function vector(v: unknown): { path: PathPoint[]; vectorNetwork: VectorNetwork; 
 export function decodeRustImport(payload: string): ImportResult {
   const envelope = object(JSON.parse(payload));
   if (envelope.ok !== true) throw new Error(typeof envelope.error === "string" ? envelope.error : "Rust importer declined");
+  keys(envelope, ["ok", "doc", "textMetrics", "figmaCoordinates", "figmaAppearance", "figmaEffects"]);
   const doc = object(envelope.doc);
+  // The .x serializer can add fields without bumping its v1 version. Never
+  // turn an unknown document capability into a seemingly complete web import.
+  keys(doc, ["format", "version", "pages", "default_font", "variables", "styles", "component_props", "comments", "assets", "libraries"]);
   if (doc.format !== "x-native" || doc.version !== 1 || !Array.isArray(doc.pages) || !doc.pages.length) {
     throw new Error("Unsupported Rust document schema");
   }
-  // Resource-bearing documents must be handled by the existing importer until
-  // their assets/styles/variables have a lossless web mapping.
-  for (const key of ["assets", "styles", "components", "libraries"]) {
+  if (doc.default_font !== undefined) throw new Error("Unsupported Rust default_font");
+  // Even an empty resource section must have the right native container type:
+  // a scalar/null here is not evidence that the source has no resources.
+  for (const key of ["styles", "component_props"] as const) {
+    if (doc[key] === undefined) continue;
     const value = doc[key];
-    if (value && typeof value === "object" && Object.keys(value).length) throw new Error(`Unsupported Rust ${key}`);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid Rust ${key}`);
+    if (Object.keys(value).length) throw new Error(`Unsupported Rust ${key}`);
   }
-  if (doc.variables != null) {
+  for (const key of ["assets", "libraries", "comments"] as const) {
+    const value = doc[key];
+    if (value === undefined) continue;
+    if (!Array.isArray(value)) throw new Error(`Invalid Rust ${key}`);
+    if (value.length) throw new Error(`Unsupported Rust ${key}`);
+  }
+  if (doc.variables !== undefined) {
     const vars = object(doc.variables);
     keys(vars, ["colors", "numbers", "strings", "bools", "collections", "modes", "num_modes", "str_modes", "bool_modes"]);
     for (const table of Object.values(vars)) {
@@ -225,10 +238,13 @@ export function decodeRustImport(payload: string): ImportResult {
   // Native Node.h is font size for text, NOT its source bounding-box height.
   // Old glue (and SVG without explicit metrics) must continue to fall back.
   let textMetrics: Obj = {};
+  let textMetricsVersion = 1;
   if (envelope.textMetrics != null) {
     const metadata = object(envelope.textMetrics);
     keys(metadata, ["version", "nodes"]);
-    if (metadata.version !== 1) throw new Error("Unsupported Rust text metrics version");
+    const version = metadata.version;
+    if (version !== 1 && version !== 2) throw new Error("Unsupported Rust text metrics version");
+    textMetricsVersion = version;
     textMetrics = object(metadata.nodes);
   }
   // FIG's native editor normalizes each page near (40,40). Only explicit
@@ -292,14 +308,27 @@ export function decodeRustImport(payload: string): ImportResult {
       const id = text(n.id);
       if (!Object.prototype.hasOwnProperty.call(textMetrics, id) || usedMetrics.has(id)) throw new Error("Missing or duplicate Rust source text metrics");
       usedMetrics.add(id);
-      const metrics = object(textMetrics[id]); keys(metrics, ["width", "height", "fontSize"]);
+      const metrics = object(textMetrics[id]);
+      keys(metrics, ["width", "height", "fontSize", ...(textMetricsVersion === 2 ? ["fontWeight"] : [])]);
       out.w = number(metrics.width); out.h = number(metrics.height);
       out.fontSize = number(metrics.fontSize);
       if (out.fontSize <= 0 || out.fontSize !== number(n.h) || out.w !== number(n.w)) throw new Error("Invalid Rust source text metrics");
       out.text = text(kind.text);
-      // No inferred weight from PostScript names. Unsupported source styling
-      // still fails the whole-result TS comparison in wasmBridge.choose.
+      // V1 had no weight and retains the old unstyled default. V2 SVG
+      // explicitly distinguishes an absent/nonnumeric source value (null)
+      // from a supported numeric element attribute. Never infer from the TS
+      // oracle or a PostScript font name; choose() compares the whole result.
       out.fontWeight = 400;
+      if (textMetricsVersion === 2) {
+        if (!Object.prototype.hasOwnProperty.call(metrics, "fontWeight")) throw new Error("Missing Rust source font weight");
+        const weight = metrics.fontWeight;
+        if (weight !== null) {
+          if (typeof weight !== "number" || !Number.isSafeInteger(weight) || weight < 1 || weight > 1000) {
+            throw new Error("Invalid Rust source font weight");
+          }
+          out.fontWeight = weight;
+        }
+      }
       const align = n.text_align ?? "left";
       if (align !== "left" && align !== "center" && align !== "right" && align !== "justified") throw new Error("Unsupported Rust text alignment");
       out.textAlign = align;

@@ -134,6 +134,8 @@ function cannedResponse(status, msg = "") {
   t("?geo=ts", getGeoMode() === "ts");
   globalThis.window = { location: { search: "?geo=bogus" } };
   t("?geo=bogus falls to auto", getGeoMode() === "auto");
+  globalThis.window = { location: { search: "?geo=audit" } };
+  t("?geo=audit enables diagnostic oracle", getGeoMode() === "audit");
   globalThis.window = { location: { search: "" } };
   globalThis.localStorage = { getItem: () => "wasm" };
   t("stored override", getGeoMode() === "wasm");
@@ -228,6 +230,15 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   __resetGeoForTests();
 }
 {
+  __setGeoModuleForTests({ version: 1, call: () => stubResp });
+  const via = booleanPath("union", shapes2());
+  const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
+    (19 / 160) * 0.85, false);
+  t("default uses native shaped output even when a mock disagrees with TS",
+    eq(via, direct) && !eq(via, booleanPathTs("union", shapes2())));
+  __resetGeoForTests();
+}
+{
   // Throwing module -> TS fallback, identical to the authority.
   __setGeoModuleForTests({ version: 1, call: () => { throw new Error("trap"); } });
   const warn = console.warn; console.warn = () => {};
@@ -237,11 +248,15 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   __resetGeoForTests();
 }
 {
-  // Status-1 (wasm empty) defers to the authority, never returns null itself.
+  // No per-call oracle in auto: the native result, including empty, is used.
+  // In audit mode the same false-empty candidate is rejected against TS.
   __setGeoModuleForTests({ version: 1, call: () => cannedResponse(1) });
+  t("auto selects native empty without running the TS oracle", booleanPath("union", shapes2()) === null);
+  const priorLocation = globalThis.location;
+  globalThis.location = { search: "?geo=audit" };
   const via = booleanPath("union", shapes2());
-  const ts = booleanPathTs("union", shapes2());
-  t("wasm-empty defers to TS", eq(via, ts) && via !== null);
+  t("geo=audit rejects false empty and restores TS", eq(via, booleanPathTs("union", shapes2())) && via !== null);
+  if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
   __resetGeoForTests();
 }
 {
@@ -285,8 +300,32 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   __setGeoModuleForTests({ version: 1, call: () => stubResp });
   const via = booleanPath("union", curved());
   const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
-    (Math.max(30, 40) / 160) * 0.85, true);
+    (19 / 160) * 0.85, true);
   t("curved flag flows to shaper on wasm path", eq(via, direct));
+  if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
+  __resetGeoForTests();
+}
+{
+  // The wire bbox describes the native contour, not the original coverage
+  // grid. A distant second input makes those scales differ substantially.
+  const priorLocation = globalThis.location;
+  globalThis.location = { search: "?geo=wasm" };
+  const ring = [{ x: 0, y: 0 }, { x: 5, y: 1 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+  const response = new Uint8Array(52 + 8 + ring.length * 16), dv = new DataView(response.buffer);
+  dv.setUint32(0, 0x58475231, true); dv.setUint32(4, response.length, true); dv.setUint16(8, 1, true);
+  dv.setFloat64(28, 10, true); dv.setFloat64(36, 10, true); dv.setUint32(44, 1, true);
+  dv.setUint32(52, ring.length, true);
+  ring.forEach((p, i) => { dv.setFloat64(60 + i * 16, p.x, true); dv.setFloat64(68 + i * 16, p.y, true); });
+  __setGeoModuleForTests({ version: 1, call: () => response });
+  const far = [
+    { poly: rect(0, 0, 10, 10), ox: 0, oy: 0 },
+    { poly: rect(500, 500, 10, 10), ox: 0, oy: 0 },
+  ];
+  const gridEps = (514 / 160) * 0.85;
+  const correct = shapeBooleanResult("subtract", [ring], gridEps, false);
+  const bboxEps = shapeBooleanResult("subtract", [ring], (10 / 160) * 0.85, false);
+  t("native output uses input grid scale for shared shaper, never output bbox",
+    eq(booleanPath("subtract", far), correct) && !eq(correct, bboxEps));
   if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
   __resetGeoForTests();
 }

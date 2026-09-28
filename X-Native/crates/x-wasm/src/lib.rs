@@ -1,19 +1,17 @@
-//! WebAssembly bridge: the first slice connecting the Rust engine to the web app.
+//! WebAssembly boundary for Rust imports and an opt-in document command session.
 //!
-//! Scope is deliberately one capability — reading a design file — because the
-//! behaviour suite in `apps/web/e2e/behaviour.mjs` already pins what the
-//! TypeScript importers produce. That gives an equivalence oracle: the Rust
-//! path can be proven against the same checks before anything is deleted.
+//! Imports use `x-format` and the existing TypeScript whole-result oracle;
+//! no production web document/undo/layout authority is claimed by imports.
+//! The separate `session` module holds an x-editor session over native `.x`:
+//! one initial document, small command/state deltas, explicit export. It does
+//! NOT mirror a TS document or run beside the live web editor's history.
 //! See `docs/ARCHITECTURE_BOUNDARY.md`.
 //!
-//! The bridge is intentionally thin. It owns no document logic; it converts
-//! bytes to a `.x` JSON string using `x-format`'s existing, tested importers
-//! and serializer. Anything more would be a second implementation, which is
-//! the thing the boundary rule exists to prevent.
-//!
-//! Every entry point is pure: bytes in, string out, no filesystem. That is why
-//! the `*_bytes` importers are used rather than the path-based convenience
-//! wrappers, which call `std::fs` and cannot run under wasm.
+//! The import entry points below are pure: bytes in, string out, no filesystem.
+//! That is why they use the `*_bytes` importers rather than path-based wrappers,
+//! which call `std::fs` and cannot run under wasm.
+
+pub mod session;
 
 use x_format::{figbinary, serialize::save_x, sketch, svg_import};
 
@@ -39,10 +37,24 @@ fn import_envelope(
     match result {
         Err(e) => envelope(Err(e)),
         Ok((doc, report)) => {
-            let metrics: serde_json::Map<String, serde_json::Value> = report.text_metrics.iter().map(|(id, m)| {
-                (id.clone(), serde_json::json!({ "width": m.width, "height": m.height, "fontSize": m.font_size }))
-            }).collect();
-            let metadata = serde_json::json!({ "version": 1, "nodes": metrics });
+            let metrics: serde_json::Map<String, serde_json::Value> = report
+                .text_metrics
+                .iter()
+                .map(|(id, m)| {
+                    let mut fields = serde_json::json!({
+                        "width": m.width, "height": m.height, "fontSize": m.font_size
+                    });
+                    if source == "svg" {
+                        // SVG-only v2: explicit numeric weight or null (no
+                        // supported element weight). Do not invent weight for
+                        // FIG/Sketch or change their v1 metadata contract.
+                        fields["fontWeight"] = serde_json::json!(m.font_weight);
+                    }
+                    (id.clone(), fields)
+                })
+                .collect();
+            let version = if source == "svg" { 2 } else { 1 };
+            let metadata = serde_json::json!({ "version": version, "nodes": metrics });
             let coordinates = if source == "fig" {
                 let nodes: serde_json::Map<String, serde_json::Value> = report
                     .source_positions
@@ -115,11 +127,131 @@ pub fn engine_version() -> String {
     format!("x-wasm {} (rust)", env!("CARGO_PKG_VERSION"))
 }
 
-// The wasm_bindgen surface is a thin re-export of the functions above, so the
-// native `cargo test` build does not need wasm-bindgen present at all.
+// The wasm_bindgen surface delegates to host-testable Rust imports and the
+// shared command session. Native `cargo test` does not need wasm-bindgen.
 #[cfg(target_arch = "wasm32")]
 mod bindings {
     use wasm_bindgen::prelude::*;
+
+    fn js_error(error: String) -> JsValue {
+        JsValue::from_str(&error)
+    }
+
+    /// Independently versioned command session. V3 added Booleans, V4 added
+    /// aligned strokes; V5 adds bounded single-layer signed offsets. Older
+    /// bindgen artifacts cannot safely acknowledge/undo the new shape delta.
+    #[wasm_bindgen(js_name = sessionBridgeVersion)]
+    pub fn session_bridge_version() -> u32 {
+        5
+    }
+
+    #[wasm_bindgen]
+    pub struct RustDocumentSession {
+        bridge: super::session::CommandBridge,
+    }
+
+    #[wasm_bindgen]
+    impl RustDocumentSession {
+        #[wasm_bindgen(constructor)]
+        pub fn new(x: &str) -> Result<RustDocumentSession, JsValue> {
+            Ok(Self {
+                bridge: super::session::CommandBridge::open(x).map_err(js_error)?,
+            })
+        }
+
+        #[wasm_bindgen(js_name = state)]
+        pub fn state(&self) -> String {
+            self.bridge.state()
+        }
+
+        #[wasm_bindgen(js_name = getNode)]
+        pub fn get_node(&self, id: &str) -> String {
+            self.bridge.get_node(id)
+        }
+
+        #[wasm_bindgen(js_name = getShape)]
+        pub fn get_shape(&self, id: &str) -> Result<String, JsValue> {
+            self.bridge.get_shape(id).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = renameNode)]
+        pub fn rename_node(&mut self, id: &str, name: &str) -> Result<String, JsValue> {
+            self.bridge.rename_node(id, name).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = moveNode)]
+        pub fn move_node(&mut self, id: &str, dx: f64, dy: f64) -> Result<String, JsValue> {
+            self.bridge.move_node(id, dx, dy).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = resizeNode)]
+        pub fn resize_node(&mut self, id: &str, w: f64, h: f64) -> Result<String, JsValue> {
+            self.bridge.resize_node(id, w, h).map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = booleanNode)]
+        pub fn boolean_node(
+            &mut self,
+            first: &str,
+            second: &str,
+            op: &str,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .boolean_node(first, second, op)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = strokeNode)]
+        pub fn stroke_node(
+            &mut self,
+            id: &str,
+            width: f64,
+            color: &str,
+            align: &str,
+            join: &str,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .stroke_node(id, width, color, align, join)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = previewOffset)]
+        pub fn preview_offset(
+            &self,
+            id: &str,
+            distance: f64,
+            join: &str,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .preview_offset(id, distance, join)
+                .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = offsetNode)]
+        pub fn offset_node(
+            &mut self,
+            id: &str,
+            distance: f64,
+            join: &str,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .offset_node(id, distance, join)
+                .map_err(js_error)
+        }
+
+        pub fn undo(&mut self) -> Result<String, JsValue> {
+            self.bridge.undo().map_err(js_error)
+        }
+
+        pub fn redo(&mut self) -> Result<String, JsValue> {
+            self.bridge.redo().map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = exportX)]
+        pub fn export_x(&self) -> String {
+            self.bridge.export_x()
+        }
+    }
 
     #[wasm_bindgen(js_name = importFigToX)]
     pub fn import_fig_to_x(bytes: &[u8]) -> String {
@@ -176,23 +308,73 @@ mod tests {
     }
 
     #[test]
+    fn svg_view_box_dimensions_survive_the_wasm_envelope() {
+        let out = import_svg_to_x(
+            r#"<svg viewBox="0 0 96 48"><rect id="box" width="20" height="15" fill="red"/></svg>"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["doc"]["pages"][0]["w"], 96.0);
+        assert_eq!(value["doc"]["pages"][0]["h"], 48.0);
+        assert_eq!(value["doc"]["pages"][0]["children"][0]["id"], "box");
+    }
+
+    #[test]
+    fn translated_svg_group_exports_text_and_following_shape_without_a_wrapper() {
+        let out = import_svg_to_x(
+            r#"<svg width="120" height="80"><g id="wrapper" transform="translate(10 20)">
+              <text id="label" x="0" y="30" font-size="10">Hi</text>
+              <rect id="after" x="1" y="2" width="4" height="4" fill="red"/>
+            </g></svg>"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        let children = value["doc"]["pages"][0]["children"].as_array().unwrap();
+        assert_eq!(children.len(), 2);
+        let position = |node: &serde_json::Value| (node["x"].as_f64(), node["y"].as_f64());
+        assert_eq!(children[0]["id"], "label");
+        assert_eq!(position(&children[0]), (Some(10.0), Some(40.0)));
+        assert_eq!(children[1]["id"], "after");
+        assert_eq!(position(&children[1]), (Some(11.0), Some(22.0)));
+        assert_eq!(value["textMetrics"]["nodes"]["label"]["height"], 14.0);
+    }
+
+    #[test]
     fn svg_text_exports_the_same_source_box_metrics_as_the_web_importer() {
         let out = import_svg_to_x(
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>"##,
         );
         let value: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["textMetrics"]["version"], 1);
+        assert_eq!(value["textMetrics"]["version"], 2);
         let page = &value["doc"]["pages"][0];
         let text = &page["children"][0];
         let id = text["id"].as_str().unwrap();
-        assert_eq!(text["name"], "Keep this text");
+        assert_eq!(id, "label");
+        // The .x serializer omits `name` when it equals `id`; the web adapter
+        // restores the effective name from the id, not from the TS importer.
+        assert_eq!(text["name"].as_str().unwrap_or(id), "label");
         assert_eq!(text["h"], 20.0, "persisted native text h remains font size");
         assert_eq!(value["textMetrics"]["nodes"][id]["width"], 168.0);
         assert_eq!(value["textMetrics"]["nodes"][id]["height"], 28.0);
         assert_eq!(value["textMetrics"]["nodes"][id]["fontSize"], 20.0);
+        assert!(value["textMetrics"]["nodes"][id]["fontWeight"].is_null());
         assert!(value.get("figmaCoordinates").is_none());
         assert!(value.get("figmaAppearance").is_none());
+    }
+
+    #[test]
+    fn svg_numeric_weight_is_versioned_source_metadata_not_persisted_typography() {
+        let out = import_svg_to_x(
+            r#"<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" font-weight="700">Keep this text</text></svg>"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["textMetrics"]["version"], 2);
+        assert_eq!(value["textMetrics"]["nodes"]["label"]["fontWeight"], 700);
+        assert!(value["doc"]["pages"][0]["children"][0]
+            .get("bindings")
+            .is_none());
     }
 
     #[test]

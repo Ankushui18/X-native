@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { decodeRustImport } from "../wasmImportAdapter.ts";
-import { initWasmBridge, __resetWasmForTests, importSvg, getEngineInfo } from "../wasmBridge.ts";
+import { initWasmBridge, __resetWasmForTests, importSvg, getEngineInfo, importsEquivalent } from "../wasmBridge.ts";
 import { importSvg as svgTs } from "../svgImport.ts";
 import { JSDOM } from "jsdom";
 let passed = 0, failed = 0;
@@ -19,6 +19,33 @@ await test("text content, source bounds and font size stay independent", () => {
   assert.equal(n.kind, "text"); assert.equal(n.text, "Hello λ 👋\nSecond line");
   assert.equal(n.w, 200); assert.equal(n.h, 60); assert.equal(n.fontSize, 18);
   assert.equal(n.fontWeight, 400); assert.equal(n.textAlign, "left");
+});
+await test("v2 SVG text metadata carries a source-backed numeric weight without changing .x", () => {
+  const p = payload(); p.textMetrics.version = 2;
+  p.textMetrics.nodes["text-1"].fontWeight = 700;
+  assert.equal(decode(p).nodes[0].fontWeight, 700);
+  assert.equal(p.doc.pages[0].children[0].bindings, undefined);
+  p.textMetrics.nodes["text-1"].fontWeight = null;
+  assert.equal(decode(p).nodes[0].fontWeight, 400);
+});
+await test("versioned weights stay keyed by native text ID, not display name", () => {
+  const p = payload(); p.textMetrics.version = 2;
+  p.doc.pages[0].children.push(layer({ id: "text-2", h: 24 }));
+  p.textMetrics.nodes["text-1"].fontWeight = 700;
+  p.textMetrics.nodes["text-2"] = metrics({ height: 120, fontSize: 24, fontWeight: 500 });
+  assert.deepEqual(decode(p).nodes.map((n) => n.fontWeight), [700, 500]);
+});
+for (const [label, weight] of [["string", "700"], ["fraction", 700.5], ["zero", 0], ["negative", -1], ["out of range", 1001], ["boolean", true]]) {
+  await test(`reject ${label} v2 source font weight`, () => {
+    const p = payload(); p.textMetrics.version = 2; p.textMetrics.nodes["text-1"].fontWeight = weight;
+    assert.throws(() => decode(p), /font weight/);
+  });
+}
+await test("v2 requires a weight source fact (null means unspecified); v1 cannot carry it", () => {
+  const p = payload(); p.textMetrics.version = 2;
+  assert.throws(() => decode(p), /font weight/);
+  p.textMetrics.version = 1; p.textMetrics.nodes["text-1"].fontWeight = 700;
+  assert.throws(() => decode(p), /fontWeight/);
 });
 await test("known typography bindings map with correct line-height units", () => {
   const n = decode(payload(layer({ bindings: { font: "Inter", lh: "1.25", ls: "-0.5" }, text_align: "center" }))).nodes[0];
@@ -43,7 +70,7 @@ await test("metadata supports Unicode IDs without prototype lookup", () => {
 });
 for (const [label, mutate] of [
   ["legacy text without source metrics", (p) => { delete p.textMetrics; }],
-  ["unknown metadata version", (p) => { p.textMetrics.version = 2; }],
+  ["unknown metadata version", (p) => { p.textMetrics.version = 3; }],
   ["missing text ID", (p) => { p.textMetrics.nodes = {}; }],
   ["unknown explicit font size", (p) => { p.textMetrics.nodes["text-1"].fontSize = null; }],
   ["negative font size", (p) => { p.textMetrics.nodes["text-1"].fontSize = -1; }],
@@ -76,6 +103,42 @@ await test("unknown variable schema declines", () => {
 });
 await test("orphan metadata cannot be accepted for a shape-only document", () => {
   const p = payload(layer({ kind: { t: "rect" } })); assert.throws(() => decode(p));
+});
+await test("SVG text id/name parity selects native only for the complete result", async () => {
+  const dom = new JSDOM("<!doctype html>"); globalThis.DOMParser = dom.window.DOMParser;
+  const svg = '<svg width="200" height="120"><text id="label" x="10" y="30" font-size="20" text-anchor="middle">Keep this text</text></svg>';
+  const n = layer({ id: "label", kind: { t: "text", text: "Keep this text" }, x: 10, y: 10, w: 168, h: 20, text_align: "center" });
+  // Native .x omits names identical to ids; the adapter must recover "label" from id.
+  delete n.name;
+  const page = layer({ id: "svg-root", name: "svg-root", kind: { t: "frame" }, x: 0, y: 0, w: 200, h: 120, children: [n], fill: { t: "solid", c: "#00000000" } });
+  const candidate = { ok: true, doc: { format: "x-native", version: 1, pages: [page] }, textMetrics: { version: 1, nodes: { label: metrics({ width: 168, height: 28, fontSize: 20 }) } } };
+  __resetWasmForTests();
+  try {
+    const expected = svgTs(svg);
+    const raw = decode(candidate);
+    assert.equal(raw.nodes[0].name, "label");
+    delete raw.pages; // choose() removes the single SVG interchange page, never a named design page
+    assert.ok(importsEquivalent(raw, expected), "candidate, not a TS-patched result, must match the whole SVG import");
+    await initWasmBridge(async () => ({ default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm test (rust)",
+      importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => JSON.stringify(candidate) }));
+    assert.ok(importsEquivalent(importSvg(svg), expected));
+    assert.equal(getEngineInfo().importBackend, "wasm");
+    candidate.textMetrics.version = 2;
+    candidate.textMetrics.nodes.label.fontWeight = 700;
+    const boldSvg = svg.replace('text-anchor="middle"', 'text-anchor="middle" font-weight="700"');
+    const boldExpected = svgTs(boldSvg);
+    assert.ok(importsEquivalent(importSvg(boldSvg), boldExpected));
+    assert.equal(getEngineInfo().importBackend, "wasm", "v2 weight must still pass the whole-result guard");
+    candidate.textMetrics.nodes.label.fontWeight = 500;
+    assert.deepEqual(importSvg(boldSvg), boldExpected);
+    assert.equal(getEngineInfo().importBackend, "ts", "wrong source weight must retain the complete TS result");
+    assert.match(getEngineInfo().lastImportFallback, /differs/);
+    candidate.textMetrics.version = 1; delete candidate.textMetrics.nodes.label.fontWeight;
+    n.name = "Keep this text"; // the last Rust importer revision used content instead of the explicit id
+    assert.deepEqual(importSvg(svg), expected);
+    assert.equal(getEngineInfo().importBackend, "ts");
+    assert.match(getEngineInfo().lastImportFallback, /differs/);
+  } finally { __resetWasmForTests(); delete globalThis.DOMParser; dom.window.close(); }
 });
 await test("text candidates still require the unchanged whole-result oracle", async () => {
   const dom = new JSDOM("<!doctype html>"); globalThis.DOMParser = dom.window.DOMParser;

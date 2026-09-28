@@ -1,6 +1,7 @@
 import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VariableWidthPoint, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
 import { hasVariableWidth, normalizeWidthProfile, sampleVariableWidth } from "./strokeModel";
 import { compareBooleanResults, getGeoMode, notifyGeoFallback, tryGeoBoolean } from "./geoBridge";
+import { auditDecision } from "./bridgeRuntimeAudit";
 
 /**
  * Corner geometry.
@@ -300,14 +301,10 @@ export const defaultGeometryBoolean: GeometryBoolean = {
   },
 };
 
-/** Raster-guided boolean → polyline contours (same approach as x-core).
- *  The authoritative implementation: the wasm accelerator defers here on any
- *  anomaly, and `booleanPath` below is the choke that tries wasm first. */
-export function booleanPathTs(
-  op: BooleanOp,
-  shapes: { poly: PathPoint[]; ox: number; oy: number }[],
-): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
-  if (shapes.length < 2) return null;
+/** Compute the oracle's sampling grid once for both the TS raster and the
+ *  native candidate's shared TS shaper. The response bbox describes OUTPUT,
+ *  so it cannot be used to infer the input grid's simplification scale. */
+function booleanRasterSetup(shapes: { poly: PathPoint[]; ox: number; oy: number }[]) {
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -335,6 +332,20 @@ export function booleanPathTs(
   const gh = Math.max(8, Math.round((bh / bw) * res));
   const sx = bw / gw;
   const sy = bh / gh;
+  return { world, minX, minY, gw, gh, sx, sy };
+}
+
+/** Raster-guided boolean → polyline contours (also implemented by x-core's
+ *  web-parity raster). TS stays authoritative: the wasm accelerator defers
+ *  here on any anomaly through the guarded `booleanPath` choke below. */
+export function booleanPathTs(
+  op: BooleanOp,
+  shapes: { poly: PathPoint[]; ox: number; oy: number }[],
+): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
+  if (shapes.length < 2) return null;
+  const setup = booleanRasterSetup(shapes);
+  if (!setup) return null;
+  const { world, minX, minY, gw, gh, sx, sy } = setup;
   const cov: boolean[][] = [];
   for (let y = 0; y < gh; y++) {
     const row: boolean[] = [];
@@ -451,39 +462,61 @@ export function shapeBooleanResult(
   };
 }
 
-/** Choke point: the wasm accelerator when ready, else the TS authority.
- *  Only a complete contour set is accepted from wasm — emptiness, errors,
- *  version skew, and an absent module all defer to `booleanPathTs`, so the
- *  bridge can never change a result, only its provenance. Never throws. */
+/** Promoted Boolean choke: native results are selected without a per-call TS
+ * oracle once x-geo is ready. Missing/invalid modules fall back to TS;
+ * `?geo=audit` compares shaped results (including emptiness) and falls back
+ * on mismatch. Keep audit: 30 corpus cases are evidence, not a proof for
+ * every possible document. The opt-in Rust document session is separate. */
 export function booleanPath(
   op: BooleanOp,
   shapes: { poly: PathPoint[]; ox: number; oy: number }[],
 ): { path: PathPoint[]; x: number; y: number; w: number; h: number; network?: VectorNetwork } | null {
-  if (shapes.length < 2) return null;
+  if (shapes.length < 2) {
+    auditDecision({ bridge: "geometry", operation: op, result: "none", guard: "not-run", candidate: false,
+      reason: "fewer than two operands" });
+    return null;
+  }
   if (getGeoMode() !== "ts") {
     try {
       const raw = tryGeoBoolean(op, shapes);
       if (raw) {
-        const candidate = raw.contours.length ? shapeBooleanResult(
+        // The oracle simplifies by its INPUT cell size, not the OUTPUT bbox
+        // in the wire header (which may be tiny after subtraction).
+        const sampling = raw.contours.length ? booleanRasterSetup(shapes) : null;
+        if (raw.contours.length && !sampling) throw new Error("geo: missing sampling grid");
+        const candidate = raw.contours.length && sampling ? shapeBooleanResult(
           op,
           raw.contours.map((c) => c.map((p) => ({ x: p.x, y: p.y }))),
-          (Math.max(raw.w, raw.h) / 160) * 0.85,
+          Math.max(sampling.sx, sampling.sy) * 0.85,
           hasCurveHandles(shapes),
         ) : null;
-        // Native and web raster grids intentionally differ. Until promotion
-        // passes the real-module corpus, auto must not alter shipped geometry.
-        // Explicit wasm mode is for differential testing, never a parity claim.
-        if (getGeoMode() === "wasm") return candidate;
+        if (getGeoMode() !== "audit") {
+          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "not-run", candidate: true,
+            reason: "native Boolean selected without TS oracle (audit available via geo=audit)" });
+          return candidate;
+        }
         const authority = booleanPathTs(op, shapes);
         const diff = compareBooleanResults(candidate, authority);
-        if (diff.ok) return candidate;
+        if (diff.ok) {
+          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "passed", candidate: true,
+            reason: "emptiness, contours, bounds and area matched TS" });
+          return candidate;
+        }
+        // The comparator describes coordinates; the audit logs only check names.
+        auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "blocked", candidate: true,
+          reason: `differential mismatch: ${diff.reasons.map(r => r.split(":")[0]).join(", ")}` });
         notifyGeoFallback(diff.reasons.join("; "));
         return authority;
       }
     } catch (e) {
+      auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "blocked", candidate: true,
+        reason: "candidate request, response or WASM call failed" });
       notifyGeoFallback(e);
+      return booleanPathTs(op, shapes);
     }
   }
+  auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "not-run", candidate: false,
+    reason: getGeoMode() === "ts" ? "geo=ts" : "geo module unavailable/not loaded" });
   return booleanPathTs(op, shapes);
 }
 

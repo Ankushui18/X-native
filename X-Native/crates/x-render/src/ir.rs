@@ -639,6 +639,57 @@ fn offset_command(command: &RenderCommand, dx: f64, dy: f64) -> RenderCommand {
     }
 }
 
+/// Only the proved, single-layer rectangle dialect is converted to an
+/// actual filled outline. Both the GPU scene and raster/IR sinks read this
+/// x-core geometry; neither approximates inside/outside with a centered
+/// path stroke. Other strokes keep their preexisting renderer until they have
+/// their own topology/curve/cap parity proof.
+pub(crate) fn aligned_rectangle_stroke_path(node: &Node, layer: &StrokeLayer) -> Option<BezPath> {
+    if !node.visual_stacks_materialized
+        || node.stroke_layers.len() != 1
+        || node.stroke_layers[0] != *layer
+        || !matches!(&node.kind, NodeKind::Rect { radius } if *radius == 0.0)
+        || node.corner_radii.is_some()
+        || node.corner_smoothing != 0.0
+        || layer.stroke.width <= 0.0
+        || !layer.options.dash.is_empty()
+        || layer.options.dash_offset != 0.0
+        || layer.options.miter_limit != 4.0
+        || layer.options.cap_start != StrokeCap::None
+        || layer.options.cap_end != StrokeCap::None
+        || layer.options.join == StrokeJoin::Round
+    {
+        return None;
+    }
+    let corners = [(0.0, 0.0), (node.w, 0.0), (node.w, node.h), (0.0, node.h)];
+    let band = x_core::stroke_alignment::aligned_stroke_band(
+        &corners,
+        layer.stroke.width,
+        layer.options.align,
+        layer.options.join,
+        layer.options.miter_limit,
+    )
+    .ok()?;
+    let mut outline = BezPath::new();
+    if let Some((first, rest)) = band.outer.split_first() {
+        outline.move_to(*first);
+        for p in rest {
+            outline.line_to(*p);
+        }
+        outline.close_path();
+    }
+    // Render sinks use NONZERO winding. Reverse the inner boundary to make
+    // the inset a hole; the web preview uses EVENODD for the same two rings.
+    if let Some((first, rest)) = band.inner.split_last() {
+        outline.move_to(*first);
+        for p in rest.iter().rev() {
+            outline.line_to(*p);
+        }
+        outline.close_path();
+    }
+    Some(outline)
+}
+
 #[allow(clippy::too_many_arguments)] // positional params are the natural shape here; grouping would obscure the algorithm
 fn emit_visual_layers(
     tree: &mut RenderTree,
@@ -814,23 +865,36 @@ fn emit_visual_layers(
                 bounds: bounds(world, node.w, node.h),
             });
         }
+        let aligned = aligned_rectangle_stroke_path(node, layer);
         for (tap, (dx, dy, weight)) in gaussian_taps(layer_blur).into_iter().enumerate() {
-            tree.commands.push(RenderCommand::StrokePath {
-                key: if layer_blur > 0.01 {
-                    format!("{layer_key}/blur-{tap}")
-                } else {
-                    layer_key.clone()
-                },
-                transform: Affine::translate((dx, dy)) * world,
-                path: path.clone(),
-                brush: layer_brush(
-                    &layer.stroke.paint,
-                    vars,
-                    opacity * layer.opacity.clamp(0.0, 1.0) * weight,
-                ),
-                width: layer.stroke.width,
-                options: layer.options.clone(),
-            });
+            let key = if layer_blur > 0.01 {
+                format!("{layer_key}/blur-{tap}")
+            } else {
+                layer_key.clone()
+            };
+            let transform = Affine::translate((dx, dy)) * world;
+            let brush = layer_brush(
+                &layer.stroke.paint,
+                vars,
+                opacity * layer.opacity.clamp(0.0, 1.0) * weight,
+            );
+            if let Some(outline) = &aligned {
+                tree.commands.push(RenderCommand::FillPath {
+                    key,
+                    transform,
+                    path: outline.clone(),
+                    brush,
+                });
+            } else {
+                tree.commands.push(RenderCommand::StrokePath {
+                    key,
+                    transform,
+                    path: path.clone(),
+                    brush,
+                    width: layer.stroke.width,
+                    options: layer.options.clone(),
+                });
+            }
         }
         if layer.blend != BlendKind::Normal {
             tree.commands.push(RenderCommand::PopLayer);
@@ -2164,6 +2228,57 @@ pub fn build_render_tree_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aligned_rectangle_emits_one_shared_fill_outline_instead_of_a_centered_stroke() {
+        let mut rect = Node::rect("border", 20.0, 20.0, 100.0, 80.0, Color::TRANSPARENT);
+        rect.fill = Paint::Solid(Color::TRANSPARENT);
+        rect.visual_stacks_materialized = true;
+        rect.fill_layers = vec![PaintLayer::new(rect.fill.clone())];
+        rect.stroke = Stroke::solid(Color::BLACK, 10.0);
+        let mut layer = StrokeLayer::new(rect.stroke.clone());
+        layer.options.align = StrokeAlign::Outside;
+        layer.options.join = StrokeJoin::Bevel;
+        rect.stroke_layers = vec![layer];
+        let mut page = Node::frame("page", 160.0, 140.0).child(rect);
+        page.fill = Paint::Solid(Color::TRANSPARENT);
+        let tree = build_render_tree(&page, &Variables::default());
+        let aligned = tree.commands.iter().find(|c| matches!(c, RenderCommand::FillPath { key, .. } if key.ends_with("border/stroke-0")));
+        let RenderCommand::FillPath { path, .. } = aligned.expect("stroke is a filled offset band")
+        else {
+            unreachable!();
+        };
+        assert_eq!(path.bounding_box(), Rect::new(-10.0, -10.0, 110.0, 90.0));
+        assert_eq!(
+            path.elements().len(),
+            14,
+            "8 bevel anchors + 4 reversed hole anchors + 2 closes"
+        );
+        assert!(!tree.commands.iter().any(|c| matches!(c, RenderCommand::StrokePath { key, .. } if key.ends_with("border/stroke-0"))));
+        let (scene, _) = crate::scene::build_scene(&page, None, &Variables::default());
+        assert!(
+            scene.encoding().n_paths >= 2,
+            "direct GPU path must also paint the same outline"
+        );
+        let pix = crate::raster::RasterSink::new(None, None, 160.0, 140.0, 1.0, None)
+            .unwrap()
+            .render(&tree);
+        assert_eq!(
+            pix.pixel(15, 60).unwrap().alpha(),
+            255,
+            "outside edge is painted"
+        );
+        assert_eq!(
+            pix.pixel(25, 60).unwrap().alpha(),
+            0,
+            "shape interior is the reversed-winding hole"
+        );
+        assert_eq!(
+            pix.pixel(11, 11).unwrap().alpha(),
+            0,
+            "bevel clips the far corner"
+        );
+    }
 
     #[test]
     fn text_runs_flow_into_glyphs_commands() {

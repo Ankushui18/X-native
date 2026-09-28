@@ -2,10 +2,11 @@
  * TypeScript side of the TS↔Rust geometry bridge (docs/GEO_BRIDGE_DESIGN_2026-09-25.md).
  *
  * The Rust module (`x_geo.wasm`, built from `crates/x-geo` in a Rust-capable
- * environment) is a candidate accelerator for `booleanPath`. Auto mode checks
- * its result against TS; unavailable/invalid/unequal results degrade to the
- * pure-TS implementation. Nothing here may ever throw past the choke point in
- * `geometry.ts`: the bridge is an accelerator, not a dependency.
+ * environment) is the promoted Boolean engine for `booleanPath`. Auto mode
+ * selects it directly when ready; missing, rejected or invalid traffic falls
+ * back to TS. `?geo=audit` additionally compares every result to the TS
+ * oracle and falls back on a mismatch. Nothing may throw past the choke point
+ * in `geometry.ts`: a missing optional module is not a dependency failure.
  *
  * Lives apart from `wasmBridge.ts` deliberately: that module imports the file
  * importers (which import `geometry.ts`), so geometry calling into it would be
@@ -14,6 +15,7 @@
 
 import type { BooleanOp, PathPoint } from "./types";
 import { wasmAssetUrl } from "./wasmAssets";
+import { auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 /* -------------------------------------------------------------------------- */
 /* §5 wire format v1                                                           */
@@ -149,18 +151,20 @@ export function decodeGeoResponse(buf: Uint8Array): GeoContours {
 /* mode + loader                                                               */
 /* -------------------------------------------------------------------------- */
 
-export type GeoMode = "auto" | "ts" | "wasm";
+export type GeoMode = "auto" | "ts" | "wasm" | "audit";
 
-/** `?geo=` beats the stored override beats the default. Node-safe (no window). */
+/** `?geo=` beats the stored override beats the default. Node-safe (no window).
+ * `auto` selects Rust when ready, `audit` alone runs the TS oracle on every
+ * candidate, `ts` disables native, and `wasm` is the legacy forced alias. */
 export function getGeoMode(): GeoMode {
   try {
     const loc =
       typeof window !== "undefined" ? window.location : typeof location !== "undefined" ? location : null;
     const q = loc?.search ? new URLSearchParams(loc.search).get("geo") : null;
-    if (q === "ts" || q === "wasm" || q === "auto") return q;
+    if (q === "ts" || q === "wasm" || q === "auto" || q === "audit") return q;
     const stored =
       typeof localStorage !== "undefined" ? localStorage.getItem("x-native-geo") : null;
-    if (stored === "ts" || stored === "wasm" || stored === "auto") return stored;
+    if (stored === "ts" || stored === "wasm" || stored === "auto" || stored === "audit") return stored;
   } catch {
     /* storage/URL accessors can throw in locked-down contexts; default out */
   }
@@ -186,19 +190,19 @@ export function wrapGeoExports(e: GeoWasmExports): GeoModule {
   const view8 = () => new Uint8Array(e.memory.buffer);
   const viewDV = () => new DataView(e.memory.buffer);
   return {
-    version: e.xgeo_version(),
+    version: auditRustCall("x-geo.xgeo_version", () => e.xgeo_version()),
     call(req: Uint8Array): Uint8Array {
       let reqPtr = 0, outPtr = 0, rPtr = 0, rLen = 0;
       const valid = (ptr: number, len: number) => Number.isInteger(ptr) && ptr > 0 &&
         Number.isInteger(len) && len > 0 && ptr + len <= e.memory.buffer.byteLength;
       try {
-        reqPtr = e.xgeo_alloc(req.length) >>> 0;
+        reqPtr = auditRustCall("x-geo.xgeo_alloc", () => e.xgeo_alloc(req.length)) >>> 0;
         if (!valid(reqPtr, req.length)) throw new Error("geo: request allocation failed");
         view8().set(req, reqPtr);
-        outPtr = e.xgeo_alloc(8) >>> 0;
+        outPtr = auditRustCall("x-geo.xgeo_alloc", () => e.xgeo_alloc(8)) >>> 0;
         if (!valid(outPtr, 8)) throw new Error("geo: output allocation failed");
         view8().fill(0, outPtr, outPtr + 8);
-        const rc = e.xgeo_boolean(reqPtr, req.length, outPtr, outPtr + 4);
+        const rc = auditRustCall("x-geo.xgeo_boolean", () => e.xgeo_boolean(reqPtr, req.length, outPtr, outPtr + 4));
         const dv = viewDV();
         rPtr = dv.getUint32(outPtr, true);
         rLen = dv.getUint32(outPtr + 4, true);
@@ -209,10 +213,10 @@ export function wrapGeoExports(e: GeoWasmExports): GeoModule {
         return view8().slice(rPtr, rPtr + rLen);
       } finally {
         // Try every free even when a faulty module traps during cleanup.
-        try { if (rPtr && rPtr !== reqPtr && rPtr !== outPtr) e.xgeo_free(rPtr, rLen); }
+        try { if (rPtr && rPtr !== reqPtr && rPtr !== outPtr) auditRustCall("x-geo.xgeo_free", () => e.xgeo_free(rPtr, rLen)); }
         finally {
-          try { if (reqPtr) e.xgeo_free(reqPtr, req.length); }
-          finally { if (outPtr && outPtr !== reqPtr) e.xgeo_free(outPtr, 8); }
+          try { if (reqPtr) auditRustCall("x-geo.xgeo_free", () => e.xgeo_free(reqPtr, req.length)); }
+          finally { if (outPtr && outPtr !== reqPtr) auditRustCall("x-geo.xgeo_free", () => e.xgeo_free(outPtr, 8)); }
         }
       }
     },
@@ -222,10 +226,30 @@ export function wrapGeoExports(e: GeoWasmExports): GeoModule {
 let cached: GeoModule | null = null;
 let pending: Promise<GeoModule | null> | null = null;
 let warned = false;
+let geoStatus: "idle" | "loading" | "ready" | "unavailable" | "test-injected" = "idle";
+let geoFailure: string | null = null;
+let geoExports: string[] = [];
+let geoSource: "public URL" | "override" | "test-injected" | null = null;
 
-/** Loud in `wasm` mode (a debugging flag), once-per-session otherwise. */
+registerAuditProbe("geometry", {
+  snapshot: () => ({
+    asset: GEO_WASM_URL,
+    mode: getGeoMode(),
+    status: getGeoMode() === "ts" ? "disabled by geo=ts" : geoStatus,
+    instantiated: !!cached,
+    source: geoSource,
+    abiVersion: cached?.version ?? null,
+    availableFunctions: geoExports,
+    lastFailure: geoFailure,
+    guard: getGeoMode() === "audit" ? "compare to TS oracle on every candidate; fall back on mismatch" :
+      getGeoMode() === "ts" ? "TS only" : "native-first; TS only on unavailable/error (no per-call oracle)",
+  }),
+  load: () => ensureGeo(),
+});
+
+/** Loud in diagnostic modes, once-per-session otherwise. */
 function geoWarn(e: unknown): void {
-  if (getGeoMode() === "wasm") {
+  if (getGeoMode() === "wasm" || getGeoMode() === "audit") {
     console.warn("geo bridge fallback to TS:", e);
     return;
   }
@@ -242,12 +266,20 @@ function geoWarn(e: unknown): void {
 export function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<GeoModule | null> {
   if (getGeoMode() === "ts" || typeof WebAssembly === "undefined") return Promise.resolve(null);
   if (pending) return pending;
+  geoStatus = "loading";
+  geoSource = source === undefined ? "public URL" : "override";
+  geoFailure = null;
+  geoExports = [];
   pending = (async () => {
   try {
     let bytes: ArrayBuffer;
     if (typeof source === "string" || source === undefined) {
       const resp = await fetch(source ?? GEO_WASM_URL).catch(() => null);
-      if (!resp || !resp.ok) return null;
+      if (!resp || !resp.ok) {
+        geoStatus = "unavailable";
+        geoFailure = resp ? `HTTP ${resp.status}` : "network/fetch failure";
+        return null;
+      }
       bytes = await resp.arrayBuffer();
     } else if (source instanceof Uint8Array) {
       bytes = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
@@ -256,6 +288,7 @@ export function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<G
     }
     const mod = await WebAssembly.instantiate(bytes, {});
     const exp = mod.instance.exports as Partial<GeoWasmExports>;
+    geoExports = Object.keys(exp).filter(key => typeof exp[key as keyof GeoWasmExports] === "function");
     if (
       !(exp.memory instanceof WebAssembly.Memory) ||
       typeof exp.xgeo_version !== "function" ||
@@ -263,16 +296,24 @@ export function ensureGeo(source?: string | ArrayBuffer | Uint8Array): Promise<G
       typeof exp.xgeo_free !== "function" ||
       typeof exp.xgeo_boolean !== "function"
     ) {
+      geoStatus = "unavailable";
+      geoFailure = "required ABI exports missing";
       return null;
     }
     const wrapped = wrapGeoExports(exp as GeoWasmExports);
     if (wrapped.version !== GEO_VERSION) {
+      geoStatus = "unavailable";
+      geoFailure = "ABI version mismatch";
       geoWarn(`version mismatch (wasm=${wrapped.version} ts=${GEO_VERSION})`);
       return null;
     }
     cached = wrapped;
+    geoStatus = "ready";
     return cached;
   } catch (e) {
+    geoStatus = "unavailable";
+    geoFailure = e instanceof WebAssembly.CompileError ? "invalid WASM bytes (possible HTML fallback)" :
+      e instanceof WebAssembly.LinkError ? "module link failed" : "module fetch/instantiation failed";
     geoWarn(e);
     cached = null;
     return null;
@@ -311,11 +352,19 @@ export function tryGeoBoolean(op: BooleanOp, shapes: GeoShape[]): GeoContours | 
 export function __setGeoModuleForTests(mod: GeoModule | null): void {
   cached = mod;
   pending = Promise.resolve(mod);
+  geoStatus = "test-injected";
+  geoSource = "test-injected";
+  geoExports = [];
+  geoFailure = null;
 }
 export function __resetGeoForTests(): void {
   cached = null;
   pending = null;
   warned = false;
+  geoStatus = "idle";
+  geoSource = null;
+  geoExports = [];
+  geoFailure = null;
 }
 export function notifyGeoFallback(e: unknown): void {
   geoWarn(e);

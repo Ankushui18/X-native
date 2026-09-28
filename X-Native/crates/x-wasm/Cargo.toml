@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 serde_json = "1"
 x-core = { path = "../x-core" }
+x-editor = { path = "../x-editor" }
 x-format = { path = "../x-format" }
 
 # Pinned to the version already in Cargo.lock so `cargo test --locked` — which

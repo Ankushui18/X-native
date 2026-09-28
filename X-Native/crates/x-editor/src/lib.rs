@@ -24,12 +24,15 @@ pub mod constraints;
 pub mod devmode;
 pub mod editor_core;
 pub mod eraser;
+pub mod offset_path;
 pub mod parametric;
 pub mod prototype;
 pub mod selection;
+pub mod session;
 pub mod shape_builder;
 pub mod snapping;
 pub mod spatial;
+pub mod stroke_alignment;
 #[cfg(test)]
 mod tests_mod;
 pub mod transformed_resize;
@@ -47,6 +50,7 @@ pub use eraser::*;
 pub use parametric::*;
 pub use prototype::*;
 pub use selection::*;
+pub use session::*;
 pub use shape_builder::{
     overlap, path_area, validate, OverlapReport, ShapeBuilderIssue, ShapeBuilderOp, AREA_STEPS,
     DEFAULT_MIN_OVERLAP,

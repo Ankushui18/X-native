@@ -256,14 +256,29 @@ jobs:
           p = pathlib.Path("/tmp/tests.log")
           if p.exists():
               raw = p.read_text(errors="replace")
-              failures = re.findall(r"---- .*? stdout ----.*?(?=\nfailures:|\n---- |\Z)", raw, re.S)
+              # Anchor on actual test-harness failure headers. A warning line
+              # ending in `----` otherwise captures the entire test log first
+              # and truncates away the panic we need to debug.
+              names = re.findall(r"(?m)^test [^\n]+ \.\.\. FAILED$", raw)
+              failures = re.findall(r"(?ms)^---- [^\n]+ stdout ----.*?(?=^failures:|^---- [^\n]+ stdout ----|\Z)", raw)
               failures += [raw[max(0, m.start() - 1600):m.end() + 300] for m in re.finditer(r"[^\n]*(?:overflowed its stack|fatal runtime error|memory allocation)[^\n]*", raw)]
-              if failures:
-                  text = ("Rust test failure detail:\n" + "\n".join(failures))[:3500]
+              if failures or names:
+                  text = ("Rust test failure detail:\n" + "\n".join(names + failures))[:3500]
                   print("::error::" + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
           '
           if [ -f /tmp/report.txt ]; then
             printf '::notice::%s\n' "$(head -1 /tmp/report.txt)"
+          fi
+          if grep -q 'unformatted code' /tmp/gate.log 2>/dev/null; then
+            # The gate's short summary has only "Diff in file:line"; emit the
+            # first actual hunks through the API for toolchain-less hosts.
+            python3 -c '
+          import subprocess
+          result = subprocess.run(["cargo", "fmt", "--all", "--", "--check"], capture_output=True, text=True)
+          if result.returncode:
+              text = (result.stdout + result.stderr)[:3000]
+              print("::error::Rust formatting diff:\n".replace("\n", "%0A") + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
+            '
           fi
           esc=$(printf '\033')
           if [ -f /tmp/gate.log ]; then

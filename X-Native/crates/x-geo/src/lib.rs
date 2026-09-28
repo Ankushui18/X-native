@@ -1,6 +1,7 @@
 //! Binary geometry bridge v1. All geometry belongs to x-core; this crate only
 //! validates/serializes the wire format documented in GEO_BRIDGE_DESIGN.
-use x_core::booleans::{boolean_with, Backend, BoolOp, PositionedPath};
+use x_core::booleans::{BoolOp, PositionedPath};
+use x_core::web_raster::boolean_web_raster;
 use x_core::PathCmd;
 
 const REQUEST_MAGIC: u32 = 0x58474f31;
@@ -124,42 +125,10 @@ fn error(message: &str) -> Vec<u8> {
 }
 fn compute(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let (op, shapes) = decode(bytes)?;
-    let mut result = shapes[0].clone();
-    for next in &shapes[1..] {
-        let r = boolean_with(Backend::RasterGuided, op, &result, next);
-        result = PositionedPath {
-            cmds: r.cmds,
-            offset: r.origin,
-        };
-    }
-    // RasterGuided emits only polylines. Do not silently throw away curves if
-    // its contract ever changes: decline and let the host use its fallback.
-    let mut rings: Vec<Vec<(f64, f64)>> = Vec::new();
-    let mut current = Vec::new();
-    for cmd in result.cmds {
-        match cmd {
-            PathCmd::MoveTo(x, y) => {
-                if !current.is_empty() {
-                    return Err("unclosed native contour".into());
-                }
-                current.push((x + result.offset.0, y + result.offset.1));
-            }
-            PathCmd::LineTo(x, y) => current.push((x + result.offset.0, y + result.offset.1)),
-            PathCmd::Close => {
-                if current.first() == current.last() {
-                    current.pop();
-                }
-                if current.len() >= 3 {
-                    rings.push(std::mem::take(&mut current));
-                }
-                current.clear();
-            }
-            PathCmd::CurveTo(..) => return Err("unexpected curved raster output".into()),
-        }
-    }
-    if !current.is_empty() {
-        return Err("unclosed native contour".into());
-    }
+    // The x-core web raster evaluates every operand on one grid and returns
+    // raw boundary-cell centres. TS shapes these rings once after decoding.
+    // A resource-limit decline is a controlled error, never a coarser raster.
+    let rings = boolean_web_raster(op, &shapes).map_err(str::to_string)?;
     if rings.is_empty() {
         return Ok(header(1, 52, [0.0; 4], 0));
     }
@@ -319,6 +288,16 @@ mod tests {
             );
             assert_eq!(out[10], 0);
         }
+    }
+    #[test]
+    fn response_serializes_web_grid_cell_centres_without_rust_presimplification() {
+        let out = boolean_request(&rectangle_request(0));
+        assert_eq!(out[10], 0);
+        let x = f64::from_le_bytes(out[60..68].try_into().unwrap());
+        let y = f64::from_le_bytes(out[68..76].try_into().unwrap());
+        // World bounds [-2,82] by [-2,42] => 160x84 independent cells.
+        assert!((x - 0.3625).abs() < 1e-12);
+        assert!((y - 0.357142857142857).abs() < 1e-12);
     }
     #[test]
     fn rejects_every_truncated_prefix() {
