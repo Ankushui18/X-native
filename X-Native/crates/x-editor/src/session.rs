@@ -304,11 +304,14 @@ impl DocumentSession {
     fn offset_operand(&self, id: &str) -> Result<(), String> {
         let node = self.target(id)?;
         let shape = match &node.kind {
-            NodeKind::Rect { radius } => radius.is_finite() && *radius >= 0.0 && *radius <= node.w.min(node.h) / 2.0,
+            NodeKind::Rect { radius } => {
+                radius.is_finite() && *radius >= 0.0 && *radius <= node.w.min(node.h) / 2.0
+            }
             NodeKind::Ellipse => true,
             NodeKind::Poly { sides } => (3..=256).contains(sides),
-            NodeKind::Star { points, ratio } =>
-                (3..=256).contains(points) && ratio.is_finite() && *ratio > 0.0 && *ratio < 1.0,
+            NodeKind::Star { points, ratio } => {
+                (3..=256).contains(points) && ratio.is_finite() && *ratio > 0.0 && *ratio < 1.0
+            }
             NodeKind::Vector { path } => path.len() <= x_core::offset_path::MAX_OFFSET_ANCHORS,
             _ => false,
         };
@@ -352,9 +355,15 @@ impl DocumentSession {
             NodeKind::Rect { radius } => OffsetShapeDelta::Rect { radius: *radius },
             NodeKind::Ellipse => OffsetShapeDelta::Ellipse,
             NodeKind::Poly { sides } => OffsetShapeDelta::Poly { sides: *sides },
-            NodeKind::Star { points, ratio } => OffsetShapeDelta::Star { points: *points, ratio: *ratio },
-            NodeKind::Vector { path } if path.len() <= x_core::offset_path::MAX_OFFSET_ANCHORS + 128 =>
-                OffsetShapeDelta::Vector { path: path.clone() },
+            NodeKind::Star { points, ratio } => OffsetShapeDelta::Star {
+                points: *points,
+                ratio: *ratio,
+            },
+            NodeKind::Vector { path }
+                if path.len() <= x_core::offset_path::MAX_OFFSET_ANCHORS + 128 =>
+            {
+                OffsetShapeDelta::Vector { path: path.clone() }
+            }
             _ => return Err("offset delta exceeds the path budget".into()),
         };
         Ok(OffsetDelta {
@@ -1103,10 +1112,20 @@ mod tests {
             Node::ellipse("target", 10.0, 15.0, 90.0, 80.0, Color::BLACK),
             Node::poly("target", 10.0, 15.0, 90.0, 80.0, 6, Color::BLACK),
             Node::star("target", 10.0, 15.0, 90.0, 80.0, 5, 0.45, Color::BLACK),
-            Node::vector("target", 10.0, 15.0, 90.0, 80.0, vec![
-                PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(90.0, 0.0),
-                PathCmd::LineTo(90.0, 80.0), PathCmd::LineTo(0.0, 80.0), PathCmd::Close,
-            ]),
+            Node::vector(
+                "target",
+                10.0,
+                15.0,
+                90.0,
+                80.0,
+                vec![
+                    PathCmd::MoveTo(0.0, 0.0),
+                    PathCmd::LineTo(90.0, 0.0),
+                    PathCmd::LineTo(90.0, 80.0),
+                    PathCmd::LineTo(0.0, 80.0),
+                    PathCmd::Close,
+                ],
+            ),
         ];
         for shape in shapes {
             let before = shape.clone();
@@ -1117,19 +1136,30 @@ mod tests {
                 ..Default::default()
             };
             let mut session = DocumentSession::new(doc).unwrap();
-            let applied = session.dispatch(SessionCommand::Offset {
-                id: "target", distance: 6.0, join: StrokeJoin::Miter,
-            }).unwrap();
+            let applied = session
+                .dispatch(SessionCommand::Offset {
+                    id: "target",
+                    distance: 6.0,
+                    join: StrokeJoin::Miter,
+                })
+                .unwrap();
             assert_eq!(applied.revision, 1);
-            assert!(applied.node.is_none() && applied.boolean.is_none() && applied.stroke.is_none());
+            assert!(
+                applied.node.is_none() && applied.boolean.is_none() && applied.stroke.is_none()
+            );
             let patch = applied.offset.unwrap();
             assert_eq!(patch.node.id, "target");
-            assert!(matches!(patch.shape, OffsetShapeDelta::Vector { path } if path.last() == Some(&PathCmd::Close)));
+            assert!(
+                matches!(patch.shape, OffsetShapeDelta::Vector { path } if path.last() == Some(&PathCmd::Close))
+            );
             assert_eq!(session.editor.undo_depth(), 1);
             assert_eq!(session.snapshot().pages[0].children[1].id, "other");
             assert_eq!(session.snapshot().pages[0].children[0].fill, before.fill);
             let saved = x_format::serialize::save_x(&session.snapshot());
-            assert!(matches!(x_format::deserialize::load_x(&saved).unwrap().pages[0].children[0].kind, NodeKind::Vector { .. }));
+            assert!(matches!(
+                x_format::deserialize::load_x(&saved).unwrap().pages[0].children[0].kind,
+                NodeKind::Vector { .. }
+            ));
             let undone = session.dispatch(SessionCommand::Undo).unwrap();
             assert_eq!(undone.revision, 2);
             assert!(undone.node.is_none() && undone.offset.is_some());
@@ -1144,19 +1174,40 @@ mod tests {
     fn offset_rejects_strokes_and_bad_input_without_a_history_entry() {
         let mut session = DocumentSession::new(sample()).unwrap();
         for distance in [f64::NAN, 2049.0] {
-            assert!(session.dispatch(SessionCommand::Offset { id: "box", distance, join: StrokeJoin::Round }).is_err());
+            assert!(session
+                .dispatch(SessionCommand::Offset {
+                    id: "box",
+                    distance,
+                    join: StrokeJoin::Round
+                })
+                .is_err());
         }
-        let unchanged = session.dispatch(SessionCommand::Offset {
-            id: "box", distance: 0.0, join: StrokeJoin::Bevel,
-        }).unwrap();
+        let unchanged = session
+            .dispatch(SessionCommand::Offset {
+                id: "box",
+                distance: 0.0,
+                join: StrokeJoin::Bevel,
+            })
+            .unwrap();
         assert_eq!(unchanged.revision, 0);
         assert!(unchanged.offset.is_none());
         assert_eq!(session.editor.undo_depth(), 0);
-        session.dispatch(SessionCommand::Stroke {
-            id: "box", width: 5.0, color: Color::BLACK,
-            align: StrokeAlign::Center, join: StrokeJoin::Miter,
-        }).unwrap();
-        assert!(session.dispatch(SessionCommand::Offset { id: "box", distance: 4.0, join: StrokeJoin::Round }).is_err());
+        session
+            .dispatch(SessionCommand::Stroke {
+                id: "box",
+                width: 5.0,
+                color: Color::BLACK,
+                align: StrokeAlign::Center,
+                join: StrokeJoin::Miter,
+            })
+            .unwrap();
+        assert!(session
+            .dispatch(SessionCommand::Offset {
+                id: "box",
+                distance: 4.0,
+                join: StrokeJoin::Round
+            })
+            .is_err());
         assert_eq!(session.editor.undo_depth(), 1);
     }
 

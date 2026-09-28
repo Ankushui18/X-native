@@ -19,10 +19,14 @@ impl Editor {
         join: StrokeJoin,
     ) -> Result<bool, &'static str> {
         let before = find(&self.root, id).ok_or("offset target not found")?;
-        if !matches!(&before.kind,
-            NodeKind::Rect { .. } | NodeKind::Ellipse | NodeKind::Vector { .. }
-                | NodeKind::Poly { .. } | NodeKind::Star { .. })
-            || !before.children.is_empty()
+        if !matches!(
+            &before.kind,
+            NodeKind::Rect { .. }
+                | NodeKind::Ellipse
+                | NodeKind::Vector { .. }
+                | NodeKind::Poly { .. }
+                | NodeKind::Star { .. }
+        ) || !before.children.is_empty()
             || before.stroke.width != 0.0
             || !before.stroke_layers.is_empty()
             || !before.fill_layers.is_empty()
@@ -38,8 +42,12 @@ impl Editor {
         let source = node_to_path(before).ok_or("unsupported offset source")?;
         let rings = offset_filled_path(&source, distance, join)?;
         let mut next = before.clone();
-        let (mut min_x, mut min_y, mut max_x, mut max_y) =
-            (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
         for &(x, y) in rings.iter().flatten() {
             min_x = min_x.min(x);
             min_y = min_y.min(y);
@@ -87,38 +95,73 @@ mod tests {
             Node::ellipse("target", 10.0, 20.0, 100.0, 80.0, Color::BLACK),
             Node::poly("target", 10.0, 20.0, 100.0, 80.0, 5, Color::BLACK),
             Node::star("target", 10.0, 20.0, 100.0, 80.0, 5, 0.4, Color::BLACK),
-            Node::vector("target", 10.0, 20.0, 100.0, 80.0, vec![
-                PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(100.0, 0.0),
-                PathCmd::LineTo(100.0, 80.0), PathCmd::LineTo(0.0, 80.0), PathCmd::Close,
-            ]),
+            Node::vector(
+                "target",
+                10.0,
+                20.0,
+                100.0,
+                80.0,
+                vec![
+                    PathCmd::MoveTo(0.0, 0.0),
+                    PathCmd::LineTo(100.0, 0.0),
+                    PathCmd::LineTo(100.0, 80.0),
+                    PathCmd::LineTo(0.0, 80.0),
+                    PathCmd::Close,
+                ],
+            ),
         ];
         for shape in shapes {
             let original = shape.clone();
             let mut editor = Editor::new(Node::frame("page", 400.0, 300.0).child(shape));
-            assert_eq!(editor.offset_filled_node("target", 5.0, StrokeJoin::Round), Ok(true));
+            assert_eq!(
+                editor.offset_filled_node("target", 5.0, StrokeJoin::Round),
+                Ok(true)
+            );
             assert_eq!(editor.undo_depth(), 1);
             let result = find(&editor.root, "target").unwrap();
             assert_eq!(result.id, original.id);
             assert_eq!(result.fill, original.fill);
-            assert!(matches!(&result.kind, NodeKind::Vector { path } if path.last() == Some(&PathCmd::Close)));
+            assert!(
+                matches!(&result.kind, NodeKind::Vector { path } if path.last() == Some(&PathCmd::Close))
+            );
             assert!(editor.undo());
             assert_eq!(find(&editor.root, "target").unwrap(), &original);
             assert!(editor.redo());
-            assert!(matches!(&find(&editor.root, "target").unwrap().kind, NodeKind::Vector { .. }));
+            assert!(matches!(
+                &find(&editor.root, "target").unwrap().kind,
+                NodeKind::Vector { .. }
+            ));
         }
     }
 
     #[test]
     fn no_op_and_invalid_geometry_never_push_history() {
         let mut editor = Editor::new(Node::frame("page", 80.0, 80.0).child(Node::rect(
-            "box", 0.0, 0.0, 10.0, 10.0, Color::BLACK,
+            "box",
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            Color::BLACK,
         )));
-        assert_eq!(editor.offset_filled_node("box", 0.0, StrokeJoin::Miter), Ok(false));
-        assert!(editor.offset_filled_node("box", f64::NAN, StrokeJoin::Miter).is_err());
+        assert_eq!(
+            editor.offset_filled_node("box", 0.0, StrokeJoin::Miter),
+            Ok(false)
+        );
+        assert!(editor
+            .offset_filled_node("box", f64::NAN, StrokeJoin::Miter)
+            .is_err());
         assert_eq!(editor.undo_depth(), 0);
-        assert!(editor.offset_filled_node("box", -10.0, StrokeJoin::Bevel).unwrap());
-        assert!(matches!(&find(&editor.root, "box").unwrap().kind, NodeKind::Vector { path } if path.is_empty()));
+        assert!(editor
+            .offset_filled_node("box", -10.0, StrokeJoin::Bevel)
+            .unwrap());
+        assert!(
+            matches!(&find(&editor.root, "box").unwrap().kind, NodeKind::Vector { path } if path.is_empty())
+        );
         assert!(editor.undo());
-        assert!(matches!(find(&editor.root, "box").unwrap().kind, NodeKind::Rect { .. }));
+        assert!(matches!(
+            find(&editor.root, "box").unwrap().kind,
+            NodeKind::Rect { .. }
+        ));
     }
 }

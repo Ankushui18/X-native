@@ -211,8 +211,15 @@ mod bindings {
         }
 
         #[wasm_bindgen(js_name = offsetNode)]
-        pub fn offset_node(&mut self, id: &str, distance: f64, join: &str) -> Result<String, JsValue> {
-            self.bridge.offset_node(id, distance, join).map_err(js_error)
+        pub fn offset_node(
+            &mut self,
+            id: &str,
+            distance: f64,
+            join: &str,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .offset_node(id, distance, join)
+                .map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

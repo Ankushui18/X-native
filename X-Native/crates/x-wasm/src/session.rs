@@ -50,12 +50,15 @@ fn offset_value(change: OffsetDelta) -> Value {
         }
         OffsetShapeDelta::Vector { path } => {
             value["kind"] = json!("vector");
-            value["path"] = json!(path.into_iter().map(|cmd| match cmd {
-                PathCmd::MoveTo(x, y) => json!(["M", x, y]),
-                PathCmd::LineTo(x, y) => json!(["L", x, y]),
-                PathCmd::CurveTo(a, b, c, d, x, y) => json!(["C", a, b, c, d, x, y]),
-                PathCmd::Close => json!(["Z"]),
-            }).collect::<Vec<_>>());
+            value["path"] = json!(path
+                .into_iter()
+                .map(|cmd| match cmd {
+                    PathCmd::MoveTo(x, y) => json!(["M", x, y]),
+                    PathCmd::LineTo(x, y) => json!(["L", x, y]),
+                    PathCmd::CurveTo(a, b, c, d, x, y) => json!(["C", a, b, c, d, x, y]),
+                    PathCmd::Close => json!(["Z"]),
+                })
+                .collect::<Vec<_>>());
         }
     }
     value
@@ -385,7 +388,10 @@ mod tests {
         let mut bridge = CommandBridge::open(&fixture()).unwrap();
         assert!(bridge.offset_node("box", f64::NAN, "round").is_err());
         assert!(bridge.offset_node("box", 3.0, "unknown").is_err());
-        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
+        assert_eq!(
+            serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"],
+            0
+        );
         let applied = bridge.offset_node("box", 4.0, "round").unwrap();
         let change: Value = serde_json::from_str(&applied).unwrap();
         assert_eq!(change["revision"], 1);
@@ -394,15 +400,22 @@ mod tests {
         assert_eq!(change["offset"]["id"], "box");
         assert!(change["offset"]["path"].as_array().unwrap().len() >= 5);
         assert!(change.get("pages").is_none());
-        assert!(applied.len() < 10_000, "a one-layer command returned a page");
-        assert!(matches!(load_x(&bridge.export_x()).unwrap().pages[0].children[0].kind, x_core::NodeKind::Vector { .. }));
+        assert!(
+            applied.len() < 10_000,
+            "a one-layer command returned a page"
+        );
+        assert!(matches!(
+            load_x(&bridge.export_x()).unwrap().pages[0].children[0].kind,
+            x_core::NodeKind::Vector { .. }
+        ));
         let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
         assert_eq!(undone["node"], Value::Null);
         assert_eq!(undone["offset"]["kind"], "rect");
         assert_eq!(undone["offset"]["radius"], 0.0);
         let redone: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
         assert_eq!(redone["offset"], change["offset"]);
-        let contracted: Value = serde_json::from_str(&bridge.offset_node("box", -100.0, "bevel").unwrap()).unwrap();
+        let contracted: Value =
+            serde_json::from_str(&bridge.offset_node("box", -100.0, "bevel").unwrap()).unwrap();
         assert_eq!(contracted["offset"]["path"], json!([]));
         assert!(bridge.undo().is_ok());
     }
