@@ -1985,4 +1985,140 @@ mod tests {
         assert!(loaded.variables.exposed.is_empty());
         assert_eq!(save_x(&loaded), text, "byte-stable without exposed");
     }
+
+    #[test]
+    fn variable_width_stroke_profile_roundtrips_and_uniform_wire_stays_stable() {
+        let mut profiled = Node::rect("profiled", 0.0, 0.0, 80.0, 40.0, Color::WHITE);
+        profiled.visual_stacks_materialized = true;
+        profiled.stroke_layers = vec![StrokeLayer {
+            stroke: Stroke::solid(Color::from_rgb8(0x11, 0x22, 0x33), 6.0),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendKind::Normal,
+            options: StrokeOptions {
+                width_profile: vec![
+                    VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
+                    VariableWidthPoint { position: 0.35, width_multiplier: 2.0 },
+                    VariableWidthPoint { position: 1.0, width_multiplier: 0.0 },
+                ],
+                ..StrokeOptions::default()
+            },
+        }];
+        let mut doc = Document::new();
+        doc.pages.push(Node::frame("page", 160.0, 100.0).child(profiled));
+        let encoded = save_x(&doc);
+        assert!(encoded.contains("\"width_profile\""), "{encoded}");
+        let loaded = load_x(&encoded).expect("profiled stroke loads");
+        let profile = &find(&loaded.pages[0], "profiled").unwrap().stroke_layers[0].options.width_profile;
+        assert_eq!(profile.len(), 3);
+        assert_eq!(profile[1], VariableWidthPoint { position: 0.35, width_multiplier: 2.0 });
+        assert_eq!(save_x(&loaded), encoded, "profile data is byte-stable");
+
+        let mut uniform = doc.clone();
+        uniform.pages[0].children[0].stroke_layers[0].options.width_profile.clear();
+        assert!(
+            !save_x(&uniform).contains("\"width_profile\""),
+            "empty legacy profiles remain omitted"
+        );
+    }
+
+    #[test]
+    fn malformed_variable_width_records_are_retained_for_admission_rejection() {
+        let mut node = Node::rect("profiled", 0.0, 0.0, 20.0, 20.0, Color::WHITE);
+        node.visual_stacks_materialized = true;
+        node.stroke_layers = vec![StrokeLayer {
+            stroke: Stroke::solid(Color::BLACK, 2.0),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendKind::Normal,
+            options: StrokeOptions {
+                width_profile: vec![VariableWidthPoint { position: 0.0, width_multiplier: 1.0 }],
+                ..StrokeOptions::default()
+            },
+        }];
+        let mut doc = Document::new();
+        doc.pages.push(Node::frame("page", 30.0, 30.0).child(node));
+        let broken = save_x(&doc).replace(
+            "\"width_multiplier\":1",
+            "\"width_multiplier\":\"not-a-number\"",
+        );
+        let decoded = load_x(&broken).expect("syntax remains decodable for admission");
+        assert!(
+            crate::validate_admission(&decoded).is_err(),
+            "a malformed profile must not silently become a uniform stroke"
+        );
+    }
+
+
+    #[test]
+    fn svg_export_materializes_profiled_strokes_as_nonzero_fill_paths() {
+        let mut line = Node::line("taper", 0.0, 0.0, 80.0, 0.0, Color::BLACK);
+        line.visual_stacks_materialized = true;
+        line.stroke_layers = vec![StrokeLayer {
+            stroke: Stroke::solid(Color::from_rgb8(0x44, 0x55, 0x66), 8.0),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendKind::Normal,
+            options: StrokeOptions {
+                cap_start: StrokeCap::Round,
+                cap_end: StrokeCap::Round,
+                dash: vec![12.0, 6.0],
+                width_profile: vec![
+                    VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
+                    VariableWidthPoint { position: 0.5, width_multiplier: 2.0 },
+                    VariableWidthPoint { position: 1.0, width_multiplier: 0.5 },
+                ],
+                ..StrokeOptions::default()
+            },
+        }];
+        let svg = export_svg(&Node::frame("page", 100.0, 30.0).child(line), &Variables::default());
+        assert!(svg.contains("fill-rule=\"nonzero\""), "{svg}");
+        assert!(!svg.contains("<line "), "profile is not downgraded to an SVG uniform stroke: {svg}");
+    }
+
+    #[test]
+    fn svg_profile_fill_covers_every_shape_centerline() {
+        fn profiled(mut node: Node) -> Node {
+            node.visual_stacks_materialized = true;
+            node.stroke_layers = vec![StrokeLayer {
+                stroke: Stroke::solid(Color::from_rgb8(0x22, 0x44, 0x88), 5.0),
+                opacity: 1.0,
+                visible: true,
+                blend: BlendKind::Normal,
+                options: StrokeOptions {
+                    cap_start: StrokeCap::Round,
+                    cap_end: StrokeCap::Square,
+                    join: StrokeJoin::Round,
+                    dash: vec![11.0, 5.0],
+                    width_profile: vec![
+                        VariableWidthPoint { position: 0.0, width_multiplier: 0.75 },
+                        VariableWidthPoint { position: 0.5, width_multiplier: 1.5 },
+                        VariableWidthPoint { position: 1.0, width_multiplier: 0.5 },
+                    ],
+                    ..StrokeOptions::default()
+                },
+            }];
+            node
+        }
+
+        let shapes = vec![
+            profiled(Node::rect("rect", 0.0, 0.0, 32.0, 20.0, Color::WHITE).radius(4.0)),
+            profiled(Node::ellipse("ellipse", 40.0, 0.0, 32.0, 20.0, Color::WHITE)),
+            profiled(Node::line("line", 80.0, 0.0, 28.0, 16.0, Color::BLACK)),
+            profiled(Node::vector("vector", 0.0, 34.0, 32.0, 20.0, vec![
+                PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(32.0, 8.0), PathCmd::LineTo(8.0, 20.0),
+            ])),
+            profiled(Node::section("section", 32.0, 20.0)),
+            profiled(Node::poly("poly", 40.0, 34.0, 32.0, 20.0, 5, Color::WHITE)),
+            profiled(Node::star("star", 80.0, 34.0, 32.0, 20.0, 5, 0.45, Color::WHITE)),
+            profiled(Node::arc("arc", 120.0, 34.0, 32.0, 20.0, 0.0, 220.0, 0.3, Color::WHITE)),
+        ];
+        let page = shapes
+            .into_iter()
+            .fold(Node::frame("page", 180.0, 70.0), |page, shape| page.child(shape));
+        let svg = export_svg(&page, &Variables::default());
+        assert_eq!(svg.matches("fill-rule=\"nonzero\"").count(), 8, "{svg}");
+        assert!(!svg.contains("stroke-width="), "profile strokes must not degrade: {svg}");
+    }
+
 }

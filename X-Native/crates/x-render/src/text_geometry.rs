@@ -145,6 +145,73 @@ pub fn outline_text(tree: &RenderTree, fonts: &x_text::FontManager) -> Result<Re
     Ok(RenderTree { commands })
 }
 
+/// Materialize a profiled stroke through x-core's bounded editable geometry.
+///
+/// Vello/tiny-skia only accept uniform-width `Stroke`s. A persisted profile is
+/// therefore filled from exactly the same caps, joins, dash phase and stations
+/// that Outline Stroke uses; an empty profile keeps the fast native stroke
+/// path. Invalid profiles are rejected at format admission; a damaged
+/// in-memory profiled stroke becomes an empty fill rather than incorrectly
+/// falling back to a uniform native stroke.
+pub fn variable_stroke_outline(
+    path: &BezPath,
+    width: f64,
+    options: &x_core::StrokeOptions,
+) -> Option<BezPath> {
+    if options.width_profile.is_empty() {
+        return None;
+    }
+    let mut commands = Vec::new();
+    for element in path.elements() {
+        match *element {
+            PathEl::MoveTo(point) => commands.push(x_core::PathCmd::MoveTo(point.x, point.y)),
+            PathEl::LineTo(point) => commands.push(x_core::PathCmd::LineTo(point.x, point.y)),
+            PathEl::QuadTo(control, point) => {
+                // Core PathCmd has cubics only. Elevate the quadratic exactly,
+                // just as text outlining does, rather than flattening before
+                // the common Outline Stroke implementation sees it.
+                let current = match commands.last().copied() {
+                    Some(x_core::PathCmd::MoveTo(x, y) | x_core::PathCmd::LineTo(x, y)) => (x, y),
+                    Some(x_core::PathCmd::CurveTo(_, _, _, _, x, y)) => (x, y),
+                    // A malformed in-memory path must never silently turn a
+                    // variable stroke back into a uniform native stroke.
+                    _ => return Some(BezPath::new()),
+                };
+                commands.push(x_core::PathCmd::CurveTo(
+                    current.0 + (control.x - current.0) * 2.0 / 3.0,
+                    current.1 + (control.y - current.1) * 2.0 / 3.0,
+                    point.x + (control.x - point.x) * 2.0 / 3.0,
+                    point.y + (control.y - point.y) * 2.0 / 3.0,
+                    point.x,
+                    point.y,
+                ));
+            }
+            PathEl::CurveTo(a, b, point) => commands.push(x_core::PathCmd::CurveTo(
+                a.x, a.y, b.x, b.y, point.x, point.y,
+            )),
+            PathEl::ClosePath => commands.push(x_core::PathCmd::Close),
+        }
+    }
+    let outline = match x_core::outline_stroke_path(&commands, width, options) {
+        Ok(outline) => outline,
+        // A nonempty profile deliberately takes the materialized-fill path.
+        // Admission normally excludes this branch; rendering an empty path is
+        // safer than incorrectly painting an invalid/tapered profile as the
+        // legacy uniform stroke.
+        Err(_) => return Some(BezPath::new()),
+    };
+    let mut result = BezPath::new();
+    for command in outline.path {
+        match command {
+            x_core::PathCmd::MoveTo(x, y) => result.move_to((x, y)),
+            x_core::PathCmd::LineTo(x, y) => result.line_to((x, y)),
+            x_core::PathCmd::CurveTo(a, b, c, d, x, y) => result.curve_to((a, b), (c, d), (x, y)),
+            x_core::PathCmd::Close => result.close_path(),
+        }
+    }
+    Some(result)
+}
+
 pub fn stroke_style(width: f64, options: &x_core::StrokeOptions) -> Stroke {
     let cap = |cap| match cap {
         x_core::StrokeCap::Round => Cap::Round,
@@ -180,13 +247,67 @@ pub fn outline_strokes(tree: &mut RenderTree) {
             options,
         } = command
         {
-            let style = stroke_style(*width, options);
+            let outlined = variable_stroke_outline(path, *width, options).unwrap_or_else(|| {
+                let style = stroke_style(*width, options);
+                stroke(path.iter(), &style, &StrokeOpts::default(), 0.05)
+            });
             *command = RenderCommand::FillPath {
                 key: key.clone(),
                 transform: *transform,
                 brush: brush.clone(),
-                path: stroke(path.iter(), &style, &StrokeOpts::default(), 0.05),
+                path: outlined,
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod variable_stroke_tests {
+    use super::*;
+
+    #[test]
+    fn profiled_dash_strokes_materialize_as_filled_paths() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((70.0, 0.0));
+        let options = x_core::StrokeOptions {
+            cap_start: x_core::StrokeCap::Round,
+            cap_end: x_core::StrokeCap::Square,
+            join: x_core::StrokeJoin::Round,
+            dash: vec![12.0, 6.0],
+            width_profile: vec![
+                x_core::VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
+                x_core::VariableWidthPoint { position: 0.5, width_multiplier: 2.0 },
+                x_core::VariableWidthPoint { position: 1.0, width_multiplier: 0.75 },
+            ],
+            ..Default::default()
+        };
+        let outline = variable_stroke_outline(&path, 8.0, &options).expect("profile takes fill path");
+        assert!(
+            outline.elements().iter().filter(|el| matches!(el, PathEl::ClosePath)).count() >= 3,
+            "each painted dash is a closed filled contour"
+        );
+        let bounds = outline.bounding_box();
+        assert!(bounds.height() > 12.0, "mid-path width peak survives: {bounds:?}");
+        assert!(bounds.x0 < -1.9, "round start cap survives");
+
+        let uniform = x_core::StrokeOptions::default();
+        assert!(variable_stroke_outline(&path, 8.0, &uniform).is_none());
+    }
+
+    #[test]
+    fn malformed_profile_does_not_fall_back_to_a_uniform_stroke() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((10.0, 0.0));
+        let options = x_core::StrokeOptions {
+            width_profile: vec![x_core::VariableWidthPoint {
+                position: f64::NAN,
+                width_multiplier: 1.0,
+            }],
+            ..Default::default()
+        };
+        let outline = variable_stroke_outline(&path, 2.0, &options).expect("nonempty profile is handled");
+        assert!(outline.elements().is_empty());
     }
 }

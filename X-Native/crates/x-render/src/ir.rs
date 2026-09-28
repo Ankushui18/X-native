@@ -652,6 +652,7 @@ pub(crate) fn aligned_rectangle_stroke_path(node: &Node, layer: &StrokeLayer) ->
         || node.corner_radii.is_some()
         || node.corner_smoothing != 0.0
         || layer.stroke.width <= 0.0
+        || !layer.options.width_profile.is_empty()
         || !layer.options.dash.is_empty()
         || layer.options.dash_offset != 0.0
         || layer.options.miter_limit != 4.0
@@ -1420,16 +1421,14 @@ fn lower(
             );
         }
         NodeKind::Line => {
-            for (i, layer) in node.active_strokes().iter().enumerate() {
-                let width = layer.stroke.width.max(1.0);
-                let shape = Rect::new(0.0, 0.0, node.w.max(width), width).into_path(0.1);
-                tree.commands.push(RenderCommand::FillPath {
-                    key: format!("{key}/stroke-{i}"),
-                    transform: world,
-                    path: shape,
-                    brush: layer_brush(&layer.stroke.paint, vars, opacity * layer.opacity),
-                });
-            }
+            // `w`/`h` are the true line endpoint in local space. Lower it
+            // through the common layer path so a profiled/dashed line has the
+            // same centerline, caps and joins in every sink.
+            let mut shape = BezPath::new();
+            shape.move_to((0.0, 0.0));
+            shape.line_to((node.w, node.h));
+            let override_color = node_fill_override(overrides, node.id.as_str());
+            emit_visual_layers(tree, node, &key, world, &shape, vars, opacity, override_color);
         }
         NodeKind::Vector { path: p } => {
             if !p.is_empty() {
@@ -2036,8 +2035,12 @@ impl<'a> VelloSink<'a> {
                     options,
                     ..
                 } => {
-                    let stroke = crate::text_geometry::stroke_style(*width, options);
-                    scene.stroke(&stroke, *transform, brush, None, path)
+                    if let Some(outline) = crate::text_geometry::variable_stroke_outline(path, *width, options) {
+                        scene.fill(Fill::NonZero, *transform, brush, None, &outline)
+                    } else {
+                        let stroke = crate::text_geometry::stroke_style(*width, options);
+                        scene.stroke(&stroke, *transform, brush, None, path)
+                    }
                 }
                 RenderCommand::PushLayer {
                     mix, alpha, bounds, ..

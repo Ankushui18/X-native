@@ -385,6 +385,11 @@ pub fn validate_admission(doc: &Document) -> Result<(), String> {
                 paint(&s.stroke.paint)?;
                 numbers(&[s.stroke.width, s.options.dash_offset, s.options.miter_limit])?;
                 numbers(&s.options.dash)?;
+                for point in &s.options.width_profile {
+                    numbers(&[point.position, point.width_multiplier])?;
+                }
+                validate_width_profile(&s.options.width_profile)
+                    .map_err(|error| format!("invalid stroke width profile: {error}"))?;
                 if s.stroke.width < 0.0
                     || s.options.dash.len() > 128
                     || s.options.dash.iter().any(|d| *d < 0.0)

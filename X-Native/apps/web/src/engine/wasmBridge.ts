@@ -10,9 +10,9 @@ import { decodeRustImport } from "./wasmImportAdapter";
 import { auditDecision, auditRustAsyncCall, auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 export const IMPORT_BRIDGE_VERSION = 1;
-// V5 adds a bounded single-layer offset command/shape delta to V4's strokes.
-// Older bindgen classes cannot acknowledge or undo this shape rewrite safely.
-export const SESSION_BRIDGE_VERSION = 5;
+// V6 adds reversible bounded Outline Stroke deltas to V5's signed offsets.
+// Older bindgen classes cannot acknowledge or undo this filled-vector rewrite safely.
+export const SESSION_BRIDGE_VERSION = 6;
 export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
 /** wasm-bindgen owns this stateful instance; JS never mirrors its document or
  * undo stack. The only large payload is an explicit open/export of native .x. */
@@ -27,6 +27,7 @@ export interface WasmDocumentSession {
   strokeNode: (id: string, width: number, color: string, align: string, join: string) => string;
   previewOffset: (id: string, distance: number, join: string) => string;
   offsetNode: (id: string, distance: number, join: string) => string;
+  outlineStroke: (id: string) => string;
   undo: () => string;
   redo: () => string;
   exportX: () => string;

@@ -21,6 +21,12 @@ import { guardOffsetPreview, offsetAuditRequested } from "./offsetPathOracle";
 import { verifyStrokeDelta } from "./strokeBandOracle";
 
 export const WEB_DOCUMENT_SESSION_VERSION = 2;
+/** Outline Stroke is implemented at the Rust/session boundary but deliberately
+ * remains unavailable from the opt-in browser host until its own genuine
+ * generated-WASM 30/30 corpus is recorded. Do not flip this merely because
+ * unit fixtures pass: caps, joins, dashes and width profiles need independent
+ * rendered-ink evidence first. */
+export const OUTLINE_STROKE_GUARD_ACTIVE = true;
 export type WebDocument = DocSeed | PersistedDoc;
 
 // Freeze the supported v1 web schema. If the factory gains a new field, even
@@ -198,6 +204,10 @@ function nativeDocument(root: XNode): Record<string, unknown> {
   };
 }
 
+const OUTLINE_VECTOR_MAX_ANCHORS = 8192;
+const OUTLINE_VECTOR_MAX_LOOPS = Math.ceil(OUTLINE_VECTOR_MAX_ANCHORS / 3);
+const OUTLINE_VECTOR_COORD_LIMIT = 1_100_000_000;
+
 function nativeVector(value: unknown): Pick<XNode, "path" | "vectorNetwork" | "closed"> {
   const kind = object(value);
   exactKeys(kind, ["t", "path"]);
@@ -218,7 +228,8 @@ function nativeVector(value: unknown): Pick<XNode, "path" | "vectorNetwork" | "c
       loop = [];
     } else {
       if (item.length !== 3 || !finite(item[1]) || !finite(item[2]) ||
-          (item[0] === "M") !== (loop.length === 0) || vertices.length >= 4096) {
+          Math.abs(item[1]) > OUTLINE_VECTOR_COORD_LIMIT || Math.abs(item[2]) > OUTLINE_VECTOR_COORD_LIMIT ||
+          (item[0] === "M") !== (loop.length === 0) || vertices.length >= OUTLINE_VECTOR_MAX_ANCHORS) {
         throw new Error("Invalid native vector anchor");
       }
       const p = { x: item[1], y: item[2] };
@@ -227,10 +238,33 @@ function nativeVector(value: unknown): Pick<XNode, "path" | "vectorNetwork" | "c
       loop.push(vertices.length - 1);
     }
   }
-  if (loop.length || loops.length > 512 || (!loops.length && kind.path.length)) {
+  if (loop.length || loops.length > OUTLINE_VECTOR_MAX_LOOPS || (!loops.length && kind.path.length)) {
     throw new Error("Unclosed native vector contour");
   }
   return { path, vectorNetwork: { vertices, segments, regions: [{ windingRule: "EVENODD", loops }] }, closed: true };
+}
+
+/** Outline Stroke writes a canonical one-fill visual stack so its former
+ * stroke paint remains editable. The web document model has exactly the same
+ * single-solid-fill semantics in legacy form, so checkpoint decoding can
+ * represent this narrow stack without dropping an observable property. */
+function canonicalOutlineFillStack(raw: Record<string, unknown>, expected: Record<string, unknown>, vector: boolean, root: boolean): boolean {
+  if (root || !vector || raw.stroke !== undefined || !Array.isArray(raw.fill_layers) || raw.fill_layers.length !== 1 ||
+      !Array.isArray(raw.stroke_layers) || raw.stroke_layers.length !== 0 ||
+      !Array.isArray(raw.effect_layers) || raw.effect_layers.length !== 0) return false;
+  try {
+    const layer = object(raw.fill_layers[0]);
+    exactKeys(layer, ["paint", "opacity", "visible", "blend"]);
+    const paint = object(layer.paint), fill = object(raw.fill);
+    exactKeys(paint, ["t", "c"]); exactKeys(fill, ["t", "c"]);
+    if (paint.t !== "solid" || fill.t !== "solid" || paint.c !== fill.c ||
+        layer.opacity !== 1 || layer.visible !== true || layer.blend !== "normal") return false;
+    const normalized = { ...raw };
+    delete normalized.fill_layers; delete normalized.stroke_layers; delete normalized.effect_layers;
+    return equal(normalized, expected);
+  } catch {
+    return false;
+  }
 }
 
 function decodedNode(value: unknown, root: boolean): XNode {
@@ -262,9 +296,22 @@ function decodedNode(value: unknown, root: boolean): XNode {
     ...(star ? { starRatio: kind.ratio as number } : {}),
     ...style,
   };
-  // Checks *every* native field, including extra properties the lenient .x
-  // parser might expose in a future build. Nothing is stripped on export.
-  if (!equal(n, nativeNode(candidate, root))) throw new Error("Unsupported native layer fields");
+  // Checks every native field, including extra properties the lenient .x
+  // parser might expose in a future build. The one exception is Outline
+  // Stroke's canonical single-solid-fill stack, which has the exact legacy
+  // web-fill meaning and is normalized only after every stack field is proved.
+  const expected = nativeNode(candidate, root);
+  // Children were recursively decoded and strictly checked above. Compare only
+  // the frame's own fields here so a canonical outlined child's fill stack is
+  // not mistaken for an unexamined frame-level extension.
+  const directMatch = root ? (() => {
+    const { children: _actualChildren, ...actual } = n;
+    const { children: _expectedChildren, ...expectedOwn } = expected;
+    return equal(actual, expectedOwn);
+  })() : equal(n, expected);
+  if (!directMatch && !canonicalOutlineFillStack(n, expected, vector, root)) {
+    throw new Error("Unsupported native layer fields");
+  }
   return admittedNode(candidate, root, true);
 }
 
@@ -287,7 +334,13 @@ function checkpoint(x: string, shell: WebShell): WebDocument {
   const pages = native.pages;
   if (!Array.isArray(pages) || pages.length !== 1) throw new Error("Unsupported native pages");
   const root = decodedNode(pages[0], true);
-  if (!equal(native, nativeDocument(root))) throw new Error("Unsupported native document metadata");
+  // `decodedNode` already recursively proves the sole page and every layer.
+  // Compare document-level metadata separately so the one permitted canonical
+  // Outline Stroke child stack is not erased merely to make this outer equality
+  // check pass.
+  const { pages: _nativePages, ...nativeMetadata } = native;
+  const { pages: _expectedPages, ...expectedMetadata } = nativeDocument(root);
+  if (!equal(nativeMetadata, expectedMetadata)) throw new Error("Unsupported native document metadata");
   if (shell.rootId !== root.id) throw new Error("Native root identity changed");
   return {
     ...JSON.parse(JSON.stringify(shell.document)),
@@ -343,6 +396,19 @@ export class RustWebDocumentSession {
       throw new Error("Rust offset changed after equivalence preflight; editing must pause");
     }
     if (!preview && applied.offset) throw new Error("Unrequested Rust offset mutation; editing must pause");
+    return applied;
+  }
+  /** One native ReplaceNode rewrite. Keep the browser route behind its corpus
+   * guard until genuine generated-WASM ink evidence exists; native callers can
+   * still use the typed x-editor/x-wasm command for implementation testing. */
+  outlineStroke(id: string) {
+    if (OUTLINE_STROKE_GUARD_ACTIVE) {
+      throw new Error("Outline Stroke remains guarded pending genuine WASM corpus proof");
+    }
+    const applied = this.rust.outlineStroke(id);
+    if (!applied.outline || applied.outline.id !== id) {
+      throw new Error("Native outline did not return its affected layer; editing must pause");
+    }
     return applied;
   }
   undo() { return this.checked(this.rust.undo()); }

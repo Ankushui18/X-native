@@ -129,34 +129,108 @@ pub fn svg_text_outliner(
     }
 }
 
-/// TEXT-TO-VECTOR glue: outline a Text node's glyphs into ONE editable vector
-/// path — the "Outline text" (⌥⌘O), which turns type into geometry you can
-/// node-edit, boolean and offset.
+/// Outline a Text node into one editable vector, retaining the historic
+/// Flatten-compatible behavior. New callers that need Figma-style per-glyph
+/// layers should use [`outline_text_glyph_nodes`] instead.
 ///
-/// This lives in the facade for the same dependency-direction reason as
-/// [`svg_text_outliner`]: x-editor must not depend on x-text/x-render, so the
-/// editor cannot resolve glyphs itself. Glyph outlines come from the very same
-/// `node_text_outlines` pipeline the canvas, the PDF sink and the SVG exporter
-/// consume, with the same parameter derivation x-render's IR uses (`fs` /
-/// `fontsize`, `ls` / `letterspacing`, `lh` + `lineheight`, `tw` wrap, `font`
-/// family, `ws`/`ps`/`bs`, small caps, `opsz`/`wdth` axes) — so the outlined
-/// shape matches what was on screen, wrapping and per-run styling included.
-/// TrueType quadratics are elevated to cubics exactly (no re-fitting), because
-/// `PathCmd` has no quad.
-///
-/// The result is a `Vector` node in the text node's own local space, carrying
-/// its transform, name, opacity and paint (the text colour becomes the path
-/// fill), with w/h grown to cover the glyphs. Feed it to
-/// `editor::Editor::replace_node` to make the swap one undo step.
-///
-/// Returns None when the node is not text, its string is empty or whitespace, or
-/// no font resolves — the caller should say so instead of quietly keeping the
-/// text layer.
+/// This facade owns shaping because x-editor must not depend on x-text. It
+/// shares the canvas/PDF/SVG `node_text_outlines` inputs (font, wrapping,
+/// spacing, rich runs and axes), elevates TrueType quadratics exactly, and
+/// rebases its local vector bounds without moving transformed text on canvas.
+/// Returns `None` for non-text, blank, or unresolved-font nodes.
 pub fn outline_text_node(
     node: &Node,
     fonts: &x_text::FontManager,
     vars: &Variables,
 ) -> Option<Node> {
+    let (glyphs, vshift) = shaped_text_outline_glyphs(node, fonts, vars)?;
+    let mut cmds: Vec<PathCmd> = vec![];
+    for glyph in &glyphs {
+        let mut path = glyph.path.clone();
+        path.apply_affine(vshift * glyph.transform);
+        cmds.extend(bez_to_path_cmds(&path));
+    }
+    (!cmds.is_empty()).then(|| text_vector_node(node, "outline", cmds, None))
+}
+
+/// Outline a Text node into distinct editable glyph layers.
+///
+/// This facade owns font shaping because `x-editor` intentionally does not
+/// depend on `x-text`; callers feed the resulting nodes to
+/// `Editor::replace_node_with_siblings` for one atomic command/history entry.
+/// A grapheme/ligature shares one output node, whitespace creates no empty
+/// layer, and a numbered-list counter stays together. Each vector gets cloned
+/// style/effects/transform state rather than aliases to the source node.
+pub fn outline_text_glyph_nodes(
+    node: &Node,
+    fonts: &x_text::FontManager,
+    vars: &Variables,
+) -> Option<Vec<Node>> {
+    let (glyphs, vshift) = shaped_text_outline_glyphs(node, fonts, vars)?;
+    let mut groups: Vec<(usize, Option<Color>, Vec<PathCmd>)> = Vec::new();
+    for glyph in glyphs {
+        let mut path = glyph.path.clone();
+        path.apply_affine(vshift * glyph.transform);
+        let commands = bez_to_path_cmds(&path);
+        if commands.is_empty() {
+            continue;
+        }
+        // Plain shaping carries BLACK as its internal brush marker; only a
+        // real rich-text run color overrides the cloned source fill stack.
+        let color = (!node.text_runs.is_empty() && glyph.color.components[3] != 0.0)
+            .then_some(glyph.color);
+        match groups.last_mut() {
+            Some((group, prior_color, paths)) if *group == glyph.group => {
+                // A grapheme normally has one style. If a fallback shaper did
+                // expose conflicting run colors, keeping the source fill is
+                // less surprising than silently picking one partial outline.
+                if *prior_color != color {
+                    *prior_color = None;
+                }
+                paths.extend(commands);
+            }
+            _ => groups.push((glyph.group, color, commands)),
+        }
+    }
+    if groups.is_empty() {
+        return None;
+    }
+    let nodes = groups
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, color, commands))| {
+            let mut vector = text_vector_node(node, "glyph", commands, color);
+            vector.name = format!("{} glyph {}", node.name, index + 1);
+            vector
+        })
+        .collect::<Vec<_>>();
+    Some(nodes)
+}
+
+/// Shape and replace a text layer with its editable glyph siblings in one
+/// editor command. This is the public end-to-end Outline Text entry point;
+/// failure is side-effect free (non-text/empty/unresolved-font nodes leave the
+/// document and history unchanged).
+pub fn outline_text_glyph_layers(
+    editor: &mut x_editor::Editor,
+    id: &str,
+    fonts: &x_text::FontManager,
+    vars: &Variables,
+) -> Option<Vec<String>> {
+    let source = x_core::find_node(&editor.root, id)?.clone();
+    let glyphs = outline_text_glyph_nodes(&source, fonts, vars)?;
+    editor.replace_node_with_siblings(id, glyphs)
+}
+
+/// Resolve the exact same typography inputs that x-render uses and return
+/// block-local glyph geometry plus the vertical placement affine. Keeping this
+/// private helper shared by merged and per-glyph outlining prevents font/wrap
+/// drift between the two public conversion modes.
+fn shaped_text_outline_glyphs(
+    node: &Node,
+    fonts: &x_text::FontManager,
+    vars: &Variables,
+) -> Option<(Vec<x_text::OutlineGlyph>, vello::kurbo::Affine)> {
     let NodeKind::Text { text } = &node.kind else {
         return None;
     };
@@ -170,7 +244,7 @@ pub fn outline_text_node(
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|v| *v > 0.0);
     let size = node.bound_number("fontsize", vars, fs_binding.unwrap_or(node.h * 0.72));
-    let typo_num = |k: &str| node.bindings.get(k).and_then(|v| v.parse::<f64>().ok());
+    let typo_num = |key: &str| node.bindings.get(key).and_then(|v| v.parse::<f64>().ok());
     let ls = node.bound_number("letterspacing", vars, typo_num("ls").unwrap_or(0.0));
     let font = node.bindings.get("font").cloned();
     let (lh_mode, lh_value) = match node
@@ -181,12 +255,10 @@ pub fn outline_text_node(
         Some(px) if *px > 0.0 => (1u8, *px),
         _ => node.lh_mode_value(),
     };
-    // a px / percent line-height is a BOX; the shaper wants a multiplier of the
-    // face's natural line height — the same conversion the sinks perform
-    let nat = x_text::resolve_natural_line_height(fonts, font.as_deref(), size).max(0.1);
+    let natural = x_text::resolve_natural_line_height(fonts, font.as_deref(), size).max(0.1);
     let lh = match lh_mode {
-        1 => lh_value.max(1.0) / nat,
-        2 => (lh_value / 100.0 * size / nat).max(0.1),
+        1 => lh_value.max(1.0) / natural,
+        2 => (lh_value / 100.0 * size / natural).max(0.1),
         _ => typo_num("lh").unwrap_or(1.2),
     };
     let wrap = node.text_wrap();
@@ -200,12 +272,6 @@ pub fn outline_text_node(
         typo_num("opsz").unwrap_or(0.0) as f32,
         typo_num("wdth").unwrap_or(0.0) as f32,
     );
-    // Runs, derived exactly like x-render's IR: rich runs only when the node
-    // carries them; a node-level weight with no runs is synthesized into one, so
-    // "Inter 600" outlines as the 600 face and not the 400. Instance text
-    // overrides are NOT resolvable from a bare node — outlining an overridden
-    // instance's text uses the component's own string, which is the honest
-    // limit of a node-level API.
     let parts: Vec<TextPart> = if !node.text_runs.is_empty() {
         resolve_text_parts(text, &node.text_runs)
     } else {
@@ -213,25 +279,21 @@ pub fn outline_text_node(
             .bindings
             .get("fw")
             .and_then(|v| v.parse::<u16>().ok())
-            .filter(|w| *w != 400)
+            .filter(|weight| *weight != 400)
         {
-            Some(w) => vec![TextPart {
+            Some(weight) => vec![TextPart {
                 text: text.clone(),
                 color: None,
                 size: None,
                 font: None,
-                weight: Some(w),
+                weight: Some(weight),
                 italic: None,
                 ls: None,
             }],
             None => vec![],
         }
     };
-    // empty runs = the plain pipeline, the same branch the canvas/PDF/SVG sinks
-    // take, so all four agree on the glyph geometry. Alignment, the line
-    // cap, paragraph indent and decoration ride along too — the outline is
-    // the rendered shape, so it must carry everything the canvas renders.
-    let glyphs = if parts.is_empty() {
+    let shaped = if parts.is_empty() {
         x_text::node_text_outlines_styled(
             fonts,
             text,
@@ -279,53 +341,90 @@ pub fn outline_text_node(
             node.list_style,
         )?
     };
-    let (glyphs, block_h) = glyphs;
-    // the sinks place the block vertically inside the node box; the
-    // outline must sit where the text sits
+    let (glyphs, block_h) = shaped;
+    if glyphs.is_empty() {
+        return None;
+    }
     let dy = match node.text_align_vertical {
         TextAlignVertical::Top => 0.0,
         TextAlignVertical::Middle => (node.h - block_h) / 2.0,
         TextAlignVertical::Bottom => node.h - block_h,
     };
-    let vshift = vello::kurbo::Affine::translate((0.0, dy));
-    if glyphs.is_empty() {
-        return None;
+    Some((glyphs, vello::kurbo::Affine::translate((0.0, dy))))
+}
+
+/// Preserve the source's world affine while making an individual glyph's path
+/// local to its tight bounds. Text nodes can be rotated, flipped or skewed, so
+/// changing `w`/`h` without solving the origin-pivot translation would move the
+/// glyph on canvas.
+fn text_vector_node(node: &Node, prefix: &str, commands: Vec<PathCmd>, color: Option<Color>) -> Node {
+    let (min_x, min_y, max_x, max_y) = path_cmd_bounds(&commands)
+        .expect("shaped text paths contain finite anchors");
+    let old_matrix = node.transform.matrix(node.w, node.h);
+    let [a, b, c, d, e, f] = old_matrix.as_coeffs();
+    let w = (max_x - min_x).max(1.0);
+    let h = (max_y - min_y).max(1.0);
+    let pivot_x = node.transform.origin_x * w;
+    let pivot_y = node.transform.origin_y * h;
+    let target_x = a * min_x + c * min_y + e;
+    let target_y = b * min_x + d * min_y + f;
+
+    let mut vector = node.clone();
+    vector.id = fresh_id(prefix);
+    vector.kind = NodeKind::Vector {
+        path: commands
+            .into_iter()
+            .map(|command| shift_path_cmd(command, -min_x, -min_y))
+            .collect(),
+    };
+    vector.w = w;
+    vector.h = h;
+    vector.transform.x = target_x - pivot_x + a * pivot_x + c * pivot_y;
+    vector.transform.y = target_y - pivot_y + b * pivot_x + d * pivot_y;
+    vector.children.clear();
+    vector.text_runs.clear();
+    vector.baseline = None;
+    vector.corner_radii = None;
+    vector.corner_smoothing = 0.0;
+    vector.dirty = true;
+    if let Some(color) = color {
+        vector.fill = Paint::Solid(color);
+        vector.visual_stacks_materialized = true;
+        vector.fill_layers = vec![PaintLayer::new(vector.fill.clone())];
     }
-    // glyph space -> node-local space, then into PathCmds
-    let mut cmds: Vec<PathCmd> = vec![];
-    for g in &glyphs {
-        let mut p = g.path.clone();
-        p.apply_affine(vshift * g.transform);
-        cmds.extend(bez_to_path_cmds(&p));
-    }
-    if cmds.is_empty() {
-        return None;
-    }
-    // grow-only bounds, the same contract the editor's path ops use
-    let (mut maxx, mut maxy) = (node.w, node.h);
-    for c in &cmds {
-        for (x, y) in path_cmd_points(*c) {
-            maxx = maxx.max(x);
-            maxy = maxy.max(y);
+    vector
+}
+
+fn path_cmd_bounds(commands: &[PathCmd]) -> Option<(f64, f64, f64, f64)> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut seen = false;
+    for command in commands {
+        for (x, y) in path_cmd_points(*command) {
+            if !x.is_finite() || !y.is_finite() {
+                return None;
+            }
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+            seen = true;
         }
     }
-    let mut v = Node::vector(
-        &fresh_id("outline"),
-        node.transform.x,
-        node.transform.y,
-        maxx.max(1.0),
-        maxy.max(1.0),
-        cmds,
-    );
-    v.transform = node.transform;
-    v.name = node.name.clone();
-    v.opacity = node.opacity;
-    v.visible = node.visible;
-    // the text colour becomes the path fill (both the simple and the ordered
-    // stack, so a text layer with several fill layers keeps all of them)
-    v.fill = node.fill.clone();
-    v.fill_layers = node.fill_layers.clone();
-    Some(v)
+    seen.then_some((min_x, min_y, max_x, max_y))
+}
+
+fn shift_path_cmd(command: PathCmd, dx: f64, dy: f64) -> PathCmd {
+    match command {
+        PathCmd::MoveTo(x, y) => PathCmd::MoveTo(x + dx, y + dy),
+        PathCmd::LineTo(x, y) => PathCmd::LineTo(x + dx, y + dy),
+        PathCmd::CurveTo(a, b, c, d, x, y) => {
+            PathCmd::CurveTo(a + dx, b + dy, c + dx, d + dy, x + dx, y + dy)
+        }
+        PathCmd::Close => PathCmd::Close,
+    }
 }
 
 /// Every point a PathCmd carries (anchors and control points), for bounds.

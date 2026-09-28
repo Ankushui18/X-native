@@ -175,6 +175,10 @@ fn hash_subtree(n: &Node) -> (u64, bool, bool) {
             for d in &l.options.dash {
                 fmix(h, *d);
             }
+            for point in &l.options.width_profile {
+                fmix(h, point.position);
+                fmix(h, point.width_multiplier);
+            }
         }
         for l in &n.effect_layers {
             fmix(h, l.opacity as f64);
@@ -1266,5 +1270,35 @@ mod preparation_context_tests {
             },
         );
         assert!(!cache.stats.full_hit);
+    }
+}
+
+#[cfg(test)]
+mod variable_width_cache_tests {
+    use super::*;
+
+    #[test]
+    fn width_profile_stations_invalidate_the_subtree_paint_hash() {
+        let mut line = Node::line("line", 0.0, 0.0, 80.0, 0.0, Color::BLACK);
+        line.visual_stacks_materialized = true;
+        line.stroke_layers = vec![StrokeLayer {
+            stroke: Stroke::solid(Color::WHITE, 4.0),
+            opacity: 1.0,
+            visible: true,
+            blend: BlendKind::Normal,
+            options: StrokeOptions {
+                width_profile: vec![
+                    VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
+                    VariableWidthPoint { position: 1.0, width_multiplier: 1.5 },
+                ],
+                ..StrokeOptions::default()
+            },
+        }];
+        let initial = hash_subtree(&line).0;
+        line.stroke_layers[0].options.width_profile[1].width_multiplier = 2.0;
+        let width_changed = hash_subtree(&line).0;
+        assert_ne!(initial, width_changed);
+        line.stroke_layers[0].options.width_profile[1].position = 0.75;
+        assert_ne!(width_changed, hash_subtree(&line).0);
     }
 }

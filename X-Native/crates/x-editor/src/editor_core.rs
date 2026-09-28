@@ -2670,6 +2670,45 @@ impl Editor {
         }
     }
 
+    /// Read an Outline Stroke rewrite directly from the command log. An
+    /// outline is distinguishable from an ordinary stroke-style replacement:
+    /// it turns its sole active stroke into a filled Vector, preserving the
+    /// stroke paint as that vector's fill and changing its geometry.
+    pub(crate) fn next_undo_outline(&self) -> Option<&str> {
+        Self::outline_history_id(self.undo_stack.last()?)
+    }
+
+    pub(crate) fn next_redo_outline(&self) -> Option<&str> {
+        Self::outline_history_id(self.redo_stack.last()?)
+    }
+
+    fn outline_history_id(commands: &[Command]) -> Option<&str> {
+        let [Command::ReplaceNode { id, before, after }] = commands else {
+            return None;
+        };
+        let strokes = before.active_strokes();
+        let [layer] = strokes.as_slice() else {
+            return None;
+        };
+        let NodeKind::Vector { path: after_path } = &after.kind else {
+            return None;
+        };
+        if !after.active_strokes().is_empty()
+            || after.stroke.width != 0.0
+            || after.fill != layer.stroke.paint
+        {
+            return None;
+        }
+        // Setting a vector's stroke to zero can also use ReplaceNode. Require
+        // that the actual centerline changed (or that this was a primitive to
+        // vector rewrite) so that style commands are never mislabeled outline.
+        let geometry_changed = match &before.kind {
+            NodeKind::Vector { path } => path != after_path,
+            _ => true,
+        };
+        geometry_changed.then_some(id)
+    }
+
     /// Read the actual ReplaceNode history for a style edit. Never maintain
     /// a parallel list of stroke ids just to produce session undo deltas.
     pub(crate) fn next_undo_stroke(&self) -> Option<&str> {

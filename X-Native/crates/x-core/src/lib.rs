@@ -31,6 +31,7 @@ pub mod query;
 pub mod registry;
 pub mod smart_animate;
 pub mod stroke_alignment;
+pub mod stroke_outline;
 pub mod styles;
 pub mod transaction;
 pub mod transform;
@@ -73,6 +74,12 @@ pub use query::{
 };
 pub use registry::*;
 pub use styles::*;
+pub use stroke_outline::{
+    outline_stroke_path, sample_width_profile, validate_width_profile, StrokeOutline,
+    StrokeOutlineBounds, MAX_OUTLINE_ANCHORS, MAX_OUTLINE_CENTERLINE_POINTS,
+    MAX_OUTLINE_DASH_ENTRIES, MAX_OUTLINE_INPUT_COMMANDS, MAX_OUTLINE_MITER_LIMIT,
+    MAX_OUTLINE_STROKE_WIDTH, OUTLINE_FLATTEN_STEPS,
+};
 pub use transform::*;
 pub use variables::*;
 

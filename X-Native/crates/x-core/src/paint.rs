@@ -519,6 +519,39 @@ pub enum StrokeJoin {
     Bevel,
     Round,
 }
+/// One arc-length station in a variable-width stroke profile.
+///
+/// `position` is normalized over the stroked centerline (`0.0` = start,
+/// `1.0` = end) and `width_multiplier` scales the layer's base stroke width.
+/// The persisted model deliberately stores a small piecewise-linear profile,
+/// rather than sampled geometry: the renderer, exporter and Outline Stroke
+/// command can all resolve the same stations at their own flattening tolerance.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VariableWidthPoint {
+    pub position: f64,
+    pub width_multiplier: f64,
+}
+
+/// Keep imported/profile-edit input bounded before it can turn one centerline
+/// into an unbounded number of outline anchors.
+pub const MAX_VARIABLE_WIDTH_POINTS: usize = 64;
+/// Eight times the layer's normal width matches the inspector's sane drag
+/// range. A wider brush is represented by increasing `Stroke::width` instead.
+pub const MAX_VARIABLE_WIDTH_MULTIPLIER: f64 = 8.0;
+
+impl VariableWidthPoint {
+    /// A finite, persisted station. This is intentionally strict: callers that
+    /// want UI-friendly clamping should do it before changing the document;
+    /// accepting NaN/unsorted stations here would make a saved profile render
+    /// differently in each consumer.
+    pub fn is_valid(self) -> bool {
+        self.position.is_finite()
+            && (0.0..=1.0).contains(&self.position)
+            && self.width_multiplier.is_finite()
+            && (0.0..=MAX_VARIABLE_WIDTH_MULTIPLIER).contains(&self.width_multiplier)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StrokeOptions {
     pub align: StrokeAlign,
@@ -528,6 +561,9 @@ pub struct StrokeOptions {
     pub dash: Vec<f64>,
     pub dash_offset: f64,
     pub miter_limit: f64,
+    /// Piecewise-linear width multipliers along the centerline. Empty means a
+    /// uniform stroke and preserves the historic rendering/file format result.
+    pub width_profile: Vec<VariableWidthPoint>,
 }
 impl Default for StrokeOptions {
     fn default() -> Self {
@@ -539,6 +575,7 @@ impl Default for StrokeOptions {
             dash: vec![],
             dash_offset: 0.0,
             miter_limit: 4.0,
+            width_profile: vec![],
         }
     }
 }

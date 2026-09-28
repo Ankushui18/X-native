@@ -307,17 +307,25 @@ fn encode_vector_layers(
                 &bounds(world, node.w, node.h),
             );
         }
-        let stroke = crate::text_geometry::stroke_style(layer.stroke.width, &layer.options);
-        scene.stroke(
-            &stroke,
-            world,
-            &brush_with_alpha(
-                paint_brush(&layer.stroke.paint, vars),
-                node_alpha * layer.opacity.clamp(0.0, 1.0),
-            ),
-            None,
-            path,
+        let brush = brush_with_alpha(
+            paint_brush(&layer.stroke.paint, vars),
+            node_alpha * layer.opacity.clamp(0.0, 1.0),
         );
+        // Keep the already-proven plain-rectangle inside/outside bands exact.
+        // A width profile deliberately bypasses that narrow fast path and uses
+        // the common materialized geometry below instead.
+        if let Some(aligned) = crate::ir::aligned_rectangle_stroke_path(node, layer) {
+            scene.fill(Fill::NonZero, world, &brush, None, &aligned);
+        } else if let Some(outline) = crate::text_geometry::variable_stroke_outline(
+            path,
+            layer.stroke.width,
+            &layer.options,
+        ) {
+            scene.fill(Fill::NonZero, world, &brush, None, &outline);
+        } else {
+            let stroke = crate::text_geometry::stroke_style(layer.stroke.width, &layer.options);
+            scene.stroke(&stroke, world, &brush, None, path);
+        }
         stats.paths += 1;
         if layer.blend.mix().is_some() {
             scene.pop_layer();
@@ -421,64 +429,47 @@ fn encode(
             let bound_radius = node.bound_number("radius", vars, *radius);
             let shape = shape_for_rect(node, bound_radius);
             encode_drop_shadows(scene, node, world, &shape, stats);
-            scene.fill(
-                Fill::NonZero,
+            encode_vector_layers(
+                scene,
+                node,
                 world,
-                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
-                None,
                 &shape,
+                overrides.get(&node.id).and_then(|raw| parse_hex_color(raw)),
+                vars,
+                stats,
             );
-            if node.stroke.width > 0.0 {
-                let aligned = node
-                    .stroke_layers
-                    .first()
-                    .and_then(|layer| crate::ir::aligned_rectangle_stroke_path(node, layer));
-                let brush = brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity);
-                if let Some(outline) = aligned {
-                    scene.fill(Fill::NonZero, world, &brush, None, &outline);
-                } else {
-                    scene.stroke(
-                        &vello::kurbo::Stroke::new(node.stroke.width),
-                        world,
-                        &brush,
-                        None,
-                        &shape,
-                    );
-                }
-                stats.paths += 1;
-            }
-            stats.paths += 1;
         }
         NodeKind::Ellipse => {
             let r = node.w.min(node.h) / 2.0;
-            let shape = Circle::new((r, r), r);
+            let shape = Circle::new((r, r), r).into_path(0.1);
             let t = world * Affine::scale_non_uniform(node.w / node.h, 1.0);
-            encode_drop_shadows(scene, node, t, &shape.into_path(0.1), stats);
-            scene.fill(
-                Fill::NonZero,
+            encode_drop_shadows(scene, node, t, &shape, stats);
+            encode_vector_layers(
+                scene,
+                node,
                 t,
-                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
-                None,
                 &shape,
+                overrides.get(&node.id).and_then(|raw| parse_hex_color(raw)),
+                vars,
+                stats,
             );
-            stats.paths += 1;
         }
         NodeKind::Line => {
-            let shape = Rect::new(
-                0.0,
-                0.0,
-                node.w.max(node.stroke.width),
-                node.stroke.width.max(1.0),
-            )
-            .into_path(0.1);
-            scene.fill(
-                Fill::NonZero,
+            // A line's box stores its true endpoint; use the shared centerline
+            // rather than an old horizontal filled-rect surrogate so profiles,
+            // dashes and asymmetric caps materialize exactly as they do in IR.
+            let mut shape = vello::kurbo::BezPath::new();
+            shape.move_to((0.0, 0.0));
+            shape.line_to((node.w, node.h));
+            encode_vector_layers(
+                scene,
+                node,
                 world,
-                &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
-                None,
                 &shape,
+                overrides.get(&node.id).and_then(|raw| parse_hex_color(raw)),
+                vars,
+                stats,
             );
-            stats.paths += 1;
         }
         NodeKind::Image {
             asset,
@@ -713,76 +704,46 @@ fn encode(
             }
         }
         NodeKind::Poly { sides } => {
-            // polygon primitive: the same box-local outline the Boolean ops and
-            // the export read, filled + stroked like any other shape
             let bez = path_to_bez(&x_core::booleans::poly_path_cmds(node.w, node.h, *sides));
             encode_drop_shadows(scene, node, world, &bez, stats);
-            scene.fill(
-                Fill::NonZero,
+            encode_vector_layers(
+                scene,
+                node,
                 world,
-                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
-                None,
                 &bez,
+                overrides.get(&node.id).and_then(|raw| parse_hex_color(raw)),
+                vars,
+                stats,
             );
-            if node.stroke.width > 0.0 {
-                scene.stroke(
-                    &vello::kurbo::Stroke::new(node.stroke.width),
-                    world,
-                    &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
-                    None,
-                    &bez,
-                );
-                stats.paths += 1;
-            }
-            stats.paths += 1;
         }
         NodeKind::Star { points, ratio } => {
             let cmds = x_core::booleans::star_path_cmds(node.w, node.h, *points, *ratio);
             let bez = path_to_bez(&cmds);
             encode_drop_shadows(scene, node, world, &bez, stats);
-            scene.fill(
-                Fill::NonZero,
+            encode_vector_layers(
+                scene,
+                node,
                 world,
-                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
-                None,
                 &bez,
+                overrides.get(&node.id).and_then(|raw| parse_hex_color(raw)),
+                vars,
+                stats,
             );
-            if node.stroke.width > 0.0 {
-                scene.stroke(
-                    &vello::kurbo::Stroke::new(node.stroke.width),
-                    world,
-                    &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
-                    None,
-                    &bez,
-                );
-                stats.paths += 1;
-            }
-            stats.paths += 1;
         }
         NodeKind::Arc { start, end, ratio } => {
-            // arc primitive: the shared wedge/ring outline, filled + stroked
             let bez = path_to_bez(&x_core::booleans::arc_path_cmds(
                 node.w, node.h, *start, *end, *ratio,
             ));
             encode_drop_shadows(scene, node, world, &bez, stats);
-            scene.fill(
-                Fill::NonZero,
+            encode_vector_layers(
+                scene,
+                node,
                 world,
-                &brush_with_alpha(effective_brush(node, overrides, vars), node.opacity),
-                None,
                 &bez,
+                overrides.get(&node.id).and_then(|raw| parse_hex_color(raw)),
+                vars,
+                stats,
             );
-            if node.stroke.width > 0.0 {
-                scene.stroke(
-                    &vello::kurbo::Stroke::new(node.stroke.width),
-                    world,
-                    &brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity),
-                    None,
-                    &bez,
-                );
-                stats.paths += 1;
-            }
-            stats.paths += 1;
         }
         NodeKind::Instance { component } => {
             if depth < MAX_INSTANCE_DEPTH {

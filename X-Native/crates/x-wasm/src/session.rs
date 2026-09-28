@@ -3,10 +3,10 @@
 
 use serde_json::{json, Value};
 use x_core::booleans::BoolOp;
-use x_core::{parse_hex_color, PathCmd, StrokeAlign, StrokeJoin};
+use x_core::{parse_hex_color, PathCmd, StrokeAlign, StrokeCap, StrokeJoin};
 use x_editor::{
-    DocumentSession, GeometryNodeDelta, NodeDelta, OffsetDelta, OffsetShapeDelta, SessionCommand,
-    SessionDelta,
+    DocumentSession, GeometryNodeDelta, NodeDelta, OffsetDelta, OffsetShapeDelta, OutlineDelta,
+    OutlineShapeDelta, OutlineStrokeStyle, SessionCommand, SessionDelta,
 };
 use x_format::{deserialize::load_x, serialize::save_x};
 
@@ -64,6 +64,88 @@ fn offset_value(change: OffsetDelta) -> Value {
     value
 }
 
+fn outline_path_value(path: Vec<PathCmd>) -> Value {
+    json!(path
+        .into_iter()
+        .map(|cmd| match cmd {
+            PathCmd::MoveTo(x, y) => json!(["M", x, y]),
+            PathCmd::LineTo(x, y) => json!(["L", x, y]),
+            PathCmd::CurveTo(a, b, c, d, x, y) => json!(["C", a, b, c, d, x, y]),
+            PathCmd::Close => json!(["Z"]),
+        })
+        .collect::<Vec<_>>())
+}
+
+fn outline_cap_name(cap: StrokeCap) -> &'static str {
+    match cap {
+        StrokeCap::None => "none",
+        StrokeCap::Round => "round",
+        StrokeCap::Square => "square",
+        StrokeCap::Arrow => "arrow",
+        StrokeCap::Triangle => "triangle",
+    }
+}
+
+fn outline_stroke_value(style: OutlineStrokeStyle) -> Value {
+    json!({
+        "width": style.width,
+        "color": style.color,
+        "align": match style.align {
+            StrokeAlign::Inside => "inside",
+            StrokeAlign::Center => "center",
+            StrokeAlign::Outside => "outside",
+        },
+        "capStart": outline_cap_name(style.cap_start),
+        "capEnd": outline_cap_name(style.cap_end),
+        "join": match style.join {
+            StrokeJoin::Miter => "miter",
+            StrokeJoin::Bevel => "bevel",
+            StrokeJoin::Round => "round",
+        },
+        "dash": style.dash,
+        "dashOffset": style.dash_offset,
+        "miterLimit": style.miter_limit,
+        "widthProfile": style.width_profile.into_iter().map(|point| json!({
+            "position": point.position,
+            "widthMultiplier": point.width_multiplier,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn outline_value(change: OutlineDelta) -> Value {
+    let mut value = node_value(change.node);
+    match change.shape {
+        OutlineShapeDelta::Rect { radius } => {
+            value["kind"] = json!("rect");
+            value["radius"] = json!(radius);
+        }
+        OutlineShapeDelta::Ellipse => value["kind"] = json!("ellipse"),
+        OutlineShapeDelta::Line => value["kind"] = json!("line"),
+        OutlineShapeDelta::Arc { start, end, ratio } => {
+            value["kind"] = json!("arc");
+            value["start"] = json!(start);
+            value["end"] = json!(end);
+            value["ratio"] = json!(ratio);
+        }
+        OutlineShapeDelta::Poly { sides } => {
+            value["kind"] = json!("poly");
+            value["count"] = json!(sides);
+        }
+        OutlineShapeDelta::Star { points, ratio } => {
+            value["kind"] = json!("star");
+            value["count"] = json!(points);
+            value["ratio"] = json!(ratio);
+        }
+        OutlineShapeDelta::Vector { path } => {
+            value["kind"] = json!("vector");
+            value["path"] = outline_path_value(path);
+        }
+    }
+    value["fill"] = json!(change.fill);
+    value["stroke"] = change.stroke.map(outline_stroke_value).unwrap_or(Value::Null);
+    value
+}
+
 fn offset_join(join: &str) -> Result<StrokeJoin, String> {
     match join {
         "miter" => Ok(StrokeJoin::Miter),
@@ -104,6 +186,9 @@ fn delta_json(delta: SessionDelta) -> String {
     }
     if let Some(offset) = delta.offset {
         value["offset"] = offset_value(offset);
+    }
+    if let Some(outline) = delta.outline {
+        value["outline"] = outline_value(outline);
     }
     value.to_string()
 }
@@ -221,6 +306,13 @@ impl CommandBridge {
         })
     }
 
+    /// Convert one admitted live stroke to an editable filled vector. Stroke
+    /// profile/dash/cap/join data is already persisted in Rust; the caller only
+    /// names the layer and receives a bounded reversible projection.
+    pub fn outline_stroke(&mut self, id: &str) -> Result<String, String> {
+        self.dispatch(SessionCommand::OutlineStroke { id })
+    }
+
     pub fn undo(&mut self) -> Result<String, String> {
         self.dispatch(SessionCommand::Undo)
     }
@@ -242,7 +334,10 @@ impl CommandBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use x_core::{Color, Document, Node};
+    use x_core::{
+        Color, Document, Node, PaintLayer, Stroke, StrokeCap, StrokeJoin, StrokeLayer,
+        StrokeOptions, VariableWidthPoint,
+    };
 
     fn fixture() -> String {
         save_x(&Document {
@@ -447,6 +542,72 @@ mod tests {
             serde_json::from_str(&bridge.offset_node("box", -100.0, "bevel").unwrap()).unwrap();
         assert_eq!(contracted["offset"]["path"], json!([]));
         assert!(bridge.undo().is_ok());
+    }
+
+    #[test]
+    fn outline_stroke_serializes_a_reversible_profiled_dash_cap_delta() {
+        let mut line = Node::line("ink", 10.0, 20.0, 72.0, 36.0, Color::from_rgb8(0x91, 0x42, 0xd4));
+        line.visual_stacks_materialized = true;
+        line.fill_layers = vec![PaintLayer::new(line.fill.clone())];
+        line.stroke = Stroke::solid(Color::from_rgb8(0x91, 0x42, 0xd4), 7.0);
+        line.stroke_layers = vec![StrokeLayer {
+            stroke: line.stroke.clone(),
+            opacity: 1.0,
+            visible: true,
+            blend: x_core::BlendKind::Normal,
+            options: StrokeOptions {
+                cap_start: StrokeCap::Round,
+                cap_end: StrokeCap::Triangle,
+                join: StrokeJoin::Round,
+                dash: vec![11.0, 4.0],
+                dash_offset: 8.0,
+                width_profile: vec![
+                    VariableWidthPoint { position: 0.0, width_multiplier: 0.5 },
+                    VariableWidthPoint { position: 0.4, width_multiplier: 1.75 },
+                    VariableWidthPoint { position: 1.0, width_multiplier: 0.75 },
+                ],
+                ..Default::default()
+            },
+        }];
+        let source = save_x(&Document {
+            pages: vec![Node::frame("page", 160.0, 90.0).child(line)],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&source).unwrap();
+
+        let applied_wire = bridge.outline_stroke("ink").unwrap();
+        assert!(applied_wire.len() < 100_000, "outline command returned a page");
+        let applied: Value = serde_json::from_str(&applied_wire).unwrap();
+        assert_eq!(applied["revision"], 1);
+        assert_eq!(applied["node"], Value::Null);
+        assert!(applied.get("stroke").is_none() && applied.get("offset").is_none());
+        assert_eq!(applied["outline"]["id"], "ink");
+        assert_eq!(applied["outline"]["kind"], "vector");
+        assert_eq!(applied["outline"]["fill"], "#9142d4");
+        assert_eq!(applied["outline"]["stroke"], Value::Null);
+        assert!(applied["outline"]["path"].as_array().unwrap().iter().any(|cmd| cmd == &json!(["Z"])));
+        assert!(matches!(
+            load_x(&bridge.export_x()).unwrap().pages[0].children[0].kind,
+            x_core::NodeKind::Vector { .. }
+        ));
+
+        let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+        assert_eq!(undone["revision"], 2);
+        assert_eq!(undone["outline"]["kind"], "line");
+        assert_eq!(undone["outline"]["fill"], Value::Null);
+        assert_eq!(undone["outline"]["stroke"]["width"], 7.0);
+        assert_eq!(undone["outline"]["stroke"]["capStart"], "round");
+        assert_eq!(undone["outline"]["stroke"]["capEnd"], "triangle");
+        assert_eq!(undone["outline"]["stroke"]["join"], "round");
+        assert_eq!(undone["outline"]["stroke"]["dash"], json!([11.0, 4.0]));
+        assert_eq!(undone["outline"]["stroke"]["dashOffset"], 8.0);
+        assert_eq!(undone["outline"]["stroke"]["widthProfile"].as_array().unwrap().len(), 3);
+        assert_eq!(bridge.export_x(), source, "undo restores the exact native source");
+
+        let redone: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();
+        assert_eq!(redone["revision"], 3);
+        assert_eq!(redone["outline"], applied["outline"]);
+        assert!(bridge.outline_stroke("missing").is_err());
     }
 
     #[test]
