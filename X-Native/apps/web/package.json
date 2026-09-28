@@ -1,36 +1,36 @@
 {
   "name": "x-native-web",
-  "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "X-Native \u2014 high-performance design workspace (React) over the document command API.",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 5173",
-    "test": "vite-node src/engine/__tests__/parity.test.mjs && vite-node src/engine/__tests__/variables.test.mjs && vite-node src/engine/__tests__/workflow.test.mjs && vite-node src/engine/__tests__/codegen.test.mjs && vite-node src/engine/__tests__/designapi.test.mjs && vite-node src/engine/__tests__/geobridge.test.mjs && vite-node src/engine/__tests__/guides.test.mjs && vite-node src/engine/__tests__/fills.test.mjs && vite-node src/engine/__tests__/strokes.test.mjs && vite-node src/engine/__tests__/effects.test.mjs && vite-node src/engine/__tests__/images.test.mjs && vite-node src/engine/__tests__/typography.test.mjs && vite-node src/engine/__tests__/glyphOutline.test.mjs && vite-node src/engine/__tests__/vector.test.mjs && vite-node src/engine/__tests__/simplify.test.mjs && vite-node src/engine/__tests__/layers.test.mjs && vite-node src/engine/__tests__/autolayout.test.mjs && vite-node src/engine/__tests__/baselineAlignment.test.mjs && vite-node src/engine/__tests__/inspector.test.mjs && vite-node src/engine/__tests__/toolbar.test.mjs && vite-node src/engine/__tests__/menu.test.mjs && vite-node src/engine/__tests__/proto.test.mjs && vite-node src/engine/__tests__/export24.test.mjs && vite-node src/engine/__tests__/history25.test.mjs && vite-node src/engine/__tests__/keyboard26.test.mjs && vite-node src/ui/__tests__/dialog.test.mjs && vite-node src/engine/__tests__/files.test.mjs && vite-node src/ui/__tests__/tooltip.test.mjs && vite-node src/ui/__tests__/vectorcard.test.mjs && vite-node src/ui/__tests__/vectorcard.dom.test.mjs && vite-node src/ui/__tests__/dock.dom.test.mjs && vite-node src/ui/__tests__/canvasChrome.test.mjs && vite-node src/ui/__tests__/canvasSelection.test.mjs && vite-node src/ui/__tests__/maskAlpha.test.mjs && vite-node src/ui/__tests__/maskReach.test.mjs && vite-node src/ui/__tests__/sections.test.mjs && vite-node src/ui/__tests__/smartSelection.test.mjs && vite-node src/ui/__tests__/arcHandles.test.mjs && vite-node src/ui/__tests__/batch2.dom.test.mjs && vite-node src/ui/__tests__/leftpanel.dom.test.mjs && vite-node src/ui/__tests__/firstRun.test.mjs && vite-node src/ui/__tests__/toolsagent.dom.test.mjs && vite-node src/ui/__tests__/edgefit.test.mjs && vite-node src/ui/__tests__/escape.test.mjs && vite-node src/ui/__tests__/trap.test.mjs && vite-node src/ui/__tests__/modalkeys.test.mjs && vite-node src/ui/__tests__/events.test.mjs && vite-node src/ui/__tests__/announce.test.mjs && vite-node src/ui/__tests__/drift.test.mjs && vite-node src/ui/__tests__/batch3.dom.test.mjs && vite-node src/ui/__tests__/baselineAlignment.dom.test.mjs && vite-node src/ui/__tests__/parityReaudit.dom.test.mjs && vite-node src/ui/__tests__/patternFill.test.mjs && vite-node src/engine/__tests__/networkFit.test.mjs && vite-node src/engine/__tests__/wasmBridge.test.mjs && vite-node src/engine/__tests__/rustSession.test.mjs && vite-node src/engine/__tests__/strokeBandOracle.test.mjs && vite-node src/engine/__tests__/offsetPathOracle.test.mjs && vite-node src/engine/__tests__/outlineStrokeOracle.test.mjs && vite-node src/engine/__tests__/webDocumentSession.test.mjs && vite-node src/ui/__tests__/rustDocumentView.dom.test.mjs && vite-node src/engine/__tests__/geoSafety.test.mjs && vite-node src/engine/__tests__/wasmText.test.mjs && vite-node src/engine/__tests__/wasmStroke.test.mjs && vite-node src/engine/__tests__/wasmEffects.test.mjs && vite-node src/engine/__tests__/wasmCoordinates.test.mjs && vite-node src/engine/__tests__/wasmAppearance.test.mjs && vite-node src/engine/__tests__/wasmSourceEffects.test.mjs && vite-node src/engine/__tests__/bridgeRuntimeAudit.test.mjs",
+    "test": "vite-node src/engine/__tests__/parity.test.mjs && vite-node src/engine/__tests__/variables.test.mjs && vite-node src/engine/__tests__/workflow.test.mjs && vite-node src/engine/__tests__/codegen.test.mjs && vite-node src/engine/__tests__/designapi.test.mjs && vite-node src/engine/__tests__/geobridge.test.mjs && vite-node src/engine/__tests__/guides.test.mjs && vite-node src/engine/__tests__/fills.test.mjs && vite-node src/engine/__tests__/strokes.test.mjs && vite-node src/engine/__tests__/effects.test.mjs && vite-node src/engine/__tests__/images.test.mjs && vite-node src/engine/__tests__/typography.test.mjs && vite-node src/engine/__tests__/glyphOutline.test.mjs && vite-node src/engine/__tests__/textOutlining.test.mjs && vite-node src/engine/__tests__/vector.test.mjs && vite-node src/engine/__tests__/simplify.test.mjs && vite-node src/engine/__tests__/layers.test.mjs && vite-node src/engine/__tests__/autolayout.test.mjs && vite-node src/engine/__tests__/baselineAlignment.test.mjs && vite-node src/engine/__tests__/inspector.test.mjs && vite-node src/engine/__tests__/toolbar.test.mjs && vite-node src/engine/__tests__/menu.test.mjs && vite-node src/engine/__tests__/proto.test.mjs && vite-node src/engine/__tests__/export24.test.mjs && vite-node src/engine/__tests__/history25.test.mjs && vite-node src/engine/__tests__/keyboard26.test.mjs && vite-node src/ui/__tests__/dialog.test.mjs && vite-node src/engine/__tests__/files.test.mjs && vite-node src/ui/__tests__/tooltip.test.mjs && vite-node src/ui/__tests__/vectorcard.test.mjs && vite-node src/ui/__tests__/vectorcard.dom.test.mjs && vite-node src/ui/__tests__/dock.dom.test.mjs && vite-node src/ui/__tests__/canvasChrome.test.mjs && vite-node src/ui/__tests__/canvasSelection.test.mjs && vite-node src/ui/__tests__/maskAlpha.test.mjs && vite-node src/ui/__tests__/maskReach.test.mjs && vite-node src/ui/__tests__/sections.test.mjs && vite-node src/ui/__tests__/smartSelection.test.mjs && vite-node src/ui/__tests__/arcHandles.test.mjs && vite-node src/ui/__tests__/batch2.dom.test.mjs && vite-node src/ui/__tests__/leftpanel.dom.test.mjs && vite-node src/ui/__tests__/firstRun.test.mjs && vite-node src/ui/__tests__/toolsagent.dom.test.mjs && vite-node src/ui/__tests__/edgefit.test.mjs && vite-node src/ui/__tests__/escape.test.mjs && vite-node src/ui/__tests__/trap.test.mjs && vite-node src/ui/__tests__/modalkeys.test.mjs && vite-node src/ui/__tests__/events.test.mjs && vite-node src/ui/__tests__/announce.test.mjs && vite-node src/ui/__tests__/drift.test.mjs && vite-node src/ui/__tests__/batch3.dom.test.mjs && vite-node src/ui/__tests__/baselineAlignment.dom.test.mjs && vite-node src/ui/__tests__/parityReaudit.dom.test.mjs && vite-node src/ui/__tests__/patternFill.test.mjs && vite-node src/engine/__tests__/networkFit.test.mjs && vite-node src/engine/__tests__/wasmBridge.test.mjs && vite-node src/engine/__tests__/rustSession.test.mjs && vite-node src/engine/__tests__/strokeBandOracle.test.mjs && vite-node src/engine/__tests__/offsetPathOracle.test.mjs && vite-node src/engine/__tests__/outlineStrokeOracle.test.mjs && vite-node src/engine/__tests__/webDocumentSession.test.mjs && vite-node src/ui/__tests__/rustDocumentView.dom.test.mjs && vite-node src/engine/__tests__/geoSafety.test.mjs && vite-node src/engine/__tests__/wasmText.test.mjs && vite-node src/engine/__tests__/wasmStroke.test.mjs && vite-node src/engine/__tests__/wasmEffects.test.mjs && vite-node src/engine/__tests__/wasmCoordinates.test.mjs && vite-node src/engine/__tests__/wasmAppearance.test.mjs && vite-node src/engine/__tests__/wasmSourceEffects.test.mjs && vite-node src/engine/__tests__/bridgeRuntimeAudit.test.mjs && vite-node src/engine/__tests__/layerEngineSprint2.test.mjs",
     "bench": "vite-node src/engine/__tests__/benchmark.mjs",
     "bench:fps": "node tests/benchmarks/fps.mjs",
     "record:geofixtures": "vite-node src/engine/__tests__/recordGeobridgeFixtures.mjs",
     "bench:wasm": "vite-node tests/benchmarks/wasm.mjs",
     "bench:profile": "node tests/benchmarks/profile.mjs",
     "test:e2e": "node e2e/behaviour.mjs",
-    "build:wasm": "bash ../../scripts/build-wasm.sh",
     "test:wasm": "vite-node tests/wasm/real-bridges.mjs"
   },
   "dependencies": {
-    "fzstd": "^0.1.1",
+    "@types/canvas-confetti": "^1.9.0",
+    "canvas-confetti": "^1.9.4",
+    "lucide-react": "^0.475.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^22.13.14",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
-    "jsdom": "^30.1.1",
-    "puppeteer-core": "^25.11.0",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.11",
-    "vite-node": "^2.1.8"
+    "happy-dom": "^17.4.8",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "vite-node": "^3.0.7"
   }
 }

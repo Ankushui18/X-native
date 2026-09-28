@@ -601,11 +601,105 @@ export const SPACING_MODES: { id: Spacing; label: string; hint: string }[] = [
  * `childBaseline`/`baselineRow` so the row, the hug and the wrap cannot drift
  * apart.
  */
-export const TEXT_BASELINE_RATIO = 0.8;
+/**
+ * Known font ascent and descent ratios relative to units_per_em (from hhea / typo OS/2 tables).
+ * Inter is 1984 / 2048 = 0.96875 ascent, 494 / 2048 = 0.2412109375 descent.
+ */
+export const FONT_METRIC_RATIOS: Record<string, { ascent: number; descent: number }> = {
+  inter: { ascent: 0.96875, descent: 0.2412109375 },
+  roboto: { ascent: 0.927734375, descent: 0.244140625 },
+  "helvetica neue": { ascent: 0.952, descent: 0.213 },
+  helvetica: { ascent: 0.952, descent: 0.213 },
+  arial: { ascent: 0.9052734375, descent: 0.2119140625 },
+  "system-ui": { ascent: 0.96875, descent: 0.2412109375 },
+  default: { ascent: 0.96875, descent: 0.2412109375 },
+};
+
+/**
+ * Standard font ascent ratio (0.96875) matching Inter's hhea ascent table.
+ * Replaces the legacy 0.8 approximation with true font metrics parity.
+ */
+export const TEXT_BASELINE_RATIO = 0.96875;
+
+export interface ResolvedFontMetrics {
+  ascent: number;
+  descent: number;
+  ascentRatio: number;
+  descentRatio: number;
+  actualAscent?: number;
+  actualDescent?: number;
+}
+
+let _metricsCanvas: HTMLCanvasElement | null = null;
+let _metricsCtx: CanvasRenderingContext2D | null = null;
+
+/**
+ * Resolves real font metrics for a given font family, size, and weight.
+ * Uses browser Canvas TextMetrics.fontBoundingBoxAscent when running in DOM,
+ * and falls back to precise OpenType table ratios (0.96875 for Inter) in offline/SSR.
+ */
+export function resolveFontMetrics(
+  fontFamily = "Inter",
+  fontSize = 14,
+  fontWeight: number | string = 400
+): ResolvedFontMetrics {
+  const size = fontSize > 0 ? fontSize : 14;
+  const famKey = (fontFamily || "default").trim().toLowerCase();
+  const fallback = FONT_METRIC_RATIOS[famKey] || FONT_METRIC_RATIOS.default;
+
+  if (typeof document !== "undefined") {
+    try {
+      if (!_metricsCanvas) {
+        _metricsCanvas = document.createElement("canvas");
+        _metricsCtx = _metricsCanvas.getContext("2d");
+      }
+      if (_metricsCtx) {
+        _metricsCtx.font = `${fontWeight} ${size}px "${fontFamily}", Inter, sans-serif`;
+        const m = _metricsCtx.measureText("Hgy");
+        if (typeof m.fontBoundingBoxAscent === "number" && m.fontBoundingBoxAscent > 0) {
+          const ascent = m.fontBoundingBoxAscent;
+          const descent =
+            typeof m.fontBoundingBoxDescent === "number" && m.fontBoundingBoxDescent > 0
+              ? m.fontBoundingBoxDescent
+              : size * fallback.descent;
+          return {
+            ascent,
+            descent,
+            ascentRatio: ascent / size,
+            descentRatio: descent / size,
+            actualAscent: m.actualBoundingBoxAscent,
+            actualDescent: m.actualBoundingBoxDescent,
+          };
+        }
+      }
+    } catch {
+      // Fall through to offline/SSR ratio table
+    }
+  }
+
+  return {
+    ascent: size * fallback.ascent,
+    descent: size * fallback.descent,
+    ascentRatio: fallback.ascent,
+    descentRatio: fallback.descent,
+  };
+}
 
 /** The baseline of one child, measured from the top of its own box. */
-export function childBaseline(child: Pick<XNode, "kind" | "fontSize" | "h">): number {
-  if (child.kind === "text") return (child.fontSize || 14) * TEXT_BASELINE_RATIO;
+export function childBaseline(
+  child: Pick<XNode, "kind" | "fontSize" | "h"> & {
+    baseline?: number;
+    fontFamily?: string;
+    fontWeight?: number;
+  }
+): number {
+  if (child.kind === "text") {
+    if (typeof child.baseline === "number" && child.baseline > 0) {
+      return child.baseline;
+    }
+    const metrics = resolveFontMetrics(child.fontFamily, child.fontSize, child.fontWeight);
+    return metrics.ascent;
+  }
   // A layer without text has no baseline of its own; flexbox synthesises one
   // from the bottom edge, which is what Figma's icon-on-the-line example shows.
   return child.h;

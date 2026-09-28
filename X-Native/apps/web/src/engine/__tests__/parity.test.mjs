@@ -35,8 +35,6 @@ import {
 } from "../geometry.ts";
 import { MemoryEngine, defaultEffect, find, findParent, hitTest, insideInstance, node, previewBoolean, worldPos } from "../memory.ts";
 import { paintDropShadows, paintExtraStrokes } from "../paint.ts";
-import { evalField } from "../../ui/fieldExpr.ts";
-import { sameIds } from "../../ui/selectSame.ts";
 import {
   SPACING_MODES,
   alignKey,
@@ -66,7 +64,7 @@ import {
   wraps,
 } from "../layout.ts";
 import { ASSET_PREFIX, assetCount, dehydrateDoc, hydrateDoc, putAsset, resetAssets } from "../assets.ts";
-import { evalField, hasExpression } from "../../ui/fieldExpr.ts";
+import { hasExpression, evalField } from "../../ui/fieldExpr.ts";
 import { rotateAboutOrigin, scaleBoxAround, scaleMembers, sizeKeepingRatio, unionBox } from "../../ui/scaleModel.ts";
 import { layersAt, matchingIds, pathIndex, sameIds } from "../../ui/selectSame.ts";
 import {
@@ -516,11 +514,11 @@ console.log("component instance overrides:");
   const t1 = row.children.find((c) => c.id === t1Id);
   const t2 = row.children.find((c) => c.id === t2Id);
 
-  // maxBaseline = 40 * 0.8 = 32.
-  // t1 baseline = 32 -> y = 32 - 32 = 0.
-  // t2 baseline = 20 * 0.8 = 16 -> y = 32 - 16 = 16.
+  // maxBaseline = 40 * 0.96875 = 38.75.
+  // t1 baseline = 38.75 -> y = 38.75 - 38.75 = 0.
+  // t2 baseline = 20 * 0.96875 = 19.375 -> y = 38.75 - 19.375 = 19.375.
   t("t1 baseline aligned at top (y=0)", Math.round(t1.y) === 0);
-  t("t2 baseline shifted down to match t1 baseline (y=16)", Math.round(t2.y) === 16);
+  t("t2 baseline shifted down to match t1 baseline (y=19)", Math.round(t2.y) === 19);
 }
 
 {

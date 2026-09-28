@@ -319,6 +319,12 @@ fn outline_probe() {
         ("round", StrokeJoin::Round),
     ] {
         run(
+            &format!("acute5-{tag}"),
+            &poly(&acute(5.0), false),
+            20.0,
+            &opts(join, StrokeCap::None),
+        );
+        run(
             &format!("acute10-{tag}"),
             &poly(&acute(10.0), false),
             20.0,
@@ -341,8 +347,20 @@ fn outline_probe() {
             ..opts(join, StrokeCap::None)
         };
         run(
+            &format!("acute5-vw-{tag}"),
+            &poly(&acute(5.0), false),
+            20.0,
+            &vw,
+        );
+        run(
             &format!("acute10-vw-{tag}"),
             &poly(&acute(10.0), false),
+            20.0,
+            &vw,
+        );
+        run(
+            &format!("acute30-vw-{tag}"),
+            &poly(&acute(30.0), false),
             20.0,
             &vw,
         );
@@ -353,6 +371,47 @@ fn outline_probe() {
         &poly(&square, true),
         20.0,
         &opts(StrokeJoin::Miter, StrokeCap::None),
+    );
+    let miter_below_30 = StrokeOptions {
+        miter_limit: 3.85,
+        ..opts(StrokeJoin::Miter, StrokeCap::None)
+    };
+    run(
+        "miter-boundary-below-30",
+        &poly(&acute(30.0), false),
+        20.0,
+        &miter_below_30,
+    );
+    let miter_above_30 = StrokeOptions {
+        miter_limit: 3.88,
+        ..opts(StrokeJoin::Miter, StrokeCap::None)
+    };
+    run(
+        "miter-boundary-above-30",
+        &poly(&acute(30.0), false),
+        20.0,
+        &miter_above_30,
+    );
+    let right_angle = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)];
+    let miter_below_90 = StrokeOptions {
+        miter_limit: 1.41,
+        ..opts(StrokeJoin::Miter, StrokeCap::None)
+    };
+    run(
+        "miter-boundary-below-90",
+        &poly(&right_angle, false),
+        20.0,
+        &miter_below_90,
+    );
+    let miter_above_90 = StrokeOptions {
+        miter_limit: 1.42,
+        ..opts(StrokeJoin::Miter, StrokeCap::None)
+    };
+    run(
+        "miter-boundary-above-90",
+        &poly(&right_angle, false),
+        20.0,
+        &miter_above_90,
     );
     let dashed = StrokeOptions {
         dash: vec![30.0, 10.0],
@@ -374,6 +433,36 @@ fn outline_probe() {
         20.0,
         &dashed_vw,
     );
+    let dash_corner_miter = StrokeOptions {
+        dash: vec![60.0, 30.0],
+        ..opts(StrokeJoin::Miter, StrokeCap::Round)
+    };
+    run(
+        "acute30-dash-corner-miter",
+        &poly(&acute(30.0), false),
+        20.0,
+        &dash_corner_miter,
+    );
+    let dash_corner_round = StrokeOptions {
+        dash: vec![60.0, 30.0],
+        ..opts(StrokeJoin::Round, StrokeCap::Round)
+    };
+    run(
+        "acute30-dash-corner-round",
+        &poly(&acute(30.0), false),
+        20.0,
+        &dash_corner_round,
+    );
+    let closed_dash = StrokeOptions {
+        dash: vec![120.0, 40.0],
+        ..opts(StrokeJoin::Miter, StrokeCap::None)
+    };
+    run(
+        "closed-square-dash-seam",
+        &poly(&square, true),
+        20.0,
+        &closed_dash,
+    );
     let curve = [
         PathCmd::MoveTo(0.0, 0.0),
         PathCmd::CurveTo(0.0, 200.0, 300.0, -200.0, 300.0, 0.0),
@@ -384,6 +473,16 @@ fn outline_probe() {
         16.0,
         &opts(StrokeJoin::Round, StrokeCap::Round),
     );
+    let curve_vw_round = StrokeOptions {
+        width_profile: bulge(),
+        ..opts(StrokeJoin::Round, StrokeCap::Round)
+    };
+    run("s-curve-vw-round", &curve, 16.0, &curve_vw_round);
+    let curve_vw_miter = StrokeOptions {
+        width_profile: bulge(),
+        ..opts(StrokeJoin::Miter, StrokeCap::Round)
+    };
+    run("s-curve-vw-miter", &curve, 16.0, &curve_vw_miter);
     let h = poly(&hand(1000), false);
     run(
         "hand1000-round",
