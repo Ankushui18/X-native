@@ -1010,4 +1010,3 @@ assert.ok(audit.decisions["geometry.union"]?.attempts >= 1);
 assert.ok(audit.decisions["session.open"]?.rust >= 1);
 console.log("PASS real WASM audit: bindgen import, Rust resize/Boolean session, x-geo Boolean and guarded decisions observed at production call sites");
 __enableBridgeAuditForTests(false);
-enableBridgeAuditForTests(false);
