@@ -1309,7 +1309,10 @@ export function Canvas({
     }
     const root = page.root;
     const z = snap.zoom;
-    const paint = (n: XNode, px: number, py: number) => {
+    // `maskTile` marks the pass that paints a mask into its own offscreen tile,
+    // where only the mask's alpha matters: the green mask outline belongs on the
+    // canvas, not in the mask (it would widen the clip by its stroke width).
+    const paint = (n: XNode, px: number, py: number, maskTile = false) => {
       if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
@@ -1427,18 +1430,7 @@ export function Canvas({
         }
         // No hit and unrasterizable: fall through to the live paint below.
       }
-      const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
-      const round = () => {
-        ctx.beginPath();
-        // A smoothed corner is not a roundRect: it goes through the same outline
-        // the hit test and the SVG export use, so the three cannot drift apart.
-        if (hasCornerSmoothing(n)) {
-          tracePath(ctx, shapePoly(n), sx, sy, z, true);
-          return;
-        }
-        if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, rr);
-        else ctx.rect(sx, sy, sw, sh);
-      };
+      const round = () => roundRectPath(ctx, n, sx, sy, sw, sh, z);
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
         // Every visible drop gets its own pass over the union; the stroke
         // paints shadowless afterwards, like a text stroke.
@@ -1482,71 +1474,11 @@ export function Canvas({
         ctx.restore();
         return;
       }
-      // Named so extra stroke layers can re-trace the same outline; a stroke
-      // pass changes lineWidth and may clip, so the path has to be rebuilt.
-      const traceShape = () => {
-        if (n.kind === "text") {
-          ctx.beginPath();
-        } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
-          if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
-            traceVectorNetwork(ctx, n.vectorNetwork, snap.panX + x * z, snap.panY + y * z, z);
-          } else {
-            tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
-          }
-        } else if (n.kind === "ellipse") {
-          ctx.beginPath();
-          if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
-            const sa = n.arcData.startingAngle ?? 0;
-            const ea = n.arcData.endingAngle ?? Math.PI * 2;
-            const ir = Math.max(0, Math.min(0.99, n.arcData.innerRadius ?? 0));
-            const cx = sx + sw / 2;
-            const cy = sy + sh / 2;
-            const rx = Math.abs(sw / 2);
-            const ry = Math.abs(sh / 2);
-            if (ir > 0.001) {
-              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
-              ctx.lineTo(cx + Math.cos(ea) * rx * ir, cy + Math.sin(ea) * ry * ir);
-              ctx.ellipse(cx, cy, rx * ir, ry * ir, 0, ea, sa, true);
-              ctx.closePath();
-            } else if (Math.abs(ea - sa) < Math.PI * 2 - 0.001) {
-              ctx.moveTo(cx, cy);
-              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
-              ctx.closePath();
-            } else {
-              ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-            }
-          } else {
-            ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
-          }
-        } else if (n.kind === "line" || n.kind === "arrow") {
-          ctx.beginPath();
-          ctx.moveTo(sx, sy + sh / 2);
-          ctx.lineTo(sx + sw, sy + sh / 2);
-        } else if (n.kind === "star") {
-          starPath(
-            ctx,
-            sx + sw / 2,
-            sy + sh / 2,
-            Math.abs(sw / 2),
-            Math.abs(sh / 2),
-            n.count || 5,
-            n.starRatio || 0.4,
-            n.cornerRadii[0] || 0,
-          );
-        } else if (n.kind === "poly") {
-          polyPath(
-            ctx,
-            sx + sw / 2,
-            sy + sh / 2,
-            Math.abs(sw / 2),
-            Math.abs(sh / 2),
-            n.count || 3,
-            n.cornerRadii[0] || 0,
-          );
-        } else {
-          round();
-        }
-      };
+      // The module-level tracer, named so the extra-stroke layers can re-trace
+      // the same outline (a stroke pass changes lineWidth and may clip, so the
+      // path has to be rebuilt) and so the mask-outline overlay traces what the
+      // layer actually paints instead of a second, drifting copy of this shape.
+      const traceShape = () => traceNodeShape(ctx, n, sx, sy, sw, sh, z);
       traceShape();
       if (snap.outlineMode) {
         ctx.save();
@@ -2007,11 +1939,11 @@ export function Canvas({
           return t;
         };
         const prev = ctx;
-        const into = (t: CanvasRenderingContext2D | null, c: XNode) => {
+        const into = (t: CanvasRenderingContext2D | null, c: XNode, maskTile = false) => {
           if (!t) return false;
           ctx = t;
           try {
-            paint(c, x, y);
+            paint(c, x, y, maskTile);
           } finally {
             ctx = prev;
           }
@@ -2021,7 +1953,7 @@ export function Canvas({
         // against a transparent tile is meaningless, and the mask's job is
         // only to supply alpha (or luminance).
         const mt = tile();
-        if (!into(mt, { ...mask, blendMode: "normal" })) return false;
+        if (!into(mt, { ...mask, blendMode: "normal" }, true)) return false;
         const mc = mt!.canvas;
         const type = mask.maskType || "alpha";
         if (type !== "alpha") {
@@ -2042,7 +1974,13 @@ export function Canvas({
           if (!into(kt, k)) return false;
           kt!.save();
           kt!.globalCompositeOperation = "destination-in";
-          kt!.drawImage(mc, 0, 0);
+          // The mask raster covers exactly the run box, so it goes back at the
+          // box's origin and size - the same rect the punched tile is blitted
+          // with below. Drawing it at (0, 0) at natural size instead put the
+          // mask's alpha wherever the run's padding happened to land (6 device
+          // px down-right for a 100px box), so the soft edge of a gradient mask
+          // sampled the neighbouring pixel and the mask bled past its own box.
+          kt!.drawImage(mc, ox, oy, ow, oh);
           kt!.restore();
           ctx.drawImage(kt!.canvas, ox, oy, ow, oh);
         }
@@ -2079,14 +2017,44 @@ export function Canvas({
         ctx.restore();
         ctx.clip();
       };
+      // View > Mask outlines, dashed out of the mask tile: "Once the setting
+      // on, masks in your file are outlined in green. Note: If all layers being
+      // masked are hidden or have zero percent opacity, then the object's mask
+      // outlines won't appear." A mask whose run has no visible, non-zero-alpha
+      // kid therefore draws nothing, and the line is traced from the same shape
+      // tracer the layer paints with, so it follows any kind of mask layer.
+      const strokeMaskOutline = (mask: XNode, kids: XNode[]) => {
+        if (maskTile || !snap.showMaskOutlines || !mask.visible) return;
+        if (!kids.some((k) => k.visible && (k.opacity ?? 1) > 0)) return;
+        const mx = snap.panX + (x + mask.x) * z;
+        const my = snap.panY + (y + mask.y) * z;
+        ctx.save();
+        if (mask.rotation || mask.flipH || mask.flipV) {
+          const mcx = mx + (mask.w * z) / 2;
+          const mcy = my + (mask.h * z) / 2;
+          ctx.translate(mcx, mcy);
+          if (mask.rotation) ctx.rotate((mask.rotation * Math.PI) / 180);
+          if (mask.flipH || mask.flipV) ctx.scale(mask.flipH ? -1 : 1, mask.flipV ? -1 : 1);
+          ctx.translate(-mcx, -mcy);
+        }
+        ctx.strokeStyle = MASK;
+        ctx.lineWidth = Math.max(1, z);
+        ctx.setLineDash([]);
+        traceNodeShape(ctx, mask, mx, my, mask.w * z, mask.h * z, z);
+        ctx.stroke();
+        ctx.restore();
+      };
       const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
       for (const run of partitionMaskRuns(renderChildren)) {
         if (!run.mask) {
           for (const k of run.kids) paint(k, x, y);
-        } else if (!paintMaskedRun(run.mask, run.kids)) {
-          paintGeometricMask(run.mask);
-          for (const k of run.kids) paint(k, x, y);
-          ctx.restore();
+        } else {
+          if (!paintMaskedRun(run.mask, run.kids)) {
+            paintGeometricMask(run.mask);
+            for (const k of run.kids) paint(k, x, y);
+            ctx.restore();
+          }
+          strokeMaskOutline(run.mask, run.kids);
         }
       }
       // Noise and texture sit on top of everything the layer paints -
@@ -2117,7 +2085,7 @@ export function Canvas({
         }
         ctx.restore();
       }
-      if (snap.showMaskOutlines && n.isMask && n.visible) {
+      if (!maskTile && snap.showMaskOutlines && n.isMask && n.visible) {
         ctx.save();
         ctx.strokeStyle = MASK;
         ctx.lineWidth = Math.max(1, z);
@@ -7311,6 +7279,9 @@ export function Canvas({
                 outline: nodes.some(
                   (n) => n.kind === "text" || n.kind === "line" || n.kind === "arrow" || n.strokeWidth > 0,
                 ),
+                // "Remove mask" instead of "Use as mask" once the layer is one
+                // (Figma's Masks article names that row for the right-click menu).
+                mask: !!nodes[0]?.isMask,
               };
             })(),
           )}
@@ -7593,6 +7564,110 @@ function polyPath(
     }
   }
   ctx.closePath();
+}
+
+/**
+ * The rounded-rect outline a node paints, as a path. Smoothed corners are not
+ * a roundRect: they go through the same polygon the hit test and the SVG export
+ * use, so the three cannot drift apart. Module scope so the mask-outline
+ * overlay can trace the same shape the layer paints.
+ */
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  z: number,
+) {
+  ctx.beginPath();
+  if (hasCornerSmoothing(n)) {
+    tracePath(ctx, shapePoly(n), sx, sy, z, true);
+    return;
+  }
+  const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
+  if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, rr);
+  else ctx.rect(sx, sy, sw, sh);
+}
+
+/**
+ * One shape tracer for a node, in device space. The layer paint uses it for
+ * every fill, stroke and effect pass, and the mask-outline overlay (View >
+ * Mask outlines) uses it to stroke a mask: Figma's Masks article says "Once the
+ * setting on, masks in your file are outlined in green", so the green line has
+ * to follow exactly what the mask paints, whatever kind of layer it is.
+ */
+function traceNodeShape(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  z: number,
+) {
+  if (n.kind === "text") {
+    ctx.beginPath();
+  } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
+    if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+      traceVectorNetwork(ctx, n.vectorNetwork, sx, sy, z);
+    } else {
+      tracePath(ctx, n.path, sx, sy, z, n.closed);
+    }
+  } else if (n.kind === "ellipse") {
+    ctx.beginPath();
+    if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
+      const sa = n.arcData.startingAngle ?? 0;
+      const ea = n.arcData.endingAngle ?? Math.PI * 2;
+      const ir = Math.max(0, Math.min(0.99, n.arcData.innerRadius ?? 0));
+      const cx = sx + sw / 2;
+      const cy = sy + sh / 2;
+      const rx = Math.abs(sw / 2);
+      const ry = Math.abs(sh / 2);
+      if (ir > 0.001) {
+        ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+        ctx.lineTo(cx + Math.cos(ea) * rx * ir, cy + Math.sin(ea) * ry * ir);
+        ctx.ellipse(cx, cy, rx * ir, ry * ir, 0, ea, sa, true);
+        ctx.closePath();
+      } else if (Math.abs(ea - sa) < Math.PI * 2 - 0.001) {
+        ctx.moveTo(cx, cy);
+        ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+        ctx.closePath();
+      } else {
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      }
+    } else {
+      ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+    }
+  } else if (n.kind === "line" || n.kind === "arrow") {
+    ctx.beginPath();
+    ctx.moveTo(sx, sy + sh / 2);
+    ctx.lineTo(sx + sw, sy + sh / 2);
+  } else if (n.kind === "star") {
+    starPath(
+      ctx,
+      sx + sw / 2,
+      sy + sh / 2,
+      Math.abs(sw / 2),
+      Math.abs(sh / 2),
+      n.count || 5,
+      n.starRatio || 0.4,
+      n.cornerRadii[0] || 0,
+    );
+  } else if (n.kind === "poly") {
+    polyPath(
+      ctx,
+      sx + sw / 2,
+      sy + sh / 2,
+      Math.abs(sw / 2),
+      Math.abs(sh / 2),
+      n.count || 3,
+      n.cornerRadii[0] || 0,
+    );
+  } else {
+    roundRectPath(ctx, n, sx, sy, sw, sh, z);
+  }
 }
 
 function tracePath(
