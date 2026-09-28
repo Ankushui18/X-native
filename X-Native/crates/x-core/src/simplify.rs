@@ -153,11 +153,18 @@ mod tests {
     fn large_inputs_do_not_overflow() {
         for n in [8_000, 20_000, 100_000] {
             let z = zigzag(n);
-            assert_eq!(simplify_points(&z, 1.0).len(), n, "zigzag {n} keeps every tooth");
+            assert_eq!(
+                simplify_points(&z, 1.0).len(),
+                n,
+                "zigzag {n} keeps every tooth"
+            );
             let h = hand(n);
             let keep = simplify_keep(&h, 1.5);
             assert!(max_deviation(&h, &keep) <= 1.5 + 1e-9);
-            assert!(keep.iter().filter(|k| **k).count() < n / 4, "hand {n} reduces");
+            assert!(
+                keep.iter().filter(|k| **k).count() < n / 4,
+                "hand {n} reduces"
+            );
         }
     }
 
@@ -168,6 +175,9 @@ mod tests {
         // A closed chain whose endpoints coincide measures point distance.
         let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)];
         assert_eq!(simplify_points(&ring, 1.0), ring);
-        assert_eq!(simplify_points(&[(0.0, 0.0), (1.0, 0.1), (2.0, 0.0)], 0.0).len(), 3);
+        assert_eq!(
+            simplify_points(&[(0.0, 0.0), (1.0, 0.1), (2.0, 0.0)], 0.0).len(),
+            3
+        );
     }
 }

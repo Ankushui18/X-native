@@ -138,7 +138,10 @@ fn centerline(path: &[PathCmd]) -> Vec<Pt> {
                     let t = f64::from(k) / 64.0;
                     let m = 1.0 - t;
                     let f = |p0: f64, p1: f64, p2: f64, p3: f64| {
-                        m * m * m * p0 + 3.0 * m * m * t * p1 + 3.0 * m * t * t * p2 + t * t * t * p3
+                        m * m * m * p0
+                            + 3.0 * m * m * t * p1
+                            + 3.0 * m * t * t * p2
+                            + t * t * t * p3
                     };
                     out.push((f(from.0, ax, bx, x), f(from.1, ay, by, y)));
                 }
@@ -146,7 +149,10 @@ fn centerline(path: &[PathCmd]) -> Vec<Pt> {
             PathCmd::Close => {
                 for k in 1..=64 {
                     let t = f64::from(k) / 64.0;
-                    out.push((from.0 + (start.0 - from.0) * t, from.1 + (start.1 - from.1) * t));
+                    out.push((
+                        from.0 + (start.0 - from.0) * t,
+                        from.1 + (start.1 - from.1) * t,
+                    ));
                 }
             }
         }
@@ -185,7 +191,10 @@ fn coverage(path: &[PathCmd], rings: &[Vec<Pt>], width: f64, opts: &StrokeOption
         }
         let half = 0.5 * width * sample_width_profile(&opts.width_profile, s / total);
         let (nx, ny) = (-dy / len * half * 0.6, dx / len * half * 0.6);
-        for p in [(line[i].0 + nx, line[i].1 + ny), (line[i].0 - nx, line[i].1 - ny)] {
+        for p in [
+            (line[i].0 + nx, line[i].1 + ny),
+            (line[i].0 - nx, line[i].1 - ny),
+        ] {
             n += 1;
             if winding(rings, p) != 0 {
                 hit += 1;
@@ -202,7 +211,13 @@ fn poly(pts: &[Pt], closed: bool) -> Vec<PathCmd> {
     let mut out: Vec<PathCmd> = pts
         .iter()
         .enumerate()
-        .map(|(i, &(x, y))| if i == 0 { PathCmd::MoveTo(x, y) } else { PathCmd::LineTo(x, y) })
+        .map(|(i, &(x, y))| {
+            if i == 0 {
+                PathCmd::MoveTo(x, y)
+            } else {
+                PathCmd::LineTo(x, y)
+            }
+        })
         .collect();
     if closed {
         out.push(PathCmd::Close);
@@ -224,7 +239,11 @@ fn hand(n: usize) -> Vec<Pt> {
 
 fn acute(deg: f64) -> Vec<Pt> {
     let r = deg.to_radians();
-    vec![(0.0, 0.0), (200.0, 0.0), (200.0 - 197.0 * r.cos(), 197.0 * r.sin())]
+    vec![
+        (0.0, 0.0),
+        (200.0, 0.0),
+        (200.0 - 197.0 * r.cos(), 197.0 * r.sin()),
+    ]
 }
 
 fn star() -> Vec<Pt> {
@@ -239,14 +258,28 @@ fn star() -> Vec<Pt> {
 
 fn bulge() -> Vec<VariableWidthPoint> {
     vec![
-        VariableWidthPoint { position: 0.0, width_multiplier: 0.2 },
-        VariableWidthPoint { position: 0.5, width_multiplier: 3.0 },
-        VariableWidthPoint { position: 1.0, width_multiplier: 0.2 },
+        VariableWidthPoint {
+            position: 0.0,
+            width_multiplier: 0.2,
+        },
+        VariableWidthPoint {
+            position: 0.5,
+            width_multiplier: 3.0,
+        },
+        VariableWidthPoint {
+            position: 1.0,
+            width_multiplier: 0.2,
+        },
     ]
 }
 
 fn opts(join: StrokeJoin, cap: StrokeCap) -> StrokeOptions {
-    StrokeOptions { join, cap_start: cap, cap_end: cap, ..StrokeOptions::default() }
+    StrokeOptions {
+        join,
+        cap_start: cap,
+        cap_end: cap,
+        ..StrokeOptions::default()
+    }
 }
 
 fn run(name: &str, path: &[PathCmd], width: f64, o: &StrokeOptions) {
@@ -280,32 +313,106 @@ fn run(name: &str, path: &[PathCmd], width: f64, o: &StrokeOptions) {
 #[test]
 #[ignore = "diagnostic probe; run with --ignored --nocapture (CI publishes it)"]
 fn outline_probe() {
-    for (tag, join) in [("miter", StrokeJoin::Miter), ("bevel", StrokeJoin::Bevel), ("round", StrokeJoin::Round)] {
-        run(&format!("acute10-{tag}"), &poly(&acute(10.0), false), 20.0, &opts(join, StrokeCap::None));
-        run(&format!("acute30-{tag}"), &poly(&acute(30.0), false), 20.0, &opts(join, StrokeCap::None));
-        run(&format!("star-{tag}"), &poly(&star(), true), 12.0, &opts(join, StrokeCap::None));
-        let vw = StrokeOptions { width_profile: bulge(), ..opts(join, StrokeCap::None) };
-        run(&format!("acute10-vw-{tag}"), &poly(&acute(10.0), false), 20.0, &vw);
+    for (tag, join) in [
+        ("miter", StrokeJoin::Miter),
+        ("bevel", StrokeJoin::Bevel),
+        ("round", StrokeJoin::Round),
+    ] {
+        run(
+            &format!("acute10-{tag}"),
+            &poly(&acute(10.0), false),
+            20.0,
+            &opts(join, StrokeCap::None),
+        );
+        run(
+            &format!("acute30-{tag}"),
+            &poly(&acute(30.0), false),
+            20.0,
+            &opts(join, StrokeCap::None),
+        );
+        run(
+            &format!("star-{tag}"),
+            &poly(&star(), true),
+            12.0,
+            &opts(join, StrokeCap::None),
+        );
+        let vw = StrokeOptions {
+            width_profile: bulge(),
+            ..opts(join, StrokeCap::None)
+        };
+        run(
+            &format!("acute10-vw-{tag}"),
+            &poly(&acute(10.0), false),
+            20.0,
+            &vw,
+        );
     }
     let square = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
-    run("square-miter(control)", &poly(&square, true), 20.0, &opts(StrokeJoin::Miter, StrokeCap::None));
-    let dashed = StrokeOptions { dash: vec![30.0, 10.0], ..opts(StrokeJoin::Miter, StrokeCap::Round) };
-    run("acute10-dash30/10", &poly(&acute(10.0), false), 20.0, &dashed);
-    let dashed_vw = StrokeOptions { width_profile: bulge(), ..dashed };
-    run("acute10-dash-vw", &poly(&acute(10.0), false), 20.0, &dashed_vw);
+    run(
+        "square-miter(control)",
+        &poly(&square, true),
+        20.0,
+        &opts(StrokeJoin::Miter, StrokeCap::None),
+    );
+    let dashed = StrokeOptions {
+        dash: vec![30.0, 10.0],
+        ..opts(StrokeJoin::Miter, StrokeCap::Round)
+    };
+    run(
+        "acute10-dash30/10",
+        &poly(&acute(10.0), false),
+        20.0,
+        &dashed,
+    );
+    let dashed_vw = StrokeOptions {
+        width_profile: bulge(),
+        ..dashed
+    };
+    run(
+        "acute10-dash-vw",
+        &poly(&acute(10.0), false),
+        20.0,
+        &dashed_vw,
+    );
     let curve = [
         PathCmd::MoveTo(0.0, 0.0),
         PathCmd::CurveTo(0.0, 200.0, 300.0, -200.0, 300.0, 0.0),
     ];
-    run("s-curve-round", &curve, 16.0, &opts(StrokeJoin::Round, StrokeCap::Round));
+    run(
+        "s-curve-round",
+        &curve,
+        16.0,
+        &opts(StrokeJoin::Round, StrokeCap::Round),
+    );
     let h = poly(&hand(1000), false);
-    run("hand1000-round", &h, 8.0, &opts(StrokeJoin::Round, StrokeCap::Round));
-    run("hand1000-miter", &h, 8.0, &opts(StrokeJoin::Miter, StrokeCap::None));
-    let hvw = StrokeOptions { width_profile: bulge(), ..opts(StrokeJoin::Round, StrokeCap::Round) };
+    run(
+        "hand1000-round",
+        &h,
+        8.0,
+        &opts(StrokeJoin::Round, StrokeCap::Round),
+    );
+    run(
+        "hand1000-miter",
+        &h,
+        8.0,
+        &opts(StrokeJoin::Miter, StrokeCap::None),
+    );
+    let hvw = StrokeOptions {
+        width_profile: bulge(),
+        ..opts(StrokeJoin::Round, StrokeCap::Round)
+    };
     run("hand1000-vw", &h, 8.0, &hvw);
-    let hd = StrokeOptions { dash: vec![12.0, 6.0], ..opts(StrokeJoin::Round, StrokeCap::Round) };
+    let hd = StrokeOptions {
+        dash: vec![12.0, 6.0],
+        ..opts(StrokeJoin::Round, StrokeCap::Round)
+    };
     run("hand1000-dash", &h, 8.0, &hd);
-    run("hand5000-round", &poly(&hand(5000), false), 8.0, &opts(StrokeJoin::Round, StrokeCap::Round));
+    run(
+        "hand5000-round",
+        &poly(&hand(5000), false),
+        8.0,
+        &opts(StrokeJoin::Round, StrokeCap::Round),
+    );
 }
 
 fn max_deviation(pts: &[Pt], keep: &[bool]) -> f64 {
@@ -322,7 +429,11 @@ fn max_deviation(pts: &[Pt], keep: &[bool]) -> f64 {
 #[test]
 #[ignore = "diagnostic probe; run with --ignored --nocapture (CI publishes it)"]
 fn simplify_probe() {
-    let zig = |n: usize| (0..n).map(|i| (i as f64, (i % 2) as f64 * 3.0)).collect::<Vec<Pt>>();
+    let zig = |n: usize| {
+        (0..n)
+            .map(|i| (i as f64, (i % 2) as f64 * 3.0))
+            .collect::<Vec<Pt>>()
+    };
     let spiral = |n: usize| {
         (0..n)
             .map(|i| {
@@ -353,6 +464,9 @@ fn simplify_probe() {
             "PROBE|simplify|{name}|in={}|out={kept}|eps={eps}|maxDev={dev:.4}|ms={ms:.2}",
             pts.len()
         );
-        assert!(dev <= eps + 1e-9, "{name}: tolerance bound broken ({dev} > {eps})");
+        assert!(
+            dev <= eps + 1e-9,
+            "{name}: tolerance bound broken ({dev} > {eps})"
+        );
     }
 }
