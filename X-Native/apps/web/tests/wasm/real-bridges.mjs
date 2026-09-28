@@ -13,7 +13,7 @@ import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
 import { openRustSession } from "../../src/engine/rustSession.ts";
 import { admitWebDocument, openWebDocumentSession } from "../../src/engine/webDocumentSession.ts";
 import { rectangleStrokeOracle, strokeMatchesRectangle } from "../../src/engine/strokeBandOracle.ts";
-import { offsetCoverageEquivalent } from "../../src/engine/offsetPathOracle.ts";
+import { offsetCoverageEquivalent, offsetRings } from "../../src/engine/offsetPathOracle.ts";
 import { docFromTemplate } from "../../src/engine/files.ts";
 import { node } from "../../src/engine/memory.ts";
 import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
@@ -357,8 +357,12 @@ try {
             "subtract")).boolean.upsert[0].id : id;
           const preview = JSON.parse(probe.previewOffset(probeId, distance, join));
           offsetCoverageEquivalent(current, preview, distance, join, reason => { details += `; ${reason}`; });
+          const areas = (offsetRings(current.path ?? []) ?? []).map(r => r.reduce((sum, [x, y], i) => {
+            const [u, v] = r[(i + 1) % r.length]; return sum + x * v - y * u;
+          }, 0) / 2);
+          details += `; input signed areas=${JSON.stringify(areas)}`;
           const concise = s => ({ id: s.id, kind: s.kind, x: s.x, y: s.y,
-            w: s.w, h: s.h, path: s.path?.slice(0, 9), rings: s.path?.filter(c => c[0] === "Z").length });
+            w: s.w, h: s.h, path: s.path?.slice(0, 28), rings: s.path?.filter(c => c[0] === "Z").length });
           details += `; ${JSON.stringify({ source: concise(current), preview: concise(preview) }).slice(0, 1800)}`;
         } catch (diagnosticError) {
           details += `; diagnostic unavailable: ${String(diagnosticError)}`;
