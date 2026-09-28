@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { rectangleStrokeOracle, strokeMatchesRectangle, verifyStrokeDelta, STROKE_EQUIVALENCE_GUARD } from "../strokeBandOracle.ts";
+import { rectangleStrokeOracle, strokeMatchesRectangle, verifyStrokeDelta } from "../strokeBandOracle.ts";
 
 const node = { id: "box", name: "Box", x: -23, y: 7, w: 100, h: 80 };
 const style = { id: node.id, width: 10, color: "#234567", align: "outside", join: "bevel" };
@@ -21,9 +21,19 @@ assert.ok(strokeMatchesRectangle(node, { ...style, ...outside }));
 assert.ok(!strokeMatchesRectangle(node, { ...style, ...outside, outer: outside.outer.map(([x, y], i) =>
   i === 0 ? [x + 1, y] : [x, y]) }));
 const changed = { revision: 1, node: null, canUndo: true, canRedo: false, stroke: { ...style, ...outside } };
-assert.equal(verifyStrokeDelta(changed, id => id === node.id ? node : null), changed);
-assert.equal(STROKE_EQUIVALENCE_GUARD, true, "the guard remains until real-WASM parity is proven");
-assert.throws(() => verifyStrokeDelta({ ...changed, stroke: { ...changed.stroke, inner: [] } }, () => node),
-  /independent rectangle oracle/, "a Rust edit that fails parity must freeze, never replay in TS");
-assert.throws(() => verifyStrokeDelta(changed, () => null), /independent rectangle oracle/);
-console.log("Stroke guard: analytical contours, narrow holes, guarded mutation/refusal passed");
+const mismatch = { ...changed, stroke: { ...changed.stroke, inner: [] } };
+const previousLocation = globalThis.location;
+try {
+  globalThis.location = { search: "" };
+  assert.equal(verifyStrokeDelta(mismatch, () => { throw Error("default must not query the TS oracle"); }), mismatch,
+    "after genuine-WASM 30/30 parity, default edits keep Rust output without equivalence comparison");
+  globalThis.location.search = "?stroke=audit";
+  assert.equal(verifyStrokeDelta(changed, id => id === node.id ? node : null), changed);
+  assert.throws(() => verifyStrokeDelta(mismatch, () => node),
+    /independent rectangle oracle/, "an audited Rust mismatch must freeze, never replay in TS");
+  assert.throws(() => verifyStrokeDelta(changed, () => null), /independent rectangle oracle/);
+} finally {
+  if (previousLocation === undefined) delete globalThis.location;
+  else globalThis.location = previousLocation;
+}
+console.log("Promoted stroke: analytical contours, default Rust authority and opt-in audit/refusal passed");

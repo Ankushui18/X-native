@@ -237,6 +237,7 @@ try {
     { x: 0, y: 0, w: 1, h: 1, width: 0.25 },
     { x: 145.25, y: -23.5, w: 300.25, h: 149.75, width: 27.5 },
   ];
+  const strokeAuditsBefore = bridgeAuditSnapshot().decisions["session.stroke"]?.attempts ?? 0;
   let parity = 0;
   for (const r of strokeRects) for (const align of ["inside", "center", "outside"])
     for (const join of ["miter", "bevel"]) {
@@ -248,7 +249,23 @@ try {
       assert.throws(() => owner.strokeNode(id, -1, "#236b9e", align, join), /width/);
       assert.throws(() => owner.strokeNode(id, r.width, "#236b9e", align, "round"), /join/);
       assert.equal(owner.state().revision, 0, "a rejected command cannot change native history");
-      const changed = owner.strokeNode(id, r.width, "#236b9e", align, join);
+      // The first real bindgen edit opts into the analytical audit; the other
+      // 29 cases must use Rust without a default per-edit oracle comparison.
+      const previousLocation = globalThis.location;
+      let changed;
+      try {
+        if (parity === 0) globalThis.location = { search: "?stroke=audit" };
+        changed = owner.strokeNode(id, r.width, "#236b9e", align, join);
+      } finally {
+        if (parity === 0) {
+          if (previousLocation === undefined) delete globalThis.location;
+          else globalThis.location = previousLocation;
+        }
+      }
+      if (parity === 0) {
+        assert.equal(bridgeAuditSnapshot().decisions["session.stroke"]?.last.guard, "passed",
+          "opt-in stroke audit must compare the actual Rust contour");
+      }
       assert.equal(changed.revision, 1);
       assert.equal(changed.node, null, "style change must not copy the bounding box");
       assert.equal(changed.boolean, undefined);
@@ -287,7 +304,9 @@ try {
       parity++;
     }
   assert.equal(parity, 30);
-  console.log(`PASS real-WASM Rust stroke alignment: ${parity}/30 rectangle oracle parity, bound checks, native history, resize reprojection and lossless checkpoints`);
+  assert.equal(bridgeAuditSnapshot().decisions["session.stroke"]?.attempts, strokeAuditsBefore + 1,
+    "only the one opt-in edit may run the TS oracle; 29 default edits stay Rust-owned");
+  console.log(`PASS real-WASM Rust stroke alignment: ${parity}/30 rectangle oracle parity, one opt-in audit, 29 default Rust edits, bound checks, history, resize reprojection and lossless checkpoints`);
 
   const extended = JSON.parse(glue.importSvgToX(plain));
   extended.doc.comments = [{ text: "do not discard me" }];

@@ -1,13 +1,9 @@
 /** Independent rectangle reference for the *opt-in* Rust command boundary.
- * This is NOT a TypeScript stroke/document engine. It only compares the
- * bounded native contours with analytically offset rectangle edges. Once the
- * real-WASM 30/30 gate passes, default commands no longer run this oracle;
- * ?stroke=audit retains it for diagnostics. No TS history or paint fallback. */
+ * This is NOT a TypeScript stroke/document engine. Genuine-WASM rectangle
+ * parity passed 30/30 in CI run 36377086997; default edits use Rust directly.
+ * ?stroke=audit retains comparison for diagnostics, never paint or history. */
 import { auditDecision } from "./bridgeRuntimeAudit";
 import type { RustNodeChange, RustStateChange, RustStrokeChange } from "./rustSession";
-
-// Remains true until the genuine-WASM parity gate has passed for this slice.
-export const STROKE_EQUIVALENCE_GUARD = true;
 
 type Point = [number, number];
 export function rectangleStrokeOracle(w: number, h: number, style: Pick<RustStrokeChange, "width" | "align" | "join">):
@@ -42,12 +38,12 @@ function auditRequested(): boolean {
   catch { return false; }
 }
 
-/** Guard an already-acknowledged Rust edit. If a candidate disagrees, freeze
- * the preview and offer recovery export; it would be unsafe to start a second
- * TS owner after the native history has advanced. */
+/** Only in audit mode, compare an already-acknowledged Rust edit. If it
+ * disagrees, freeze the preview and offer recovery export; it would be unsafe
+ * to start a second TS owner after the native history has advanced. */
 export function verifyStrokeDelta(change: RustStateChange, getNode: (id: string) => RustNodeChange | null): RustStateChange {
   const stroke = change.stroke;
-  if (!stroke || !STROKE_EQUIVALENCE_GUARD && !auditRequested()) return change;
+  if (!stroke || !auditRequested()) return change;
   const node = change.node?.id === stroke.id ? change.node : getNode(stroke.id);
   const passes = !!node && strokeMatchesRectangle(node, stroke);
   auditDecision({ bridge: "session", operation: "stroke", result: passes ? "rust" : "none",
