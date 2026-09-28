@@ -133,6 +133,91 @@ console.log("inside strokes in layout math (AL-009-014):");
   t("grid cells start inside the stroke", kids[0].x === 10 && kids[1].x === 50);
 }
 
+console.log("fill children split by content area (AL-038-046):");
+{
+  // Figma, "Children set to fill container now use the border-box model"
+  // (help 42031586813719): the space is shared out by *content* area, so the
+  // child whose own border box is thicker takes more of the frame - "a layer
+  // with a thicker stroke will take up slightly more of the available width or
+  // height, so that its inner content area matches its sibling's".
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 300, 100, layout());
+  const a = addKid(e, F, 50, 40);
+  const b = addKid(e, F, 50, 40);
+  e.dispatch({ type: "patch", id: a, patch: { sizingW: "fill" } });
+  e.dispatch({ type: "patch", id: b, patch: { sizingW: "fill", strokeWidth: 8, strokeAlign: "inside" } });
+  const A = byId(e, a), B = byId(e, b);
+  t("two fill children share one content area, not one size", A.w === 142 && B.w === 158);
+  t("the thicker border box is the one that grew", A.w === B.w - 16);
+  t("and the pair still fills the frame exactly", A.w + B.w === 300);
+  t("so the second child starts where the first ends", B.x === 142);
+}
+{
+  // The rule reads the child's own padding as well as its stroke.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 300, 100, layout());
+  const a = addKid(e, F, 50, 40);
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 50, h: 40, parent: F });
+  const b = byId(e, F).children.at(-1).id;
+  e.dispatch({
+    type: "autoLayout",
+    id: b,
+    layout: layout({ direction: "vertical", gap: 0, padding: [16, 16, 16, 16], sizing: "hug", cross: "hug" }),
+  });
+  addKid(e, b, 10, 10);
+  e.dispatch({ type: "patch", id: a, patch: { sizingW: "fill" } });
+  e.dispatch({ type: "patch", id: b, patch: { sizingW: "fill" } });
+  const A = byId(e, a), B = byId(e, b);
+  t("a padded fill child takes its padding back out of the split", A.w === 134 && B.w === 166);
+  t("its content area matches the plain sibling's", A.w === B.w - 32);
+}
+{
+  // A lone filler still takes the whole padded content box: "padding now
+  // always gets the room it needs". Its own inside stroke eats into its
+  // content, not into the slot; an outside or center stroke is an outline and
+  // never counts at all.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 300, 100, layout({ padding: [30, 30, 0, 0] }));
+  const a = addKid(e, F, 10, 10);
+  e.dispatch({ type: "patch", id: a, patch: { sizingW: "fill", strokeWidth: 8, strokeAlign: "center" } });
+  t("a center stroke is an outline and takes nothing from the split", byId(e, a).w === 240);
+  e.dispatch({ type: "patch", id: a, patch: { strokeAlign: "inside" } });
+  t("a lone filler keeps the slot, stroke or no stroke", byId(e, a).w === 240);
+}
+{
+  // Cross-axis fill is a stretch, not a share: both children get the same
+  // border box, and only their own content areas differ.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 300, 100, layout());
+  const a = addKid(e, F, 40, 20);
+  const b = addKid(e, F, 40, 20);
+  e.dispatch({ type: "patch", id: a, patch: { sizingH: "fill" } });
+  e.dispatch({ type: "patch", id: b, patch: { sizingH: "fill", strokeWidth: 8, strokeAlign: "inside" } });
+  t("a cross fill stretches both children to the same box", byId(e, a).h === 100 && byId(e, b).h === 100);
+}
+{
+  // The article's own escape hatch: "if you want children to always split
+  // space exactly regardless of stroke width, switch the frame to a grid auto
+  // layout flow ... fractional units (fr)".
+  const e = new MemoryEngine(false);
+  const G = addFrame(e, 300, 100, layout({ direction: "grid" }));
+  e.dispatch({
+    type: "autoLayout",
+    id: G,
+    layout: {
+      ...byId(e, G).layout,
+      columns: 2,
+      rows: 1,
+      colTracks: [{ mode: "fill", fr: 1 }, { mode: "fill", fr: 1 }],
+    },
+  });
+  const a = addKid(e, G, 10, 40);
+  const b = addKid(e, G, 10, 40);
+  e.dispatch({ type: "patch", id: a, patch: { sizingW: "fill" } });
+  e.dispatch({ type: "patch", id: b, patch: { sizingW: "fill", strokeWidth: 8, strokeAlign: "inside" } });
+  t("grid fr tracks split exactly, stroke or no stroke", byId(e, a).w === 150 && byId(e, b).w === 150);
+}
+
 console.log("hug-to-constraints settle (AL-015-017):");
 {
   const e = new MemoryEngine(false);

@@ -40,6 +40,7 @@ import {
   cellAlign,
   cellAt,
   cellBox,
+  contentInset,
   fillPatch,
   clampToPadding,
   flowInsertIndex,
@@ -672,14 +673,23 @@ function applyLayout(n: XNode, gesture = false) {
       0,
     );
     const leftover = Math.max(1, (horiz ? innerW : innerH) - used - packedGap * Math.max(0, flow.length - 1));
-    const each = leftover / fillers.length;
-    for (const c of fillers) {
+    // Fill children share the *content* area, not the box: each one's own
+    // padding and inside stroke is added back to the space it takes, which is
+    // the CSS border-box model (Figma help 42031586813719: "distributes space
+    // amongst fill container children by the children's content area instead of
+    // by their size ... a layer with a thicker stroke will take up slightly
+    // more of the available width or height, so that its inner content area
+    // matches its sibling's"). The shares still add up to `leftover`, so the
+    // frame's own padding keeps its room.
+    const insets = fillers.map((c) => contentInset(c, horiz ? "w" : "h"));
+    const each = (leftover - insets.reduce((s, v) => s + v, 0)) / fillers.length;
+    fillers.forEach((c, i) => {
       const otherFills = (horiz ? c.sizingH : c.sizingW) === "fill";
-      const patch = fillPatch(c, horiz ? "w" : "h", each, otherFills);
+      const patch = fillPatch(c, horiz ? "w" : "h", Math.max(1, each + insets[i]), otherFills);
       if (patch.w != null) c.w = patch.w;
       if (patch.h != null) c.h = patch.h;
       clampDims(c);
-    }
+    });
   }
   // A hug with something filling inside it is a Fixed frame - the filler has
   // nothing to hug down to. `effectiveSizing` is the single answer to that, and

@@ -911,6 +911,26 @@ export function insideStrokeWidth(n: Pick<XNode, "strokeWidth" | "strokeAlign">)
   return n.strokeAlign === "inside" && n.strokeWidth > 0 ? n.strokeWidth : 0;
 }
 
+/**
+ * The space a child's own box keeps for itself along one axis: its padding
+ * plus its inside stroke on both sides. This is the inset CSS's border-box
+ * model measures a content area from, and the amount Figma gives back when it
+ * shares space among children set to fill container (help 42031586813719:
+ * "children ... with different padding and inside stroke widths ...
+ * distributes space amongst fill container children by the children's content
+ * area instead of by their size"). Outside and center strokes are outlines in
+ * CSS terms and never count.
+ */
+export function contentInset(
+  child: Pick<XNode, "strokeWidth" | "strokeAlign" | "layout">,
+  axis: "w" | "h",
+): number {
+  const sw = insideStrokeWidth(child);
+  const pad = child.layout && Array.isArray(child.layout.padding) ? child.layout.padding : null;
+  const [l, r, t, b] = pad ?? [0, 0, 0, 0];
+  return (axis === "w" ? l + r : t + b) + sw * 2;
+}
+
 export function clampToPadding(n: XNode): void {
   const l = n.layout;
   if (!l || !Array.isArray(l.padding)) return;
