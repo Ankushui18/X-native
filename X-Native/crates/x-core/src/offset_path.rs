@@ -49,8 +49,7 @@ pub fn offset_filled_path(
         let finite = |v: f64| v.is_finite() && v.abs() <= 1e6;
         let valid = match *cmd {
             PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => finite(x) && finite(y),
-            PathCmd::CurveTo(a, b, c, d, x, y) =>
-                [a, b, c, d, x, y].into_iter().all(finite),
+            PathCmd::CurveTo(a, b, c, d, x, y) => [a, b, c, d, x, y].into_iter().all(finite),
             PathCmd::Close => true,
         };
         if !valid {
@@ -117,7 +116,10 @@ pub fn offset_filled_path(
                 return Err("offset result exceeds the bounded contour budget");
             }
             let ring: Vec<_> = contour.into_iter().map(|[x, y]| (x, y)).collect();
-            if ring.iter().any(|&(x, y)| !x.is_finite() || !y.is_finite() || x.abs() > 1e7 || y.abs() > 1e7) {
+            if ring
+                .iter()
+                .any(|&(x, y)| !x.is_finite() || !y.is_finite() || x.abs() > 1e7 || y.abs() > 1e7)
+            {
                 return Err("offset result exceeds the coordinate budget");
             }
             rings.push(ring);
@@ -138,9 +140,17 @@ mod tests {
         cmds
     }
     fn bounds(rings: &OffsetRings) -> (f64, f64, f64, f64) {
-        let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        let (mut x0, mut y0, mut x1, mut y1) = (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        );
         for &(x, y) in rings.iter().flatten() {
-            x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
         }
         (x0, y0, x1, y1)
     }
@@ -148,31 +158,47 @@ mod tests {
         assert!((actual - expected).abs() < 0.02, "{actual} != {expected}");
     }
     fn area(ring: &[(f64, f64)]) -> f64 {
-        (0..ring.len()).map(|i| {
-            let (x, y) = ring[i]; let (u, v) = ring[(i + 1) % ring.len()];
-            x * v - u * y
-        }).sum::<f64>() / 2.0
+        (0..ring.len())
+            .map(|i| {
+                let (x, y) = ring[i];
+                let (u, v) = ring[(i + 1) % ring.len()];
+                x * v - u * y
+            })
+            .sum::<f64>()
+            / 2.0
     }
 
     #[test]
     fn positive_negative_joins_and_collapsed_inset() {
         let square = path(&[(0.0, 0.0), (80.0, 0.0), (80.0, 60.0), (0.0, 60.0)]);
         for reversed in [false, true] {
-            let input = if reversed { path(&[(0.0, 60.0), (80.0, 60.0), (80.0, 0.0), (0.0, 0.0)]) } else { square.clone() };
+            let input = if reversed {
+                path(&[(0.0, 60.0), (80.0, 60.0), (80.0, 0.0), (0.0, 0.0)])
+            } else {
+                square.clone()
+            };
             let miter = offset_filled_path(&input, 8.0, StrokeJoin::Miter).unwrap();
             assert_eq!(miter.len(), 1);
             assert_eq!(miter[0].len(), 4);
-            let (x0,y0,x1,y1) = bounds(&miter);
-            near(x0,-8.0); near(y0,-8.0); near(x1,88.0); near(y1,68.0);
+            let (x0, y0, x1, y1) = bounds(&miter);
+            near(x0, -8.0);
+            near(y0, -8.0);
+            near(x1, 88.0);
+            near(y1, 68.0);
             let bevel = offset_filled_path(&input, 8.0, StrokeJoin::Bevel).unwrap();
             assert_eq!(bevel.len(), 1);
             assert_eq!(bevel[0].len(), 8);
             let round = offset_filled_path(&input, 8.0, StrokeJoin::Round).unwrap();
             assert!(round[0].len() > 8);
             let inset = offset_filled_path(&input, -8.0, StrokeJoin::Miter).unwrap();
-            let (x0,y0,x1,y1) = bounds(&inset);
-            near(x0,8.0); near(y0,8.0); near(x1,72.0); near(y1,52.0);
-            assert!(offset_filled_path(&input, -40.0, StrokeJoin::Round).unwrap().is_empty());
+            let (x0, y0, x1, y1) = bounds(&inset);
+            near(x0, 8.0);
+            near(y0, 8.0);
+            near(x1, 72.0);
+            near(y1, 52.0);
+            assert!(offset_filled_path(&input, -40.0, StrokeJoin::Round)
+                .unwrap()
+                .is_empty());
         }
     }
 
@@ -188,11 +214,14 @@ mod tests {
             let grown = offset_filled_path(&source, 4.0, StrokeJoin::Round).unwrap();
             let shrunk = offset_filled_path(&source, -2.0, StrokeJoin::Miter).unwrap();
             assert!(!grown.is_empty() && !shrunk.is_empty());
-            assert!(grown.iter().flatten().all(|&(x,y)| x.is_finite() && y.is_finite()));
+            assert!(grown
+                .iter()
+                .flatten()
+                .all(|&(x, y)| x.is_finite() && y.is_finite()));
         }
         // The original author walk crosses itself; the simplifying overlay
         // must resolve its filled lobes before either sign of offset.
-        let bowtie = path(&[(0.0,0.0), (60.0,60.0), (0.0,60.0), (60.0,0.0)]);
+        let bowtie = path(&[(0.0, 0.0), (60.0, 60.0), (0.0, 60.0), (60.0, 0.0)]);
         for sign in [-1.0, 1.0] {
             let result = offset_filled_path(&bowtie, sign * 3.0, StrokeJoin::Round).unwrap();
             assert!(!result.is_empty());
@@ -202,24 +231,49 @@ mod tests {
 
     #[test]
     fn holes_keep_opposite_winding_and_close_when_the_shape_expands() {
-        let mut source = path(&[(0.0,0.0), (100.0,0.0), (100.0,100.0), (0.0,100.0)]);
-        source.extend(path(&[(35.0,35.0), (35.0,65.0), (65.0,65.0), (65.0,35.0)]));
+        let mut source = path(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
+        source.extend(path(&[
+            (35.0, 35.0),
+            (35.0, 65.0),
+            (65.0, 65.0),
+            (65.0, 35.0),
+        ]));
         let grown = offset_filled_path(&source, 5.0, StrokeJoin::Miter).unwrap();
         assert_eq!(grown.len(), 2);
         assert!(area(&grown[0]) * area(&grown[1]) < 0.0);
         let shrunk = offset_filled_path(&source, -5.0, StrokeJoin::Bevel).unwrap();
         assert_eq!(shrunk.len(), 2);
         assert!(area(&shrunk[0]) * area(&shrunk[1]) < 0.0);
-        assert!(offset_filled_path(&source, 18.0, StrokeJoin::Round).unwrap().len() <= 2);
+        assert!(
+            offset_filled_path(&source, 18.0, StrokeJoin::Round)
+                .unwrap()
+                .len()
+                <= 2
+        );
     }
 
     #[test]
     fn bad_requests_do_not_produce_geometry() {
-        let sq = path(&[(0.0,0.0), (10.0,0.0), (10.0,10.0), (0.0,10.0)]);
+        let sq = path(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
         for distance in [0.0, f64::NAN, f64::INFINITY, 2049.0] {
             assert!(offset_filled_path(&sq, distance, StrokeJoin::Miter).is_err());
         }
-        assert!(offset_filled_path(&[PathCmd::MoveTo(0.0,0.0), PathCmd::LineTo(1.0,0.0)], 3.0, StrokeJoin::Round).is_err());
-        assert!(offset_filled_path(&[PathCmd::MoveTo(f64::NAN,0.0), PathCmd::LineTo(1.0,0.0), PathCmd::LineTo(1.0,1.0), PathCmd::Close], 3.0, StrokeJoin::Round).is_err());
+        assert!(offset_filled_path(
+            &[PathCmd::MoveTo(0.0, 0.0), PathCmd::LineTo(1.0, 0.0)],
+            3.0,
+            StrokeJoin::Round
+        )
+        .is_err());
+        assert!(offset_filled_path(
+            &[
+                PathCmd::MoveTo(f64::NAN, 0.0),
+                PathCmd::LineTo(1.0, 0.0),
+                PathCmd::LineTo(1.0, 1.0),
+                PathCmd::Close
+            ],
+            3.0,
+            StrokeJoin::Round
+        )
+        .is_err());
     }
 }
