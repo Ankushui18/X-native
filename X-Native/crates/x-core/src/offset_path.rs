@@ -112,7 +112,8 @@ pub fn offset_filled_path(
             return Err("offset result contains too many holes");
         }
         for contour in shape {
-            if contour.len() < 3 || (total += contour.len()) > MAX_OFFSET_ANCHORS {
+            total += contour.len();
+            if contour.len() < 3 || total > MAX_OFFSET_ANCHORS {
                 return Err("offset result exceeds the bounded contour budget");
             }
             let ring: Vec<_> = contour.into_iter().map(|[x, y]| (x, y)).collect();
