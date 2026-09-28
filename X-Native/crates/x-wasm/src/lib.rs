@@ -197,9 +197,16 @@ mod bindings {
 
         #[wasm_bindgen(js_name = strokeNode)]
         pub fn stroke_node(
-            &mut self, id: &str, width: f64, color: &str, align: &str, join: &str
+            &mut self,
+            id: &str,
+            width: f64,
+            color: &str,
+            align: &str,
+            join: &str,
         ) -> Result<String, JsValue> {
-            self.bridge.stroke_node(id, width, color, align, join).map_err(js_error)
+            self.bridge
+                .stroke_node(id, width, color, align, join)
+                .map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

@@ -429,13 +429,21 @@ fn encode(
                 &shape,
             );
             if node.stroke.width > 0.0 {
-                let aligned = node.stroke_layers.first().and_then(|layer|
-                    crate::ir::aligned_rectangle_stroke_path(node, layer));
+                let aligned = node
+                    .stroke_layers
+                    .first()
+                    .and_then(|layer| crate::ir::aligned_rectangle_stroke_path(node, layer));
                 let brush = brush_with_alpha(paint_brush(&node.stroke.paint, vars), node.opacity);
                 if let Some(outline) = aligned {
                     scene.fill(Fill::NonZero, world, &brush, None, &outline);
                 } else {
-                    scene.stroke(&vello::kurbo::Stroke::new(node.stroke.width), world, &brush, None, &shape);
+                    scene.stroke(
+                        &vello::kurbo::Stroke::new(node.stroke.width),
+                        world,
+                        &brush,
+                        None,
+                        &shape,
+                    );
                 }
                 stats.paths += 1;
             }

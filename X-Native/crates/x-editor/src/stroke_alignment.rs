@@ -93,9 +93,24 @@ mod tests {
 
     #[test]
     fn style_is_one_undo_step_and_no_op_does_not_push_history() {
-        let root = Node::frame("root", 400.0, 300.0).child(Node::rect("box", 10.0, 20.0, 100.0, 80.0, Color::WHITE));
+        let root = Node::frame("root", 400.0, 300.0).child(Node::rect(
+            "box",
+            10.0,
+            20.0,
+            100.0,
+            80.0,
+            Color::WHITE,
+        ));
         let mut editor = Editor::new(root);
-        let set = |editor: &mut Editor| editor.set_aligned_rect_stroke("box", 12.0, Color::BLACK, StrokeAlign::Outside, StrokeJoin::Bevel);
+        let set = |editor: &mut Editor| {
+            editor.set_aligned_rect_stroke(
+                "box",
+                12.0,
+                Color::BLACK,
+                StrokeAlign::Outside,
+                StrokeJoin::Bevel,
+            )
+        };
         assert_eq!(set(&mut editor), Ok(true));
         assert_eq!(set(&mut editor), Ok(false));
         assert_eq!(editor.undo_depth(), 1);
@@ -107,7 +122,16 @@ mod tests {
         assert_eq!(node.stroke_layers[0].options.align, StrokeAlign::Outside);
         assert_eq!(node.stroke_layers[0].options.join, StrokeJoin::Bevel);
         assert!(node.visual_stacks_materialized);
-        assert_eq!(editor.set_aligned_rect_stroke("box", 0.0, Color::BLACK, StrokeAlign::Center, StrokeJoin::Miter), Ok(true));
+        assert_eq!(
+            editor.set_aligned_rect_stroke(
+                "box",
+                0.0,
+                Color::BLACK,
+                StrokeAlign::Center,
+                StrokeJoin::Miter
+            ),
+            Ok(true)
+        );
         assert!(find(&editor.root, "box").unwrap().stroke_layers.is_empty());
     }
 }

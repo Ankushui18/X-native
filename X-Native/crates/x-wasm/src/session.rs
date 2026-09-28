@@ -114,20 +114,39 @@ impl CommandBridge {
         self.dispatch(SessionCommand::Boolean { first, second, op })
     }
 
-    pub fn stroke_node(&mut self, id: &str, width: f64, hex: &str, alignment: &str, join: &str) -> Result<String, String> {
-        if hex.len() != 7 || !hex.starts_with('#') || !hex[1..].bytes().all(|v| v.is_ascii_hexdigit()) {
+    pub fn stroke_node(
+        &mut self,
+        id: &str,
+        width: f64,
+        hex: &str,
+        alignment: &str,
+        join: &str,
+    ) -> Result<String, String> {
+        if hex.len() != 7
+            || !hex.starts_with('#')
+            || !hex[1..].bytes().all(|v| v.is_ascii_hexdigit())
+        {
             return Err("stroke color must be opaque #rrggbb".into());
         }
         let color = parse_hex_color(hex).ok_or("invalid stroke color")?;
         let align = match alignment {
-            "inside" => StrokeAlign::Inside, "center" => StrokeAlign::Center,
-            "outside" => StrokeAlign::Outside, _ => return Err("unknown stroke alignment".into()),
+            "inside" => StrokeAlign::Inside,
+            "center" => StrokeAlign::Center,
+            "outside" => StrokeAlign::Outside,
+            _ => return Err("unknown stroke alignment".into()),
         };
         let join = match join {
-            "miter" => StrokeJoin::Miter, "bevel" => StrokeJoin::Bevel,
+            "miter" => StrokeJoin::Miter,
+            "bevel" => StrokeJoin::Bevel,
             _ => return Err("stroke join not proven".into()),
         };
-        self.dispatch(SessionCommand::Stroke { id, width, color, align, join })
+        self.dispatch(SessionCommand::Stroke {
+            id,
+            width,
+            color,
+            align,
+            join,
+        })
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -281,11 +300,21 @@ mod tests {
             (3.0, "#236b9e", "wrong", "miter"),
             (3.0, "#236b9e", "outside", "round"),
         ] {
-            assert!(bridge.stroke_node("box", width, color, align, join).is_err());
+            assert!(bridge
+                .stroke_node("box", width, color, align, join)
+                .is_err());
         }
-        assert_eq!(serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"], 0);
-        let wire = bridge.stroke_node("box", 8.0, "#236b9e", "outside", "bevel").unwrap();
-        assert!(wire.len() < 550, "returned a page instead of at most 12 stroke anchors");
+        assert_eq!(
+            serde_json::from_str::<Value>(&bridge.state()).unwrap()["revision"],
+            0
+        );
+        let wire = bridge
+            .stroke_node("box", 8.0, "#236b9e", "outside", "bevel")
+            .unwrap();
+        assert!(
+            wire.len() < 550,
+            "returned a page instead of at most 12 stroke anchors"
+        );
         let delta: Value = serde_json::from_str(&wire).unwrap();
         assert_eq!(delta["node"], Value::Null);
         assert_eq!(delta["stroke"]["outer"][0], json!([-8.0, 0.0]));
@@ -293,7 +322,10 @@ mod tests {
         assert_eq!(delta["stroke"]["color"], "#236b9e");
         assert_eq!(delta["stroke"]["join"], "bevel");
         let saved = load_x(&bridge.export_x()).unwrap();
-        assert_eq!(saved.pages[0].children[0].stroke_layers[0].options.align, StrokeAlign::Outside);
+        assert_eq!(
+            saved.pages[0].children[0].stroke_layers[0].options.align,
+            StrokeAlign::Outside
+        );
         let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
         assert_eq!(undone["stroke"]["width"], 0.0);
         let redo: Value = serde_json::from_str(&bridge.redo().unwrap()).unwrap();

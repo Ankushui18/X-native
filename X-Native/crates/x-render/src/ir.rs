@@ -663,19 +663,28 @@ pub(crate) fn aligned_rectangle_stroke_path(node: &Node, layer: &StrokeLayer) ->
     }
     let corners = [(0.0, 0.0), (node.w, 0.0), (node.w, node.h), (0.0, node.h)];
     let band = x_core::stroke_alignment::aligned_stroke_band(
-        &corners, layer.stroke.width, layer.options.align, layer.options.join, layer.options.miter_limit
-    ).ok()?;
+        &corners,
+        layer.stroke.width,
+        layer.options.align,
+        layer.options.join,
+        layer.options.miter_limit,
+    )
+    .ok()?;
     let mut outline = BezPath::new();
     if let Some((first, rest)) = band.outer.split_first() {
         outline.move_to(*first);
-        for p in rest { outline.line_to(*p); }
+        for p in rest {
+            outline.line_to(*p);
+        }
         outline.close_path();
     }
     // Render sinks use NONZERO winding. Reverse the inner boundary to make
     // the inset a hole; the web preview uses EVENODD for the same two rings.
     if let Some((first, rest)) = band.inner.split_last() {
         outline.move_to(*first);
-        for p in rest.iter().rev() { outline.line_to(*p); }
+        for p in rest.iter().rev() {
+            outline.line_to(*p);
+        }
         outline.close_path();
     }
     Some(outline)
@@ -865,16 +874,25 @@ fn emit_visual_layers(
             };
             let transform = Affine::translate((dx, dy)) * world;
             let brush = layer_brush(
-                &layer.stroke.paint, vars, opacity * layer.opacity.clamp(0.0, 1.0) * weight,
+                &layer.stroke.paint,
+                vars,
+                opacity * layer.opacity.clamp(0.0, 1.0) * weight,
             );
             if let Some(outline) = &aligned {
                 tree.commands.push(RenderCommand::FillPath {
-                    key, transform, path: outline.clone(), brush,
+                    key,
+                    transform,
+                    path: outline.clone(),
+                    brush,
                 });
             } else {
                 tree.commands.push(RenderCommand::StrokePath {
-                    key, transform, path: path.clone(), brush,
-                    width: layer.stroke.width, options: layer.options.clone(),
+                    key,
+                    transform,
+                    path: path.clone(),
+                    brush,
+                    width: layer.stroke.width,
+                    options: layer.options.clone(),
                 });
             }
         }
@@ -2226,18 +2244,40 @@ mod tests {
         page.fill = Paint::Solid(Color::TRANSPARENT);
         let tree = build_render_tree(&page, &Variables::default());
         let aligned = tree.commands.iter().find(|c| matches!(c, RenderCommand::FillPath { key, .. } if key.ends_with("border/stroke-0")));
-        let RenderCommand::FillPath { path, .. } = aligned.expect("stroke is a filled offset band") else {
+        let RenderCommand::FillPath { path, .. } = aligned.expect("stroke is a filled offset band")
+        else {
             unreachable!();
         };
         assert_eq!(path.bounding_box(), Rect::new(-10.0, -10.0, 110.0, 90.0));
-        assert_eq!(path.elements().len(), 14, "8 bevel anchors + 4 reversed hole anchors + 2 closes");
+        assert_eq!(
+            path.elements().len(),
+            14,
+            "8 bevel anchors + 4 reversed hole anchors + 2 closes"
+        );
         assert!(!tree.commands.iter().any(|c| matches!(c, RenderCommand::StrokePath { key, .. } if key.ends_with("border/stroke-0"))));
         let (scene, _) = crate::scene::build_scene(&page, None, &Variables::default());
-        assert!(scene.encoding().n_paths >= 2, "direct GPU path must also paint the same outline");
-        let pix = crate::raster::RasterSink::new(None, None, 160.0, 140.0, 1.0, None).unwrap().render(&tree);
-        assert_eq!(pix.pixel(15, 60).unwrap().alpha(), 255, "outside edge is painted");
-        assert_eq!(pix.pixel(25, 60).unwrap().alpha(), 0, "shape interior is the reversed-winding hole");
-        assert_eq!(pix.pixel(11, 11).unwrap().alpha(), 0, "bevel clips the far corner");
+        assert!(
+            scene.encoding().n_paths >= 2,
+            "direct GPU path must also paint the same outline"
+        );
+        let pix = crate::raster::RasterSink::new(None, None, 160.0, 140.0, 1.0, None)
+            .unwrap()
+            .render(&tree);
+        assert_eq!(
+            pix.pixel(15, 60).unwrap().alpha(),
+            255,
+            "outside edge is painted"
+        );
+        assert_eq!(
+            pix.pixel(25, 60).unwrap().alpha(),
+            0,
+            "shape interior is the reversed-winding hole"
+        );
+        assert_eq!(
+            pix.pixel(11, 11).unwrap().alpha(),
+            0,
+            "bevel clips the far corner"
+        );
     }
 
     #[test]
