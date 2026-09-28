@@ -389,6 +389,10 @@ try {
       assert.equal(result.node, null);
       assert.equal(result.offset?.id, id);
       assert.equal(result.offset?.kind, "vector");
+      if (shape === "vector") {
+        assert.equal(result.offset.path.filter(cmd => cmd[0] === "Z").length, 2,
+          "signed offset must retain both the outer contour and its hole");
+      }
       assert.ok(offsetCoverageEquivalent(current, result.offset, distance, join),
         `${shape}/${join}/${distance}: TS reference and Rust output differ`);
       assert.equal(bridgeAuditSnapshot().decisions["session.offset"]?.last.guard, "passed",
