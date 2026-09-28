@@ -882,14 +882,14 @@ mod tests {
     #[test]
     fn bounded_stroke_command_and_resize_share_rust_history_and_x_checkpoint() {
         let mut session = DocumentSession::new(sample()).unwrap();
-        let style = SessionCommand::Stroke {
-            id: "box",
-            width: 8.0,
+        let style = |id: &'static str, width: f64, join: StrokeJoin| SessionCommand::Stroke {
+            id,
+            width,
             color: Color::from_rgb8(35, 107, 158),
             align: StrokeAlign::Outside,
-            join: StrokeJoin::Bevel,
+            join,
         };
-        let changed = session.dispatch(style).unwrap();
+        let changed = session.dispatch(style("box", 8.0, StrokeJoin::Bevel)).unwrap();
         assert_eq!(changed.revision, 1);
         assert!(changed.node.is_none() && changed.boolean.is_none());
         let band = changed.stroke.unwrap();
@@ -902,22 +902,12 @@ mod tests {
             &[(0.0, 0.0), (30.0, 0.0), (30.0, 40.0), (0.0, 40.0)]
         );
         assert_eq!(
-            session.dispatch(style).unwrap(),
+            session.dispatch(style("box", 8.0, StrokeJoin::Bevel)).unwrap(),
             session.state(),
             "no-op cannot push a new history entry"
         );
-        assert!(session
-            .dispatch(SessionCommand::Stroke {
-                join: StrokeJoin::Round,
-                ..style
-            })
-            .is_err());
-        assert!(session
-            .dispatch(SessionCommand::Stroke {
-                width: f64::NAN,
-                ..style
-            })
-            .is_err());
+        assert!(session.dispatch(style("box", 8.0, StrokeJoin::Round)).is_err());
+        assert!(session.dispatch(style("box", f64::NAN, StrokeJoin::Bevel)).is_err());
         assert_eq!(session.state().revision, 1);
         let save = x_format::serialize::save_x(&session.snapshot());
         let loaded = x_format::deserialize::load_x(&save).unwrap();
@@ -945,24 +935,11 @@ mod tests {
         assert_eq!(undo_style.stroke.unwrap().width, 0.0);
         let redo_style = session.dispatch(SessionCommand::Redo).unwrap();
         assert_eq!(redo_style.stroke.unwrap().outer[0], (-8.0, 0.0));
-        assert!(session
-            .dispatch(SessionCommand::Stroke {
-                id: "page",
-                ..style
-            })
-            .is_err());
-        assert!(session
-            .dispatch(SessionCommand::Stroke {
-                id: "missing",
-                ..style
-            })
-            .is_err());
+        assert!(session.dispatch(style("page", 8.0, StrokeJoin::Bevel)).is_err());
+        assert!(session.dispatch(style("missing", 8.0, StrokeJoin::Bevel)).is_err());
         assert_eq!(
             session
-                .dispatch(SessionCommand::Stroke {
-                    width: 0.0,
-                    ..style
-                })
+                .dispatch(style("box", 0.0, StrokeJoin::Bevel))
                 .unwrap()
                 .stroke
                 .unwrap()
