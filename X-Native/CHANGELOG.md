@@ -5,6 +5,53 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: sections, the titled top-level container)
+
+The seventh feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Organize your canvas with sections* (help 9771500257687) —
+*"Sections in Figma Design are a top-level element on the canvas by default.
+Sections can contain all layer types, including other sections, but cannot be
+contained within frames or groups."* … *"Click Section in the toolbar or use the
+keyboard shortcut ⇧ Shift S."* … *"Double-click the section title on the canvas
+or Layers panel. Edit the title."* … *"Change the background and border color for
+a section using the Fill and Stroke sections of the right sidebar."*
+
+- **The tool existed; the element did not.** ⇧S already armed a Section tool
+  whose drag created `kind: "frame"` with `fill: "#00000000"` — measured — so a
+  section was an invisible frame: no background, no border (`node("section", …)`
+  fell through to a shape's `#d9d9d9`), nothing clipped, no title chrome, and
+  document-order z. `NodeKind` now carries `"section"`, and the node defaults
+  give it the article's background (`#ffffff`) and border (`#e6e6e6`, 1px) with
+  `overflow: "visible"`, so it never clips.
+- **Top-level, both routes.** `memory.ts::sectionStaysTopLevel` is the one owner
+  of *"cannot be contained within frames or groups"*: the `add` command the
+  Section tool draws with, and `wrapSel` for **Wrap in new section**, which now
+  produces a real section and lifts a selection out of the frame that held it,
+  keeping the selection's world box.
+- **Behind the frames it holds.** `paint.ts::sectionsFirst` paints sections
+  before their siblings, at the page root and inside any container, so a section
+  listed after a frame still sits behind it (measured before the fix: the overlap
+  read red where the frame is green).
+- **A title you can edit.** The section's name is painted in the canvas label
+  pass, inside the box's top-left, at a constant 12px while the canvas zooms; the
+  label hit test takes sections, so double-clicking the title opens the rename
+  editor (which now lands on the title instead of above the box).
+- Pinned by `apps/web/src/ui/__tests__/sections.test.mjs` (28 assertions, wired
+  into `npm test`), which drives the real canvas with mouse events: the ⇧S drag,
+  the wrap-and-lift, `add()` refusing a nested section, the defaults, the painted
+  background, an unclipped child outside the box, the frame winning the overlap
+  at both levels, the border stroke, and the title (position, zoom, moves,
+  renaming, double-click editor). Disarming the z rule fails 2 assertions,
+  mapping the tool back to a frame 3, removing the title pass 5. The shared
+  software canvas gained a `fillText` log and an `act` runner for those. Whole
+  suite **2946 passed, 0 failed** (2,918 + the 28 here). TypeScript only: no Rust
+  file changed, the WASM boundary and the geometry guard were not touched.
+- Recorded residuals: a section does not yet take in the objects it is drawn or
+  resized over; there is no delete-keeping-contents route (Figma's ⌘⌫); the
+  *Ready for dev* status and *Share* are not implemented; the inspector still
+  offers a **Clip content** toggle on a section.
+
 ## [Unreleased] — 2026-09-28 (Figma parity: the mask's reach stops at clip content)
 
 The sixth feature through the eight-step Figma parity pipeline recorded in
