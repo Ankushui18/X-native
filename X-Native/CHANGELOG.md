@@ -5,6 +5,42 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: the mask's reach stops at clip content)
+
+The sixth feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Masks* (help 360040450253) — *"The mask applies to all siblings
+above it until it reaches: Another mask or mask object / The mask's parent frame
+or group / A frame or component with clip content on."*
+
+- **The boundary was missing entirely.** `engine/paint.ts::partitionMaskRuns` had
+  no clip-content rule: measured with a probe, `[mask, Small, clippedFrame,
+  Above]` came back as one masked run `mask(Mask):[Small, Clipped frame, Above]`
+  — the same for a frame with clip content *off*, a group, a component with clip
+  on, an instance with clip on and a scroll frame. So a frame that clips content,
+  which the article names as a hard stop, was itself masked and dragged everything
+  above it under the mask. In device pixels (the frame's fill `#1f2937` = r31, the
+  layer's blue `#3b82f6` = r59, page white = 255): the clipped frame's own fill
+  read **r=255 g=255 b=255** at (180,30) and the layer above it **r=255** at
+  (130,20) — both punched to nothing. `stopsMaskReach` now owns that rule (a
+  frame/component/instance whose `overflow` is not `visible`) and the run ends
+  there: the boundary node opens a plain run, so `paintMaskedRun` is never entered
+  for it or for anything above it. An empty masked run is dropped, which also
+  stops a reach-less mask from drawing a green outline around nothing.
+- **The panel arrow follows the same predicate.** `chrome.tsx::withMaskedBelow`
+  badged `Above`, `Clipped frame` and `Small`; it now clears `seenMask` at the
+  boundary, so the arrow marks exactly the layers the canvas clips.
+- Not changed, and measured to stay correct: a frame with clip content off, a
+  group and a clipped rect let the reach continue, and a mask inside a clipped
+  frame still clips its own siblings while its parent's sibling is untouched.
+- Pinned by `apps/web/src/ui/__tests__/maskReach.test.mjs` (22 assertions, wired
+  into `npm test`), with the software Canvas2D both mask tests share extracted to
+  `apps/web/src/ui/__tests__/softCanvas2d.mjs` (run 5's file keeps its 33
+  assertions, same names). Disarming the partition rule fails 9 assertions
+  (7 engine + 2 pixel); disarming the panel walk fails 2. Whole suite **2918
+  passed, 0 failed** (2,896 + the 22 here). TypeScript only: no Rust file changed,
+  the WASM boundary and the geometry guard were not touched.
+
 ## [Unreleased] — 2026-09-28 (Figma parity: mask per-pixel alpha and the mask indicators)
 
 The fifth feature through the eight-step Figma parity pipeline recorded in
