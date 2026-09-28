@@ -345,19 +345,23 @@ try {
         if (offsetParity === 0) globalThis.location = { search: "?offset=audit" };
         result = owner.offsetNode(id, distance, join);
       } catch (error) {
-        // Preserve the first failing case and bounded Rust preview in CI's
-        // diagnostic output. A rejected preflight must not have edited owner.
+        // The raw CI log is served from an inaccessible CDN: put the case and
+        // bounded preview in the *thrown stack* so the top-level API-readable
+        // ::error:: annotation exposes the mismatch, not just the JS callsite.
+        let details = `${shape}/${join}/${distance}: ${String(error)}`;
         let probe;
         try {
           probe = new glue.RustDocumentSession(admitWebDocument(seed));
           const probeId = shape === "vector" ? JSON.parse(probe.booleanNode(
             id, seed.pages[0].root.children[1].id, "subtract")).boolean.upsert[0].id : id;
           const preview = JSON.parse(probe.previewOffset(probeId, distance, join));
-          console.error(`Offset preflight ${shape}/${join}/${distance}: ${JSON.stringify({ source: current, preview }).slice(0, 3000)}`);
+          const concise = s => ({ id: s.id, kind: s.kind, x: s.x, y: s.y,
+            w: s.w, h: s.h, path: s.path?.slice(0, 9), rings: s.path?.filter(c => c[0] === "Z").length });
+          details += `; ${JSON.stringify({ source: concise(current), preview: concise(preview) }).slice(0, 1800)}`;
         } catch (diagnosticError) {
-          console.error(`Offset preflight ${shape}/${join}/${distance}: diagnostic unavailable`, diagnosticError);
+          details += `; diagnostic unavailable: ${String(diagnosticError)}`;
         } finally { probe?.free(); }
-        throw error;
+        throw new Error(`Offset preflight ${details}`, { cause: error });
       } finally {
         if (offsetParity === 0) {
           if (previousLocation === undefined) delete globalThis.location;
