@@ -42,7 +42,7 @@ recon task, not a settled fact.
 | 8 Fill, stroke, effects, colour | 25 | 25 | 0 | 0 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 18 | 0 | 0 | 0 | 0 |
-| 11 Vector editing & booleans | 20 | 16 | 4 | 0 | 0 | 0 |
+| 11 Vector editing & booleans | 20 | 17 | 3 | 0 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 19 | 2 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 8 | 1 | 0 | 0 | 0 |
 | 14 Prototype | 30 | 23 | 6 | 0 | 0 | 1 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **341** | **287** | **34** | **0** | **16** | **4** |
+| **total** | **341** | **288** | **33** | **0** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -350,7 +350,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 11.10 | Simplify | yes | `SimplifyVector` | MATCH |
 | 11.11 | Offset path | Figma has offset for vectors | `OffsetVector` | MATCH |
 | 11.12 | Delete & heal | `⇧⌫` after point select | `⇧⌫` / `⇧Delete` in `Canvas.tsx` deletes selected anchor point and recalculates smooth tangent handles (`ix`/`iy`, `ox`/`oy`) between neighboring anchors to heal curve continuity | MATCH |
-| 11.13 | Masks | `⌘⌥M` use as mask, the **Mask** section's type dropdown (*Alpha / Vector / Luminance*), any layer can be a mask | `⌘⌥M`, the canvas-menu row and the sidebar row all call `Editor::use_as_mask` (a multi-selection becomes Figma's mask object in ONE undo entry, and the second press clears it); `Node::mask_type` carries the section's choice and the IR scales the masked scope by the mask's own alpha (Alpha) or luminance (Luminance), ignoring it for Vector; `mask_path_of` falls back to the layer's bounds, so text, images and groups mask too. **Not built:** per-pixel alpha (a blurred or gradient mask clips hard), *View → Mask outlines*, the layers-panel mask glyph and its arrows | PARTIAL |
+| 11.13 | Masks | `⌘⌥M` use as mask, the **Mask** section's type dropdown (*Alpha / Vector / Luminance*), any layer can be a mask; **per-pixel alpha** (*"masks are applied based on the opacity of the mask"*), *View → Mask outlines* (*"masks in your file are outlined in green… If all layers being masked are hidden or have zero percent opacity, then the object's mask outlines won't appear"*), the layers panel's *"mask icon … with an upward-facing arrow along the layers that are being masked"*, and *"Right-click the mask and select Remove mask"* ([help 360040450253](https://help.figma.com/hc/en-us/articles/360040450253-Masks)) | the Rust editor path is as recorded: `⌘⌥M`, the canvas-menu row and the sidebar row call `Editor::use_as_mask` (a multi-selection becomes the mask object in ONE undo entry, the second press clears it), `Node::mask_type` carries the type and the IR scales the masked scope by the mask's own alpha or luminance, `mask_path_of` falls back to bounds. The **web product UI** is now measured and pinned: `Canvas.tsx::paintMaskedRun` paints the mask into a device-resolution tile and punches each masked child with `destination-in`, compositing the mask raster back through `drawImage(mc, ox, oy, ow, oh)` — the run box's own rect, since `(0, 0)` at natural size sampled the alpha 6 device px off and the soft edge landed in the wrong place; `traceNodeShape` (one tracer for the layer paint and the green outline) strokes `#00c853` on the canvas for *Mask outlines*, only while a masked layer is visible and above 0% opacity; `chrome.tsx::withMaskedBelow` puts the upward arrow on the rows **above** a mask beside `Icon name="mask"`; ⌃⌘M and the menu rows toggle ("Remove mask"). Pinned by `apps/web/src/ui/__tests__/maskAlpha.test.mjs` (33) | MATCH |
 | 11.14 | Pen: click-drag curves | yes | yes | MATCH |
 | 11.15 | Pen: close path | click the first point | yes | MATCH |
 | 11.16 | **Pen: edit while drawing** | exit/`Esc`, reopen, continue | our pen commits on finish; *verify* continue-a-path | PARTIAL |
@@ -603,21 +603,30 @@ rendering it.
    `option_r_moves_the_rotation_origin_and_the_pivot_follows`,
    `rotating_a_selection_orbits_every_layer_about_the_pivot` and
    `the_angle_convention_counts_back_down_past_180`.
-8. ~~**Masks authoring** (11.13)~~ — **delivered**: `⌘⌥M` (or the canvas menu's
-   **Use as mask** row, or the sidebar row) makes the bottom layer of the selection
+8. ~~**Masks authoring** (11.13)~~ — **delivered, and the mask indicators too** (pipeline
+   run 5, 2026-09-28): `⌘⌥M` (or the canvas menu's
+   **Use as mask** / **Remove mask** row, or the sidebar row) makes the bottom layer of
+   the selection
    the mask for the layers above it — a multi-selection is wrapped in the mask object
    Figma creates, as ONE undo entry — and the same gesture clears it again; the
    **Mask** section carries the type dropdown (*Alpha*, *Vector*, *Luminance*), and
    the renderer scales the masked scope by the mask's own alpha or luminance (Vector
-   ignores translucency, exactly as documented). Figma's *View → Mask outlines*, the
-   layers-panel mask glyph with the arrows over the masked layers, and per-pixel alpha
-   (blurred, gradient and image masks) are the honest remainder. Pinned by
+   ignores translucency, exactly as documented). The web canvas keeps a mask's alpha
+   per pixel (a gradient or blurred mask feathers; the reduction runs only for vector
+   and luminance), paints *View → Mask outlines* in green on the canvas while a masked
+   layer is visible above 0% opacity, marks the rows above a mask with the stack's
+   upward arrow beside the mask glyph, and closes the toggle both ways. Still open
+   (recorded in the comparison doc's run-5 residuals): the enormous-run tile cap falls
+   back to a hard geometric clip, the mask's reach does not stop at a sibling frame with
+   clip content, and the mask-type dropdown has no hover preview. Pinned by
    `use_as_mask_makes_the_bottom_layer_the_mask`,
    `use_as_mask_toggles_one_layer_and_its_type_is_undoable`,
    `mask_types_scale_the_masked_scope`,
    `the_mask_shortcut_masks_the_bottom_layer`,
    `the_mask_section_switches_the_masks_type` and
-   `the_selection_menu_offers_use_as_mask`.
+   `the_selection_menu_offers_use_as_mask`, plus
+   `apps/web/src/ui/__tests__/maskAlpha.test.mjs` (33) for the per-pixel alpha and the
+   two indicators.
 9. ~~**Place-image tool** (1.17, 2.26, 9.6)~~ — **delivered**: `⇧⌘K` (*"Select
    Image/video from the Shape tools menu … or use the keyboard shortcut"*, and
    the File menu and command search reach it too) picks one or more images,

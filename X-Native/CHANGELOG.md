@@ -5,6 +5,59 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: mask per-pixel alpha and the mask indicators)
+
+The fifth feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Masks* (help 360040450253) — *"masks are applied based on the
+opacity of the mask. The higher the opacity, the more that is revealed. Zero
+percent opacity reveals nothing. This means we can utilize blurs and opacity in
+our masks"* … *"masks in your file are outlined in green. Note: If all layers
+being masked are hidden or have zero percent opacity, then the object's mask
+outlines won't appear."* … *"Right-click the mask and select Remove mask."*
+
+- **The soft edge now lands on the mask.** `Canvas.tsx::paintMaskedRun` paints
+  the mask into a device-resolution tile, punches every masked child with
+  `destination-in`, and composited that mask raster with `drawImage(mc, 0, 0)`
+  at natural size — while the run box it covers starts at the box's padding, so
+  the mask's alpha was sampled 6 device px down-right of the layer. Measured on a
+  100px gradient mask (alpha 1 → 0), the revealed coverage at x = 5 / 25 / 50 /
+  75 / 95 px was **0.000 / 0.806 / 0.556 / 0.306 / 0.102** where the mask's own
+  alpha is 0.95 / 0.75 / 0.50 / 0.25 / 0.05; the mask also bled past its own box.
+  It is now drawn through the same rect the punched tile is blitted with
+  (`drawImage(mc, ox, oy, ow, oh)`), so a gradient or blurred mask feathers where
+  the mask actually is. Alpha masks still skip the `getImageData` reduction —
+  per-pixel alpha was already the model, this was the alignment.
+- **Show mask outlines is visible, and follows the article's note.** The green
+  `#00c853` outline used to be stroked inside the mask tile: 1 stroke on a tile,
+  **0 on the canvas**, so the view setting had no visible effect and its alpha
+  widened the mask by the stroke width. It is now stroked on the canvas from the
+  same tracer the layer paints with (`Canvas.tsx::traceNodeShape`, extracted so
+  the outline cannot drift from the shape), and not at all when every masked
+  layer is hidden or at 0% opacity.
+- **The layers panel marks the layers being masked.** The arrow sat on the row
+  *below* a mask, so Figma's arrangement (mask below its content) showed no arrow
+  anywhere while a mask above its content — which masks nothing — marked the
+  content row. `chrome.tsx::withMaskedBelow` marks the rows above a mask (the ones
+  the canvas clips), and the glyph is an upward arrow instead of a down-right
+  `↳`, matching *"the mask icon … with an upward-facing arrow along the layers
+  that are being masked"*.
+- **Use as mask toggles.** ⌃⌘M and the menu rows only ever set the flag: a second
+  press left `isMask` true and the row still read "Use as mask" while the layer
+  was one. Both now toggle, the right-click rows read **Remove mask** when the
+  layer is a mask (`ContextMenu.tsx::MenuCaps.mask`), and removing one leaves the
+  layers themselves alone.
+- Pinned by `apps/web/src/ui/__tests__/maskAlpha.test.mjs` (33 assertions, wired
+  into `npm test`), which runs against a small software Canvas2D written in the
+  test so the edge is measured in pixel alpha: the monotone gradient ramp with
+  ≥ 40 pixels in the 0.05–0.95 band, the same gradient cut as a **vector** mask is
+  binary, luminance follows brightness, a mask at 0% opacity reveals nothing, the
+  blur reaches the mask tile, the three outline cases, and the panel arrows.
+  Reverting the blit to `(0, 0)` fails 5 assertions, dropping the outline note
+  fails 2, the old panel walk fails the row-marking one. Whole suite **2896
+  passed, 0 failed**. TypeScript only: no Rust file changed and the geometry guard
+  was not touched.
+
 ## [Unreleased] — 2026-09-28 (Figma parity: the arc tool's canvas handles)
 
 The fourth feature through the eight-step Figma parity pipeline recorded in
