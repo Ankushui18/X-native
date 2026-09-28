@@ -74,7 +74,7 @@ try {
   assert.equal(getEngineInfo().importBackend, "wasm", getEngineInfo().lastImportFallback ?? "simple SVG must use native output");
   // Real stateful class, not a synthetic session/replayed patch. The Rust
   // document is opened once; each edit/undo returns one node, never .x JSON.
-  assert.equal(glue.sessionBridgeVersion(), 4);
+  assert.equal(glue.sessionBridgeVersion(), 5);
   const sessionX = JSON.stringify(JSON.parse(glue.importSvgToX(plain)).doc);
   const session = await openRustSession(sessionX);
   assert.ok(session, "generated bindgen must expose the shared Rust command session");
