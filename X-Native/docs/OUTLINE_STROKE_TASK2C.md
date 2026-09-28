@@ -6,12 +6,15 @@
 > on the pull request and
 > [36409190946](https://github.com/Ankushui18/X-native/actions/runs/36409190946)
 > on `main` — and only that evidence lifted `OUTLINE_STROKE_GUARD_ACTIVE`. The
-> post-promotion run
+> post-promotion runs
 > [36413696948](https://github.com/Ankushui18/X-native/actions/runs/36413696948)
-> then drove the public web owner on the real artifact. Reaching it took three
-> fixes, all of them harness or audit defects rather than geometry: a smoke that
-> captured its stroke revision too late, a teardown call to an unimported
-> helper, and an audit that read the source through the offset-gated `getShape`.
+> and, with the rejection rollback,
+> [36414737543](https://github.com/Ankushui18/X-native/actions/runs/36414737543)
+> then drove the public web owner on the real artifact. Reaching the first took
+> three fixes, all of them harness or audit defects rather than geometry: a
+> smoke that captured its stroke revision too late, a teardown call to an
+> unimported helper, and an audit that read the source through the offset-gated
+> `getShape`.
 > This is **not** a migration of the normal TypeScript editor, `MemoryEngine`,
 > Auto Layout or general document persistence: `#/file/<id>?engine=rust` remains
 > the only route where a Rust document owns the tree and the undo stack.
@@ -91,8 +94,10 @@
   and the real-artifact smoke with those assertions, including its
   `PASS real-WASM Outline Stroke promotion: public web owner dispatches one Rust
   command with no TS oracle, opt-in ?outline=audit proves the ink, unmodelled
-  sources are reported` line. That establishes real-module calls from the app
-  bridge in the CI host, not a shipped deployment.
+  sources are reported` line. [36414737543](https://github.com/Ankushui18/X-native/actions/runs/36414737543)
+  then re-ran the same gate, web tests/build and screenshots with the audit's
+  rejection rollback and the promotion record in place. That establishes
+  real-module calls from the app bridge in the CI host, not a shipped deployment.
 
 ## Promotion sequence (completed)
 

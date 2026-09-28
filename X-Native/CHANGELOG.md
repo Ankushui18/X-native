@@ -11,9 +11,11 @@ The genuine generated-WASM 30/30 outline corpus ran green with the promotion
 guard still ON — CI
 [36398066150](https://github.com/Ankushui18/X-native/actions/runs/36398066150)
 and [36409190946](https://github.com/Ankushui18/X-native/actions/runs/36409190946)
-— and only then was the browser guard lifted. The post-promotion run
+— and only then was the browser guard lifted. The post-promotion runs
 [36413696948](https://github.com/Ankushui18/X-native/actions/runs/36413696948)
-drove the public web owner on the packaged artifact.
+and [36414737543](https://github.com/Ankushui18/X-native/actions/runs/36414737543)
+drove the public web owner on the packaged artifact, the second with the
+rejection rollback in place.
 
 - **The opt-in Rust document view dispatches Outline Stroke directly.**
   `#/file/<id>?engine=rust` turns one admitted live-stroked rectangle into one
