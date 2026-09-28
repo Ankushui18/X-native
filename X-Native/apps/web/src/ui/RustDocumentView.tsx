@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { DocSeed } from "../engine/files";
 import type { BooleanOp } from "../engine/types";
-import { admitWebDocument, openWebDocumentSession, type RustWebDocumentSession } from "../engine/webDocumentSession";
-import { DEFAULT_RECT_STROKE_COLOR, type RustNodeChange, type RustStateChange, type RustStrokeChange } from "../engine/rustSession";
+import {
+  admitWebDocument, openWebDocumentSession, OUTLINE_STROKE_GUARD_ACTIVE,
+  type RustWebDocumentSession,
+} from "../engine/webDocumentSession";
+import {
+  DEFAULT_RECT_STROKE_COLOR, type RustNodeChange, type RustOutlineStrokeStyle,
+  type RustPathCommand, type RustStateChange, type RustStrokeChange,
+} from "../engine/rustSession";
 import { OffsetGuardRejected, offsetRings } from "../engine/offsetPathOracle";
 import { LiveStatus } from "./announce";
 import { XButton, XSelect } from "./x-ui";
@@ -33,13 +39,25 @@ interface LayerView extends RustNodeChange {
   visible: boolean;
   locked: boolean;
   rings?: [number, number][][];
+  /** Exact native commands from Outline Stroke. Offset results retain rings. */
+  path?: RustPathCommand[];
   count?: number;
   ratio?: number;
   stroke?: RustStrokeChange;
+  /** Full source style returned by Outline Stroke undo; it is distinct from
+   * the older precomputed rectangle-band `stroke` preview. */
+  outlineStroke?: RustOutlineStrokeStyle;
 }
 
 function contourPath(rings: [number, number][][]): string {
   return rings.map(ring => ring.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join(" ") + " Z").join(" ");
+}
+function nativePath(path: RustPathCommand[]): string {
+  return path.map(command => command[0] === "Z" ? "Z" :
+    command[0] === "C" ? `C${command.slice(1).join(" ")}` : `${command[0]}${command[1]} ${command[2]}`).join(" ");
+}
+function svgCap(cap: RustOutlineStrokeStyle["capStart"]): "butt" | "round" | "square" {
+  return cap === "round" ? "round" : cap === "square" ? "square" : "butt";
 }
 function polygonClip(layer: LayerView): string | undefined {
   if (layer.kind !== "poly" && layer.kind !== "star") return undefined;
@@ -168,18 +186,27 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
   const selectedLayer = layers.find(r => r.id === selected[selected.length - 1]) ?? null;
   const ready = phase === "ready" && !!session.current;
   const canBoolean = ready && selected.length === 2 &&
-    selected.every(id => layers.some(r => r.id === id && r.kind === "rect" && r.visible && !r.locked && !r.stroke?.width));
+    selected.every(id => layers.some(r => r.id === id && r.kind === "rect" && r.visible && !r.locked &&
+      !r.stroke?.width && !r.outlineStroke));
   // Vector resize needs its own geometry proof; admit rename/move but not
   // resizing a vector's box independently of its Rust path contours.
-  const canResize = ready && selectedLayer?.kind === "rect" && selectedLayer.w >= 1 && selectedLayer.h >= 1;
+  const canResize = ready && selectedLayer?.kind === "rect" && selectedLayer.w >= 1 && selectedLayer.h >= 1 &&
+    !selectedLayer.outlineStroke;
   const strokeWidth = Number(strokeDraft.width);
   const canStroke = canResize && selectedLayer?.visible && !selectedLayer.locked &&
     strokeDraft.width.trim() !== "" && Number.isFinite(strokeWidth) && strokeWidth > 0 && strokeWidth <= 2048;
   const offsetDistance = Number(offsetDraft.distance);
-  const canOffset = ready && !!selectedLayer?.visible && !selectedLayer.locked && !selectedLayer.stroke?.width &&
-    (selectedLayer?.kind !== "vector" || !!selectedLayer?.rings?.length) &&
+  const canOffset = ready && !!selectedLayer?.visible && !selectedLayer?.locked && !selectedLayer?.stroke?.width &&
+    !selectedLayer?.outlineStroke && (selectedLayer?.kind !== "vector" || !!selectedLayer?.rings?.length) &&
     offsetDraft.distance.trim() !== "" && Number.isFinite(offsetDistance) &&
     offsetDistance !== 0 && Math.abs(offsetDistance) <= 2048;
+  // This preview admits a conservative UI subset. The Rust bridge itself keeps
+  // the richer cap/dash/profile command dialect for native callers; the web
+  // button is only offered when the existing DOM layer can be replaced from a
+  // reversible bounded delta without inventing another geometry engine.
+  const canOutline = !OUTLINE_STROKE_GUARD_ACTIVE && ready && selectedLayer?.kind === "rect" &&
+    !!selectedLayer?.visible && !selectedLayer?.locked &&
+    (!!selectedLayer.stroke?.width || !!selectedLayer.outlineStroke);
   const phaseMessage = phase === "opening" ? "Checking the document and loading Rust"
     : phase === "unsupported" ? "Unsupported file. Use the standard editor"
     : phase === "unavailable" ? "Rust unavailable. Use the standard editor"
@@ -191,24 +218,28 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
     try {
       const change = command(rust);
       if (change.revision < lastRevision.current ||
-          ((change.node || change.boolean || change.stroke || change.offset) && change.revision === lastRevision.current) ||
+          ((change.node || change.boolean || change.stroke || change.offset || change.outline) &&
+            change.revision === lastRevision.current) ||
           (change.node && (!layers.some(r => r.id === change.node!.id) || change.node.w <= 0 || change.node.h <= 0)) ||
           (change.stroke && (!layers.some(r => r.id === change.stroke!.id && r.kind === "rect") ||
             change.node && change.node.id !== change.stroke.id)) ||
           (change.offset && (!layers.some(r => r.id === change.offset!.id) ||
             change.offset.kind === "rect" && change.offset.radius !== 0)) ||
+          (change.outline && (!layers.some(r => r.id === change.outline!.id) ||
+            !["rect", "ellipse", "poly", "star", "vector"].includes(change.outline.kind))) ||
           (change.boolean && (change.boolean.removed.some(id => !layers.some(r => r.id === id)) ||
             change.boolean.upsert.some(n => layers.some(r => r.id === n.id && !change.boolean!.removed.includes(r.id)))))) {
         throw new Error("Rust returned an invalid layer delta");
       }
       const offset = change.offset;
+      const outline = change.outline;
       const rings = offset?.kind === "vector" ? offsetRings(offset.path) : undefined;
       if (offset?.kind === "vector" && !rings) throw new Error("Unsupported offset path in web preview");
       lastRevision.current = change.revision;
       // Status/history are supplied by Rust; JS retains only what the DOM
       // needs to paint. No speculative patch and no full JSON at command time.
       setHistory(change);
-      if (change.node || change.boolean || change.stroke || change.offset) {
+      if (change.node || change.boolean || change.stroke || change.offset || outline) {
         hasEdits.current = true;
         if (change.boolean) {
           const patch = change.boolean;
@@ -223,18 +254,38 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
           setDraft(patch.upsert[patch.upsert.length - 1].name);
         } else {
           const { node, stroke } = change;
-          setLayers(list => list.map(layer => offset && layer.id === offset.id ? {
-            id: offset.id, name: offset.name, x: offset.x, y: offset.y, w: offset.w, h: offset.h,
-            kind: offset.kind, fill: layer.fill, visible: layer.visible, locked: layer.locked,
-            ...(rings ? { rings } : {}),
-            ...(offset.kind === "poly" || offset.kind === "star" ? { count: offset.count } : {}),
-            ...(offset.kind === "star" ? { ratio: offset.ratio } : {}),
-          } : (node && layer.id === node.id || stroke && layer.id === stroke.id)
-            ? { ...layer, ...(node ? { name: node.name, x: node.x, y: node.y, w: node.w, h: node.h } : {}),
-              ...(stroke ? { stroke: stroke.width ? stroke : undefined } : {}) }
-            : layer));
+          setLayers(list => list.map(layer => {
+            if (outline && layer.id === outline.id) {
+              // `outline` is intentionally a complete affected-layer patch:
+              // clear stale band geometry, replace its primitive/vector shape,
+              // and retain only the restored live-stroke metadata on undo.
+              return {
+                id: outline.id, name: outline.name, x: outline.x, y: outline.y, w: outline.w, h: outline.h,
+                kind: outline.kind as LayerView["kind"], fill: outline.fill ?? layer.fill,
+                visible: layer.visible, locked: layer.locked,
+                ...(outline.kind === "vector" ? { path: outline.path } : {}),
+                ...(outline.kind === "poly" || outline.kind === "star" ? { count: outline.count } : {}),
+                ...(outline.kind === "star" ? { ratio: outline.ratio } : {}),
+                ...(outline.stroke ? { outlineStroke: outline.stroke } : {}),
+              };
+            }
+            if (offset && layer.id === offset.id) {
+              return {
+                id: offset.id, name: offset.name, x: offset.x, y: offset.y, w: offset.w, h: offset.h,
+                kind: offset.kind, fill: layer.fill, visible: layer.visible, locked: layer.locked,
+                ...(rings ? { rings } : {}),
+                ...(offset.kind === "poly" || offset.kind === "star" ? { count: offset.count } : {}),
+                ...(offset.kind === "star" ? { ratio: offset.ratio } : {}),
+              };
+            }
+            return (node && layer.id === node.id || stroke && layer.id === stroke.id)
+              ? { ...layer, ...(node ? { name: node.name, x: node.x, y: node.y, w: node.w, h: node.h } : {}),
+                ...(stroke ? { stroke: stroke.width ? stroke : undefined } : {}) }
+              : layer;
+          }));
           if (node) setDraft(current => selected.includes(node.id) ? node.name : current);
           if (offset) setDraft(current => selected.includes(offset.id) ? offset.name : current);
+          if (outline) setDraft(current => selected.includes(outline.id) ? outline.name : current);
           if (stroke && selected.includes(stroke.id)) {
             setStrokeDraft(prev => ({ width: stroke.width ? String(stroke.width) : prev.width,
               color: stroke.width ? stroke.color : prev.color,
@@ -345,7 +396,15 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
                     borderRadius: r.kind === "ellipse" ? "50%" : undefined,
                     clipPath: polygonClip(r) }}>
                   {r.kind === "vector" && <svg width="100%" height="100%" viewBox={`0 0 ${r.w} ${r.h}`}
-                    aria-hidden="true"><path d={contourPath(r.rings ?? [])} fill={r.fill} fillRule="evenodd" /></svg>}
+                    aria-hidden="true"><path d={r.path ? nativePath(r.path) : contourPath(r.rings ?? [])} fill={r.fill} fillRule="evenodd" /></svg>}
+                  {r.outlineStroke && r.kind === "rect" && <svg className="rust-preview-stroke" aria-hidden="true"
+                    viewBox={`0 0 ${r.w} ${r.h}`} style={strokeSvgGeometry(r.w, r.h, 0)}>
+                    <rect x="0" y="0" width={r.w} height={r.h} fill="none" stroke={r.outlineStroke.color}
+                      strokeWidth={r.outlineStroke.width} strokeLinecap={svgCap(r.outlineStroke.capStart)}
+                      strokeLinejoin={r.outlineStroke.join} strokeMiterlimit={r.outlineStroke.miterLimit}
+                      strokeDasharray={r.outlineStroke.dash.length ? r.outlineStroke.dash.join(" ") : undefined}
+                      strokeDashoffset={r.outlineStroke.dashOffset} />
+                  </svg>}
                   {r.stroke && r.stroke.width > 0 && (() => {
                     const spill = r.stroke!.align === "inside" ? 0 : r.stroke!.align === "center" ? r.stroke!.width / 2 : r.stroke!.width;
                     const contours = [r.stroke!.outer, ...(r.stroke!.inner.length ? [r.stroke!.inner] : [])];
@@ -412,6 +471,12 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
                   onClick={() => apply(s => s.strokeNode(selectedLayer.id, 0, strokeDraft.color, "center", "miter"))}>
                   Remove stroke
                 </XButton>}
+                {selectedLayer.kind === "rect" && <XButton disabled={!canOutline}
+                  onClick={() => apply(s => s.outlineStroke(selectedLayer.id))}>
+                  Outline stroke
+                </XButton>}
+                {selectedLayer.kind === "rect" && selectedLayer.stroke?.width && OUTLINE_STROKE_GUARD_ACTIVE &&
+                  <p>Outline Stroke is guarded until the dedicated generated-WASM 30/30 corpus passes.</p>}
                 <form className="rust-preview-stroke-form" onSubmit={e => {
                   e.preventDefault();
                   if (canOffset) apply(s => s.offsetNode(selectedLayer.id, offsetDistance, offsetDraft.join));

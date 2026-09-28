@@ -55,6 +55,34 @@ export type RustOffsetChange = RustNodeChange & (
   { kind: "poly"; count: number } | { kind: "star"; count: number; ratio: number } |
   { kind: "vector"; path: RustPathCommand[] }
 );
+/** The one persisted live-stroke style that Outline Stroke can restore on
+ * undo. It is deliberately richer than the older rectangle-only stroke band:
+ * dashes, asymmetric caps, round joins and variable-width stations stay Rust
+ * data rather than being guessed from a filled result. */
+export interface RustOutlineStrokeStyle {
+  width: number;
+  color: string;
+  align: "inside" | "center" | "outside";
+  capStart: "none" | "round" | "square" | "arrow" | "triangle";
+  capEnd: "none" | "round" | "square" | "arrow" | "triangle";
+  join: "miter" | "bevel" | "round";
+  dash: number[];
+  dashOffset: number;
+  miterLimit: number;
+  widthProfile: { position: number; widthMultiplier: number }[];
+}
+/** Apply/undo/redo projection for one outline rewrite. The result is normally
+ * a vector with `stroke: null`; undo supplies the original primitive/vector
+ * and its full sole-stroke style. */
+export type RustOutlineChange = RustNodeChange & (
+  { kind: "rect"; radius: number } | { kind: "ellipse" } | { kind: "line" } |
+  { kind: "arc"; start: number; end: number; ratio: number } |
+  { kind: "poly"; count: number } | { kind: "star"; count: number; ratio: number } |
+  { kind: "vector"; path: RustPathCommand[] }
+) & {
+  fill: string | null;
+  stroke: RustOutlineStrokeStyle | null;
+};
 // User-authored document ink, not chrome/theme color.
 export const DEFAULT_RECT_STROKE_COLOR = "#202020";
 export interface RustStrokeChange {
@@ -78,6 +106,8 @@ export interface RustStateChange {
   stroke?: RustStrokeChange;
   /** Only an offset edit/undo/redo emits this bounded affected-layer patch. */
   offset?: RustOffsetChange;
+  /** Only Outline Stroke apply/undo/redo emits this reversible layer patch. */
+  outline?: RustOutlineChange;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -218,14 +248,134 @@ function offsetValue(value: unknown): RustOffsetChange {
   if (opened || contours > 128 || (path.length > 0 && !contours)) throw new Error("Unclosed Rust offset path");
   return { ...node, kind, path };
 }
+const OUTLINE_COORD_LIMIT = 1_100_000_000;
+const OUTLINE_MAX_ANCHORS = 8192;
+const OUTLINE_MAX_PATH_COMMANDS = OUTLINE_MAX_ANCHORS + Math.ceil(OUTLINE_MAX_ANCHORS / 3);
+
+function outlinePathValue(value: unknown): RustPathCommand[] {
+  if (!Array.isArray(value) || value.length > OUTLINE_MAX_PATH_COMMANDS) {
+    throw new Error("Invalid Rust outline path");
+  }
+  let opened = false, contourSize = 0, anchors = 0, closedContours = 0;
+  const finishOpen = () => {
+    if (opened && contourSize < 2) throw new Error("Degenerate Rust outline subpath");
+  };
+  const path = value.map((item): RustPathCommand => {
+    if (!Array.isArray(item) || !["M", "L", "C", "Z"].includes(item[0])) {
+      throw new Error("Invalid Rust outline path command");
+    }
+    const tag = item[0];
+    if (tag === "Z") {
+      if (item.length !== 1 || !opened || contourSize < 3) throw new Error("Invalid Rust outline contour");
+      opened = false; contourSize = 0; closedContours++;
+      if (closedContours > Math.ceil(OUTLINE_MAX_ANCHORS / 3)) throw new Error("Too many Rust outline contours");
+      return ["Z"];
+    }
+    if ((tag === "C" ? item.length !== 7 : item.length !== 3) ||
+        item.slice(1).some(v => typeof v !== "number" || !Number.isFinite(v) || Math.abs(v) > OUTLINE_COORD_LIMIT)) {
+      throw new Error("Invalid Rust outline anchor");
+    }
+    if (tag === "M") {
+      finishOpen();
+      opened = true; contourSize = 1;
+    } else {
+      if (!opened) throw new Error("Rust outline segment has no move");
+      contourSize++;
+    }
+    if (++anchors > OUTLINE_MAX_ANCHORS) throw new Error("Rust outline exceeds the anchor budget");
+    return item as RustPathCommand;
+  });
+  finishOpen();
+  return path;
+}
+
+function outlineStrokeValue(value: unknown): RustOutlineStrokeStyle {
+  const obj = record(value, "outline stroke");
+  keys(obj, ["width", "color", "align", "capStart", "capEnd", "join", "dash", "dashOffset", "miterLimit", "widthProfile"], "outline stroke");
+  if (typeof obj.width !== "number" || !Number.isFinite(obj.width) || obj.width <= 0 || obj.width > 1_000_000 ||
+      typeof obj.color !== "string" || !/^#[0-9a-f]{6}$/.test(obj.color) ||
+      !["inside", "center", "outside"].includes(obj.align as string) ||
+      !["none", "round", "square", "arrow", "triangle"].includes(obj.capStart as string) ||
+      !["none", "round", "square", "arrow", "triangle"].includes(obj.capEnd as string) ||
+      !["miter", "bevel", "round"].includes(obj.join as string) ||
+      !Array.isArray(obj.dash) || obj.dash.length > 128 ||
+      obj.dash.some(v => typeof v !== "number" || !Number.isFinite(v) || v <= 0 || v > 1e9) ||
+      typeof obj.dashOffset !== "number" || !Number.isFinite(obj.dashOffset) || Math.abs(obj.dashOffset) > 1e9 ||
+      typeof obj.miterLimit !== "number" || !Number.isFinite(obj.miterLimit) || obj.miterLimit < 1 || obj.miterLimit > 64 ||
+      !Array.isArray(obj.widthProfile) || obj.widthProfile.length > 64) {
+    throw new Error("Invalid Rust outline stroke style");
+  }
+  let previous = -1;
+  const widthProfile = obj.widthProfile.map((station): { position: number; widthMultiplier: number } => {
+    const point = record(station, "outline width station");
+    keys(point, ["position", "widthMultiplier"], "outline width station");
+    if (typeof point.position !== "number" || !Number.isFinite(point.position) || point.position < 0 || point.position > 1 ||
+        point.position < previous || typeof point.widthMultiplier !== "number" || !Number.isFinite(point.widthMultiplier) ||
+        point.widthMultiplier < 0 || point.widthMultiplier > 8) {
+      throw new Error("Invalid Rust outline width profile");
+    }
+    previous = point.position;
+    return { position: point.position, widthMultiplier: point.widthMultiplier };
+  });
+  return {
+    width: obj.width, color: obj.color, align: obj.align as RustOutlineStrokeStyle["align"],
+    capStart: obj.capStart as RustOutlineStrokeStyle["capStart"], capEnd: obj.capEnd as RustOutlineStrokeStyle["capEnd"],
+    join: obj.join as RustOutlineStrokeStyle["join"], dash: obj.dash as number[], dashOffset: obj.dashOffset,
+    miterLimit: obj.miterLimit, widthProfile,
+  };
+}
+
+function outlineValue(value: unknown): RustOutlineChange {
+  const obj = record(value, "outline layer delta");
+  const kind = obj.kind;
+  const extra = kind === "rect" ? ["radius"] : kind === "arc" ? ["start", "end", "ratio"] :
+    kind === "poly" ? ["count"] : kind === "star" ? ["count", "ratio"] : kind === "vector" ? ["path"] : [];
+  keys(obj, ["id", "name", "x", "y", "w", "h", "kind", ...extra, "fill", "stroke"], "outline layer delta");
+  const node = nodeValue({ id: obj.id, name: obj.name, x: obj.x, y: obj.y, w: obj.w, h: obj.h });
+  // `line` keeps an endpoint delta in w/h, so a horizontal or vertical
+  // source legitimately has one zero (or a negative direction) component.
+  // The outlined vector returned on apply still has a positive bounding box.
+  const invalidDimensions = kind === "line"
+    ? node === null || (node.w === 0 && node.h === 0)
+    : node === null || node.w <= 0 || node.h <= 0;
+  if (!node || node.id.length > 256 || node.name.length > 1024 || invalidDimensions ||
+      [node.x, node.y, node.w, node.h].some(n => Math.abs(n) > OUTLINE_COORD_LIMIT) ||
+      !(obj.fill === null || typeof obj.fill === "string" && /^#[0-9a-f]{6}$/.test(obj.fill))) {
+    throw new Error("Invalid Rust outline layer");
+  }
+  const stroke = obj.stroke === null ? null : outlineStrokeValue(obj.stroke);
+  if (kind === "rect") {
+    if (typeof obj.radius !== "number" || !Number.isFinite(obj.radius) || obj.radius < 0 ||
+        obj.radius > Math.min(node.w, node.h) / 2) throw new Error("Invalid Rust outline radius");
+    return { ...node, kind, radius: obj.radius, fill: obj.fill, stroke };
+  }
+  if (kind === "ellipse" || kind === "line") return { ...node, kind, fill: obj.fill, stroke };
+  if (kind === "arc") {
+    if (![obj.start, obj.end, obj.ratio].every(v => typeof v === "number" && Number.isFinite(v)) ||
+        (obj.ratio as number) < 0 || (obj.ratio as number) > 1) throw new Error("Invalid Rust outline arc");
+    return { ...node, kind, start: obj.start as number, end: obj.end as number, ratio: obj.ratio as number, fill: obj.fill, stroke };
+  }
+  if (kind === "poly" || kind === "star") {
+    if (!Number.isSafeInteger(obj.count) || (obj.count as number) < 3 || (obj.count as number) > 256 ||
+        (kind === "star" && (typeof obj.ratio !== "number" || !Number.isFinite(obj.ratio) ||
+          (obj.ratio as number) < 0.05 || (obj.ratio as number) > 0.95))) throw new Error("Invalid Rust outline polygon");
+    return kind === "poly" ? { ...node, kind, count: obj.count as number, fill: obj.fill, stroke } :
+      { ...node, kind, count: obj.count as number, ratio: obj.ratio as number, fill: obj.fill, stroke };
+  }
+  if (kind !== "vector") throw new Error("Invalid Rust outline kind");
+  return { ...node, kind, path: outlinePathValue(obj.path), fill: obj.fill, stroke };
+}
+
 function stateValue(json: string): RustStateChange {
   const obj = record(JSON.parse(json) as unknown, "session delta");
   keys(obj, ["revision", "node", "canUndo", "canRedo", ...(obj.boolean === undefined ? [] : ["boolean"]),
-    ...(obj.stroke === undefined ? [] : ["stroke"]), ...(obj.offset === undefined ? [] : ["offset"])], "session delta");
+    ...(obj.stroke === undefined ? [] : ["stroke"]), ...(obj.offset === undefined ? [] : ["offset"]),
+    ...(obj.outline === undefined ? [] : ["outline"])], "session delta");
   if (typeof obj.revision !== "number" || !Number.isSafeInteger(obj.revision) || obj.revision < 0 ||
       typeof obj.canUndo !== "boolean" || typeof obj.canRedo !== "boolean" ||
-      (obj.boolean !== undefined && (obj.node !== null || obj.stroke !== undefined || obj.offset !== undefined)) ||
-      (obj.offset !== undefined && (obj.node !== null || obj.stroke !== undefined))) {
+      (obj.boolean !== undefined && (obj.node !== null || obj.stroke !== undefined || obj.offset !== undefined || obj.outline !== undefined)) ||
+      (obj.offset !== undefined && (obj.node !== null || obj.stroke !== undefined || obj.outline !== undefined)) ||
+      (obj.outline !== undefined && (obj.node !== null || obj.stroke !== undefined || obj.offset !== undefined))) {
     throw new Error("Invalid Rust session delta");
   }
   return {
@@ -236,6 +386,7 @@ function stateValue(json: string): RustStateChange {
     ...(obj.boolean === undefined ? {} : { boolean: booleanValue(obj.boolean) }),
     ...(obj.stroke === undefined ? {} : { stroke: strokeValue(obj.stroke) }),
     ...(obj.offset === undefined ? {} : { offset: offsetValue(obj.offset) }),
+    ...(obj.outline === undefined ? {} : { outline: outlineValue(obj.outline) }),
   };
 }
 
@@ -245,7 +396,7 @@ export class RustSessionClient {
   constructor(binding: WasmDocumentSession) {
     // The version handshake alone is not enough if an optional asset was
     // partially deployed. Do not hand an incomplete Rust owner to the UI.
-    const methods = ["state", "getNode", "getShape", "renameNode", "moveNode", "resizeNode", "booleanNode", "strokeNode", "previewOffset", "offsetNode",
+    const methods = ["state", "getNode", "getShape", "renameNode", "moveNode", "resizeNode", "booleanNode", "strokeNode", "previewOffset", "offsetNode", "outlineStroke",
       "undo", "redo", "exportX", "free"] as const;
     if (methods.some(method => typeof binding[method] !== "function")) {
       if (typeof binding.free === "function") auditRustCall("x-wasm.RustDocumentSession.free", () => binding.free());
@@ -280,6 +431,9 @@ export class RustSessionClient {
   }
   offsetNode(id: string, distance: number, join: "miter" | "bevel" | "round"): RustStateChange {
     return stateValue(this.native("offsetNode", b => b.offsetNode(id, distance, join)));
+  }
+  outlineStroke(id: string): RustStateChange {
+    return stateValue(this.native("outlineStroke", b => b.outlineStroke(id)));
   }
   undo(): RustStateChange { return stateValue(this.native("undo", b => b.undo())); }
   redo(): RustStateChange { return stateValue(this.native("redo", b => b.redo())); }

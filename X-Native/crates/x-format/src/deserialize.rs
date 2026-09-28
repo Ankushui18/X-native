@@ -633,6 +633,28 @@ pub(crate) fn parse_node(v: &V) -> Node {
                         .unwrap_or_default(),
                     dash_offset: l.get("dash_offset").and_then(V::num).unwrap_or(0.0),
                     miter_limit: l.get("miter").and_then(V::num).unwrap_or(4.0),
+                    // Preserve malformed records as non-finite sentinels so
+                    // admission rejects them instead of silently changing a
+                    // variable-width stroke during import.
+                    width_profile: l
+                        .get("width_profile")
+                        .and_then(V::arr)
+                        .map(|points| {
+                            points
+                                .iter()
+                                .map(|point| VariableWidthPoint {
+                                    position: point
+                                        .get("position")
+                                        .and_then(V::num)
+                                        .unwrap_or(f64::NAN),
+                                    width_multiplier: point
+                                        .get("width_multiplier")
+                                        .and_then(V::num)
+                                        .unwrap_or(f64::NAN),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 },
             })
             .collect();

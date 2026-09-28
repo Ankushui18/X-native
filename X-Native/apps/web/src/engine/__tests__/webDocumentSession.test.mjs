@@ -23,11 +23,16 @@ async function test(label, fn) {
   try { await fn(); passed++; console.log(`  ok ${label}`); }
   catch (err) { failed++; console.error(`FAIL ${label}`, err); }
 }
-const moduleWith = Session => ({
-  default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
-  importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 5, RustDocumentSession: Session,
-});
+const moduleWith = Session => {
+  if (Session?.prototype && typeof Session.prototype.outlineStroke !== "function") {
+    Session.prototype.outlineStroke = () => "{}";
+  }
+  return {
+    default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
+    importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
+    sessionBridgeVersion: () => 6, RustDocumentSession: Session,
+  };
+};
 
 await test("one-page rect document and persisted v1 metadata round-trip exactly", () => {
   assert.equal(WEB_DOCUMENT_SESSION_VERSION, 2);
@@ -213,6 +218,34 @@ await test("explicit vector checkpoint preserves all Boolean contours, including
     const native = clone(original);
     native.pages[0].children[0].kind = { t: "vector", path };
     assert.throws(() => decodeWebDocument(JSON.stringify(native), seed), /native|contour|path/i);
+  }
+});
+
+await test("canonical Outline Stroke fill stack checkpoints as the same single web fill", () => {
+  const seed = fixture(), raw = JSON.parse(admitWebDocument(seed));
+  const n = raw.pages[0].children[0];
+  n.kind = { t: "vector", path: [["M", 0, 0], ["L", 30, 0], ["L", 30, 40], ["L", 0, 40], ["Z"]] };
+  n.fill = { t: "solid", c: "#9142d4" };
+  n.fill_layers = [{ paint: { t: "solid", c: "#9142d4" }, opacity: 1, visible: true, blend: "normal" }];
+  // Outlining removes the legacy top-level live-stroke field as well as its
+  // materialized stack; retaining it would be a lossy checkpoint projection.
+  delete n.stroke;
+  n.stroke_layers = []; n.effect_layers = [];
+  const decoded = decodeWebDocument(JSON.stringify(raw), seed);
+  const vector = decoded.pages[0].root.children[0];
+  assert.equal(vector.kind, "vector");
+  assert.equal(vector.fill, "#9142d4");
+  assert.equal(vector.vectorNetwork.vertices.length, 4);
+  assert.equal(admitWebDocument(decoded), null, "outlined vectors remain command outputs, not initial inputs");
+
+  for (const mutate of [
+    node => { node.fill_layers[0].opacity = 0.5; },
+    node => { node.fill_layers[0].paint.c = "#000000"; },
+    node => { node.stroke_layers = [{ color: "#000000", width: 1 }]; },
+    node => { node.effect_layers = [{ effect: {} }]; },
+  ]) {
+    const unsafe = clone(raw); mutate(unsafe.pages[0].children[0]);
+    assert.throws(() => decodeWebDocument(JSON.stringify(unsafe), seed), /Unsupported|native|layer/i);
   }
 });
 

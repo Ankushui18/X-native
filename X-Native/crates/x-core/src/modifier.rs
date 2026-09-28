@@ -3,14 +3,12 @@
 //! Non-destructive geometry operation graph evaluated on demand.
 //! Base Geometry -> Modifier 1 -> Modifier 2 -> ... -> Evaluated Geometry.
 
+pub use crate::paint::VariableWidthPoint;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VariableWidthPoint {
-    pub position: f64, // 0.0 to 1.0 along the path
-    pub width_multiplier: f64,
-}
-
+/// Legacy modifier-stack spelling of the canonical stroke-width stations.
+/// The modifier and paint APIs deliberately share this type so the same profile
+/// cannot acquire two incompatible representations in `x_core`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VariableWidthProfile {
     pub points: Vec<VariableWidthPoint>,

@@ -292,6 +292,30 @@ fn mask_shape_svg(n: &Node) -> String {
     }
 }
 
+/// Centerline geometry used when SVG needs to materialize a profiled stroke.
+/// Keep this source in the same node-local coordinate space as the primitive
+/// SVG element emitted by `svg_node`: the parent `<g>` supplies translation,
+/// rotation and skew afterwards.  `Section` paints as a rounded rectangle even
+/// though it is semantically a container, and a Rect's per-corner model has the
+/// same single-radius SVG fallback, so both use that canonical rounded source.
+fn svg_stroke_source(n: &Node) -> Vec<PathCmd> {
+    let mut source = n.clone();
+    match &n.kind {
+        NodeKind::Rect { radius } => {
+            source.kind = NodeKind::Rect {
+                radius: n.corner_radii.map(|corners| corners[0]).unwrap_or(*radius),
+            };
+        }
+        NodeKind::Section => {
+            source.kind = NodeKind::Rect {
+                radius: n.corner_radii.map(|corners| corners[0]).unwrap_or(8.0),
+            };
+        }
+        _ => {}
+    }
+    x_core::booleans::node_to_path(&source).unwrap_or_default()
+}
+
 fn svg_stroke_options(layer: &StrokeLayer) -> String {
     let cap = match layer.options.cap_start {
         StrokeCap::Round => "round",
@@ -323,6 +347,36 @@ fn svg_stroke_options(layer: &StrokeLayer) -> String {
         layer.options.miter_limit
     )
 }
+/// SVG has no variable-width stroke primitive. A populated profile therefore
+/// uses x-core's same bounded stroke-to-fill materialization as the native
+/// renderer/editor; an empty profile keeps the compact legacy `<stroke>`.
+/// `Some("")` is deliberate for invalid in-memory geometry: it is safer to
+/// omit it than render a tapered profile as a different uniform stroke.
+fn svg_variable_stroke(
+    source: &[PathCmd],
+    layer: &StrokeLayer,
+    vars: &Variables,
+    defs: &mut String,
+    grad_id: &mut usize,
+    assets: Option<SvgAssetResolver>,
+) -> Option<String> {
+    if layer.options.width_profile.is_empty() {
+        return None;
+    }
+    let outline = match outline_stroke_path(source, layer.stroke.width, &layer.options) {
+        Ok(outline) => outline,
+        Err(_) => return Some(String::new()),
+    };
+    let fill = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
+    Some(format!(
+        "<path d=\"{}\" fill=\"{}\" fill-rule=\"nonzero\" opacity=\"{}\"{}/>",
+        path_cmds_d(&outline.path, 0.0, 0.0),
+        fill,
+        layer.opacity,
+        svg_blend(layer.blend)
+    ))
+}
+
 fn svg_blend(blend: BlendKind) -> &'static str {
     match blend {
         BlendKind::Normal => "",
@@ -404,6 +458,7 @@ fn svg_node(
     match &n.kind {
         NodeKind::Rect { radius } => {
             let r = n.corner_radii.map(|c| c[0]).unwrap_or(*radius);
+            let stroke_source = svg_stroke_source(n);
             for layer in n.active_fills() {
                 let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
                 body.push_str(&format!(
@@ -417,21 +472,41 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                body.push_str(&format!("<rect width=\"{}\" height=\"{}\" rx=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w, n.h, r, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    body.push_str(&format!("<rect width=\"{}\" height=\"{}\" rx=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w, n.h, r, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                }
             }
         }
         NodeKind::Ellipse => {
+            let stroke_source = svg_stroke_source(n);
             for layer in n.active_fills() {
                 let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
                 body.push_str(&format!("<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{}\" opacity=\"{}\"{}/>", n.w / 2.0, n.h / 2.0, n.w / 2.0, n.h / 2.0, fill, layer.opacity, svg_blend(layer.blend)));
             }
             for layer in n.active_strokes() {
-                body.push_str(&format!("<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w / 2.0, n.h / 2.0, n.w / 2.0, n.h / 2.0, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    body.push_str(&format!("<ellipse cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w / 2.0, n.h / 2.0, n.w / 2.0, n.h / 2.0, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                }
             }
         }
         NodeKind::Line => {
+            let stroke_source = svg_stroke_source(n);
             for layer in n.active_strokes() {
-                body.push_str(&format!("<line x1=\"0\" y1=\"0\" x2=\"{}\" y2=\"0\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width.max(1.0), layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    body.push_str(&format!("<line x1=\"0\" y1=\"0\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", n.w, n.h, svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width.max(1.0), layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                }
             }
         }
         NodeKind::Text { text } => {
@@ -532,12 +607,19 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                body.push_str(&format!("<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", d.trim_end(), svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                if let Some(profiled) =
+                    svg_variable_stroke(path, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    body.push_str(&format!("<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", d.trim_end(), svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                }
             }
         }
         NodeKind::Section => {
             // labelled container: rounded rect fill + border + header text
             let r = n.corner_radii.map(|c| c[0]).unwrap_or(8.0);
+            let stroke_source = svg_stroke_source(n);
             for layer in n.active_fills() {
                 let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
                 body.push_str(&format!(
@@ -551,13 +633,19 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                body.push_str(&format!(
-                    "<rect width=\"{}\" height=\"{}\" rx=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
-                    n.w, n.h, r,
-                    svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets),
-                    layer.stroke.width, layer.opacity, svg_blend(layer.blend),
-                    svg_stroke_options(&layer)
-                ));
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    body.push_str(&format!(
+                        "<rect width=\"{}\" height=\"{}\" rx=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
+                        n.w, n.h, r,
+                        svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets),
+                        layer.stroke.width, layer.opacity, svg_blend(layer.blend),
+                        svg_stroke_options(&layer)
+                    ));
+                }
             }
             let name = if n.name.is_empty() {
                 "Section"
@@ -571,11 +659,8 @@ fn svg_node(
         }
         // polygon and star: the shape's own outline, fill + stroke
         NodeKind::Poly { sides } => {
-            let d = path_cmds_d(
-                &x_core::booleans::poly_path_cmds(n.w, n.h, *sides),
-                0.0,
-                0.0,
-            );
+            let stroke_source = x_core::booleans::poly_path_cmds(n.w, n.h, *sides);
+            let d = path_cmds_d(&stroke_source, 0.0, 0.0);
             for layer in n.active_fills() {
                 let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
                 body.push_str(&format!(
@@ -587,21 +672,27 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
-                body.push_str(&format!(
-                    "<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
-                    d.trim_end(),
-                    stroke,
-                    layer.stroke.width,
-                    layer.opacity,
-                    svg_blend(layer.blend),
-                    svg_stroke_options(&layer)
-                ));
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
+                    body.push_str(&format!(
+                        "<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
+                        d.trim_end(),
+                        stroke,
+                        layer.stroke.width,
+                        layer.opacity,
+                        svg_blend(layer.blend),
+                        svg_stroke_options(&layer)
+                    ));
+                }
             }
         }
         NodeKind::Star { points, ratio } => {
-            let cmds = x_core::booleans::star_path_cmds(n.w, n.h, *points, *ratio);
-            let d = path_cmds_d(&cmds, 0.0, 0.0);
+            let stroke_source = x_core::booleans::star_path_cmds(n.w, n.h, *points, *ratio);
+            let d = path_cmds_d(&stroke_source, 0.0, 0.0);
             for layer in n.active_fills() {
                 let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
                 body.push_str(&format!(
@@ -613,25 +704,28 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
-                body.push_str(&format!(
-                    "<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
-                    d.trim_end(),
-                    stroke,
-                    layer.stroke.width,
-                    layer.opacity,
-                    svg_blend(layer.blend),
-                    svg_stroke_options(&layer)
-                ));
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    let stroke = svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets);
+                    body.push_str(&format!(
+                        "<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>",
+                        d.trim_end(),
+                        stroke,
+                        layer.stroke.width,
+                        layer.opacity,
+                        svg_blend(layer.blend),
+                        svg_stroke_options(&layer)
+                    ));
+                }
             }
         }
         // arc: same fill/stroke emission as a plain vector path
         NodeKind::Arc { start, end, ratio } => {
-            let d = path_cmds_d(
-                &x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end, *ratio),
-                0.0,
-                0.0,
-            );
+            let stroke_source = x_core::booleans::arc_path_cmds(n.w, n.h, *start, *end, *ratio);
+            let d = path_cmds_d(&stroke_source, 0.0, 0.0);
             for layer in n.active_fills() {
                 let fill = svg_fill(&layer.paint, vars, defs, grad_id, assets);
                 body.push_str(&format!(
@@ -643,7 +737,13 @@ fn svg_node(
                 ));
             }
             for layer in n.active_strokes() {
-                body.push_str(&format!("<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", d.trim_end(), svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                if let Some(profiled) =
+                    svg_variable_stroke(&stroke_source, &layer, vars, defs, grad_id, assets)
+                {
+                    body.push_str(&profiled);
+                } else {
+                    body.push_str(&format!("<path d=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{}\" opacity=\"{}\"{}{}/>", d.trim_end(), svg_fill(&layer.stroke.paint, vars, defs, grad_id, assets), layer.stroke.width, layer.opacity, svg_blend(layer.blend), svg_stroke_options(&layer)));
+                }
             }
         }
         NodeKind::Image {

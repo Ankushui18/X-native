@@ -98,7 +98,7 @@ export function bridgeAuditSnapshot() {
   const geo = modules.geometry as { availableFunctions?: string[] } | undefined;
   const available = [
     ...(imp?.availableFunctions ?? []).map(k => k === "default" ? "x-wasm.init" : `x-wasm.${k}`),
-    ...(imp?.sessionExportPresent ? ["new", "state", "getNode", "getShape", "renameNode", "moveNode", "resizeNode", "booleanNode", "strokeNode", "previewOffset", "offsetNode", "undo", "redo", "exportX", "free"]
+    ...(imp?.sessionExportPresent ? ["new", "state", "getNode", "getShape", "renameNode", "moveNode", "resizeNode", "booleanNode", "strokeNode", "previewOffset", "offsetNode", "outlineStroke", "undo", "redo", "exportX", "free"]
       .map(k => `x-wasm.RustDocumentSession.${k}`) : []),
     ...(geo?.availableFunctions ?? []).map(k => `x-geo.${k}`),
   ];

@@ -774,6 +774,11 @@ pub struct OutlineGlyph {
     /// local placement: translate(pen + offset, baseline) * scale(s, -s)
     pub transform: Affine,
     pub color: Color,
+    /// Stable grouping boundary for editable text outlining. Multiple glyph
+    /// outlines from one grapheme/ligature share this value, so a combining
+    /// mark or a counter's characters never become unrelated vector layers.
+    /// Render sinks deliberately ignore it.
+    pub group: usize,
 }
 
 /// Shape + wrap + align rich spans and return every glyph as a positioned
@@ -889,6 +894,11 @@ pub fn glyph_outlines(
         }
     }
     let mut out = vec![];
+    // This counter is intentionally assigned by shaping order rather than by
+    // glyph vector index: one grapheme can produce several outlines (base +
+    // combining mark, an Indic cluster, a counter's digits/punctuation), and
+    // editable Outline Text must retain that unit as one vector layer.
+    let mut next_group = 0usize;
     let mut y = 0.0f64;
     // the 1-based item counter a numbered list shows
     let mut item = 0usize;
@@ -947,7 +957,14 @@ pub fn glyph_outlines(
                 let f = &fonts.fonts[run.font];
                 let scale = run.size / f.units_per_em;
                 let mut x = pen;
+                let mut previous_cluster: Option<u32> = None;
+                let mut group = 0usize;
                 for g in &run.glyphs {
+                    if previous_cluster != Some(g.cluster) {
+                        group = next_group;
+                        next_group = next_group.saturating_add(1);
+                        previous_cluster = Some(g.cluster);
+                    }
                     if let Some(outline) = f.outline(g.glyph_id) {
                         let t = Affine::translate((x + g.x_offset, baseline - g.y_offset))
                             * Affine::scale_non_uniform(scale, -scale);
@@ -955,6 +972,7 @@ pub fn glyph_outlines(
                             path: outline,
                             transform: t,
                             color: run.color,
+                            group,
                         });
                     }
                     x += g.x_advance;
@@ -983,6 +1001,10 @@ pub fn glyph_outlines(
                     mspan = mspan.color(first.color);
                     mspan.font = first.font;
                 }
+                // A list marker is one semantic counter/bullet, even when a
+                // numbered marker shapes to several glyphs ("10.").
+                let marker_group = next_group;
+                next_group = next_group.saturating_add(1);
                 for run in shaper.shape_span(&mspan, default_font) {
                     let f = &fonts.fonts[run.font];
                     let scale = run.size / f.units_per_em;
@@ -995,6 +1017,7 @@ pub fn glyph_outlines(
                                 path: outline,
                                 transform: t,
                                 color: run.color,
+                                group: marker_group,
                             });
                         }
                         x += g.x_advance;
@@ -1019,10 +1042,13 @@ pub fn glyph_outlines(
             path.push(PathEl::LineTo(Point::new(x0 + line.width, line_y + th)));
             path.push(PathEl::LineTo(Point::new(x0, line_y + th)));
             path.push(PathEl::ClosePath);
+            let group = next_group;
+            next_group = next_group.saturating_add(1);
             out.push(OutlineGlyph {
                 path,
                 transform: Affine::IDENTITY,
                 color: line.spans[0].color,
+                group,
             });
         }
         y += lh;
@@ -1152,6 +1178,7 @@ pub fn node_text_outlines_styled(
                     path: g.path.clone(),
                     transform: g.transform,
                     color: g.color,
+                    group: g.group,
                 })
                 .collect(),
             block.height,
@@ -1276,6 +1303,7 @@ pub fn node_text_outlines_rich(
                     path: g.path.clone(),
                     transform: g.transform,
                     color: g.color,
+                    group: g.group,
                 })
                 .collect(),
             block.height,
@@ -2377,5 +2405,25 @@ mod tests {
             );
             assert_eq!(p, 2);
         }
+    }
+
+    #[test]
+    fn outline_glyph_group_keeps_multi_contour_glyphs_together() {
+        let fonts = fonts();
+        let Some(default_font) = fonts.default_font() else {
+            return;
+        };
+        // A lowercase i normally contains a stem and detached dot. They may
+        // become several path contours, but editable Outline Text must receive
+        // one glyph group rather than separate sibling layers.
+        let (glyphs, _) = glyph_outlines(
+            &fonts,
+            &[Span::new("i", 32.0).font(default_font)],
+            default_font,
+            &TextBlockStyle::default(),
+        );
+        assert!(!glyphs.is_empty());
+        let group = glyphs[0].group;
+        assert!(glyphs.iter().all(|glyph| glyph.group == group));
     }
 }

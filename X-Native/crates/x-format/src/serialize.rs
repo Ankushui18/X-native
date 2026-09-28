@@ -666,14 +666,33 @@ pub(crate) fn node_json(n: &Node, out: &mut String) {
                 Paint::Solid(c) => format!("\"color\":\"{}\"", color_to_hex(*c)),
                 other => format!("\"paint\":{}", paint_json(other)),
             };
+            // Empty is omitted so legacy uniform-stroke documents remain
+            // byte-stable. A populated profile is persisted as normalized
+            // arc-length stations, not pre-expanded outline geometry.
+            let width_profile = if l.options.width_profile.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ",\"width_profile\":[{}]",
+                    l.options
+                        .width_profile
+                        .iter()
+                        .map(|point| format!(
+                            "{{\"position\":{},\"width_multiplier\":{}}}",
+                            point.position, point.width_multiplier
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            };
             format!(
-            "{{{},\"width\":{},\"opacity\":{},\"visible\":{},\"blend\":\"{}\",\"align\":\"{}\",\"cap_start\":\"{}\",\"cap_end\":\"{}\",\"join\":\"{}\",\"dash\":[{}],\"dash_offset\":{},\"miter\":{}}}",
+            "{{{},\"width\":{},\"opacity\":{},\"visible\":{},\"blend\":\"{}\",\"align\":\"{}\",\"cap_start\":\"{}\",\"cap_end\":\"{}\",\"join\":\"{}\",\"dash\":[{}],\"dash_offset\":{},\"miter\":{}{}}}",
             paint_part,
             l.stroke.width, l.opacity, l.visible, blend_name(l.blend),
             match l.options.align { StrokeAlign::Inside => "inside", StrokeAlign::Center => "center", StrokeAlign::Outside => "outside" },
             cap_name(l.options.cap_start), cap_name(l.options.cap_end),
             match l.options.join { StrokeJoin::Miter => "miter", StrokeJoin::Bevel => "bevel", StrokeJoin::Round => "round" },
-            l.options.dash.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","), l.options.dash_offset, l.options.miter_limit
+            l.options.dash.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","), l.options.dash_offset, l.options.miter_limit, width_profile
         )}).collect::<Vec<_>>().join(",");
         out.push_str(&format!(",\"stroke_layers\":[{layers}]"));
     }

@@ -138,11 +138,12 @@ mod bindings {
     }
 
     /// Independently versioned command session. V3 added Booleans, V4 added
-    /// aligned strokes; V5 adds bounded single-layer signed offsets. Older
-    /// bindgen artifacts cannot safely acknowledge/undo the new shape delta.
+    /// aligned strokes, V5 added bounded single-layer signed offsets, and V6
+    /// adds reversible Outline Stroke projections. Older bindgen artifacts
+    /// cannot safely acknowledge/undo the new filled-vector rewrite.
     #[wasm_bindgen(js_name = sessionBridgeVersion)]
     pub fn session_bridge_version() -> u32 {
-        5
+        6
     }
 
     #[wasm_bindgen]
@@ -237,6 +238,11 @@ mod bindings {
             self.bridge
                 .offset_node(id, distance, join)
                 .map_err(js_error)
+        }
+
+        #[wasm_bindgen(js_name = outlineStroke)]
+        pub fn outline_stroke(&mut self, id: &str) -> Result<String, JsValue> {
+            self.bridge.outline_stroke(id).map_err(js_error)
         }
 
         pub fn undo(&mut self) -> Result<String, JsValue> {

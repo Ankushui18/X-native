@@ -9,11 +9,18 @@ async function test(name, fn) {
   catch (e) { failed++; console.error(`FAIL ${name}`, e); }
 }
 const patch = { revision: 1, node: { id: "box", name: "Card", x: 13, y: 16, w: 80, h: 24.5 }, canUndo: true, canRedo: false };
-const moduleWith = (session) => ({
-  default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
-  importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 5, RustDocumentSession: session,
-});
+const moduleWith = (session) => {
+  // Old fixtures exercise unrelated commands. Give them the newly required
+  // ABI member; dedicated cases below still validate Outline Stroke payloads.
+  if (session?.prototype && typeof session.prototype.outlineStroke !== "function") {
+    session.prototype.outlineStroke = () => JSON.stringify(patch);
+  }
+  return {
+    default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
+    importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
+    sessionBridgeVersion: () => 6, RustDocumentSession: session,
+  };
+};
 
 await test("optional older bindgen artifacts keep imports without advertising a command session", async () => {
   assert.equal(await initWasmBridge(async () => moduleWith(undefined)), true);
@@ -21,7 +28,7 @@ await test("optional older bindgen artifacts keep imports without advertising a 
   assert.equal(getEngineInfo().hasWasm, true);
 });
 await test("old/future session ABIs decline without breaking import status", async () => {
-  for (const version of [1, 2, 3, 4, 6]) {
+  for (const version of [1, 2, 3, 4, 5, 7]) {
     __resetWasmForTests();
     assert.equal(await initWasmBridge(async () => ({ ...moduleWith(class {}), sessionBridgeVersion: () => version })), true);
     assert.equal(await openRustSession("native .x"), null);
@@ -228,7 +235,53 @@ await test("offset paths are bounded, closed, typed and never whole-page deltas"
   }
   session.close();
 });
-await test("incomplete v5 binding frees itself before exposing a Rust owner", async () => {
+await test("Outline Stroke deltas keep source style reversible and reject malformed bridge payloads", async () => {
+  const result = { id: "box", name: "Card", x: 8, y: 14, w: 90, h: 48,
+    kind: "vector", path: [["M", 0, 0], ["L", 90, 0], ["L", 90, 48], ["L", 0, 48], ["Z"]],
+    fill: "#9142d4", stroke: null };
+  const restored = { id: "box", name: "Card", x: 10, y: 20, w: 80, h: 40,
+    kind: "rect", radius: 0, fill: "#a1b2c3", stroke: {
+      width: 7, color: "#9142d4", align: "center", capStart: "round", capEnd: "triangle", join: "round",
+      dash: [11, 4], dashOffset: 8, miterLimit: 4,
+      widthProfile: [{ position: 0, widthMultiplier: 0.5 }, { position: 0.4, widthMultiplier: 1.75 }, { position: 1, widthMultiplier: 0.75 }],
+    } };
+  let response = { revision: 1, node: null, canUndo: true, canRedo: false, outline: result };
+  class OutlineSession {
+    state() { return JSON.stringify({ revision: 0, node: null, canUndo: false, canRedo: false }); }
+    getNode() { return JSON.stringify(patch.node); }
+    getShape() { return JSON.stringify({ ...patch.node, kind: "rect", radius: 0 }); }
+    previewOffset() { return "{}"; }
+    offsetNode() { return "{}"; }
+    outlineStroke() { return JSON.stringify(response); }
+    renameNode() { return JSON.stringify(patch); }
+    moveNode() { return JSON.stringify(patch); }
+    resizeNode() { return JSON.stringify(patch); }
+    booleanNode() { return JSON.stringify(patch); }
+    strokeNode() { return JSON.stringify(patch); }
+    undo() { return JSON.stringify({ ...response, revision: 2, canUndo: false, canRedo: true, outline: restored }); }
+    redo() { return JSON.stringify(response); }
+    exportX() { return "{}"; }
+    free() {}
+  }
+  await initWasmBridge(async () => moduleWith(OutlineSession));
+  const session = await openRustSession("native .x");
+  assert.deepEqual(session.outlineStroke("box").outline, result);
+  assert.deepEqual(session.undo().outline, restored);
+  assert.deepEqual(session.redo().outline, result);
+  for (const bad of [
+    { ...response, outline: { ...result, path: [["M", 0, 0], ["Z"]] } },
+    { ...response, outline: { ...restored, stroke: { ...restored.stroke, widthProfile: [
+      { position: 0.8, widthMultiplier: 1 }, { position: 0.2, widthMultiplier: 1 }] } } },
+    { ...response, outline: { ...result, fill: "#9142d4ff" } },
+    { ...response, outline: { ...result, extra: true } },
+    { ...response, offset: { ...patch.node, kind: "rect", radius: 0 } },
+  ]) {
+    response = bad;
+    assert.throws(() => session.outlineStroke("box"), /Invalid|Unexpected|Degenerate|segment/i);
+  }
+  session.close();
+});
+await test("incomplete v6 binding frees itself before exposing a Rust owner", async () => {
   let freed = 0;
   class IncompleteSession {
     state() { return "{}"; }

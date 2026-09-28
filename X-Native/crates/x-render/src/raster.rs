@@ -297,7 +297,10 @@ impl<'a> RasterSink<'a> {
                     options,
                     ..
                 } => {
-                    if let Some(p) = to_path(path) {
+                    let profiled =
+                        crate::text_geometry::variable_stroke_outline(path, *width, options);
+                    let draw_path = profiled.as_ref().unwrap_or(path);
+                    if let Some(p) = to_path(draw_path) {
                         let mut paint = to_paint(brush);
                         let mask = self.stack.last().and_then(|c| c.mask.as_ref());
                         paint.blend_mode = self
@@ -305,9 +308,24 @@ impl<'a> RasterSink<'a> {
                             .last()
                             .map(|c| c.blend)
                             .unwrap_or(ts::BlendMode::SourceOver);
-                        let stroke = to_stroke(options, *width);
-                        self.pix
-                            .stroke_path(&p, &paint, &stroke, to_transform(*transform), mask);
+                        if profiled.is_some() {
+                            self.pix.fill_path(
+                                &p,
+                                &paint,
+                                ts::FillRule::Winding,
+                                to_transform(*transform),
+                                mask,
+                            );
+                        } else {
+                            let stroke = to_stroke(options, *width);
+                            self.pix.stroke_path(
+                                &p,
+                                &paint,
+                                &stroke,
+                                to_transform(*transform),
+                                mask,
+                            );
+                        }
                     }
                 }
                 RenderCommand::Glyphs {

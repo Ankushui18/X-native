@@ -23,11 +23,16 @@ const fixture = () => {
   );
   return doc;
 };
-const moduleWith = Session => ({
-  default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
-  importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-  sessionBridgeVersion: () => 5, RustDocumentSession: Session,
-});
+const moduleWith = Session => {
+  if (Session?.prototype && typeof Session.prototype.outlineStroke !== "function") {
+    Session.prototype.outlineStroke = () => "{}";
+  }
+  return {
+    default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
+    importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
+    sessionBridgeVersion: () => 6, RustDocumentSession: Session,
+  };
+};
 const calls = { opens: 0, exports: 0, queries: 0, shapes: 0, previews: 0, edits: 0, closes: 0 };
 class FakeRust {
   constructor(x) { calls.opens++; this.doc = JSON.parse(x); this.revision = 0; this.undos = []; this.redos = []; this.strokes = new Map(); }
@@ -96,6 +101,20 @@ class FakeRust {
     this.revision++; calls.edits++;
     return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(id, after) });
   }
+  outlineStroke(id) {
+    const n = this.get(id), style = this.strokes.get(id);
+    if (!n || !style) throw Error("mock needs one live stroke");
+    const before = clone(n), beforeStyle = clone(style);
+    const path = [["M", 0, 0], ["L", n.w, 0], ["L", n.w, n.h], ["L", 0, n.h], ["Z"]];
+    const after = { ...clone(n), kind: { t: "vector", path }, fill: { t: "solid", c: style.color } };
+    Object.assign(n, after); this.strokes.delete(id);
+    this.undos.push({ outline: true, id, before, beforeStyle, after: clone(n) });
+    this.redos.length = 0; this.revision++; calls.edits++;
+    return JSON.stringify({ ...JSON.parse(this.state()), outline: {
+      id, name: n.name ?? id, x: n.x, y: n.y, w: n.w, h: n.h,
+      kind: "vector", path, fill: style.color, stroke: null,
+    } });
+  }
   booleanNode(first, second, name) {
     // A predetermined fixture response exercises the DOM/ABI, NOT a JS
     // implementation of Boolean geometry. Genuine contours are tested in CI.
@@ -133,6 +152,16 @@ class FakeRust {
       if (op.before) this.strokes.set(op.id, op.before); else this.strokes.delete(op.id);
       return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(op.id, op.before) });
     }
+    if (op.outline) {
+      Object.assign(this.get(op.id), clone(op.before)); this.strokes.set(op.id, clone(op.beforeStyle));
+      const n = this.get(op.id), style = op.beforeStyle;
+      return JSON.stringify({ ...JSON.parse(this.state()), outline: {
+        id: op.id, name: n.name ?? op.id, x: n.x, y: n.y, w: n.w, h: n.h, kind: "rect", radius: 0,
+        fill: n.fill.c, stroke: { width: style.width, color: style.color, align: style.align,
+          capStart: "none", capEnd: "none", join: style.join, dash: [], dashOffset: 0,
+          miterLimit: 4, widthProfile: [] },
+      } });
+    }
     if (op.boolean) {
       this.doc.pages[0].children = clone(op.before);
       return JSON.stringify({ ...JSON.parse(this.state()), boolean: {
@@ -158,6 +187,14 @@ class FakeRust {
     if (op.stroke) {
       if (op.after) this.strokes.set(op.id, op.after); else this.strokes.delete(op.id);
       return JSON.stringify({ ...JSON.parse(this.state()), stroke: this.strokeDelta(op.id, op.after) });
+    }
+    if (op.outline) {
+      Object.assign(this.get(op.id), clone(op.after)); this.strokes.delete(op.id);
+      const n = this.get(op.id), path = n.kind.path;
+      return JSON.stringify({ ...JSON.parse(this.state()), outline: {
+        id: op.id, name: n.name ?? op.id, x: n.x, y: n.y, w: n.w, h: n.h,
+        kind: "vector", path, fill: n.fill.c, stroke: null,
+      } });
     }
     if (op.boolean) {
       this.doc.pages[0].children = clone(op.after);
@@ -342,6 +379,9 @@ assert.match(stroked.host.querySelector(".rust-preview-stroke path").getAttribut
 assert.equal(stroked.host.querySelector(".rust-preview-stroke path").getAttribute("fill"), "#202020");
 assert.equal(stroked.host.querySelector(".rust-preview-stroke").style.left, "-8px");
 assert.equal(stroked.byText("Remove stroke").disabled, false);
+assert.equal(stroked.byText("Outline stroke").disabled, true,
+  "Outline Stroke stays guard-on until its own genuine-WASM corpus proves ink parity");
+assert.ok(stroked.host.textContent.includes("generated-WASM 30/30 corpus"));
 await stroked.click("Undo");
 assert.equal(stroked.host.querySelector(".rust-preview-stroke"), null);
 await stroked.click("Redo");
