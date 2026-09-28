@@ -344,6 +344,20 @@ try {
       try {
         if (offsetParity === 0) globalThis.location = { search: "?offset=audit" };
         result = owner.offsetNode(id, distance, join);
+      } catch (error) {
+        // Preserve the first failing case and bounded Rust preview in CI's
+        // diagnostic output. A rejected preflight must not have edited owner.
+        let probe;
+        try {
+          probe = new glue.RustDocumentSession(admitWebDocument(seed));
+          const probeId = shape === "vector" ? JSON.parse(probe.booleanNode(
+            id, seed.pages[0].root.children[1].id, "subtract")).boolean.upsert[0].id : id;
+          const preview = JSON.parse(probe.previewOffset(probeId, distance, join));
+          console.error(`Offset preflight ${shape}/${join}/${distance}: ${JSON.stringify({ source: current, preview }).slice(0, 3000)}`);
+        } catch (diagnosticError) {
+          console.error(`Offset preflight ${shape}/${join}/${distance}: diagnostic unavailable`, diagnosticError);
+        } finally { probe?.free(); }
+        throw error;
       } finally {
         if (offsetParity === 0) {
           if (previousLocation === undefined) delete globalThis.location;
