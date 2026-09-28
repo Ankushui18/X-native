@@ -5,6 +5,25 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: a section has no clip-content property)
+
+The inspector polish that closes run 7's residual (4). Measured with a probe
+against the mounted inspector, the **Clip content / mask** row rendered for a
+section (`row=present checkbox=checked=false`) and was live: clicking it wrote
+`overflow: "clip"` onto a section, a property Figma does not give one — its
+*Sections* article offers a section exactly the background and border colours in
+the Fill and Stroke sections and never a clip-content toggle.
+
+- The row now renders only when `n.kind !== "section"` (`ui/inspector.tsx`);
+  re-measured `section selected row=absent`, while the controls are untouched
+  (a frame's row still present and checked, a shape's present and unchecked).
+  **Use as mask** is still offered on a section. Pure UI: no engine change, no
+  Rust file, no WASM boundary, no geometry.
+- Pinned by `apps/web/src/ui/__tests__/sections.test.mjs` (**33**, five new
+  assertions): no Clip content row for a section, its `overflow` stays
+  `"visible"`, **Use as mask** still there, plus the two controls. Removing the
+  gate fails 1 assertion. Whole suite **2951 passed, 0 failed**.
+
 ## [Unreleased] — 2026-09-28 (Figma parity: sections, the titled top-level container)
 
 The seventh feature through the eight-step Figma parity pipeline recorded in

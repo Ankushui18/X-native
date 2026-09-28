@@ -24,6 +24,9 @@
  * section listed after a frame painted over it: the overlap pixel read
  * r=255 g=0 b=0 where the frame is green.
  *
+ * The inspector half is pinned too: a section is offered no Clip content
+ * toggle, because it never clips.
+ *
  * Not implemented, and recorded in the comparison doc rather than claimed here:
  * a section does not yet take in the objects it is drawn or resized over
  * ("You can also click and drag a section over the objects you want to add to
@@ -38,6 +41,7 @@ import { MemoryEngine, node, find, findParent } from "../../engine/memory.ts";
 import { TOOL_META } from "../../engine/types.ts";
 import { stopsMaskReach } from "../../engine/paint.ts";
 import { contexts, mountCanvas } from "./softCanvas2d.mjs";
+import { mountSurface } from "./domEnv.mjs";
 
 let pass = 0,
   fail = 0;
@@ -383,6 +387,69 @@ const textsOf = (name) =>
     input ? `value=${JSON.stringify(input.value)}` : "no input appeared",
   );
   await ui.close();
+}
+
+/* ------------------------------------------------------------------ *
+ * 5. The inspector: a section has no clip-content property. Figma never clips
+ *    a section, so the right sidebar must not offer the toggle for one -
+ *    measured before the fix: the row rendered for a section (unchecked but
+ *    live, and clicking it wrote `overflow: "clip"` onto a section).
+ * ------------------------------------------------------------------ */
+{
+  const clipRow = (ui) =>
+    ui.all("label.check").find((el) => (el.textContent || "").trim().startsWith("Clip content")) ?? null;
+  const selectedNode = (ui) => {
+    const sel = ui.engine.snapshot().selection[0];
+    const walk = (n) => (n.id === sel ? n : n.children.reduce((hit, c) => hit ?? walk(c), null));
+    return walk(ui.engine.snapshot().pages[0].root);
+  };
+
+  const section = await mountSurface("inspector", {
+    layer: (engine) => {
+      engine.dispatch({ type: "add", kind: "section", x: 40, y: 40, w: 240, h: 140 });
+      return engine.snapshot().selection[0];
+    },
+  });
+  t(
+    "inspector: a selected section is offered no Clip content toggle",
+    clipRow(section) === null,
+    clipRow(section) ? `row present: ${JSON.stringify(clipRow(section).textContent)}` : "row absent",
+  );
+  t(
+    "inspector: the section keeps overflow: \"visible\" (it never clips)",
+    selectedNode(section)?.kind === "section" && selectedNode(section)?.overflow === "visible",
+    `kind=${selectedNode(section)?.kind} overflow=${selectedNode(section)?.overflow}`,
+  );
+  t(
+    "inspector: Use as mask is still offered on a section",
+    section.all("label.check").some((el) => (el.textContent || "").trim().startsWith("Use as mask")),
+  );
+
+  // Controls: the same row is untouched for the kinds that do clip.
+  const frameUi = await mountSurface("inspector", {
+    layer: (engine) => {
+      engine.dispatch({ type: "add", kind: "frame", x: 40, y: 40, w: 240, h: 140 });
+      return engine.snapshot().selection[0];
+    },
+  });
+  const frameRow = clipRow(frameUi);
+  t(
+    "inspector: a frame still offers Clip content, checked by default",
+    !!frameRow && frameRow.querySelector("input")?.checked === true,
+    frameRow ? `checked=${frameRow.querySelector("input")?.checked}` : "row absent",
+  );
+  const rectUi = await mountSurface("inspector", {
+    layer: (engine) => {
+      engine.dispatch({ type: "add", kind: "rect", x: 40, y: 40, w: 120, h: 80 });
+      return engine.snapshot().selection[0];
+    },
+  });
+  const rectRow = clipRow(rectUi);
+  t(
+    "inspector: a shape still offers Clip content, unchecked",
+    !!rectRow && rectRow.querySelector("input")?.checked === false,
+    rectRow ? `checked=${rectRow.querySelector("input")?.checked}` : "row absent",
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
