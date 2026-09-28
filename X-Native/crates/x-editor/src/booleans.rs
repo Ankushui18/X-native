@@ -34,8 +34,7 @@ fn orient_web_rings_for_nonzero(rings: &mut [Vec<(f64, f64)>]) {
         let mut prev = ring[ring.len() - 1];
         for &current in ring {
             if (current.1 > y) != (prev.1 > y)
-                && x < (prev.0 - current.0) * (y - current.1) / (prev.1 - current.1)
-                    + current.0
+                && x < (prev.0 - current.0) * (y - current.1) / (prev.1 - current.1) + current.0
             {
                 inside = !inside;
             }
@@ -444,8 +443,22 @@ mod tests {
     #[test]
     fn session_boolean_hole_keeps_nonzero_winding_through_bevel_inset() {
         let page = x_core::Node::frame("page", 180.0, 120.0)
-            .child(x_core::Node::rect("outer", 12.0, 18.0, 50.0, 44.0, Color::BLACK))
-            .child(x_core::Node::rect("hole", 27.0, 31.0, 20.0, 16.0, Color::BLACK));
+            .child(x_core::Node::rect(
+                "outer",
+                12.0,
+                18.0,
+                50.0,
+                44.0,
+                Color::BLACK,
+            ))
+            .child(x_core::Node::rect(
+                "hole",
+                27.0,
+                31.0,
+                20.0,
+                16.0,
+                Color::BLACK,
+            ));
         let mut ed = Editor::new(page);
         ed.selection = vec!["outer".into(), "hole".into()];
         let id = ed.boolean_web_selected(BoolOp::Subtract).unwrap();
@@ -464,7 +477,10 @@ mod tests {
                     .sum::<f64>()
             })
             .collect();
-        assert!(areas[0] * areas[1] < 0.0, "holes need opposite NONZERO winding");
+        assert!(
+            areas[0] * areas[1] < 0.0,
+            "holes need opposite NONZERO winding"
+        );
         let original_kind = node.kind.clone();
         let inset = ed
             .preview_filled_offset(&id, -4.0, StrokeJoin::Bevel)
@@ -473,7 +489,11 @@ mod tests {
         let NodeKind::Vector { path } = &inset.kind else {
             panic!("inset did not create a vector");
         };
-        assert_eq!(path_to_polylines(path, 1).len(), 2, "thin inset cannot fill the hole");
+        assert_eq!(
+            path_to_polylines(path, 1).len(),
+            2,
+            "thin inset cannot fill the hole"
+        );
         assert!(ed.offset_filled_node(&id, -4.0, StrokeJoin::Bevel).unwrap());
         assert_eq!(ed.root.children[0].kind, inset.kind);
         assert!(ed.undo(), "one Rust undo restores the hollow source");
