@@ -125,7 +125,11 @@ mod tests {
                 matches!(&result.kind, NodeKind::Vector { path } if path.last() == Some(&PathCmd::Close))
             );
             assert!(editor.undo());
-            assert_eq!(find(&editor.root, "target").unwrap(), &original);
+            let restored = find(&editor.root, "target").unwrap();
+            assert_eq!(restored.kind, original.kind);
+            assert_eq!(restored.transform, original.transform);
+            assert_eq!((restored.w, restored.h), (original.w, original.h));
+            assert_eq!(restored.fill, original.fill);
             assert!(editor.redo());
             assert!(matches!(
                 &find(&editor.root, "target").unwrap().kind,

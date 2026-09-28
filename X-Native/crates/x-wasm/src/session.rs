@@ -125,6 +125,10 @@ impl CommandBridge {
             .to_string()
     }
 
+    pub fn get_shape(&self, id: &str) -> Result<String, String> {
+        self.session.offset_shape(id).map(|node| offset_value(node).to_string())
+    }
+
     pub fn rename_node(&mut self, id: &str, name: &str) -> Result<String, String> {
         self.dispatch(SessionCommand::Rename { id, name })
     }

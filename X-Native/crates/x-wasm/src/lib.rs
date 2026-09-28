@@ -169,6 +169,11 @@ mod bindings {
             self.bridge.get_node(id)
         }
 
+        #[wasm_bindgen(js_name = getShape)]
+        pub fn get_shape(&self, id: &str) -> Result<String, JsValue> {
+            self.bridge.get_shape(id).map_err(js_error)
+        }
+
         #[wasm_bindgen(js_name = renameNode)]
         pub fn rename_node(&mut self, id: &str, name: &str) -> Result<String, JsValue> {
             self.bridge.rename_node(id, name).map_err(js_error)

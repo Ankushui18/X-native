@@ -347,6 +347,13 @@ impl DocumentSession {
         Ok(())
     }
 
+    /// Read one offset operand as a bounded, lossless shape projection. This
+    /// is used for web equivalence checks without retaining a JS document.
+    pub fn offset_shape(&self, id: &str) -> Result<OffsetDelta, String> {
+        self.offset_operand(id)?;
+        self.offset_node(id)
+    }
+
     fn offset_node(&self, id: &str) -> Result<OffsetDelta, String> {
         let node = self.target(id)?;
         // On undo the original may have nonzero curvature. Send PathCmds,
@@ -1136,6 +1143,7 @@ mod tests {
                 ..Default::default()
             };
             let mut session = DocumentSession::new(doc).unwrap();
+            let before_file = x_format::serialize::save_x(&session.snapshot());
             let applied = session
                 .dispatch(SessionCommand::Offset {
                     id: "target",
@@ -1163,7 +1171,7 @@ mod tests {
             let undone = session.dispatch(SessionCommand::Undo).unwrap();
             assert_eq!(undone.revision, 2);
             assert!(undone.node.is_none() && undone.offset.is_some());
-            assert_eq!(session.snapshot().pages[0].children[0], before);
+            assert_eq!(x_format::serialize::save_x(&session.snapshot()), before_file);
             let redone = session.dispatch(SessionCommand::Redo).unwrap();
             assert_eq!(redone.revision, 3);
             assert!(redone.node.is_none() && redone.offset.is_some());
