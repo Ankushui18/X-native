@@ -353,7 +353,8 @@ try {
         try {
           probe = new glue.RustDocumentSession(admitWebDocument(seed));
           const probeId = shape === "vector" ? JSON.parse(probe.booleanNode(
-            id, seed.pages[0].root.children[1].id, "subtract")).boolean.upsert[0].id : id;
+            seed.pages[0].root.children[0].id, seed.pages[0].root.children[1].id,
+            "subtract")).boolean.upsert[0].id : id;
           const preview = JSON.parse(probe.previewOffset(probeId, distance, join));
           offsetCoverageEquivalent(current, preview, distance, join, reason => { details += `; ${reason}`; });
           const concise = s => ({ id: s.id, kind: s.kind, x: s.x, y: s.y,
