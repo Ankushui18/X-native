@@ -361,5 +361,104 @@ await test("promoted offset bypasses the TS oracle but freezes on a wrong affect
   assert.equal(commands, 1, "bad native acknowledgement must freeze, not silently replay in TS");
 });
 
+await test("promoted outline dispatches one Rust command and freezes on unproven result shapes", () => {
+  const seed = fixture();
+  const id = seed.pages[0].root.children[0].id;
+  let commands = 0;
+  const applied = { revision: 1, node: null, canUndo: true, canRedo: false, outline: {
+    id, name: "Box 91", x: 10, y: 20, w: 30, h: 40, kind: "vector",
+    path: [["M", 0, 0], ["L", 30, 0], ["L", 30, 40], ["L", 0, 40], ["Z"]],
+    fill: "#a1b2c3", stroke: null } };
+  const native = {
+    getShape() { throw Error("the default outline route must not read a TS oracle input"); },
+    outlineStroke() { commands++; return applied; },
+  };
+  const owner = RustWebDocumentSession.create(native, seed);
+  assert.deepEqual(owner.outlineStroke(id), applied);
+  assert.equal(commands, 1, "the promoted route is exactly one native ReplaceNode command");
+
+  const strokeStyle = { width: 8, color: "#236b9e", align: "center", capStart: "none",
+    capEnd: "none", join: "miter", dash: [], dashOffset: 0, miterLimit: 4, widthProfile: [] };
+  for (const broken of [
+    { ...applied, outline: { ...applied.outline, id: "other" } },
+    { ...applied, outline: { ...applied.outline, kind: "rect", radius: 0 } },
+    { ...applied, outline: { ...applied.outline, stroke: strokeStyle } },
+    { ...applied, outline: { ...applied.outline, path: [["M", 0, 0], ["L", 30, 0]] } },
+  ]) {
+    const failing = RustWebDocumentSession.create({ outlineStroke: () => broken }, seed);
+    assert.throws(() => failing.outlineStroke(id), /editing must pause/,
+      "an outline acknowledgement must be a closed filled vector for the same layer");
+  }
+});
+
+await test("opt-in outline audit proves committed ink against the independent rectangle model", async () => {
+  const { __enableBridgeAuditForTests, bridgeAuditSnapshot, resetBridgeAudit } = await import("../bridgeRuntimeAudit.ts");
+  const seed = fixture();
+  const id = seed.pages[0].root.children[0].id;
+  const style = { width: 8, color: "#236b9e", align: "center", capStart: "none",
+    capEnd: "none", join: "miter", dash: [], dashOffset: 0, miterLimit: 4, widthProfile: [] };
+  // A 10,20 30x40 rectangle with an 8-wide centred miter band: the outer ring
+  // is the source rectangle expanded by 4, the hole is it inset by 4, and the
+  // two rings are wound oppositely so NONZERO winding leaves the hole empty.
+  const banded = { revision: 0, node: null, canUndo: true, canRedo: true, outline: {
+    id, name: "Box 91", x: 6, y: 16, w: 38, h: 48, kind: "vector",
+    path: [["M", 0, 0], ["L", 38, 0], ["L", 38, 48], ["L", 0, 48], ["Z"],
+      ["M", 8, 8], ["L", 8, 40], ["L", 30, 40], ["L", 30, 8], ["Z"]],
+    fill: "#236b9e", stroke: null } };
+  const restored = { ...banded, outline: { id, name: "Box 91", x: 10, y: 20, w: 30, h: 40,
+    kind: "rect", radius: 0, fill: null, stroke: style } };
+  const calls = { shapes: 0, commands: 0, undos: 0, redos: 0 };
+  const native = {
+    getShape() { calls.shapes++; return { id, name: "Box 91", x: 10, y: 20, w: 30, h: 40, kind: "rect", radius: 0 }; },
+    outlineStroke() { calls.commands++; return { ...banded, revision: 1 }; },
+    undo() { calls.undos++; return { ...restored, revision: 2 }; },
+    redo() { calls.redos++; return { ...banded, revision: 3 }; },
+  };
+  __enableBridgeAuditForTests(true);
+  const previous = globalThis.location;
+  try {
+    globalThis.location = { search: "?outline=audit" };
+    const owner = RustWebDocumentSession.create(native, seed);
+    const result = owner.outlineStroke(id);
+    assert.equal(result.revision, 3, "the audit returns the redone command, not the intermediate undo");
+    assert.deepEqual(result.outline, banded.outline, "the committed vector round-trips exactly");
+    assert.deepEqual(calls, { shapes: 1, commands: 1, undos: 1, redos: 1 });
+    const decision = bridgeAuditSnapshot().decisions["session.outline"];
+    assert.equal(decision.last.guard, "passed");
+    assert.equal(decision.last.result, "rust");
+
+    // A source this reference does not model is reported, never asserted as a
+    // pass, and never turned into a refusal: the native command still runs.
+    resetBridgeAudit();
+    const ellipseCalls = { shapes: 0, commands: 0, undos: 0 };
+    const ellipse = RustWebDocumentSession.create({
+      getShape() { ellipseCalls.shapes++; return { id, name: "E", x: 0, y: 0, w: 20, h: 20, kind: "ellipse" }; },
+      outlineStroke() { ellipseCalls.commands++; return { ...banded, revision: 1 }; },
+      undo() { ellipseCalls.undos++; return { ...restored, revision: 2 }; },
+    }, seed);
+    assert.equal(ellipse.outlineStroke(id).revision, 1);
+    assert.deepEqual(ellipseCalls, { shapes: 1, commands: 1, undos: 0 });
+    assert.equal(bridgeAuditSnapshot().decisions["session.outline"].last.guard, "not-run");
+
+    // Fabricated ink (a filled bounding box, not a band) is a decisive
+    // disagreement: the command stands, but the preview must stop painting.
+    resetBridgeAudit();
+    const fabricatedPath = [["M", 0, 0], ["L", 38, 0], ["L", 38, 48], ["L", 0, 48], ["Z"]];
+    const fabricated = RustWebDocumentSession.create({
+      getShape: native.getShape,
+      outlineStroke() { return { ...banded, revision: 1, outline: { ...banded.outline, path: fabricatedPath } }; },
+      undo: native.undo,
+      redo() { return { ...banded, revision: 3, outline: { ...banded.outline, path: fabricatedPath } }; },
+    }, seed);
+    assert.throws(() => fabricated.outlineStroke(id), /independent rectangle reference/);
+    assert.equal(bridgeAuditSnapshot().decisions["session.outline"].last.guard, "blocked");
+  } finally {
+    if (previous === undefined) delete globalThis.location;
+    else globalThis.location = previous;
+    resetBridgeAudit();
+    __enableBridgeAuditForTests(false);
+  }
+});
+
 console.log(`Web document admission: ${passed} passed, ${failed} failed`);
 if (failed) process.exitCode = 1;

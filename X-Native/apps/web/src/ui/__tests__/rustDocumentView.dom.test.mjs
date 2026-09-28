@@ -379,9 +379,8 @@ assert.match(stroked.host.querySelector(".rust-preview-stroke path").getAttribut
 assert.equal(stroked.host.querySelector(".rust-preview-stroke path").getAttribute("fill"), "#202020");
 assert.equal(stroked.host.querySelector(".rust-preview-stroke").style.left, "-8px");
 assert.equal(stroked.byText("Remove stroke").disabled, false);
-assert.equal(stroked.byText("Outline stroke").disabled, true,
-  "Outline Stroke stays guard-on until its own genuine-WASM corpus proves ink parity");
-assert.ok(stroked.host.textContent.includes("generated-WASM 30/30 corpus"));
+assert.equal(stroked.byText("Outline stroke").disabled, false,
+  "the promoted outline command is offered once the layer owns a live stroke");
 await stroked.click("Undo");
 assert.equal(stroked.host.querySelector(".rust-preview-stroke"), null);
 await stroked.click("Redo");
@@ -391,6 +390,54 @@ assert.equal(stroked.host.querySelector(".rust-preview-stroke"), null);
 assert.equal(calls.exports, beforeStrokeExports, "stroke/history never export .x just to paint");
 await stroked.close();
 console.log("  ok stroke preview: Rust-only join/alignment deltas, unclipped SVG band and undo/redo");
+
+// Task 2C promotion: the opt-in Rust view now dispatches Outline Stroke to the
+// real command. The mock fabricates a bounding-box fill instead of a real band,
+// so it also proves the audit diagnostic below refuses ink it cannot prove.
+const outlinedView = mount(fixture());
+await outlinedView.render();
+const exportsBeforeOutline = calls.exports;
+assert.equal(outlinedView.byText("Outline stroke").disabled, true,
+  "an unstroked rectangle has no live stroke to materialize");
+await outlinedView.click("Apply stroke");
+assert.equal(outlinedView.byText("Outline stroke").disabled, false);
+await outlinedView.click("Outline stroke");
+const outlinedPath = outlinedView.host.querySelector(".rust-preview-rect path");
+assert.ok(outlinedPath, "outline replaces the rectangle with one filled Rust vector");
+assert.equal(outlinedPath.getAttribute("fill"), "#202020", "the live stroke paint becomes the vector fill");
+assert.equal(outlinedView.host.querySelector(".rust-preview-stroke"), null, "the live stroke band is gone");
+assert.equal(outlinedView.byText("Outline stroke"), undefined,
+  "the filled vector result is not offered for a second outline from this preview");
+assert.equal(outlinedView.byText("Wider 10").disabled, true, "the filled vector cannot silently resize");
+await outlinedView.click("Undo");
+assert.ok(outlinedView.host.querySelector(".rust-preview-stroke rect"),
+  "undo restores the live stroke from the bounded Rust style projection");
+assert.equal(outlinedView.host.querySelector(".rust-preview-rect path"), null);
+await outlinedView.click("Redo");
+assert.ok(outlinedView.host.querySelector(".rust-preview-rect path"), "redo restores the same filled vector");
+assert.equal(calls.exports, exportsBeforeOutline, "outline and its history use layer deltas, never a page export");
+await outlinedView.close();
+console.log("  ok promoted outline stroke: one Rust ReplaceNode delta, filled vector, undo/redo without a page copy");
+
+const rejectedOutline = mount(fixture());
+await rejectedOutline.render();
+await rejectedOutline.click("Apply stroke");
+const previousOutlineLocation = globalThis.location;
+try {
+  globalThis.location = { search: "?outline=audit" };
+  await rejectedOutline.click("Outline stroke");
+} finally {
+  if (previousOutlineLocation === undefined) delete globalThis.location;
+  else globalThis.location = previousOutlineLocation;
+}
+assert.ok(rejectedOutline.host.textContent.includes("independent rectangle reference"),
+  "audit mode must name the reference that refused the fabricated ink");
+assert.ok(rejectedOutline.host.textContent.includes("Edits are paused"),
+  "a decisive ink disagreement pauses editing instead of painting an unproven delta");
+assert.ok(rejectedOutline.host.querySelector(".rust-preview-stroke path"),
+  "the DOM keeps the last proven Rust state, not the rejected delta");
+await rejectedOutline.close();
+console.log("  ok opt-in outline audit: unproven committed ink freezes the preview instead of being painted");
 
 const offsetSeed = fixture(), offsetBefore = clone(offsetSeed);
 const offsetView = mount(offsetSeed);
