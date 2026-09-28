@@ -910,8 +910,12 @@ mod tests {
             session.state(),
             "no-op cannot push a new history entry"
         );
-        assert!(session.dispatch(style("box", 8.0, StrokeJoin::Round)).is_err());
-        assert!(session.dispatch(style("box", f64::NAN, StrokeJoin::Bevel)).is_err());
+        assert!(session
+            .dispatch(style("box", 8.0, StrokeJoin::Round))
+            .is_err());
+        assert!(session
+            .dispatch(style("box", f64::NAN, StrokeJoin::Bevel))
+            .is_err());
         assert_eq!(session.state().revision, 1);
         let save = x_format::serialize::save_x(&session.snapshot());
         let loaded = x_format::deserialize::load_x(&save).unwrap();
@@ -939,8 +943,12 @@ mod tests {
         assert_eq!(undo_style.stroke.unwrap().width, 0.0);
         let redo_style = session.dispatch(SessionCommand::Redo).unwrap();
         assert_eq!(redo_style.stroke.unwrap().outer[0], (-8.0, 0.0));
-        assert!(session.dispatch(style("page", 8.0, StrokeJoin::Bevel)).is_err());
-        assert!(session.dispatch(style("missing", 8.0, StrokeJoin::Bevel)).is_err());
+        assert!(session
+            .dispatch(style("page", 8.0, StrokeJoin::Bevel))
+            .is_err());
+        assert!(session
+            .dispatch(style("missing", 8.0, StrokeJoin::Bevel))
+            .is_err());
         assert_eq!(
             session
                 .dispatch(style("box", 0.0, StrokeJoin::Bevel))
