@@ -664,93 +664,37 @@ fn side_outline(
         } else {
             None
         };
-
-        let (incoming, l_in, d_env_in, from) = if let Some(prev_idx) = previous {
-            let inc = direction(samples[prev_idx].point, point);
-            let len = distance(samples[prev_idx].point, point);
-            let prev_half = width
-                * sample_width_profile(&options.width_profile, samples[prev_idx].t)
-                * side_scale;
-            let dr = half - prev_half;
-            let sin_a = if len > EPS {
-                (dr / len).clamp(-0.999, 0.999)
-            } else {
-                0.0
-            };
-            let cos_a = (1.0 - sin_a * sin_a).sqrt();
-            let n_in = inc.map(left_normal);
-            let norm = match (n_in, inc) {
-                (Some(n), Some(u)) => Some(sub(mul(n, side * cos_a), mul(u, sin_a))),
-                _ => None,
-            };
-            let d_env = match (inc, n_in) {
-                (Some(u), Some(n)) => Some(add(mul(u, cos_a), mul(n, side * sin_a))),
-                _ => None,
-            };
-            let pt = norm.map(|n| add(point, mul(n, half)));
-            (inc, len, d_env, pt)
-        } else {
-            (None, 0.0, None, None)
-        };
-
-        let (outgoing, l_out, d_env_out, to) = if let Some(next_idx) = next {
-            let outg = direction(point, samples[next_idx].point);
-            let len = distance(point, samples[next_idx].point);
-            let next_half = width
-                * sample_width_profile(&options.width_profile, samples[next_idx].t)
-                * side_scale;
-            let dr = next_half - half;
-            let sin_b = if len > EPS {
-                (dr / len).clamp(-0.999, 0.999)
-            } else {
-                0.0
-            };
-            let cos_b = (1.0 - sin_b * sin_b).sqrt();
-            let n_out = outg.map(left_normal);
-            let norm = match (n_out, outg) {
-                (Some(n), Some(u)) => Some(sub(mul(n, side * cos_b), mul(u, sin_b))),
-                _ => None,
-            };
-            let d_env = match (outg, n_out) {
-                (Some(u), Some(n)) => Some(add(mul(u, cos_b), mul(n, side * sin_b))),
-                _ => None,
-            };
-            let pt = norm.map(|n| add(point, mul(n, half)));
-            (outg, len, d_env, pt)
-        } else {
-            (None, 0.0, None, None)
-        };
-
         match (previous, next) {
-            (None, Some(_)) => {
-                if let Some(p) = to {
-                    out.push(p);
-                }
+            (None, Some(next)) => {
+                let d = direction(point, samples[next].point).expect("nondegenerate samples");
+                out.push(add(point, mul(left_normal(d), side * half)));
             }
-            (Some(_), None) => {
-                if let Some(p) = from {
-                    out.push(p);
-                }
+            (Some(previous), None) => {
+                let d = direction(samples[previous].point, point).expect("nondegenerate samples");
+                out.push(add(point, mul(left_normal(d), side * half)));
             }
-            (Some(_), Some(_)) => {
-                let (Some(incoming), Some(outgoing), Some(d_env_in), Some(d_env_out), Some(from), Some(to)) =
-                    (incoming, outgoing, d_env_in, d_env_out, from, to)
-                else {
+            (Some(previous), Some(next)) => {
+                let (Some(incoming), Some(outgoing)) = (
+                    direction(samples[previous].point, point),
+                    direction(point, samples[next].point),
+                ) else {
                     continue;
                 };
+                let l_in = distance(samples[previous].point, point);
+                let l_out = distance(point, samples[next].point);
+                let normal_in = left_normal(incoming);
+                let normal_out = left_normal(outgoing);
+                let from = add(point, mul(normal_in, side * half));
+                let to = add(point, mul(normal_out, side * half));
                 let turn = cross(incoming, outgoing);
                 let outside = side * turn < -EPS;
                 if turn.abs() <= EPS {
                     if dot(incoming, outgoing) >= 0.0 {
                         out.push(from);
-                        if distance(from, to) > EPS {
-                            if options.join == StrokeJoin::Round && half > EPS {
-                                append_round_join(&mut out, point, from, to, side);
-                            } else {
-                                out.push(to);
-                            }
-                        }
                     } else {
+                        // A U-turn has no stable line intersection. Treat it
+                        // as the conservative bevel/semicircle join instead of
+                        // sending an infinite miter into history.
                         out.push(from);
                         if options.join == StrokeJoin::Round && half > EPS {
                             append_round_join(&mut out, point, from, to, side);
@@ -761,12 +705,16 @@ fn side_outline(
                     continue;
                 }
 
-                let meet_res = line_intersection_params(from, d_env_in, to, d_env_out);
+                let meet_res = line_intersection_params(from, incoming, to, outgoing);
                 if !outside {
                     let t_in = meet_res.map(|(_, t, _)| t).unwrap_or(-1e9);
                     let s_out = meet_res.map(|(_, _, s)| s).unwrap_or(-1e9);
                     if let Some((meet, _, _)) = meet_res {
-                        if -l_in - EPS <= t_in && t_in <= EPS && -EPS <= s_out && s_out <= l_out + EPS {
+                        if -l_in - EPS <= t_in
+                            && t_in <= EPS
+                            && -EPS <= s_out
+                            && s_out <= l_out + EPS
+                        {
                             out.push(meet);
                             continue;
                         }
@@ -776,9 +724,11 @@ fn side_outline(
                     for k in (search_limit + 1..out.len()).rev() {
                         let p_a = out[k - 1];
                         let p_b = out[k];
-                        let Some(d_ab) = direction(p_a, p_b) else { continue; };
+                        let Some(d_ab) = direction(p_a, p_b) else {
+                            continue;
+                        };
                         if let Some((pt_int, t_seg, s_ray)) =
-                            line_intersection_params(p_a, d_ab, to, d_env_out)
+                            line_intersection_params(p_a, d_ab, to, outgoing)
                         {
                             let d_seg = distance(p_a, p_b);
                             if (-EPS..=d_seg + EPS).contains(&t_seg)
@@ -794,7 +744,7 @@ fn side_outline(
                         }
                     }
                     if !clipped {
-                        let clamp_pt = sub(from, mul(d_env_in, l_in));
+                        let clamp_pt = sub(from, mul(incoming, l_in));
                         out.push(clamp_pt);
                     }
                     continue;
