@@ -40,6 +40,7 @@ import {
   cellAlign,
   cellAt,
   cellBox,
+  contentInset,
   fillPatch,
   clampToPadding,
   flowInsertIndex,
@@ -52,6 +53,8 @@ import {
   widthIsMain,
   textDimensionRule,
   wraps,
+  baselineRow,
+  effectiveCrossAlign,
   type Spacing,
 } from "./layout";
 import {
@@ -93,6 +96,19 @@ import {
 let seq = 1;
 export const uid = (p: string) => `${p}_${seq++}`;
 
+/** Figma: "Sections in Figma Design are a top-level element on the canvas by
+ *  default. Sections can contain all layer types, including other sections, but
+ *  cannot be contained within frames or groups." Both creation routes - the
+ *  Section tool's add and the selection's Wrap in new section - ask this one
+ *  question, so neither can nest a section inside a frame or a group. */
+function sectionStaysTopLevel(kind: NodeKind, into: XNode, root: XNode): XNode {
+  return kind === "section" ? root : into;
+}
+
+/** The border colour a fresh section paints: the article's "background and
+ *  border color for a section", neutral enough to read on a white page. */
+const SECTION_STROKE = "#e6e6e6";
+
 /** Node factory. Exported so the file store can seed new documents from the
  *  dashboard templates with exactly the same defaults the editor uses. */
 export function node(
@@ -114,8 +130,11 @@ export function node(
     h,
     rotation: 0,
     rotOrigin: [0.5, 0.5],
+    // A section carries its own background and border, the two colours the
+    // sections article points at in the right sidebar's Fill and Stroke
+    // sections; a frame is a plain white surface, a shape a grey fill.
     fill:
-      kind === "frame"
+      kind === "frame" || kind === "section"
         ? "#ffffff"
         : kind === "text"
           ? "#0d1220"
@@ -128,10 +147,15 @@ export function node(
     fillB: "#ffffff",
     gradientStops: [],
     fillBlend: "Normal",
-    strokePaint: kind === "line" || kind === "arrow" ? "#1e1e1e" : "#00000000",
+    strokePaint:
+      kind === "line" || kind === "arrow"
+        ? "#1e1e1e"
+        : kind === "section"
+          ? SECTION_STROKE
+          : "#00000000",
     strokeOpacity: 1,
-    strokeVisible: kind === "line" || kind === "arrow",
-    strokeWidth: kind === "line" || kind === "arrow" ? 1 : 0,
+    strokeVisible: kind === "line" || kind === "arrow" || kind === "section",
+    strokeWidth: kind === "line" || kind === "arrow" || kind === "section" ? 1 : 0,
     effects: [] as Effect[],
     strokeAlign: kind === "line" || kind === "arrow" ? "center" : "inside",
     strokeDash: 0,
@@ -670,14 +694,23 @@ function applyLayout(n: XNode, gesture = false) {
       0,
     );
     const leftover = Math.max(1, (horiz ? innerW : innerH) - used - packedGap * Math.max(0, flow.length - 1));
-    const each = leftover / fillers.length;
-    for (const c of fillers) {
+    // Fill children share the *content* area, not the box: each one's own
+    // padding and inside stroke is added back to the space it takes, which is
+    // the CSS border-box model (Figma help 42031586813719: "distributes space
+    // amongst fill container children by the children's content area instead of
+    // by their size ... a layer with a thicker stroke will take up slightly
+    // more of the available width or height, so that its inner content area
+    // matches its sibling's"). The shares still add up to `leftover`, so the
+    // frame's own padding keeps its room.
+    const insets = fillers.map((c) => contentInset(c, horiz ? "w" : "h"));
+    const each = (leftover - insets.reduce((s, v) => s + v, 0)) / fillers.length;
+    fillers.forEach((c, i) => {
       const otherFills = (horiz ? c.sizingH : c.sizingW) === "fill";
-      const patch = fillPatch(c, horiz ? "w" : "h", each, otherFills);
+      const patch = fillPatch(c, horiz ? "w" : "h", Math.max(1, each + insets[i]), otherFills);
       if (patch.w != null) c.w = patch.w;
       if (patch.h != null) c.h = patch.h;
       clampDims(c);
-    }
+    });
   }
   // A hug with something filling inside it is a Fixed frame - the filler has
   // nothing to hug down to. `effectiveSizing` is the single answer to that, and
@@ -685,46 +718,89 @@ function applyLayout(n: XNode, gesture = false) {
   const hugMain = hugsMain(l, n, flow);
   const hugCross = hugsCross(l, n, flow);
   if (doesWrap && flow.length) {
-    let x = pl;
-    let y = pt;
-    let rowH = 0;
-    let rowW = 0;
     // A wrapping flow has two gaps: `gap` spaces the objects within a line,
     // `gapCross` spaces the lines themselves (rows, or columns in a vertical
     // wrap). Older documents only have the one, which both fall back to.
     const gapBetween = typeof l.gapCross === "number" ? l.gapCross : gap;
     const limit = horiz ? n.w - pr : n.h - pb;
-    for (const c of flow) {
-      const main = horiz ? c.w : c.h;
-      const cur = horiz ? x : y;
-      if (cur > (horiz ? pl : pt) && cur + main > limit) {
-        if (horiz) {
-          x = pl;
-          y += rowH + gapBetween;
-        } else {
-          y = pt;
-          x += rowW + gapBetween;
+    // Break the lines first, with the same rule as before. A line has to be
+    // known as a whole before it can be placed: a baseline row sizes itself
+    // from the tallest baseline and the deepest descender in *that* line.
+    const rows: XNode[][] = [];
+    {
+      let current: XNode[] = [];
+      let x = pl;
+      let y = pt;
+      let rowH = 0;
+      let rowW = 0;
+      for (const c of flow) {
+        const main = horiz ? c.w : c.h;
+        const cur = horiz ? x : y;
+        if (cur > (horiz ? pl : pt) && cur + main > limit) {
+          rows.push(current);
+          current = [];
+          if (horiz) {
+            x = pl;
+            y += rowH + gapBetween;
+          } else {
+            y = pt;
+            x += rowW + gapBetween;
+          }
+          rowH = 0;
+          rowW = 0;
         }
-        rowH = 0;
-        rowW = 0;
+        current.push(c);
+        if (horiz) {
+          x += c.w + gap;
+          rowH = Math.max(rowH, c.h);
+        } else {
+          y += c.h + gap;
+          rowW = Math.max(rowW, c.w);
+        }
       }
-      c.x = x;
-      c.y = y;
-      if (horiz) {
-        x += c.w + gap;
-        rowH = Math.max(rowH, c.h);
-      } else {
-        y += c.h + gap;
-        rowW = Math.max(rowW, c.w);
+      if (current.length) rows.push(current);
+    }
+    // Every wrapped horizontal line gets its own baseline group, so line 2
+    // aligns on its own line rather than on line 1's. A baseline line's cross
+    // size is `max baseline-above + max descent-below`, which is what the hug
+    // below reserves; without baseline alignment the line is its tallest child.
+    const usesBaseline = horiz && effectiveCrossAlign(l) === "baseline";
+    const lineStart = horiz ? pl : pt;
+    let mainEnd = lineStart;
+    let crossCursor = horiz ? pt : pl;
+    let crossEnd = crossCursor;
+    for (const row of rows) {
+      const group = usesBaseline ? baselineRow(row) : null;
+      const offsets = group ? group.offsets : row.map(() => 0);
+      // Every line starts its run at the flow's own origin; only the cross
+      // cursor moves from line to line.
+      let m = lineStart;
+      for (let k = 0; k < row.length; k++) {
+        const c = row[k];
+        if (horiz) {
+          c.x = m;
+          c.y = crossCursor + offsets[k];
+          m += c.w + gap;
+        } else {
+          c.y = m;
+          c.x = crossCursor + offsets[k];
+          m += c.h + gap;
+        }
       }
+      const cross = group
+        ? group.cross
+        : row.reduce((s, c) => Math.max(s, horiz ? c.h : c.w), 0);
+      mainEnd = m;
+      crossEnd = crossCursor + cross;
+      crossCursor = crossEnd + gapBetween;
     }
     if (hugMain) {
-      if (horiz) n.w = Math.max(n.w, x + pr);
-      else n.h = Math.max(n.h, y + pb);
+      if (horiz) n.w = Math.max(n.w, mainEnd + pr);
+      else n.h = Math.max(n.h, mainEnd + pb);
     }
     if (hugCross) {
-      if (horiz) n.h = y + rowH + pb;
-      else n.w = x + rowW + pr;
+      if (horiz) n.h = crossEnd + pb;
+      else n.w = crossEnd + pr;
     }
     for (const c of flow) clampDims(c);
     clampToPadding(n);
@@ -749,29 +825,29 @@ function applyLayout(n: XNode, gesture = false) {
   }
   let cursor = origin + pack.lead;
   let crossMax = 0;
-  const maxBaseline =
-    horiz && l.align === "baseline"
-      ? Math.max(
-          ...flow.map((c) => (c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8)),
-        )
-      : 0;
+  // A baseline is a cross-axis position of its own: the line is placed so the
+  // tallest item's baseline sits on the shared line and the others are offset
+  // down to meet it. The group is anchored at the content edge (Rust's session
+  // does the same), and the descent below the baseline is part of the row's
+  // cross size, so a hug reserves the descenders rather than clipping them.
+  const crossAlign = effectiveCrossAlign(l);
+  const group = horiz && crossAlign === "baseline" ? baselineRow(flow) : null;
   for (let i = 0; i < flow.length; i++) {
     const c = flow[i];
     if (horiz) {
       c.x = cursor;
       const extra = crossInner - c.h;
-      if (l.align === "baseline") {
-        const itemBaseline = c.kind === "text" ? (c.fontSize || 14) * 0.8 : c.h * 0.8;
-        c.y = pt + (maxBaseline - itemBaseline);
+      if (group) {
+        c.y = pt + group.offsets[i];
       } else {
-        c.y = pt + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+        c.y = pt + (crossAlign === "center" ? extra / 2 : crossAlign === "max" ? extra : 0);
       }
       cursor += c.w + (i < flow.length - 1 ? pack.gap : 0);
-      crossMax = Math.max(crossMax, c.h);
+      crossMax = Math.max(crossMax, group ? 0 : c.h);
     } else {
       c.y = cursor;
       const extra = crossInner - c.w;
-      c.x = pl + (l.align === "center" ? extra / 2 : l.align === "max" ? extra : 0);
+      c.x = pl + (crossAlign === "center" ? extra / 2 : crossAlign === "max" ? extra : 0);
       cursor += c.h + (i < flow.length - 1 ? pack.gap : 0);
       crossMax = Math.max(crossMax, c.w);
     }
@@ -784,7 +860,7 @@ function applyLayout(n: XNode, gesture = false) {
     : contentMain + packedGap * Math.max(0, flow.length - 1);
   if (horiz) {
     if (hugMain) n.w = Math.max(1, pl + packedMain + pr);
-    if (hugCross) n.h = Math.max(1, crossMax + pt + pb);
+    if (hugCross) n.h = Math.max(1, (group ? group.cross : crossMax) + pt + pb);
   } else {
     if (hugMain) n.h = Math.max(1, pt + packedMain + pb);
     if (hugCross) n.w = Math.max(1, crossMax + pl + pr);
@@ -793,6 +869,17 @@ function applyLayout(n: XNode, gesture = false) {
   clampToPadding(n);
   clampDims(n);
   applyConstraints(n, entryW, entryH, n.w, n.h, true);
+}
+
+/** The layout a frame actually stores.
+ *
+ * Baseline alignment is a horizontal-flow setting: the line it aligns to is a
+ * text baseline, and its cross axis is vertical. A flow that has just become
+ * vertical cannot have one, so the value is normalized to the start edge rather
+ * than left in the model to disagree with what the alignment box shows. */
+export function normalLayout(layout: AutoLayout | null): AutoLayout | null {
+  if (!layout || layout.align !== "baseline" || layout.direction === "horizontal") return layout;
+  return { ...layout, align: "min" };
 }
 
 export function demoPage(): Page {
@@ -1992,6 +2079,37 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      case "distributeSpacing": {
+        // The smart-selection gap handle (Figma help 360040450233): "click and
+        // drag the handle to adjust the space between layers" and "uniformly
+        // adjust the vertical and horizontal spacing between layers" — every
+        // pair gets the dragged value, in order, sizes untouched. World
+        // coordinates and the same member filter as `distribute`: locked layers
+        // and instance members sit out. The run is anchored at its first layer
+        // so the space grows away from the handle (right/down increases it,
+        // which is the direction the article's tooltip describes).
+        const rt = this.root();
+        const items = cmd.ids
+          .map((id) => worldPos(rt, id))
+          .filter(
+            (w): w is { x: number; y: number; node: XNode } =>
+              !!w && !isEffectivelyLocked(rt, w.node.id) && !isInstanceMember(rt, w.node.id),
+          );
+        if (items.length < 2) break;
+        const snap = snapOn(this.state, s.page);
+        const gap = Math.max(0, cmd.gap);
+        items.sort((a, b) => (cmd.axis === "h" ? a.x - b.x : a.y - b.y));
+        let cursor = cmd.axis === "h" ? items[0].x : items[0].y;
+        for (const w of items) {
+          // `shiftWorld` takes world coordinates and rounds the node's own
+          // local ones when pixel snapping is on, exactly as under `move` and
+          // `distribute`; the world cursor itself stays exact.
+          if (cmd.axis === "h") shiftWorld(w, cursor, w.y, snap);
+          else shiftWorld(w, w.x, cursor, snap);
+          cursor += (cmd.axis === "h" ? w.node.w : w.node.h) + gap;
+        }
+        break;
+      }
       case "tidyUp": {
         const rt = this.root();
         // Same footing as distribute: world coordinates, locked layers and
@@ -2194,7 +2312,10 @@ export class MemoryEngine implements Engine {
           grid ? Math.max(1, Math.round(cmd.h)) : cmd.h,
           cmd.extra,
         );
-        const into = parent ?? this.root();
+        // "Sections ... are a top-level element on the canvas by default ...
+        // but cannot be contained within frames or groups", so a section is
+        // created at the page root whatever host the pointer was over.
+        const into = sectionStaysTopLevel(cmd.kind, parent ?? this.root(), this.root());
         // Instances take no new children: structure belongs to the master.
         if (into !== this.root() && (isInstanceMember(this.root(), into.id) || (!!into.componentId && !into.isComponent))) break;
         const spot = this.gridSpotFor(into, cmd.x, cmd.y);
@@ -2639,7 +2760,11 @@ export class MemoryEngine implements Engine {
             }
           }
         } else if (n && !insideInstance(this.root(), cmd.id)) {
-          n.layout = cmd.layout;
+          // A vertical flow has no text baseline to align to, so a stale
+          // `baseline` left over from a horizontal flow is normalized to the
+          // flow's start edge. The alignment box does not offer baseline for a
+          // vertical flow either, so the panel and the model cannot disagree.
+          n.layout = normalLayout(cmd.layout);
           // A fresh preset wins over gap/padding bindings; without the
           // detach the next relayout would snap the preset back.
           if (n.variableBindings) {
@@ -2952,12 +3077,14 @@ export class MemoryEngine implements Engine {
       }
       case "group":
       case "wrapSection": {
-        this.wrapSel(cmd.type === "wrapSection" ? "Section" : "Group", {
-          kind: cmd.type === "wrapSection" ? "frame" : "group",
-          fill: "#00000000",
-          fillVisible: false,
-          overflow: "visible",
-        });
+        this.wrapSel(
+          cmd.type === "wrapSection" ? "Section" : "Group",
+          cmd.type === "wrapSection"
+            ? // A real section: the tool's kind, with the article's background
+              // and border from the node defaults.
+              { kind: "section" }
+            : { kind: "group", fill: "#00000000", fillVisible: false, overflow: "visible" },
+        );
         break;
       }
       case "frameSelection": {
@@ -4532,8 +4659,12 @@ export class MemoryEngine implements Engine {
     const ids = s.selection;
     if (ids.length < 1) return;
     const rt = this.root();
-    const parent = findParent(rt, ids[0]);
-    if (!parent) return;
+    const found = findParent(rt, ids[0]);
+    if (!found) return;
+    // Wrapping a selection that sits inside a frame lifts a section to the
+    // canvas, the same rule the add command applies (a section can never be
+    // contained within a frame or group).
+    const parent = sectionStaysTopLevel((extra.kind ?? "group") as NodeKind, found, rt);
     const nodes: XNode[] = [];
     for (const id of ids) {
       const n = find(rt, id);

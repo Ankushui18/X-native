@@ -578,16 +578,53 @@ fn to_cross_align(a: Alignment) -> CrossAlign {
     }
 }
 
+/// A text child's first-line ascent as a fraction of its font size — the same
+/// ratio the TypeScript layout pass uses (`apps/web/src/engine/layout.ts`,
+/// `TEXT_BASELINE_RATIO`), so a baseline row solves identically on both sides
+/// of the WASM boundary. Figma: "a baseline is the invisible line in which text
+/// or a layer sits" (help.figma.com 31289464393751).
+pub const TEXT_BASELINE_RATIO: f64 = 0.8;
+
+/// Legacy box -> font-size convention for a text node that carries no size of
+/// its own. The renderer resolves a missing size the same way — see
+/// `x-render/src/ir.rs`: `node.h * 0.72`.
+const TEXT_BOX_FONT_RATIO: f64 = 0.72;
+
+/// The font size (px) of a text child, resolved in the order the rest of the
+/// engine resolves one: a measured `TextMetrics.font_size`, then the editor's
+/// literal `fs` binding (documented as the point size itself), then the legacy
+/// box convention. A variable-bound `fontsize` token needs the document's
+/// variable table, which the layout pass does not carry; a caller that has one
+/// can pass an explicit `node.baseline` instead.
+fn text_font_size(child: &Node) -> f64 {
+    child
+        .text_metrics
+        .as_ref()
+        .map(|m| m.font_size)
+        .filter(|s| *s > 0.0)
+        .or_else(|| {
+            child
+                .bindings
+                .get("fs")
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|s| *s > 0.0)
+        })
+        .unwrap_or(child.h * TEXT_BOX_FONT_RATIO)
+}
+
 /// Baseline offset of a child: distance from its top edge to its first text
 /// baseline. Uses the explicit `node.baseline` when the text pipeline supplied
-/// one; otherwise falls back to a geometry heuristic (text ≈ 0.72·h·0.8 ascent
-/// at the node-height convention; non-text = bottom edge, per ).
+/// one; otherwise the ascent is `TEXT_BASELINE_RATIO` x the child's font size
+/// (see [`text_font_size`]) — a property of the type, not of the box, so a
+/// wrapped two-line box keeps its first baseline where one line has it.
+/// A child without text uses its bottom edge: flexbox's synthesised baseline,
+/// which is the icon-on-the-line example in help.figma.com 31289464393751.
 fn child_baseline(child: &Node) -> f64 {
     if let Some(b) = child.baseline {
         return b;
     }
     if matches!(child.kind, NodeKind::Text { .. }) {
-        child.h * 0.72 * 0.8
+        text_font_size(child) * TEXT_BASELINE_RATIO
     } else {
         child.h
     }
@@ -664,4 +701,81 @@ pub fn paints_first_on_top(node: &Node) -> bool {
         &node.kind,
         NodeKind::Frame { layout: Some(l) } if l.canvas_stacking == CanvasStacking::FirstOnTop
     )
+}
+
+#[cfg(test)]
+mod baseline_tests {
+    use super::*;
+
+    /// Figma's own example (help 31289464393751): a 48px icon and a word that
+    /// share one baseline.
+    fn icon_row(label: Node) -> Node {
+        let mut row = Node::frame("row", 200.0, 60.0).auto_layout(AutoLayout {
+            direction: LayoutDirection::Horizontal,
+            align: CrossAlign::Baseline,
+            sizing: Sizing::Hug,
+            ..Default::default()
+        });
+        row.children
+            .push(Node::rect("icon", 0.0, 0.0, 48.0, 48.0, Color::BLACK));
+        row.children.push(label);
+        row
+    }
+
+    fn solve(node: &mut Node) {
+        apply_auto_layout(node, &Variables::default());
+    }
+
+    #[test]
+    fn the_ascent_comes_from_the_font_size_not_the_box_height() {
+        // A 14px face in a 40px (wrapped) box: the first baseline is 11.2 from
+        // the top. The old box convention said 40 * 0.72 * 0.8 = 23.04, which
+        // is what dragged the word above the icon's bottom.
+        let label = Node::text("label", 0.0, 0.0, 60.0, 40.0, "home").bind("fs", "14");
+        let mut row = icon_row(label);
+        solve(&mut row);
+        let icon = &row.children[0];
+        let text = &row.children[1];
+        assert!(
+            (child_baseline(text) - 11.2).abs() < 1e-9,
+            "baseline = {}",
+            child_baseline(text)
+        );
+        let line = icon.transform.y + icon.h;
+        assert!(
+            ((text.transform.y + child_baseline(text)) - line).abs() < 1e-9,
+            "the bottom of the icon and the word must share one line"
+        );
+    }
+
+    #[test]
+    fn a_measured_font_size_outranks_the_box_convention() {
+        let mut label = Node::text("label", 0.0, 0.0, 200.0, 100.0, "two\nlines");
+        label.text_metrics = Some(TextMetrics {
+            font_size: 20.0,
+            ..Default::default()
+        });
+        assert!((child_baseline(&label) - 16.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_text_node_with_no_size_keeps_the_legacy_box_convention() {
+        // No metrics and no `fs` binding: the number is unchanged from the
+        // heuristic this replaced, so legacy documents do not move.
+        let label = Node::text("label", 0.0, 0.0, 60.0, 20.0, "home");
+        assert!((child_baseline(&label) - 20.0 * 0.72 * 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_explicit_baseline_wins_and_a_hug_reserves_the_descent() {
+        let label = Node::text("label", 0.0, 0.0, 60.0, 40.0, "home")
+            .bind("fs", "14")
+            .baseline_offset(5.0);
+        let mut row = icon_row(label);
+        solve(&mut row);
+        assert!((child_baseline(&row.children[1]) - 5.0).abs() < 1e-9);
+        // max baseline-above (48, the icon's bottom) + max descent-below
+        // (40 - 5 = 35): the row hugs the line, not the tallest box.
+        assert!((row.h - 83.0).abs() < 1e-9, "row.h = {}", row.h);
+    }
 }

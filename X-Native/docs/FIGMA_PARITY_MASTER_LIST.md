@@ -36,13 +36,13 @@ recon task, not a settled fact.
 | 2 Canvas gestures (drag) | 28 | 26 | 1 | 0 | 1 | 0 |
 | 3 Keyboard | 35 | 32 | 2 | 0 | 1 | 0 |
 | 4 Menus & palettes | 10 | 10 | 0 | 0 | 0 | 0 |
-| 5 Layers, pages, sections | 14 | 13 | 1 | 0 | 0 | 0 |
+| 5 Layers, pages, sections | 15 | 14 | 1 | 0 | 0 | 0 |
 | 6 Frame & shape properties | 20 | 20 | 0 | 0 | 0 | 0 |
 | 7 Auto layout | 16 | 15 | 0 | 0 | 0 | 1 |
 | 8 Fill, stroke, effects, colour | 25 | 25 | 0 | 0 | 0 | 0 |
 | 9 Images | 9 | 7 | 2 | 0 | 0 | 0 |
 | 10 Text & typography | 18 | 18 | 0 | 0 | 0 | 0 |
-| 11 Vector editing & booleans | 20 | 16 | 4 | 0 | 0 | 0 |
+| 11 Vector editing & booleans | 20 | 17 | 3 | 0 | 0 | 0 |
 | 12 Components, instances, styles | 21 | 19 | 2 | 0 | 0 | 0 |
 | 13 Variables & modes | 9 | 8 | 1 | 0 | 0 | 0 |
 | 14 Prototype | 30 | 23 | 6 | 0 | 0 | 1 |
@@ -52,7 +52,7 @@ recon task, not a settled fact.
 | 18 Design language (look of the app itself) | 12 | 5 | 7 | 0 | 0 | 0 |
 | 19 Comments & collaboration | 5 | 3 | 1 | 0 | 0 | 1 |
 | 20 Beyond Figma (ours) | 8 | — | — | — | 8 | — |
-| **total** | **340** | **286** | **34** | **0** | **16** | **4** |
+| **total** | **341** | **288** | **33** | **0** | **16** | **4** |
 
 The 17 `MISSING` rows plus the named divergences inside `PARTIAL` are the 100%. Wave 1
 below orders them by what the owner sees first; Wave 2 is the design-language half of
@@ -117,7 +117,7 @@ Figma's canvas is a small set of gestures with modifiers; the shape-tool drags a
 | 2.11 | `⌥` resize | from the centre | resize arm | MATCH |
 | 2.12 | `Space` during resize | *"Hold Space while in the middle of another action to move the points. Release Space to return to the previous action"* (`360039957634`; the shortcut tables list it as **Move while resizing**) | `Drag::ResizeSel`'s `space`/`offset` riders: while `Space` is held the box travels with the pointer at the size the resize gave it (`smart_move`, so it snaps like any drag), the first event only anchors, and letting go re-bases the resize on the box's new place | MATCH |
 | 2.13 | Scale-tool drag | box + contents scale | `Drag::ScaleSel`, `Drag::ScaleBody` | MATCH |
-| 2.14 | Arc handles | hover the ellipse, drag sweep / start / ratio | `Drag::ArcHandle` (`360040450173`) | MATCH |
+| 2.14 | Arc handles | hover the ellipse, drag sweep / start / ratio | `Drag::ArcHandle` (`360040450173`); the web canvas carries the same three controls — `Canvas.tsx::arcHandlePoints` paints and hit-tests the **Sweep**, the **Start** (with the article's dot inside it) and the **Ratio** handle, the press takes a dot ahead of the box's resize handles, the Start drag patches `startingAngle`, the Ratio handle appears as soon as a gap exists so a pie can become a ring on canvas, and the arc drag closes its own undo step; pinned by `apps/web/src/ui/__tests__/arcHandles.test.mjs` (22) | MATCH |
 | 2.15 | Star / Polygon handles | Count (and Ratio) drag, live redraw | `Drag::ShapeHandle` | MATCH |
 | 2.16 | Prototype noodle | drag the edge circle onto a frame, it snaps | `Drag::ProtoConnect` (`31011968186007`) | MATCH |
 | 2.17 | Ruler guides | drag off a ruler; guides snap | `Drag::Guide` | MATCH |
@@ -205,13 +205,14 @@ sections, groups and frames").
 | 5.5 | Rename | `⌘R` or double-click | `LayerRename`, `RenameStart` | MATCH |
 | 5.6 | Group / ungroup / frame selection | `⌘G` `⇧⌘G` `⌥⌘G` | same | MATCH |
 | 5.7 | Select all with same property | "Select matching" | `SelectMatching` | MATCH |
-| 5.8 | **Sections** | labelled container, distinct hit/hue, arrow key nav; place one with the Section tool (`⇧S`) or **Wrap in new section** (right-click); "sections … cannot be contained within frames or groups"; a section takes in the layers it is dragged or drawn over; `Delete` removes it **and its contents**, `⌘⌫`/`Ctrl+Backspace` **without** them ([help 9771500257687](https://help.figma.com/hc/en-us/articles/9771500257687)) | `Tool::Section` (⇧S, sharing `App::frame_slot` with Frame through `App::select_tool`), `Editor::section_selection` / `lift_into_section` / `section_absorb` / `delete_keeping_contents`, `CtxCmd::SectionSelection`; pinned by `a_section_lifts_layers_out_of_a_frame_and_keeps_their_place`, `a_section_never_lands_inside_a_frame_or_a_group`, `a_section_takes_in_the_layers_it_covers`, `deleting_a_section_can_keep_its_layers`, `the_section_tool_is_shift_s_and_shares_the_frame_slot`, `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`, `the_canvas_menu_wraps_a_selection_in_a_section` | MATCH |
-| 5.9 | Clean up layers | Owner-confirmed 2026-09-20 to the chapter-4 framing: flatten redundant nests; **rename stays manual** (Figma's layer-namer is an AI agent). The chapter-16 FD4B reading ([help 30979556779159](https://help.figma.com/hc/en-us/articles/30979556779159): align → distribute → Smart-selection tidy-up, [help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233)) is a separate remainder: engine has `align` + `distribute_horizontal`, no `distribute_vertical` / smart selection. | `Editor::clean_up_layers` unwraps single-child, visually-inert groups bottom-up (positions preserved, one undo entry); exposed as right-click **Clean up layers** + command palette; pinned by `clean_up_layers_flattens_redundant_nests_in_one_undo` | PARTIAL — rename (manual by choice) + FD4B smart selection remain |
+| 5.8 | **Sections** | labelled container, distinct hit/hue, arrow key nav; place one with the Section tool (`⇧S`) or **Wrap in new section** (right-click); "sections … cannot be contained within frames or groups"; a section takes in the layers it is dragged or drawn over; `Delete` removes it **and its contents**, `⌘⌫`/`Ctrl+Backspace` **without** them ([help 9771500257687](https://help.figma.com/hc/en-us/articles/9771500257687)) | `Tool::Section` (⇧S, sharing `App::frame_slot` with Frame through `App::select_tool`), `Editor::section_selection` / `lift_into_section` / `section_absorb` / `delete_keeping_contents`, `CtxCmd::SectionSelection`; pinned by `a_section_lifts_layers_out_of_a_frame_and_keeps_their_place`, `a_section_never_lands_inside_a_frame_or_a_group`, `a_section_takes_in_the_layers_it_covers`, `deleting_a_section_can_keep_its_layers`, `the_section_tool_is_shift_s_and_shares_the_frame_slot`, `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`, `the_canvas_menu_wraps_a_selection_in_a_section`. The **web product UI** is now measured too: `NodeKind` carries `"section"`, the node defaults give it a `#ffffff` background with a 1px `#e6e6e6` border and `overflow: "visible"` (no clipping), `memory.ts::sectionStaysTopLevel` keeps the ⇧S tool's `add` and **Wrap in new section**'s `wrapSel` from nesting a section inside a frame or group (a wrapped selection is lifted to the canvas), `paint.ts::sectionsFirst` paints sections behind their siblings at the page root and in containers, and the section title is painted at the box's top-left at a constant 12px with a double-click rename, and the inspector offers a section no **Clip content** toggle (`kind !== "section"`) while frames and shapes keep theirs. Pinned by `apps/web/src/ui/__tests__/sections.test.mjs` (33); the comparison doc's Sections row moved MISSING → MATCH. | MATCH |
+| 5.9 | Clean up layers | Owner-confirmed 2026-09-20 to the chapter-4 framing: flatten redundant nests; **rename stays manual** (Figma's layer-namer is an AI agent). The chapter-16 FD4B reading ([help 30979556779159](https://help.figma.com/hc/en-us/articles/30979556779159): align → distribute → Smart-selection tidy-up, [help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233)) is a separate remainder: engine has `align` + `distribute_horizontal`, no `distribute_vertical` / smart selection (the canvas's gap-handle drag is 5.15; the Tidy up half of that article is still open). | `Editor::clean_up_layers` unwraps single-child, visually-inert groups bottom-up (positions preserved, one undo entry); exposed as right-click **Clean up layers** + command palette; pinned by `clean_up_layers_flattens_redundant_nests_in_one_undo` | PARTIAL — rename (manual by choice) + FD4B smart selection remain |
 | 5.10 | Duplicate naming | Figma: "… copy" style naming on duplicate | `duplicateNaming` in `memory.ts` names sequential duplicates `"Card copy"`, `"Card copy 2"`, etc., pinned by `parity.test.mjs` | MATCH |
 | 5.11 | Per-frame "Show name" | toggle on the frame | `ToggleShowName` | MATCH |
 | 5.12 | Clip content | per-frame tick | `ClipContent` | MATCH |
 | 5.13 | Layer search | filter the tree | `TreeSearchClear`, find/replace | MATCH |
 | 5.14 | Collapse/expand all | yes | `CollapseAllLayers` | MATCH |
+| 5.15 | **Smart selection — drag the gap handles** | with layers selected an equal distance apart on one axis, pink handles appear between them: *"When you hover over your Smart selection, additional pink handles will appear between each layer"* … *"Click and drag the handle to adjust the space between layers. A tooltip above your cursor shows the current space between layers, in pixels"* — right/down increases the space, left/up decreases it, **every gap in the run moving together** ([help 360040450233](https://help.figma.com/hc/en-us/articles/360040450233-Arrange-layers-with-Smart-selection)) | `snapping.ts::smartSelectionGaps` is the one owner of the 1D run (an equal gap on every pair, one shared cross-axis band) and returns one `GapBadge` per gap; `Canvas.tsx` paints a pill per gap at rest, recomputes them from the snapshot so a nudge that breaks the equality drops them, and hit-tests them in the multi-selection press path before the marquee; the drag dispatches the new `distributeSpacing` command (`engine/types.ts`, `engine/memory.ts`), which anchors the run at its first layer and re-places every following layer at the dragged gap (⇧ steps by the Big nudge, a negative value clamps to 0); pinned by `ui/__tests__/smartSelection.test.mjs` (26) — a 40px drag of a handle turns gaps 20/20 into 60/60 at 0/160/320 | MATCH |
 
 ## 6. Frame & shape properties (Design tab)
 
@@ -255,11 +256,11 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 7.4 | Gap | between children | `Gap` | MATCH |
 | 7.5 | Alignment 3×3 | 9 dots | alignment grid | MATCH |
 | 7.6 | Wrap + wrap alignment | yes | `ToggleWrap` | MATCH |
-| 7.7 | Sizing per axis | Fixed / Hug / Fill, both axes | `Sizing`, `ToggleChildFill` | MATCH |
+| 7.7 | Sizing per axis | Fixed / Hug / Fill, both axes; a fill child shares space by **content area** — "children set to fill container now use the border-box model … a layer with a thicker stroke will take up slightly more of the available width or height, so that its inner content area matches its sibling's" ([help 42031586813719](https://help.figma.com/hc/en-us/articles/42031586813719)) | `Sizing`, `ToggleChildFill`; `layout.ts::contentInset` is the one owner of a child's own inset (its padding plus its inside stroke on both sides — outside and center strokes never count) and `memory.ts::computeAutoLayout` adds it back to each filler's share while the frame's own padding keeps its room; pinned by `autolayout.test.mjs` block AL-038-046 (142/158 for an 8px border in a 300px row, 134/166 for a 16px-padded child, plus the lone-filler, cross-stretch and grid-`fr` cases) | MATCH |
 | 7.8 | Absolute position in a layout | "❖ absolute, `⌥`" | `ToggleChildAbsolute` | MATCH |
 | 7.9 | **Min / Max width & height** | per axis, from the W/H dropdown: **Add min width** / **Add max width** (and the height pair), the value typed into the field that appears, the axis icon gaining "two lines, one on each side", **Remove min and max** to clear; *"an additional setting that can be used at the same time as other resizing properties"* ([help 360040451373](https://help.figma.com/hc/en-us/articles/360040451373)) | `Action::LayoutAxisMenu` / `AddAxisLimit` / `ClearAxisLimits` / `SetAxisSizing`, `FieldId::Min|Max{Width,Height}`, and `AutoLayout::{min,max}_{width,height}` clamped by `apply_auto_layout` for every sizing; pinned by `min_and_max_dimensions_clamp_either_sizing`, `the_width_menu_carries_figmas_sizing_and_min_max_rows`, `a_min_and_max_width_are_added_from_the_menu_and_clamp_the_frame` | MATCH |
 | 7.10 | **Canvas stacking** | **First on top** / **Last on top** in the auto-layout settings; "the order of layers in the layers panel stays the same. Canvas stacking is solely a visual change that happens on the canvas" ([help 31289464393751](https://help.figma.com/hc/en-us/articles/31289464393751)) | `x_core::paint_order` / `paints_first_on_top` is the one owner of child paint order, walked by the Vello scene, the render IR and `hit_test`; `Action::StackingMenu` / `SetCanvasStacking`; pinned by `canvas_stacking_reverses_the_paint_order_and_never_the_layer_list`, `canvas_stacking_decides_which_layer_paints_on_top`, `the_hit_test_follows_canvas_stacking`, `the_canvas_stacking_menu_writes_figmas_two_orders` | MATCH |
-| 7.11 | Baseline alignment | cross-axis baseline | `LayoutAlign` `"baseline"` in `types.ts`, `applyLayout` aligns font ascender baselines (`itemBaseline = (fontSize || 14) * 0.8`), inspector toggle button and CSS/Tailwind codegen; pinned by `parity.test.mjs` | MATCH |
+| 7.11 | Baseline alignment | cross-axis baseline, horizontal flows only: *"when aligning an icon with a text layer"* — *"the bottoms of the icon and the word home are aligned on the red line"*; a row reserves the descenders (help 31289464393751) | `LayoutAlign` `"baseline"` in `types.ts`; `layout.ts::{childBaseline, baselineRow, effectiveCrossAlign}` is the one baseline model, used by both the plain row and **every wrapped line** in `memory.ts::computeAutoLayout`. A text's first line sits at `fontSize * TEXT_BASELINE_RATIO` from its box top; a shape synthesises its baseline from its **bottom** edge (flexbox, which Figma's own article says auto layout mirrors); a baseline row's cross size is `max baseline-above + max descent-below`, so a hug cannot clip a descender; a stale `baseline` on a flow that became vertical is normalized to `min` (`normalLayout`) because a vertical flow has no baseline. Inspector toggle + `B`, CSS/Tailwind codegen; pinned by `baselineAlignment.test.mjs` (32) and `baselineAlignment.dom.test.mjs` (16), with `parity.test.mjs` keeping the varying-font-size case | MATCH |
 | 7.12 | Space between via distribute | "distribute spacing" | align/distribute row | MATCH |
 | 7.13 | Text resizing inside layout | hug/fill text | text sizing path | MATCH |
 | 7.14 | Layout in components | layout inherited by instances | component path | MATCH |
@@ -349,7 +350,7 @@ position, canvas stacking, "distribute", `⇧A` to add.
 | 11.10 | Simplify | yes | `SimplifyVector` | MATCH |
 | 11.11 | Offset path | Figma has offset for vectors | `OffsetVector` | MATCH |
 | 11.12 | Delete & heal | `⇧⌫` after point select | `⇧⌫` / `⇧Delete` in `Canvas.tsx` deletes selected anchor point and recalculates smooth tangent handles (`ix`/`iy`, `ox`/`oy`) between neighboring anchors to heal curve continuity | MATCH |
-| 11.13 | Masks | `⌘⌥M` use as mask, the **Mask** section's type dropdown (*Alpha / Vector / Luminance*), any layer can be a mask | `⌘⌥M`, the canvas-menu row and the sidebar row all call `Editor::use_as_mask` (a multi-selection becomes Figma's mask object in ONE undo entry, and the second press clears it); `Node::mask_type` carries the section's choice and the IR scales the masked scope by the mask's own alpha (Alpha) or luminance (Luminance), ignoring it for Vector; `mask_path_of` falls back to the layer's bounds, so text, images and groups mask too. **Not built:** per-pixel alpha (a blurred or gradient mask clips hard), *View → Mask outlines*, the layers-panel mask glyph and its arrows | PARTIAL |
+| 11.13 | Masks | `⌘⌥M` use as mask, the **Mask** section's type dropdown (*Alpha / Vector / Luminance*), any layer can be a mask; **per-pixel alpha** (*"masks are applied based on the opacity of the mask"*), *View → Mask outlines* (*"masks in your file are outlined in green… If all layers being masked are hidden or have zero percent opacity, then the object's mask outlines won't appear"*), the layers panel's *"mask icon … with an upward-facing arrow along the layers that are being masked"*, and *"Right-click the mask and select Remove mask"* ([help 360040450253](https://help.figma.com/hc/en-us/articles/360040450253-Masks)) | the Rust editor path is as recorded: `⌘⌥M`, the canvas-menu row and the sidebar row call `Editor::use_as_mask` (a multi-selection becomes the mask object in ONE undo entry, the second press clears it), `Node::mask_type` carries the type and the IR scales the masked scope by the mask's own alpha or luminance, `mask_path_of` falls back to bounds. The **web product UI** is now measured and pinned: `Canvas.tsx::paintMaskedRun` paints the mask into a device-resolution tile and punches each masked child with `destination-in`, compositing the mask raster back through `drawImage(mc, ox, oy, ow, oh)` — the run box's own rect, since `(0, 0)` at natural size sampled the alpha 6 device px off and the soft edge landed in the wrong place; `traceNodeShape` (one tracer for the layer paint and the green outline) strokes `#00c853` on the canvas for *Mask outlines*, only while a masked layer is visible and above 0% opacity; `chrome.tsx::withMaskedBelow` puts the upward arrow on the rows **above** a mask beside `Icon name="mask"`; ⌃⌘M and the menu rows toggle ("Remove mask"); and the reach stops at the article's third rule — `paint.ts::stopsMaskReach` (a frame/component/instance whose `overflow` is not `visible`) ends the masked run there, so the boundary frame is itself outside the mask and so is everything above it, while a frame with clip content off, a group or a clipped rect lets the reach continue, and `withMaskedBelow` clears the arrow at the same predicate. Pinned by `apps/web/src/ui/__tests__/maskAlpha.test.mjs` (33) and `apps/web/src/ui/__tests__/maskReach.test.mjs` (22) | MATCH |
 | 11.14 | Pen: click-drag curves | yes | yes | MATCH |
 | 11.15 | Pen: close path | click the first point | yes | MATCH |
 | 11.16 | **Pen: edit while drawing** | exit/`Esc`, reopen, continue | our pen commits on finish; *verify* continue-a-path | PARTIAL |
@@ -593,6 +594,13 @@ rendering it.
    the toolbar slot with Frame), **Wrap in new section**, lift-to-canvas when the
    selection sits in a frame or a group, the take-in that follows the draw, and the
    two deletes. Pinned by `the_section_tool_draws_on_the_canvas_and_takes_what_it_covers`.
+   The **web canvas** was the gap (the comparison doc listed Sections as MISSING) and is
+   now delivered: a real `"section"` kind with its own background/border and no clipping,
+   the top-level rule in both creation routes, sections painted behind the frames they
+   hold, and the editable on-canvas title — pinned by
+   `apps/web/src/ui/__tests__/sections.test.mjs` (33), which also pins that the inspector
+   offers a section no clip-content toggle. The take-in that follows a draw or a resize is
+   the native path's subject and is recorded as the web residual.
 7. ~~**Rotate on canvas** (2.23)~~ — **delivered**: the ring outside the corners
    (past the resize handle, never inside the bounds), the ⇧ 15° snap, Figma's
    centre-or-own-origin pivot, the `⌥R` **rotation origin** target that moves it,
@@ -602,21 +610,31 @@ rendering it.
    `option_r_moves_the_rotation_origin_and_the_pivot_follows`,
    `rotating_a_selection_orbits_every_layer_about_the_pivot` and
    `the_angle_convention_counts_back_down_past_180`.
-8. ~~**Masks authoring** (11.13)~~ — **delivered**: `⌘⌥M` (or the canvas menu's
-   **Use as mask** row, or the sidebar row) makes the bottom layer of the selection
+8. ~~**Masks authoring** (11.13)~~ — **delivered, and the mask indicators too** (pipeline
+   run 5, 2026-09-28): `⌘⌥M` (or the canvas menu's
+   **Use as mask** / **Remove mask** row, or the sidebar row) makes the bottom layer of
+   the selection
    the mask for the layers above it — a multi-selection is wrapped in the mask object
    Figma creates, as ONE undo entry — and the same gesture clears it again; the
    **Mask** section carries the type dropdown (*Alpha*, *Vector*, *Luminance*), and
    the renderer scales the masked scope by the mask's own alpha or luminance (Vector
-   ignores translucency, exactly as documented). Figma's *View → Mask outlines*, the
-   layers-panel mask glyph with the arrows over the masked layers, and per-pixel alpha
-   (blurred, gradient and image masks) are the honest remainder. Pinned by
+   ignores translucency, exactly as documented). The web canvas keeps a mask's alpha
+   per pixel (a gradient or blurred mask feathers; the reduction runs only for vector
+   and luminance), paints *View → Mask outlines* in green on the canvas while a masked
+   layer is visible above 0% opacity, marks the rows above a mask with the stack's
+   upward arrow beside the mask glyph, and closes the toggle both ways. Still open
+   (recorded in the comparison doc's run-5 residuals): the enormous-run tile cap falls
+   back to a hard geometric clip, and the mask-type dropdown has no hover preview. (The
+   reach's clip-content boundary is the run-6 subject and is pinned: `stopsMaskReach`,
+   `apps/web/src/ui/__tests__/maskReach.test.mjs` (22).) Pinned by
    `use_as_mask_makes_the_bottom_layer_the_mask`,
    `use_as_mask_toggles_one_layer_and_its_type_is_undoable`,
    `mask_types_scale_the_masked_scope`,
    `the_mask_shortcut_masks_the_bottom_layer`,
    `the_mask_section_switches_the_masks_type` and
-   `the_selection_menu_offers_use_as_mask`.
+   `the_selection_menu_offers_use_as_mask`, plus
+   `apps/web/src/ui/__tests__/maskAlpha.test.mjs` (33) for the per-pixel alpha and the
+   two indicators.
 9. ~~**Place-image tool** (1.17, 2.26, 9.6)~~ — **delivered**: `⇧⌘K` (*"Select
    Image/video from the Shape tools menu … or use the keyboard shortcut"*, and
    the File menu and command search reach it too) picks one or more images,

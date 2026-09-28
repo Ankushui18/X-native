@@ -11,10 +11,11 @@ import { importSketch as sketchTs } from "../../src/engine/sketchImport.ts";
 import { initWasmBridge, getEngineInfo, importSvg, importFig, importSketch, importsEquivalent, __resetWasmForTests } from "../../src/engine/wasmBridge.ts";
 import { decodeRustImport } from "../../src/engine/wasmImportAdapter.ts";
 import { openRustSession } from "../../src/engine/rustSession.ts";
-import { admitWebDocument, openWebDocumentSession, OUTLINE_STROKE_GUARD_ACTIVE } from "../../src/engine/webDocumentSession.ts";
+import { admitWebDocument, openWebDocumentSession } from "../../src/engine/webDocumentSession.ts";
 import { runOutlineStrokeCorpus } from "./outline-stroke-corpus.mjs";
 import { rectangleStrokeOracle, strokeMatchesRectangle } from "../../src/engine/strokeBandOracle.ts";
 import { offsetCoverageEquivalent, offsetRings } from "../../src/engine/offsetPathOracle.ts";
+import { outlineInkVerdict } from "../../src/engine/outlineStrokeOracle.ts";
 import { docFromTemplate } from "../../src/engine/files.ts";
 import { node } from "../../src/engine/memory.ts";
 import { ensureGeo, encodeGeoRequest, decodeGeoResponse, compareBooleanResults } from "../../src/engine/geoBridge.ts";
@@ -310,16 +311,140 @@ try {
     "only the one opt-in edit may run the TS oracle; 29 default edits stay Rust-owned");
   console.log(`PASS real-WASM Rust stroke alignment: ${parity}/30 rectangle oracle parity, one opt-in audit, 29 default Rust edits, bound checks, history, resize reprojection and lossless checkpoints`);
 
-  // Promotion evidence deliberately bypasses the public web-owner operation:
-  // that owner remains guarded until this independent generated-WASM corpus is
-  // recorded green. `openRustSession` still dispatches the actual bindgen
-  // RustDocumentSession.outlineStroke method and its audited call counter.
+  // Promotion evidence. `openRustSession` dispatches the actual bindgen
+  // RustDocumentSession.outlineStroke method and its audited call counter; the
+  // 30 rich raw .x cases are the pre-promotion proof that was recorded green
+  // before the web guard was lifted.
   const outlined = await runOutlineStrokeCorpus({
     openRustSession,
     auditSnapshot: bridgeAuditSnapshot,
-    guardActive: OUTLINE_STROKE_GUARD_ACTIVE,
   });
-  console.log(`PASS real-WASM Outline Stroke: ${outlined.cases}/30 independent filled-ink cases, rich raw .x styles, bounded apply/undo/redo/checkpoints and refusal no-history proof while UI guard remains active`);
+  console.log(`PASS real-WASM Outline Stroke: ${outlined.cases}/30 independent filled-ink cases, rich raw .x styles, bounded apply/undo/redo/checkpoints and refusal no-history proof`);
+
+  // Task 2C promotion, through the PUBLIC web owner a user reaches: an admitted
+  // one-page document, a real Rust stroke command, then Outline Stroke. The
+  // default route must dispatch exactly one native command and read no TS
+  // oracle input; the opt-in ?outline=audit route must prove the committed ink
+  // against the independent rectangle band model with real WASM.
+  {
+    const seed = docFromTemplate("blank");
+    seed.pages[0].root.children.push(node("rect", "Outlined", 12, 18, 70, 40, { fill: "#b7a9c2" }));
+    const id = seed.pages[0].root.children[0].id;
+    const owner = await openWebDocumentSession(seed);
+    assert.ok(owner, "the promoted slice must admit a plain rectangle");
+    owner.strokeNode(id, 8, "#236b9e", "center", "miter");
+    const strokeRevision = owner.state().revision;
+    const before = owner.exportDocument();
+    const counters = () => bridgeAuditSnapshot().functions;
+    const callsBefore = counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0;
+    const shapesBefore = counters()["x-wasm.RustDocumentSession.getShape"]?.calls ?? 0;
+    const undoBefore = counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0;
+    const redoBefore = counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0;
+    assert.equal(bridgeAuditSnapshot().decisions["session.outline"]?.attempts ?? 0, 0,
+      "the default route must not consult the opt-in outline audit");
+
+    const applied = owner.outlineStroke(id);
+    assert.equal(counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls, callsBefore + 1,
+      "the promoted default route is one real RustDocumentSession.outlineStroke call");
+    assert.equal(counters()["x-wasm.RustDocumentSession.getShape"]?.calls, shapesBefore,
+      "the default route reads no reference input and runs no TS geometry");
+    assert.equal(applied.revision, strokeRevision + 1, "outline is exactly one native history entry");
+    assert.equal(applied.node, null, "outline must not masquerade as a scalar node edit");
+    assert.equal(applied.outline?.id, id);
+    assert.equal(applied.outline?.kind, "vector");
+    assert.equal(applied.outline?.fill, "#236b9e", "the live stroke paint becomes the vector fill");
+    assert.equal(applied.outline?.stroke, null, "the result cannot retain a live stroke");
+    assert.ok(!JSON.stringify(applied).includes('"pages"'), "bounded delta must not contain a document");
+    assert.ok(outlineInkVerdict({ x: 12, y: 18, w: 70, h: 40 },
+      { width: 8, color: "#236b9e", align: "center", capStart: "none", capEnd: "none",
+        join: "miter", dash: [], dashOffset: 0, miterLimit: 4, widthProfile: [] }, applied.outline).verified,
+      "committed Rust ink must equal the independent rectangle band model");
+
+    const saved = owner.exportDocument();
+    const layer = saved.pages[0].root.children[0];
+    assert.equal(layer.id, id);
+    assert.equal(layer.kind, "vector");
+    assert.equal(layer.fill, "#236b9e");
+    assert.equal(layer.strokeWidth, 0, "an explicit checkpoint drops the live stroke");
+    const undone = owner.undo();
+    assert.equal(undone.outline?.kind, "rect");
+    assert.deepEqual(undone.outline?.stroke?.width, 8);
+    assert.deepEqual(owner.exportDocument(), before, "one Rust undo restores the stroked rectangle");
+    assert.deepEqual(owner.redo().outline, applied.outline);
+    assert.deepEqual(owner.exportDocument(), saved);
+    owner.close();
+
+    // The opt-in diagnostic rounds the same command through Rust's own style
+    // projection (apply, undo, redo) and must agree with the committed ink.
+    const audited = await openWebDocumentSession(seed);
+    assert.ok(audited, "the audit case needs the same genuine session");
+    audited.strokeNode(id, 8, "#236b9e", "center", "miter");
+    const auditCallsBefore = counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0;
+    const auditShapesBefore = counters()["x-wasm.RustDocumentSession.getShape"]?.calls ?? 0;
+    const auditUndoBefore = counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0;
+    const auditRedoBefore = counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0;
+    // The audit reads the source from the command's own undo projection: the
+    // only bounded shape query in the bridge is offset-gated and refuses a
+    // layer that still owns a live stroke.
+
+    const previousOutlineLocation = globalThis.location;
+    let auditedOutline;
+    try {
+      globalThis.location = { search: "?outline=audit" };
+      auditedOutline = audited.outlineStroke(id);
+    } finally {
+      if (previousOutlineLocation === undefined) delete globalThis.location;
+      else globalThis.location = previousOutlineLocation;
+    }
+    assert.deepEqual([
+      (counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0) - auditCallsBefore,
+      (counters()["x-wasm.RustDocumentSession.getShape"]?.calls ?? 0) - auditShapesBefore,
+      (counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0) - auditUndoBefore,
+      (counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0) - auditRedoBefore,
+    ], [1, 0, 1, 1],
+      "the opt-in audit must run one command and one undo/redo round trip, without an offset-gated shape read");
+    assert.deepEqual(auditedOutline.outline, applied.outline,
+      "the audited result must be the same filled vector the default route commits");
+    assert.equal(bridgeAuditSnapshot().decisions["session.outline"]?.last.guard, "passed",
+      "the opt-in audit must compare real committed ink with the independent rectangle model");
+    assert.match(bridgeAuditSnapshot().decisions["session.outline"]?.last.reason ?? "", /opt-in outline audit/);
+    assert.deepEqual(audited.exportDocument(), saved, "the audited checkpoint equals the default one");
+    audited.close();
+
+    // A source the reference cannot cover is reported, never asserted as a
+    // pass or a finding: a 1-wide stroke on a 4x4 rectangle has no decisive ink
+    // sample (every band sample sits inside the facet clearance), so the round
+    // trip still runs but its verdict is `not-run`, and the edit stands.
+    const tinySeed = docFromTemplate("blank");
+    tinySeed.pages[0].root.children.push(node("rect", "Tiny", 10, 12, 4, 4, { fill: "#8a6f4e" }));
+    const tinyId = tinySeed.pages[0].root.children[0].id;
+    const tinyOwner = await openWebDocumentSession(tinySeed);
+    assert.ok(tinyOwner, "an empty 4x4 rectangle is admitted");
+    const tinyStrokeRevision = tinyOwner.strokeNode(tinyId, 1, "#236b9e", "center", "miter").revision;
+    const tinyCallsBefore = counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0;
+    const tinyUndoBefore = counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0;
+    const tinyRedoBefore = counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0;
+    try {
+      globalThis.location = { search: "?outline=audit" };
+      assert.equal(tinyOwner.outlineStroke(tinyId).outline?.kind, "vector");
+    } finally {
+      if (previousOutlineLocation === undefined) delete globalThis.location;
+      else globalThis.location = previousOutlineLocation;
+    }
+    assert.deepEqual([
+      (counters()["x-wasm.RustDocumentSession.outlineStroke"]?.calls ?? 0) - tinyCallsBefore,
+      (counters()["x-wasm.RustDocumentSession.undo"]?.calls ?? 0) - tinyUndoBefore,
+      (counters()["x-wasm.RustDocumentSession.redo"]?.calls ?? 0) - tinyRedoBefore,
+    ], [1, 1, 1], "an uncovered source still runs the one command and the bounded round trip");
+    assert.equal(tinyOwner.state().revision, tinyStrokeRevision + 3,
+      "the round trip ends on the redo, so the next user undo still removes the outline");
+    assert.equal(bridgeAuditSnapshot().decisions["session.outline"]?.last.guard, "not-run");
+    assert.match(bridgeAuditSnapshot().decisions["session.outline"]?.last.reason ?? "", /did not cover this source/);
+    assert.equal(bridgeAuditSnapshot().decisions["session.outline"]?.blocked, 0,
+      "a coverage gap is never recorded as a refusal");
+    tinyOwner.close();
+    console.log("PASS real-WASM Outline Stroke promotion: public web owner dispatches one Rust command with no TS oracle, opt-in ?outline=audit proves the ink, unmodelled sources are reported");
+  }
 
   // Actual V5 bindgen/session class, not x-geo or a mock. The independent TS
   // NONZERO reference verifies all 30 committed Rust results here. Only the

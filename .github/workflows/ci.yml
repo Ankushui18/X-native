@@ -129,7 +129,14 @@ jobs:
           status=$?
           cat /tmp/wasm-smoke.log
           if [ "$status" -ne 0 ]; then
-            # Logs live behind a separate CDN. Annotations remain API-readable.
+            # Logs live behind a separate CDN. Annotations remain API-readable,
+            # but only about ten error annotations survive per step, and a
+            # failing runner's log is mostly PASS banner lines. Emit the actual
+            # failure lines first so they cannot be crowded out of the budget.
+            grep -anE 'Error|error|FAIL|fail|Expected|expected|actual |thrown|at /' /tmp/wasm-smoke.log |
+              head -8 | while IFS= read -r line; do
+                printf '::error::%s\n' "${line//%/%25}"
+              done
             tail -60 /tmp/wasm-smoke.log | while IFS= read -r line; do
               line=${line//%/%25}
               printf '::error::%s\n' "$line"

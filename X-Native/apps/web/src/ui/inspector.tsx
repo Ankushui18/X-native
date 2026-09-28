@@ -4415,20 +4415,25 @@ function Design({
           </label>
         )}
       </div>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={n.overflow !== "visible"}
-          onChange={(e) =>
-            engine.dispatch({
-              type: "patch",
-              id: n.id,
-              patch: { overflow: e.target.checked ? "clip" : "visible" },
-            })
-          }
-        />
-        Clip content / mask
-      </label>
+      {/* A section never clips - it is the titled backdrop its frames are
+          placed on - so Figma gives it no clip-content property, and neither
+          does this row. Frames, groups and shapes keep the toggle. */}
+      {n.kind !== "section" && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={n.overflow !== "visible"}
+            onChange={(e) =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { overflow: e.target.checked ? "clip" : "visible" },
+              })
+            }
+          />
+          Clip content / mask
+        </label>
+      )}
       <label className="check">
         <input
           type="checkbox"

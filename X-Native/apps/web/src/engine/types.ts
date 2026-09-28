@@ -5,6 +5,7 @@
 
 export type NodeKind =
   | "frame"
+  | "section"
   | "group"
   | "rect"
   | "ellipse"
@@ -1037,6 +1038,13 @@ export type Command =
   | { type: "movePage"; from: number; to: number }
   | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
   | { type: "distribute"; axis: "h" | "v" }
+  /** Smart-selection gap handle (Figma help 360040450233): set the space
+   *  between every pair of the given layers to `gap` along `axis`, keeping the
+   *  order and the sizes. Unlike `distribute`, which pins both outer layers and
+   *  splits the existing span evenly, this one takes an absolute value from the
+   *  drag and anchors the run at its first layer, so the space grows away from
+   *  the handle in the direction the pointer moved. */
+  | { type: "distributeSpacing"; ids: string[]; axis: "h" | "v"; gap: number }
   | { type: "tidyUp"; axis?: "auto" | "h" | "v" }
   | { type: "swapFillStroke" }
   | { type: "toggleStroke" }

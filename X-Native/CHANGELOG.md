@@ -5,6 +5,336 @@ Notable changes to the engine, the editor, the CLI and the MCP surface. Format:
 are the crate versions in `Cargo.toml`, which still drift (see
 [docs/KNOWN_DEBT.md](docs/KNOWN_DEBT.md) §8) until a release decision is made.
 
+## [Unreleased] — 2026-09-28 (Figma parity: a section has no clip-content property)
+
+The inspector polish that closes run 7's residual (4). Measured with a probe
+against the mounted inspector, the **Clip content / mask** row rendered for a
+section (`row=present checkbox=checked=false`) and was live: clicking it wrote
+`overflow: "clip"` onto a section, a property Figma does not give one — its
+*Sections* article offers a section exactly the background and border colours in
+the Fill and Stroke sections and never a clip-content toggle.
+
+- The row now renders only when `n.kind !== "section"` (`ui/inspector.tsx`);
+  re-measured `section selected row=absent`, while the controls are untouched
+  (a frame's row still present and checked, a shape's present and unchecked).
+  **Use as mask** is still offered on a section. Pure UI: no engine change, no
+  Rust file, no WASM boundary, no geometry.
+- Pinned by `apps/web/src/ui/__tests__/sections.test.mjs` (**33**, five new
+  assertions): no Clip content row for a section, its `overflow` stays
+  `"visible"`, **Use as mask** still there, plus the two controls. Removing the
+  gate fails 1 assertion. Whole suite **2951 passed, 0 failed**.
+
+## [Unreleased] — 2026-09-28 (Figma parity: sections, the titled top-level container)
+
+The seventh feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Organize your canvas with sections* (help 9771500257687) —
+*"Sections in Figma Design are a top-level element on the canvas by default.
+Sections can contain all layer types, including other sections, but cannot be
+contained within frames or groups."* … *"Click Section in the toolbar or use the
+keyboard shortcut ⇧ Shift S."* … *"Double-click the section title on the canvas
+or Layers panel. Edit the title."* … *"Change the background and border color for
+a section using the Fill and Stroke sections of the right sidebar."*
+
+- **The tool existed; the element did not.** ⇧S already armed a Section tool
+  whose drag created `kind: "frame"` with `fill: "#00000000"` — measured — so a
+  section was an invisible frame: no background, no border (`node("section", …)`
+  fell through to a shape's `#d9d9d9`), nothing clipped, no title chrome, and
+  document-order z. `NodeKind` now carries `"section"`, and the node defaults
+  give it the article's background (`#ffffff`) and border (`#e6e6e6`, 1px) with
+  `overflow: "visible"`, so it never clips.
+- **Top-level, both routes.** `memory.ts::sectionStaysTopLevel` is the one owner
+  of *"cannot be contained within frames or groups"*: the `add` command the
+  Section tool draws with, and `wrapSel` for **Wrap in new section**, which now
+  produces a real section and lifts a selection out of the frame that held it,
+  keeping the selection's world box.
+- **Behind the frames it holds.** `paint.ts::sectionsFirst` paints sections
+  before their siblings, at the page root and inside any container, so a section
+  listed after a frame still sits behind it (measured before the fix: the overlap
+  read red where the frame is green).
+- **A title you can edit.** The section's name is painted in the canvas label
+  pass, inside the box's top-left, at a constant 12px while the canvas zooms; the
+  label hit test takes sections, so double-clicking the title opens the rename
+  editor (which now lands on the title instead of above the box).
+- Pinned by `apps/web/src/ui/__tests__/sections.test.mjs` (28 assertions, wired
+  into `npm test`), which drives the real canvas with mouse events: the ⇧S drag,
+  the wrap-and-lift, `add()` refusing a nested section, the defaults, the painted
+  background, an unclipped child outside the box, the frame winning the overlap
+  at both levels, the border stroke, and the title (position, zoom, moves,
+  renaming, double-click editor). Disarming the z rule fails 2 assertions,
+  mapping the tool back to a frame 3, removing the title pass 5. The shared
+  software canvas gained a `fillText` log and an `act` runner for those. Whole
+  suite **2946 passed, 0 failed** (2,918 + the 28 here). TypeScript only: no Rust
+  file changed, the WASM boundary and the geometry guard were not touched.
+- Recorded residuals: a section does not yet take in the objects it is drawn or
+  resized over; there is no delete-keeping-contents route (Figma's ⌘⌫); the
+  *Ready for dev* status and *Share* are not implemented; the inspector still
+  offers a **Clip content** toggle on a section.
+
+## [Unreleased] — 2026-09-28 (Figma parity: the mask's reach stops at clip content)
+
+The sixth feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Masks* (help 360040450253) — *"The mask applies to all siblings
+above it until it reaches: Another mask or mask object / The mask's parent frame
+or group / A frame or component with clip content on."*
+
+- **The boundary was missing entirely.** `engine/paint.ts::partitionMaskRuns` had
+  no clip-content rule: measured with a probe, `[mask, Small, clippedFrame,
+  Above]` came back as one masked run `mask(Mask):[Small, Clipped frame, Above]`
+  — the same for a frame with clip content *off*, a group, a component with clip
+  on, an instance with clip on and a scroll frame. So a frame that clips content,
+  which the article names as a hard stop, was itself masked and dragged everything
+  above it under the mask. In device pixels (the frame's fill `#1f2937` = r31, the
+  layer's blue `#3b82f6` = r59, page white = 255): the clipped frame's own fill
+  read **r=255 g=255 b=255** at (180,30) and the layer above it **r=255** at
+  (130,20) — both punched to nothing. `stopsMaskReach` now owns that rule (a
+  frame/component/instance whose `overflow` is not `visible`) and the run ends
+  there: the boundary node opens a plain run, so `paintMaskedRun` is never entered
+  for it or for anything above it. An empty masked run is dropped, which also
+  stops a reach-less mask from drawing a green outline around nothing.
+- **The panel arrow follows the same predicate.** `chrome.tsx::withMaskedBelow`
+  badged `Above`, `Clipped frame` and `Small`; it now clears `seenMask` at the
+  boundary, so the arrow marks exactly the layers the canvas clips.
+- Not changed, and measured to stay correct: a frame with clip content off, a
+  group and a clipped rect let the reach continue, and a mask inside a clipped
+  frame still clips its own siblings while its parent's sibling is untouched.
+- Pinned by `apps/web/src/ui/__tests__/maskReach.test.mjs` (22 assertions, wired
+  into `npm test`), with the software Canvas2D both mask tests share extracted to
+  `apps/web/src/ui/__tests__/softCanvas2d.mjs` (run 5's file keeps its 33
+  assertions, same names). Disarming the partition rule fails 9 assertions
+  (7 engine + 2 pixel); disarming the panel walk fails 2. Whole suite **2918
+  passed, 0 failed** (2,896 + the 22 here). TypeScript only: no Rust file changed,
+  the WASM boundary and the geometry guard were not touched.
+
+## [Unreleased] — 2026-09-28 (Figma parity: mask per-pixel alpha and the mask indicators)
+
+The fifth feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Masks* (help 360040450253) — *"masks are applied based on the
+opacity of the mask. The higher the opacity, the more that is revealed. Zero
+percent opacity reveals nothing. This means we can utilize blurs and opacity in
+our masks"* … *"masks in your file are outlined in green. Note: If all layers
+being masked are hidden or have zero percent opacity, then the object's mask
+outlines won't appear."* … *"Right-click the mask and select Remove mask."*
+
+- **The soft edge now lands on the mask.** `Canvas.tsx::paintMaskedRun` paints
+  the mask into a device-resolution tile, punches every masked child with
+  `destination-in`, and composited that mask raster with `drawImage(mc, 0, 0)`
+  at natural size — while the run box it covers starts at the box's padding, so
+  the mask's alpha was sampled 6 device px down-right of the layer. Measured on a
+  100px gradient mask (alpha 1 → 0), the revealed coverage at x = 5 / 25 / 50 /
+  75 / 95 px was **0.000 / 0.806 / 0.556 / 0.306 / 0.102** where the mask's own
+  alpha is 0.95 / 0.75 / 0.50 / 0.25 / 0.05; the mask also bled past its own box.
+  It is now drawn through the same rect the punched tile is blitted with
+  (`drawImage(mc, ox, oy, ow, oh)`), so a gradient or blurred mask feathers where
+  the mask actually is. Alpha masks still skip the `getImageData` reduction —
+  per-pixel alpha was already the model, this was the alignment.
+- **Show mask outlines is visible, and follows the article's note.** The green
+  `#00c853` outline used to be stroked inside the mask tile: 1 stroke on a tile,
+  **0 on the canvas**, so the view setting had no visible effect and its alpha
+  widened the mask by the stroke width. It is now stroked on the canvas from the
+  same tracer the layer paints with (`Canvas.tsx::traceNodeShape`, extracted so
+  the outline cannot drift from the shape), and not at all when every masked
+  layer is hidden or at 0% opacity.
+- **The layers panel marks the layers being masked.** The arrow sat on the row
+  *below* a mask, so Figma's arrangement (mask below its content) showed no arrow
+  anywhere while a mask above its content — which masks nothing — marked the
+  content row. `chrome.tsx::withMaskedBelow` marks the rows above a mask (the ones
+  the canvas clips), and the glyph is an upward arrow instead of a down-right
+  `↳`, matching *"the mask icon … with an upward-facing arrow along the layers
+  that are being masked"*.
+- **Use as mask toggles.** ⌃⌘M and the menu rows only ever set the flag: a second
+  press left `isMask` true and the row still read "Use as mask" while the layer
+  was one. Both now toggle, the right-click rows read **Remove mask** when the
+  layer is a mask (`ContextMenu.tsx::MenuCaps.mask`), and removing one leaves the
+  layers themselves alone.
+- Pinned by `apps/web/src/ui/__tests__/maskAlpha.test.mjs` (33 assertions, wired
+  into `npm test`), which runs against a small software Canvas2D written in the
+  test so the edge is measured in pixel alpha: the monotone gradient ramp with
+  ≥ 40 pixels in the 0.05–0.95 band, the same gradient cut as a **vector** mask is
+  binary, luminance follows brightness, a mask at 0% opacity reveals nothing, the
+  blur reaches the mask tile, the three outline cases, and the panel arrows.
+  Reverting the blit to `(0, 0)` fails 5 assertions, dropping the outline note
+  fails 2, the old panel walk fails the row-marking one. Whole suite **2896
+  passed, 0 failed**. TypeScript only: no Rust file changed and the geometry guard
+  was not touched.
+
+## [Unreleased] — 2026-09-28 (Figma parity: the arc tool's canvas handles)
+
+The fourth feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Arc tool: create arcs, semi-circles, and rings* (help
+360040450173) — *"When you hover over the circle, a single handle will appear on
+the right-hand side"* … *"Now there will be three handles shown: The Sweep …
+The Start handle (which has a dot inside it) indicates where the arc begins …
+The Ratio handle at the center of the circle allows you to change the circle to
+a ring."*
+
+- **The Start handle exists.** `Canvas.tsx::arcHandlePoints` is the one owner of
+  the three controls — Sweep at the arc's end, Start at `startingAngle` (with
+  the article's dot inside it) and Ratio at `endingAngle × innerRadius` — used
+  by both the painter and the pointer path, so the dot a user sees is the dot
+  the pointer grabs. Before this, an arc showed only Sweep and Ratio: dragging
+  the start point ran the box's bottom-middle resize instead (`h` 100 → 50).
+- **A pie can become a ring on canvas.** The Ratio handle now appears as soon
+  as the sweep has opened a gap, at the centre of a pie, where dragging it out
+  sets `innerRadius` (measured 0 → 0.5). Before, it existed only once the
+  inspector had set `innerRadius > 0`, so the centre of a pie just moved the
+  ellipse.
+- **The hover affordance.** Figma's *"when you hover over the circle"*: an
+  unselected ellipse now paints its controls on hover, and a press on one
+  selects the layer and takes the handle rather than starting a move.
+- **The drag closes its own undo step.** `arc` was missing from the on-up `end`
+  list, so an arc drag leaked into the next gesture — measured: one undo after
+  an arc drag and a move drag reverted both.
+- Measured after (100px circle, zoom 1): Sweep drag → `endingAngle 90°` with the
+  box untouched; Start drag (50,100) → (0,50) → `startingAngle 90° → 180°`; Ratio
+  drag from a pie's centre → `innerRadius 0.5`; one undo now takes back only the
+  move. Pinned by `apps/web/src/ui/__tests__/arcHandles.test.mjs` (22
+  assertions, wired into `npm test`) — the undo case verified to fail without
+  the on-up fix. TypeScript only: no Rust file changed and the geometry guard
+  was not touched.
+
+## [Unreleased] — 2026-09-28 (Figma parity: Smart selection gap handles)
+
+The third feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Arrange layers with Smart selection* (help 360040450233) —
+*"To make a Smart selection, all layers must be an equal distance apart and
+overlap on either the x or y axis (1D) ... additional pink handles will appear
+between each layer. These handles allow you to adjust the vertical or horizontal
+spacing between layers."* … *"Click and drag the handle to adjust the space
+between layers. A tooltip above your cursor shows the current space between
+layers, in pixels."*
+
+- **Equal-gap dragging.** `snapping.ts::smartSelectionGaps` is the one owner of
+  the 1D run: the selected boxes must share a cross-axis band and every gap must
+  equal the first (a drifting pair ends the run, touching boxes have nothing to
+  drag), and it returns one `GapBadge` per gap — the same shape the move-snapping
+  feedback already painted. `Canvas.tsx` keeps those handles in `smartGaps`,
+  recomputed from the snapshot so a nudge that breaks the equality drops them,
+  paints one pink pill per gap at rest (Figma's pink handles, with the gap shown
+  in pixels) and hit-tests them in the multi-selection press path, ahead of the
+  marquee fall-through.
+- **`distributeSpacing`.** A drag dispatches the new command
+  (`engine/types.ts`, `engine/memory.ts`), which anchors the run at its first
+  layer and re-places every following layer at `size + gap`, so the space grows
+  away from the handle in the direction dragged, order and sizes untouched,
+  locked layers and instance members skipped exactly as `distribute` skips them.
+  Shift steps by the Big nudge setting and a negative value clamps to 0.
+- **Measured before → after** (three 100px squares, gaps 20/20, all selected): a
+  press on the handle at (110, 50) used to clear the selection and leave the row
+  at 0 / 120 / 240; the same drag by 40px now lands 0 / 160 / 320 with both gaps
+  at 60. A move drag of a layer itself is unchanged.
+- Pinned by `apps/web/src/ui/__tests__/smartSelection.test.mjs` (26 assertions,
+  wired into `npm test`); TypeScript only — no Rust file changed and the
+  geometry guard was not touched. The article's Tidy up tool, its per-object
+  pink rings, the sidebar "space between" fields and the ⌘-swap reorder remain
+  open (master list §5.9 / §5.15).
+
+## [Unreleased] — 2026-09-28 (Figma parity: fill children use the border-box model)
+
+The second feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Use auto layout with CSS Flexbox in mind* (help 42031586813719),
+section "Children set to fill container now use the border-box model" — *"Figma
+distributes space amongst fill container children by the children's content area
+instead of by their size ... a layer with a thicker stroke will take up slightly
+more of the available width or height, so that its inner content area matches
+its sibling's."*
+
+- **Fill children share the content area, not the box.** `layout.ts::contentInset`
+  is now the one owner of a child's own inset — its padding plus its inside
+  stroke on both sides, with outside and center strokes never counting — and the
+  fillers loop in `computeAutoLayout` adds it back to each child's share.
+  Measured before, a 300px row with two fill children where the second carries
+  an 8px inside stroke: 150/150 with content areas 150/134. Now 142/158 with
+  content 142/142. With the second child a frame padded 16: 150/150 (content
+  150/118) becomes 134/166 (content 134/134).
+- **Nothing else moved.** The frame's own padding keeps its room
+  (`clampToPadding`), a lone filler still takes the whole padded content box,
+  a cross-axis fill is still a plain stretch, and grid `fr` tracks still split
+  exactly — which is the article's own escape hatch for "always split space
+  exactly regardless of stroke width".
+- **Not a WASM change:** the fix sits inside the TypeScript layout pass behind
+  the existing `autoLayout` command; no Rust file changed and every geometry
+  guard is intact. Recorded for follow-up: the Rust pass adds only the child's
+  inside stroke to a grow child's share (`x-core/src/auto_layout.rs:176`, `:418`),
+  so a padded fill child still differs there.
+- **Tests:** `apps/web/src/engine/__tests__/autolayout.test.mjs`, block
+  AL-038-046 (10 assertions). Whole suite: 2815 passed, 0 failed.
+
+## [Unreleased] — 2026-09-28 (Figma parity: text baseline alignment)
+
+The first feature through the eight-step Figma parity pipeline recorded in
+[FIGMA_CREATE_DESIGNS_COMPARISON.md](../FIGMA_CREATE_DESIGNS_COMPARISON.md).
+Source: Figma's *Use the horizontal and vertical flows in auto layout*
+(help.figma.com 31289464393751), section "Text baseline alignment" — *"such as
+when aligning an icon with a text layer"* … *"the bottoms of the icon and the
+word home are aligned on the red line"* — plus *Use auto layout with CSS
+Flexbox in mind* (42031586813719), which states auto layout mirrors how the web
+renders layouts.
+
+- **A layer without text now sits on the baseline by its bottom edge.** The row
+  modelled every non-text child's baseline as `h × 0.8`, so an icon in a
+  baseline-aligned row was 20% of its height too high and the shared line ran
+  through it. Flexbox (and Figma's own example) synthesise the baseline from the
+  bottom edge: `layout.ts::childBaseline`.
+- **A baseline row reserves its descenders.** The row's cross size is
+  `max baseline-above + max descent-below` — the flexbox baseline row — so a hug
+  no longer clips the text that hangs below the line (measured: 48px before,
+  56.8px for a 48px icon with 14px text).
+- **Every wrapped line aligns on its own baseline.** A `wrap` + baseline frame
+  used to top-align every line; `computeAutoLayout` now breaks the lines first
+  and gives each one its own baseline group (the earlier arithmetic is
+  unchanged: the existing wrap tests keep their numbers).
+- **The stored layout and the alignment box agree.** A `baseline` left over on
+  a flow that became vertical is normalized to the start edge
+  (`memory.ts::normalLayout`), because a vertical flow has no text baseline and
+  the panel offers no such control.
+- **Not a WASM change.** This is the TypeScript layout pass behind the existing
+  `autoLayout` command: no geometry crosses the WASM boundary, so every Rust
+  geometry guard is untouched.
+- **Tests:** `apps/web/src/engine/__tests__/baselineAlignment.test.mjs` (32) and
+  `apps/web/src/ui/__tests__/baselineAlignment.dom.test.mjs` (16), both in
+  `npm test`. Still open and recorded: the engine approximates a text's
+  first-line ascent as `fontSize × 0.8` (no font tables), and the Rust
+  `x-core` layout pass uses its own text heuristic.
+
+## [Unreleased] — 2026-09-28 (Outline Stroke promoted in the opt-in Rust view)
+
+The genuine generated-WASM 30/30 outline corpus ran green with the promotion
+guard still ON — CI
+[36398066150](https://github.com/Ankushui18/X-native/actions/runs/36398066150)
+and [36409190946](https://github.com/Ankushui18/X-native/actions/runs/36409190946)
+— and only then was the browser guard lifted. The post-promotion runs
+[36413696948](https://github.com/Ankushui18/X-native/actions/runs/36413696948)
+and [36414737543](https://github.com/Ankushui18/X-native/actions/runs/36414737543)
+drove the public web owner on the packaged artifact, the second with the
+rejection rollback in place.
+
+- **The opt-in Rust document view dispatches Outline Stroke directly.**
+  `#/file/<id>?engine=rust` turns one admitted live-stroked rectangle into one
+  filled vector with a single `x-editor` `ReplaceNode` command. Strict ABI
+  parsing, affected-layer identity, a closed `vector` result with `stroke: null`
+  and explicit-checkpoint verification still apply; there is no per-edit TS
+  geometry, JS node tree or second history. The richer native dialect (lines,
+  arcs, ellipse/poly/star, dashes, asymmetric caps, variable-width stations) is
+  unchanged for native callers.
+- **`?outline=audit` keeps the independent diagnostic.** The command's own undo
+  projection supplies the source rect and its true stroke style (the only
+  bounded shape query is the offset dialect's `getShape`, which refuses a layer
+  that still owns a live stroke); the committed filled ink is compared with an
+  analytic rectangle band model under NONZERO winding, including miter/bevel/
+  round outer corners and the miter-limit bevel fallback. A decisive
+  disagreement returns native history to the proven source and pauses editing; a
+  source the model cannot cover is recorded as `not-run` rather than passed. The
+  default route consults none of it.
+- **Not built:** the normal TypeScript editor still owns Outline Stroke, text
+  outlining and its own history; the Rust view is not a second owner there.
+  Details, evidence and the withheld list: [docs/OUTLINE_STROKE_TASK2C.md](docs/OUTLINE_STROKE_TASK2C.md).
+
 ## [Unreleased] — 2026-09-19 (Outlines mode)
 
 [Designlab Figma 101 — Tips and Tricks](https://designlab.com/figma-101-course/tips-and-tricks)

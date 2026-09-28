@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { DocSeed } from "../engine/files";
 import type { BooleanOp } from "../engine/types";
 import {
-  admitWebDocument, openWebDocumentSession, OUTLINE_STROKE_GUARD_ACTIVE,
+  admitWebDocument, openWebDocumentSession,
   type RustWebDocumentSession,
 } from "../engine/webDocumentSession";
 import {
@@ -10,6 +10,7 @@ import {
   type RustPathCommand, type RustStateChange, type RustStrokeChange,
 } from "../engine/rustSession";
 import { OffsetGuardRejected, offsetRings } from "../engine/offsetPathOracle";
+import { outlineAuditRequested } from "../engine/outlineStrokeOracle";
 import { LiveStatus } from "./announce";
 import { XButton, XSelect } from "./x-ui";
 
@@ -200,13 +201,13 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
     !selectedLayer?.outlineStroke && (selectedLayer?.kind !== "vector" || !!selectedLayer?.rings?.length) &&
     offsetDraft.distance.trim() !== "" && Number.isFinite(offsetDistance) &&
     offsetDistance !== 0 && Math.abs(offsetDistance) <= 2048;
-  // This preview admits a conservative UI subset. The Rust bridge itself keeps
-  // the richer cap/dash/profile command dialect for native callers; the web
-  // button is only offered when the existing DOM layer can be replaced from a
-  // reversible bounded delta without inventing another geometry engine.
-  const canOutline = !OUTLINE_STROKE_GUARD_ACTIVE && ready && selectedLayer?.kind === "rect" &&
-    !!selectedLayer?.visible && !selectedLayer?.locked &&
-    (!!selectedLayer.stroke?.width || !!selectedLayer.outlineStroke);
+  // This preview admits a conservative UI subset: one visible stroked
+  // rectangle. The Rust bridge itself keeps the richer cap/dash/profile command
+  // dialect for native callers. The genuine generated-WASM 30/30 corpus passed
+  // with the promotion guard still on, so the button now dispatches the real
+  // command directly; `?outline=audit` adds the independent ink diagnostic.
+  const canOutline = ready && selectedLayer?.kind === "rect" &&
+    !!selectedLayer?.visible && !selectedLayer?.locked && !!selectedLayer.stroke?.width;
   const phaseMessage = phase === "opening" ? "Checking the document and loading Rust"
     : phase === "unsupported" ? "Unsupported file. Use the standard editor"
     : phase === "unavailable" ? "Rust unavailable. Use the standard editor"
@@ -475,8 +476,8 @@ export function RustDocumentView({ fileId, seed, onHome, onStandard, onRelease }
                   onClick={() => apply(s => s.outlineStroke(selectedLayer.id))}>
                   Outline stroke
                 </XButton>}
-                {selectedLayer.kind === "rect" && selectedLayer.stroke?.width && OUTLINE_STROKE_GUARD_ACTIVE &&
-                  <p>Outline Stroke is guarded until the dedicated generated-WASM 30/30 corpus passes.</p>}
+                {selectedLayer.kind === "rect" && outlineAuditRequested() &&
+                  <p>Outline audit mode: the committed filled ink is compared with the independent rectangle reference before this preview accepts it.</p>}
                 <form className="rust-preview-stroke-form" onSubmit={e => {
                   e.preventDefault();
                   if (canOffset) apply(s => s.offsetNode(selectedLayer.id, offsetDistance, offsetDraft.join));

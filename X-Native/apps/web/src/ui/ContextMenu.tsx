@@ -231,6 +231,8 @@ export type MenuCaps = {
   reset?: boolean;
   vectorize?: boolean;
   outline?: boolean;
+  /** The selected layer is already a mask, so the row removes it instead. */
+  mask?: boolean;
 };
 
 export function canvasMenu(
@@ -290,7 +292,7 @@ export function canvasMenu(
   items.push({ kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" });
   items.push({ kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true });
   items.push({ kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true });
-  items.push({ kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌃⌘M", icon: "mask" });
+  items.push({ kind: "action", id: "useAsMask", label: caps.mask ? "Remove mask" : "Use as mask", shortcut: "⌃⌘M", icon: "mask" });
   items.push(...layoutMenuItems(hasLayout));
   items.push({ kind: "action", id: "flipH", label: "Flip horizontal", shortcut: "⇧H", icon: "flip-h" });
   items.push({ kind: "action", id: "flipV", label: "Flip vertical", shortcut: "⇧V", icon: "flip-v" });
@@ -380,7 +382,7 @@ export function layerMenu(isGroup: boolean, hasLayout = false, caps: MenuCaps = 
     { kind: "action", id: "makeComponent", label: "Create component", shortcut: "⌘⌥K", icon: "component" },
     { kind: "action", id: "detachInstance", label: "Detach instance", shortcut: "⌥⌘B", icon: "detach", enabled: caps.detach ?? true },
     { kind: "action", id: "resetOverrides", label: "Reset all overrides", icon: "reset", enabled: caps.reset ?? true },
-    { kind: "action", id: "useAsMask", label: "Use as mask", shortcut: "⌃⌘M", icon: "mask" },
+    { kind: "action", id: "useAsMask", label: caps.mask ? "Remove mask" : "Use as mask", shortcut: "⌃⌘M", icon: "mask" },
     ...layoutMenuItems(hasLayout),
     { kind: "sep" },
     ...(isGroup
@@ -625,10 +627,14 @@ export async function runMenu(
       const root = snap.pages[snap.page].root;
       const id0 = snap.selection[0];
       const n = id0 ? find(root, id0) : null;
-      if (n?.children.length) {
-        engine.dispatch({ type: "patch", id: n.children[0].id, patch: { isMask: true } });
-      } else if (id0) {
-        engine.dispatch({ type: "patch", id: id0, patch: { isMask: true } });
+      const target = n?.children.length ? n.children[0] : n;
+      if (target) {
+        // Figma's Masks article lists the ways "to stop using an object as a
+        // mask" and every one of them is a toggle: "Select the mask and use the
+        // keyboard shortcut ... Mac: ⌃⌘M", "Right-click the mask and select
+        // Remove mask". So ⌃⌘M and the row set the flag, or clear it when the
+        // layer is the mask already - never a one-way street.
+        engine.dispatch({ type: "patch", id: target.id, patch: { isMask: !target.isMask } });
       }
       break;
     }

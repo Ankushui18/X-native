@@ -18,15 +18,13 @@ import type { BooleanOp, Page, XNode } from "./types";
 import { openRustSession, type RustSessionClient, type RustStateChange, type RustStrokeChange } from "./rustSession";
 import { auditDecision } from "./bridgeRuntimeAudit";
 import { guardOffsetPreview, offsetAuditRequested } from "./offsetPathOracle";
+import {
+  outlineAuditRequested, outlineInkVerdict, outlineReferenceRect, recordOutlineAudit,
+  type OutlineAuditVerdict,
+} from "./outlineStrokeOracle";
 import { verifyStrokeDelta } from "./strokeBandOracle";
 
 export const WEB_DOCUMENT_SESSION_VERSION = 2;
-/** Outline Stroke is implemented at the Rust/session boundary but deliberately
- * remains unavailable from the opt-in browser host until its own genuine
- * generated-WASM 30/30 corpus is recorded. Do not flip this merely because
- * unit fixtures pass: caps, joins, dashes and width profiles need independent
- * rendered-ink evidence first. */
-export const OUTLINE_STROKE_GUARD_ACTIVE = true;
 export type WebDocument = DocSeed | PersistedDoc;
 
 // Freeze the supported v1 web schema. If the factory gains a new field, even
@@ -398,18 +396,49 @@ export class RustWebDocumentSession {
     if (!preview && applied.offset) throw new Error("Unrequested Rust offset mutation; editing must pause");
     return applied;
   }
-  /** One native ReplaceNode rewrite. Keep the browser route behind its corpus
-   * guard until genuine generated-WASM ink evidence exists; native callers can
-   * still use the typed x-editor/x-wasm command for implementation testing. */
+  /** One native ReplaceNode rewrite. The genuine generated-WASM 30/30 corpus
+   * passed with the promotion guard active, so ordinary edits now dispatch the
+   * Rust command directly: strict ABI/schema parsing, affected-layer identity
+   * and filled-vector checks apply, but there is no per-edit TS oracle.
+   * `?outline=audit` opts into the independent filled-ink diagnostic. */
   outlineStroke(id: string) {
-    if (OUTLINE_STROKE_GUARD_ACTIVE) {
-      throw new Error("Outline Stroke remains guarded pending genuine WASM corpus proof");
+    if (!outlineAuditRequested()) return this.checkedOutline(this.rust.outlineStroke(id), id);
+    const applied = this.checkedOutline(this.rust.outlineStroke(id), id);
+    // Rust's own undo projection is the only faithful source: the web host
+    // keeps no JS copy of the layer or its stroke, and the bounded shape query
+    // is gated on the offset dialect, which does not admit a live stroke. The
+    // round trip returns the session to the pre-edit depth — it ends on the
+    // redo, so the next user undo still removes exactly this outline — and
+    // proves the committed ink before the DOM sees the delta.
+    const restored = this.rust.undo().outline;
+    const redone = this.rust.redo();
+    if (!restored || restored.id !== id) {
+      throw new Error("Rust outline undo did not restore the source layer; editing must pause");
     }
-    const applied = this.rust.outlineStroke(id);
-    if (!applied.outline || applied.outline.id !== id) {
-      throw new Error("Native outline did not return its affected layer; editing must pause");
+    if (JSON.stringify(redone.outline) !== JSON.stringify(applied.outline)) {
+      throw new Error("Rust outline changed after the audit round trip; editing must pause");
     }
-    return applied;
+    const rect = outlineReferenceRect(restored);
+    const verdict: OutlineAuditVerdict = rect
+      ? outlineInkVerdict(rect, restored.stroke!, applied.outline!)
+      : { verified: false, decisive: false, reason: "source is not an unrounded rectangle with one live stroke" };
+    if (!verdict.verified && verdict.decisive) {
+      // Committed ink the reference rejects: return native history to the
+      // proven source before freezing, so the paused preview and the single
+      // Rust owner still describe the same document. The rejected command
+      // stays on the redo stack and the frozen UI never paints it.
+      this.rust.undo();
+    }
+    recordOutlineAudit(verdict);
+    return redone;
+  }
+  private checkedOutline(change: RustStateChange, id: string): RustStateChange {
+    const outline = change.outline;
+    if (!outline || outline.id !== id || outline.kind !== "vector" || outline.stroke !== null ||
+        !outline.path.some(command => command[0] === "Z")) {
+      throw new Error("Native outline did not return its filled affected layer; editing must pause");
+    }
+    return change;
   }
   undo() { return this.checked(this.rust.undo()); }
   redo() { return this.checked(this.rust.redo()); }

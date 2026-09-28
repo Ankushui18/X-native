@@ -1,12 +1,14 @@
 /**
- * Independent filled-ink oracle for the guarded Outline Stroke promotion
- * corpus.  This intentionally does not call any x-core geometry helper: it
- * evaluates straight centre lines, SVG dash phase, caps, rectangular alignment
- * bands and NONZERO output paths in plain JavaScript.
+ * Independent filled-ink oracle for the Outline Stroke promotion corpus. It
+ * intentionally does not call any x-core geometry helper: it evaluates straight
+ * centre lines, SVG dash phase, caps, rectangular alignment bands and NONZERO
+ * output paths in plain JavaScript.
  *
- * The public web owner remains guarded.  The caller supplies the low-level
- * generated-bindgen session factory so this proof exercises
- * RustDocumentSession.outlineStroke while promotion is still blocked.
+ * The caller supplies the low-level generated-bindgen session factory, so this
+ * proof exercises RustDocumentSession.outlineStroke directly and independently
+ * of the promoted web owner's admission and delta projection. It is the run
+ * that was recorded green BEFORE the web guard was lifted, and it keeps running
+ * on every generated-artifact smoke.
  */
 import assert from "node:assert/strict";
 
@@ -463,10 +465,12 @@ async function assertRefusal(openRustSession, test, mutate, label) {
   }
 }
 
-/** Run the required genuine 30-case generated-WASM promotion proof. */
-export async function runOutlineStrokeCorpus({ openRustSession, auditSnapshot, guardActive }) {
-  assert.equal(guardActive, true,
-    "Outline Stroke corpus must run through the native binding while the public web guard is active");
+/** Run the genuine 30-case generated-WASM corpus. This is the evidence that
+ * was recorded green BEFORE the public web guard was lifted; it still runs on
+ * every real-artifact smoke so a native regression cannot hide behind the
+ * promoted web route. The promotion itself (the public owner dispatching the
+ * one Rust command with no TS oracle) is asserted in `real-bridges.mjs`. */
+export async function runOutlineStrokeCorpus({ openRustSession, auditSnapshot }) {
   const tests = corpusCases();
   assert.equal(tests.length, 30, "promotion corpus is intentionally exactly 30 cases");
   const beforeAudit = auditSnapshot();

@@ -39,12 +39,13 @@ import {
   snapCandidates,
   snapMove,
   snapResize,
+  smartSelectionGaps,
   wantsPixelSnap,
   type Box,
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
 import { coverCrop, normalizeCropRect } from "../engine/paint";
@@ -138,7 +139,7 @@ function worldGuides(root: XNode, guides: RulerGuide[]): { axis: "x" | "y"; at: 
 }
 
 function kindOf(t: Tool): NodeKind | null {
-  if (t === "section") return "frame";
+  if (t === "section") return "section";
   if (t === "slice") return "rect";
   if (t === "pen" || t === "pencil" || t === "brush") return null;
   if (t === "image") return "rect";
@@ -177,6 +178,7 @@ type Drag =
         | "multiRotate"
         | "autoPad"
         | "autoGap"
+        | "smartGap"
         | "protoConnect"
         | "starRatio"
         | "starRadius"
@@ -193,7 +195,7 @@ type Drag =
       zoom?: boolean;
       point?: number;
       segIndex?: number;
-      handle?: "in" | "out" | "g" | "h";
+      handle?: "in" | "out" | "start" | "g" | "h";
       /** Gradient-handle drag: which `fills` index the handles grabbed, -1 for the base fill. */
       gindex?: number;
       padEdge?: "top" | "right" | "bottom" | "left";
@@ -207,6 +209,10 @@ type Drag =
       moved?: boolean;
       origPad?: [number, number, number, number];
       origGap?: number;
+      /** Smart-selection gap handle drag: the live gap value and the pointer
+       *  position the drag started from (both world coordinates). */
+      smartGap?: number;
+      smartSX?: number;
       fromX?: number;
       fromY?: number;
       sx: number;
@@ -292,6 +298,69 @@ function nodeVisualBounds(wp: { x: number; y: number; node: XNode }): { x: numbe
     w: wp.node.w,
     h: wp.node.h,
   };
+}
+
+/**
+ * The arc controls of an ellipse in screen space, in the order the pointer path
+ * tests them (Figma help 360040450173, "Arc tool: create arcs, semi-circles,
+ * and rings"): the **Sweep** handle at the arc's end, the **Start** handle -
+ * "which has a dot inside it" - once the sweep has opened a gap, and the
+ * **Ratio** handle at `endingAngle * innerRadius`, which is the centre of a pie
+ * ("The Ratio handle at the center of the circle allows you to change the
+ * circle to a ring"). One owner for paint and hit-test, so the dot a user sees
+ * is the dot the pointer grabs.
+ */
+function arcHandlePoints(
+  node: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+): { kind: "out" | "start" | "in"; x: number; y: number }[] {
+  const cx = sx + sw / 2;
+  const cy = sy + sh / 2;
+  const rx = sw / 2;
+  const ry = sh / 2;
+  const d = node.arcData;
+  const sa = d?.startingAngle ?? 0;
+  const ea = d?.endingAngle ?? Math.PI * 2;
+  const ir = Math.max(0, Math.min(0.99, d?.innerRadius ?? 0));
+  const gap = !!d && Math.abs(ea - sa) < Math.PI * 2 - 0.001;
+  const out: { kind: "out" | "start" | "in"; x: number; y: number }[] = [
+    { kind: "out", x: cx + Math.cos(ea) * rx, y: cy + Math.sin(ea) * ry },
+  ];
+  if (gap) out.push({ kind: "start", x: cx + Math.cos(sa) * rx, y: cy + Math.sin(sa) * ry });
+  if (gap || ir > 0) out.push({ kind: "in", x: cx + Math.cos(ea) * rx * ir, y: cy + Math.sin(ea) * ry * ir });
+  return out;
+}
+
+/** Paint those controls. The caller has already applied the node's transform. */
+function paintArcHandles(
+  ctx: CanvasRenderingContext2D,
+  node: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  ink: string,
+  sel: string,
+) {
+  for (const h of arcHandlePoints(node, sx, sy, sw, sh)) {
+    ctx.fillStyle = ink;
+    ctx.strokeStyle = sel;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (h.kind === "start") {
+      // "The Start handle (which has a dot inside it)".
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 1.6, 0, Math.PI * 2);
+      ctx.fillStyle = sel;
+      ctx.fill();
+    }
+  }
 }
 
 export function Canvas({
@@ -388,6 +457,32 @@ export function Canvas({
   useEffect(() => {
     if (cropId && !snap.selection.includes(cropId)) setCropId(null);
   }, [snap.selection]);
+  // Smart-selection handles: recompute the mid-gap badges whenever the
+  // selection or the page geometry changes, so a nudged layer makes the run
+  // stop matching and the handles disappear, exactly as the article's
+  // "all layers must be an equal distance apart" rule requires.
+  useEffect(() => {
+    const root = snap.pages[snap.page].root;
+    const boxes: Box[] = [];
+    for (const id of snap.selection) {
+      const wp = worldPos(root, id);
+      if (!wp || isEffectivelyLocked(root, id) || isInstanceMember(root, id)) continue;
+      const b = nodeVisualBounds(wp);
+      boxes.push({ id, x: b.x, y: b.y, w: b.w, h: b.h });
+    }
+    const next = boxes.length >= 2 ? smartSelectionGaps(boxes) : [];
+    // Returning the previous array when nothing moved keeps this effect from
+    // re-rendering the canvas on every unrelated dispatch.
+    setSmartGaps((prev) =>
+      prev.length === next.length &&
+      prev.every((b, i) => b.axis === next[i].axis && b.at === next[i].at && b.cross === next[i].cross && b.size === next[i].size)
+        ? prev
+        : next,
+    );
+    // `snap` itself is the dependency: the engine keeps the same `pages`
+    // reference across a dispatch and bumps `treeRev`, so a narrower list
+    // would leave the handles stale while a layer moves.
+  }, [snap]);
   // Enter applies, Escape reverts, while cropping or placing. Keystrokes
   // aimed at a field belong to the field, not the tool.
   useEffect(() => {
@@ -493,6 +588,11 @@ export function Canvas({
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
+  /** Smart-selection gap handles: for a 1D selection of equal-spaced layers,
+   *  the mid-gap badges a drag can grab (Figma help 360040450233). Separate
+   *  from `gapBadges`, which is move-snapping feedback and only exists during
+   *  a drag. */
+  const [smartGaps, setSmartGaps] = useState<GapBadge[]>([]);
   /** Live drop target during a move drag: the frame outline plus, for a linear
    *  flow, the blue insertion line - all in world coordinates. */
   const [dropHint, setDropHint] = useState<{
@@ -1209,7 +1309,10 @@ export function Canvas({
     }
     const root = page.root;
     const z = snap.zoom;
-    const paint = (n: XNode, px: number, py: number) => {
+    // `maskTile` marks the pass that paints a mask into its own offscreen tile,
+    // where only the mask's alpha matters: the green mask outline belongs on the
+    // canvas, not in the mask (it would widen the clip by its stroke width).
+    const paint = (n: XNode, px: number, py: number, maskTile = false) => {
       if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
@@ -1327,18 +1430,7 @@ export function Canvas({
         }
         // No hit and unrasterizable: fall through to the live paint below.
       }
-      const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
-      const round = () => {
-        ctx.beginPath();
-        // A smoothed corner is not a roundRect: it goes through the same outline
-        // the hit test and the SVG export use, so the three cannot drift apart.
-        if (hasCornerSmoothing(n)) {
-          tracePath(ctx, shapePoly(n), sx, sy, z, true);
-          return;
-        }
-        if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, rr);
-        else ctx.rect(sx, sy, sw, sh);
-      };
+      const round = () => roundRectPath(ctx, n, sx, sy, sw, sh, z);
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
         // Every visible drop gets its own pass over the union; the stroke
         // paints shadowless afterwards, like a text stroke.
@@ -1382,71 +1474,11 @@ export function Canvas({
         ctx.restore();
         return;
       }
-      // Named so extra stroke layers can re-trace the same outline; a stroke
-      // pass changes lineWidth and may clip, so the path has to be rebuilt.
-      const traceShape = () => {
-        if (n.kind === "text") {
-          ctx.beginPath();
-        } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
-          if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
-            traceVectorNetwork(ctx, n.vectorNetwork, snap.panX + x * z, snap.panY + y * z, z);
-          } else {
-            tracePath(ctx, n.path, snap.panX + x * z, snap.panY + y * z, z, n.closed);
-          }
-        } else if (n.kind === "ellipse") {
-          ctx.beginPath();
-          if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
-            const sa = n.arcData.startingAngle ?? 0;
-            const ea = n.arcData.endingAngle ?? Math.PI * 2;
-            const ir = Math.max(0, Math.min(0.99, n.arcData.innerRadius ?? 0));
-            const cx = sx + sw / 2;
-            const cy = sy + sh / 2;
-            const rx = Math.abs(sw / 2);
-            const ry = Math.abs(sh / 2);
-            if (ir > 0.001) {
-              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
-              ctx.lineTo(cx + Math.cos(ea) * rx * ir, cy + Math.sin(ea) * ry * ir);
-              ctx.ellipse(cx, cy, rx * ir, ry * ir, 0, ea, sa, true);
-              ctx.closePath();
-            } else if (Math.abs(ea - sa) < Math.PI * 2 - 0.001) {
-              ctx.moveTo(cx, cy);
-              ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
-              ctx.closePath();
-            } else {
-              ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-            }
-          } else {
-            ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
-          }
-        } else if (n.kind === "line" || n.kind === "arrow") {
-          ctx.beginPath();
-          ctx.moveTo(sx, sy + sh / 2);
-          ctx.lineTo(sx + sw, sy + sh / 2);
-        } else if (n.kind === "star") {
-          starPath(
-            ctx,
-            sx + sw / 2,
-            sy + sh / 2,
-            Math.abs(sw / 2),
-            Math.abs(sh / 2),
-            n.count || 5,
-            n.starRatio || 0.4,
-            n.cornerRadii[0] || 0,
-          );
-        } else if (n.kind === "poly") {
-          polyPath(
-            ctx,
-            sx + sw / 2,
-            sy + sh / 2,
-            Math.abs(sw / 2),
-            Math.abs(sh / 2),
-            n.count || 3,
-            n.cornerRadii[0] || 0,
-          );
-        } else {
-          round();
-        }
-      };
+      // The module-level tracer, named so the extra-stroke layers can re-trace
+      // the same outline (a stroke pass changes lineWidth and may clip, so the
+      // path has to be rebuilt) and so the mask-outline overlay traces what the
+      // layer actually paints instead of a second, drifting copy of this shape.
+      const traceShape = () => traceNodeShape(ctx, n, sx, sy, sw, sh, z);
       traceShape();
       if (snap.outlineMode) {
         ctx.save();
@@ -1907,11 +1939,11 @@ export function Canvas({
           return t;
         };
         const prev = ctx;
-        const into = (t: CanvasRenderingContext2D | null, c: XNode) => {
+        const into = (t: CanvasRenderingContext2D | null, c: XNode, maskTile = false) => {
           if (!t) return false;
           ctx = t;
           try {
-            paint(c, x, y);
+            paint(c, x, y, maskTile);
           } finally {
             ctx = prev;
           }
@@ -1921,7 +1953,7 @@ export function Canvas({
         // against a transparent tile is meaningless, and the mask's job is
         // only to supply alpha (or luminance).
         const mt = tile();
-        if (!into(mt, { ...mask, blendMode: "normal" })) return false;
+        if (!into(mt, { ...mask, blendMode: "normal" }, true)) return false;
         const mc = mt!.canvas;
         const type = mask.maskType || "alpha";
         if (type !== "alpha") {
@@ -1942,7 +1974,13 @@ export function Canvas({
           if (!into(kt, k)) return false;
           kt!.save();
           kt!.globalCompositeOperation = "destination-in";
-          kt!.drawImage(mc, 0, 0);
+          // The mask raster covers exactly the run box, so it goes back at the
+          // box's origin and size - the same rect the punched tile is blitted
+          // with below. Drawing it at (0, 0) at natural size instead put the
+          // mask's alpha wherever the run's padding happened to land (6 device
+          // px down-right for a 100px box), so the soft edge of a gradient mask
+          // sampled the neighbouring pixel and the mask bled past its own box.
+          kt!.drawImage(mc, ox, oy, ow, oh);
           kt!.restore();
           ctx.drawImage(kt!.canvas, ox, oy, ow, oh);
         }
@@ -1979,14 +2017,46 @@ export function Canvas({
         ctx.restore();
         ctx.clip();
       };
-      const renderChildren = n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children;
+      // View > Mask outlines, dashed out of the mask tile: "Once the setting
+      // on, masks in your file are outlined in green. Note: If all layers being
+      // masked are hidden or have zero percent opacity, then the object's mask
+      // outlines won't appear." A mask whose run has no visible, non-zero-alpha
+      // kid therefore draws nothing, and the line is traced from the same shape
+      // tracer the layer paints with, so it follows any kind of mask layer.
+      const strokeMaskOutline = (mask: XNode, kids: XNode[]) => {
+        if (maskTile || !snap.showMaskOutlines || !mask.visible) return;
+        if (!kids.some((k) => k.visible && (k.opacity ?? 1) > 0)) return;
+        const mx = snap.panX + (x + mask.x) * z;
+        const my = snap.panY + (y + mask.y) * z;
+        ctx.save();
+        if (mask.rotation || mask.flipH || mask.flipV) {
+          const mcx = mx + (mask.w * z) / 2;
+          const mcy = my + (mask.h * z) / 2;
+          ctx.translate(mcx, mcy);
+          if (mask.rotation) ctx.rotate((mask.rotation * Math.PI) / 180);
+          if (mask.flipH || mask.flipV) ctx.scale(mask.flipH ? -1 : 1, mask.flipV ? -1 : 1);
+          ctx.translate(-mcx, -mcy);
+        }
+        ctx.strokeStyle = MASK;
+        ctx.lineWidth = Math.max(1, z);
+        ctx.setLineDash([]);
+        traceNodeShape(ctx, mask, mx, my, mask.w * z, mask.h * z, z);
+        ctx.stroke();
+        ctx.restore();
+      };
+      // Sections paint first: Figma keeps a section behind the objects it
+      // holds, whatever order the document lists them in.
+      const renderChildren = sectionsFirst(n.layout?.itemReverseZIndex ? [...n.children].reverse() : n.children);
       for (const run of partitionMaskRuns(renderChildren)) {
         if (!run.mask) {
           for (const k of run.kids) paint(k, x, y);
-        } else if (!paintMaskedRun(run.mask, run.kids)) {
-          paintGeometricMask(run.mask);
-          for (const k of run.kids) paint(k, x, y);
-          ctx.restore();
+        } else {
+          if (!paintMaskedRun(run.mask, run.kids)) {
+            paintGeometricMask(run.mask);
+            for (const k of run.kids) paint(k, x, y);
+            ctx.restore();
+          }
+          strokeMaskOutline(run.mask, run.kids);
         }
       }
       // Noise and texture sit on top of everything the layer paints -
@@ -2017,7 +2087,7 @@ export function Canvas({
         }
         ctx.restore();
       }
-      if (snap.showMaskOutlines && n.isMask && n.visible) {
+      if (!maskTile && snap.showMaskOutlines && n.isMask && n.visible) {
         ctx.save();
         ctx.strokeStyle = MASK;
         ctx.lineWidth = Math.max(1, z);
@@ -2112,7 +2182,9 @@ export function Canvas({
         }
       }
     } else {
-      for (const ch of root.children) paint(ch, 0, 0);
+      // The page's own children take the same section-first order a container's
+      // do: Figma keeps a section behind the frames that sit on it.
+      for (const ch of sectionsFirst(root.children)) paint(ch, 0, 0);
     }
 
     // View > Pixel preview. Frames are re-read as the raster they would export
@@ -2174,19 +2246,31 @@ export function Canvas({
       const screenX = snap.panX + x * z;
       const screenY = snap.panY + y * z;
       const selected = snap.selection.includes(n.id);
-      if (
+      // Skip labels whose layer is off-screen: at any zoom a page can hold
+      // hundreds of them, and fillText for each is the one thing on this
+      // canvas that runs per layer rather than per visible pixel.
+      const labelOnScreen =
+        screenX > -400 && screenX < w + 400 && screenY > -40 && screenY < h + 400;
+      if (n.kind === "section") {
+        // "Double-click the section title on the canvas or Layers panel. Edit
+        // the title." The title is the section's own chrome, so it draws
+        // whatever the selection is, inside the box's top-left, at a constant
+        // 12px while the canvas zooms.
+        if (labelOnScreen) {
+          ctx.save();
+          ctx.font = "600 12px Inter, system-ui";
+          ctx.fillStyle = canvasLabel;
+          ctx.textBaseline = "alphabetic";
+          ctx.fillText(n.name, screenX + 8, screenY + 16);
+          ctx.restore();
+        }
+      } else if (
         n.kind === "frame" &&
         n.showName !== false &&
         // Nested names stay out of the content flow unless explicitly selected.
         // A selected ancestor suppresses unselected descendant names only.
         (selected || (!parentIsFrame && !selectedAncestor)) &&
-        // Skip names whose frame is off-screen: at any zoom a page can hold
-        // hundreds of them, and fillText for each is the one thing on this
-        // canvas that runs per layer rather than per visible pixel.
-        screenX > -400 &&
-        screenX < w + 400 &&
-        screenY > -40 &&
-        screenY < h + 400
+        labelOnScreen
       ) {
         const active = selected || hoverId === n.id || panelHover === n.id;
         ctx.save();
@@ -2599,6 +2683,32 @@ export function Canvas({
       }
     }
 
+    // The article's first affordance: a hovered circle shows its arc controls
+    // ("When you hover over the circle, a single handle will appear on the
+    // right-hand side"), so the sweep can be grabbed without selecting first.
+    // A selected ellipse paints the same set in the selection pass below.
+    if (hovId && !snap.selection.includes(hovId) && snap.tool === "select" && !vecEdit) {
+      const ap = worldPos(root, hovId);
+      if (ap && ap.node.kind === "ellipse") {
+        const ab = nodeVisualBounds(ap);
+        const ax = snap.panX + ab.x * z;
+        const ay = snap.panY + ab.y * z;
+        const aw = ab.w * z;
+        const ah = ab.h * z;
+        if (aw >= 36 && ah >= 36) {
+          ctx.save();
+          if (ap.node.rotation || ap.node.flipH || ap.node.flipV) {
+            ctx.translate(ax + aw / 2, ay + ah / 2);
+            if (ap.node.rotation) ctx.rotate((ap.node.rotation * Math.PI) / 180);
+            if (ap.node.flipH || ap.node.flipV) ctx.scale(ap.node.flipH ? -1 : 1, ap.node.flipV ? -1 : 1);
+            ctx.translate(-(ax + aw / 2), -(ay + ah / 2));
+          }
+          paintArcHandles(ctx, ap.node, ax, ay, aw, ah, INK, SEL);
+          ctx.restore();
+        }
+      }
+    }
+
     // Frame tool: hovering a frame parks a + badge on each side edge for
     // one-click duplication; ⌥-click places a blank same-size frame instead.
     if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
@@ -2835,31 +2945,7 @@ export function Canvas({
         ctx.stroke();
       }
       if (wp.node.kind === "ellipse" && sw >= 36 && sh >= 36) {
-        const cx = sx + sw / 2;
-        const cy = sy + sh / 2;
-        const rx = sw / 2;
-        const ry = sh / 2;
-        const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
-        const ir = wp.node.arcData?.innerRadius ?? 0;
-        const hx = cx + Math.cos(ea) * rx;
-        const hy = cy + Math.sin(ea) * ry;
-
-        ctx.fillStyle = INK;
-        ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        if (ir > 0) {
-          const rhx = cx + Math.cos(ea) * rx * ir;
-          const rhy = cy + Math.sin(ea) * ry * ir;
-          ctx.beginPath();
-          ctx.arc(rhx, rhy, 4, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-        }
+        paintArcHandles(ctx, wp.node, sx, sy, sw, sh, INK, SEL);
       }
       // Corner radius handles: only show these for a corner that is
       // actually rounded, and draws them as a small bracket hugging the corner.
@@ -3068,12 +3154,17 @@ export function Canvas({
       }
       ctx.restore();
     }
-    if (gapBadges.length) {
+    // Gap pills, one painter: the equal-spacing feedback from a move drag and
+    // the smart-selection handles that sit between the layers of a 1D run -
+    // "a tooltip above your cursor shows the current space between layers, in
+    // pixels" (Figma help 360040450233). Both are the guide pink, the same
+    // chrome the measurement overlay uses.
+    const paintGapPills = (list: GapBadge[]) => {
       ctx.save();
       ctx.font = "500 10px Inter, system-ui";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      for (const g of gapBadges) {
+      for (const g of list) {
         const cx = g.axis === "x" ? snap.panX + g.at * z : snap.panX + g.cross * z;
         const cy = g.axis === "x" ? snap.panY + g.cross * z : snap.panY + g.at * z;
         const label = `${Math.round(g.size)}`;
@@ -3090,6 +3181,12 @@ export function Canvas({
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
       ctx.restore();
+    };
+    if (gapBadges.length) paintGapPills(gapBadges);
+    // The at-rest handles step aside while another gesture is live so the two
+    // pill sets never double up; during their own drag they move with the gaps.
+    if (smartGaps.length && !band && (!drag.current || drag.current.mode === "smartGap")) {
+      paintGapPills(smartGaps);
     }
     // The drop target during a move drag: the frame's outline, plus the blue
     // insertion line in a flow - the same gap the drop would land in.
@@ -3591,7 +3688,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -4104,6 +4201,36 @@ export function Canvas({
             return;
           }
         }
+        // Smart-selection gap handles sit between the layers of a 1D run and
+        // take priority over the empty-canvas marquee, the way the article
+        // describes them ("hover over your Smart selection, additional pink
+        // handles will appear between each layer … click and drag the handle
+        // to adjust the space between layers"). The pointer is in screen
+        // space, so the world-space midpoint is projected first.
+        for (const g of smartGaps) {
+          // A row's handle sits at (gap midpoint, band center); a column's is
+          // the other way round, the same way the paint reads them.
+          const gx = snap.panX + (g.axis === "x" ? g.at : g.cross) * z;
+          const gy = snap.panY + (g.axis === "x" ? g.cross : g.at) * z;
+          if (Math.hypot(px - gx, py - gy) < 10) {
+            if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
+              toast("Locked · ⇧⌘L to unlock");
+              return;
+            }
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "smartGap",
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              smartGap: g.size,
+              smartSX: g.axis === "x" ? wpt.x : wpt.y,
+              axis: g.axis,
+            };
+            return;
+          }
+        }
       }
     }
     if (snap.selection.length === 1) {
@@ -4285,21 +4412,17 @@ export function Canvas({
           }
         }
         if (wp.node.kind === "ellipse") {
-          const sw = wp.node.w * z;
-          const sh = wp.node.h * z;
-          const cx = sx + sw / 2;
-          const cy = sy + sh / 2;
-          const rx = sw / 2;
-          const ry = sh / 2;
-          const ea = wp.node.arcData?.endingAngle ?? Math.PI * 2;
-          const ir = wp.node.arcData?.innerRadius ?? 0;
-          const hx = cx + Math.cos(ea) * rx;
-          const hy = cy + Math.sin(ea) * ry;
-          if (Math.hypot(px - hx, py - hy) <= 9) {
+          // Sweep, then Start, then Ratio - the arc controls take the press
+          // ahead of the box's own resize handles, because the sweep dot sits
+          // on the ellipse's edge where a side handle also lives.
+          const dot = arcHandlePoints(wp.node, sx, sy, wp.node.w * z, wp.node.h * z).find(
+            (h) => Math.hypot(px - h.x, py - h.y) <= 9,
+          );
+          if (dot) {
             engine.dispatch({ type: "begin" });
             drag.current = {
               mode: "arc",
-              handle: "out",
+              handle: dot.kind,
               sx: e.clientX,
               sy: e.clientY,
               wx: wpt.x,
@@ -4307,23 +4430,6 @@ export function Canvas({
               id: wp.node.id,
             };
             return;
-          }
-          if (ir > 0) {
-            const rhx = cx + Math.cos(ea) * rx * ir;
-            const rhy = cy + Math.sin(ea) * ry * ir;
-            if (Math.hypot(px - rhx, py - rhy) <= 9) {
-              engine.dispatch({ type: "begin" });
-              drag.current = {
-                mode: "arc",
-                handle: "in",
-                sx: e.clientX,
-                sy: e.clientY,
-                wx: wpt.x,
-                wy: wpt.y,
-                id: wp.node.id,
-              };
-              return;
-            }
           }
         }
         if (
@@ -4584,6 +4690,48 @@ export function Canvas({
     const hit = e.metaKey || e.ctrlKey
       ? hitTest(root, wpt.x, wpt.y, { deep: true })
       : canvasClickTarget(root, wpt.x, wpt.y, snap.selection);
+    // A hovered, unselected ellipse shows its arc controls, so a press on one
+    // takes the handle - and selects the layer - instead of starting a move.
+    if (hit && hit.kind === "ellipse" && snap.tool === "select" && !vecEdit && !snap.selection.includes(hit.id)) {
+      const hp = worldPos(root, hit.id);
+      const r = wrap.current!.getBoundingClientRect();
+      if (hp) {
+        const hb = nodeVisualBounds(hp);
+        const z = snap.zoom;
+        const hsx = snap.panX + hb.x * z;
+        const hsy = snap.panY + hb.y * z;
+        const hsw = hb.w * z;
+        const hsh = hb.h * z;
+        if (hsw >= 36 && hsh >= 36) {
+          const rcx = hsx + hsw / 2;
+          const rcy = hsy + hsh / 2;
+          let px = e.clientX - r.left;
+          let py = e.clientY - r.top;
+          if (hit.rotation || hit.flipH || hit.flipV) {
+            const u = hit.rotation ? unrot(px, py, rcx, rcy, hit.rotation) : { x: px, y: py };
+            px = hit.flipH ? rcx - (u.x - rcx) : u.x;
+            py = hit.flipV ? rcy - (u.y - rcy) : u.y;
+          }
+          const dot = arcHandlePoints(hit, hsx, hsy, hsw, hsh).find(
+            (h) => Math.hypot(px - h.x, py - h.y) <= 9,
+          );
+          if (dot) {
+            engine.dispatch({ type: "select", ids: [hit.id] });
+            engine.dispatch({ type: "begin" });
+            drag.current = {
+              mode: "arc",
+              handle: dot.kind,
+              sx: e.clientX,
+              sy: e.clientY,
+              wx: wpt.x,
+              wy: wpt.y,
+              id: hit.id,
+            };
+            return;
+          }
+        }
+      }
+    }
     if (hit) {
       const ids = e.shiftKey
         ? snap.selection.includes(hit.id)
@@ -5303,6 +5451,23 @@ export function Canvas({
         }
         engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, padding: nextPad } });
       }
+    } else if (d.mode === "smartGap" && d.axis && d.smartGap != null && d.smartSX != null) {
+      const wpt = toWorld(e.clientX, e.clientY);
+      // "Click and drag the handle to adjust the space between layers. A
+      // tooltip above your cursor shows the current space between layers, in
+      // pixels." Right/down grows the space, left/up shrinks it; ⇧ steps by
+      // the Big nudge setting, the same convention the auto-layout gap handle
+      // uses. The value is applied to every gap in the run at once, which is
+      // what makes the selection "adjust … uniformly".
+      const big = e.shiftKey && !e.altKey ? getNudgePrefs().big : 1;
+      const raw = d.axis === "x" ? wpt.x - d.smartSX : wpt.y - d.smartSX;
+      const nextGap = Math.max(0, Math.round((d.smartGap + raw) / big) * big);
+      engine.dispatch({
+        type: "distributeSpacing",
+        ids: [...snap.selection],
+        axis: d.axis === "x" ? "h" : "v",
+        gap: nextGap,
+      });
     } else if (d.mode === "autoGap" && d.id && d.origGap != null) {
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
@@ -5385,7 +5550,22 @@ export function Canvas({
         const cx = wp.x + wp.node.w / 2;
         const cy = wp.y + wp.node.h / 2;
         const curArc = wp.node.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
-        if (d.handle === "in") {
+        const angleAt = () => {
+          let ang = Math.atan2(wpt.y - cy, wpt.x - cx);
+          if (ang < 0) ang += Math.PI * 2;
+          if (e.shiftKey) ang = Math.round((ang * 180) / Math.PI / 15) * (Math.PI / 12);
+          return ang;
+        };
+        if (d.handle === "start") {
+          // The Start handle drags the arc's beginning around the circle
+          // ("you can drag this around the circle to change the position of
+          // the ring"); ⇧ snaps to 15 degrees like the sweep does.
+          engine.dispatch({
+            type: "patch",
+            id: d.id,
+            patch: { arcData: { ...curArc, startingAngle: angleAt() } },
+          });
+        } else if (d.handle === "in") {
           const maxR = Math.min(wp.node.w, wp.node.h) / 2;
           const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
           const ratio = Math.max(0, Math.min(0.95, curR / (maxR || 1)));
@@ -5395,9 +5575,7 @@ export function Canvas({
             patch: { arcData: { ...curArc, innerRadius: Math.round(ratio * 100) / 100 } },
           });
         } else {
-          let ang = Math.atan2(wpt.y - cy, wpt.x - cx);
-          if (ang < 0) ang += Math.PI * 2;
-          if (e.shiftKey) ang = Math.round((ang * 180) / Math.PI / 15) * (Math.PI / 12);
+          let ang = angleAt();
           if (ang > Math.PI * 2 - 0.05) ang = Math.PI * 2;
           engine.dispatch({
             type: "patch",
@@ -5536,6 +5714,8 @@ export function Canvas({
       d.mode === "rotOrigin" ||
       d.mode === "autoPad" ||
       d.mode === "autoGap" ||
+      d.mode === "smartGap" ||
+      d.mode === "arc" ||
       d.mode === "crop" ||
       d.mode === "cropMove" ||
       (d.mode === "marquee" && d.id === "erase")
@@ -5732,7 +5912,9 @@ export function Canvas({
       }
       const extra: Partial<XNode> =
         snap.tool === "section"
-          ? { name: "Section", fill: "#00000000", overflow: "visible" }
+          ? // A real section: the node defaults give it the article's
+            // background and border, and it never clips.
+            { name: "Section" }
           : snap.tool === "slice"
             ? {
                 name: "Slice",
@@ -5963,10 +6145,17 @@ export function Canvas({
           const x = px + n.x;
           const y = py + n.y;
           const selected = snap.selection.includes(n.id);
-          if (n.kind === "frame" && n.showName !== false && (selected || (!parentIsFrame && !selectedAncestor))) {
+          const nameW = Math.max(40, n.name.length * 6.5);
+          if (n.kind === "section") {
+            // The title sits inside the section's top-left (see labelNames).
             const sx = snap.panX + x * z;
             const sy = snap.panY + y * z;
-            const nameW = Math.max(40, n.name.length * 6.5);
+            if (mx >= sx && mx <= sx + nameW + 8 && my >= sy + 2 && my <= sy + 20) {
+              hitFrame = n;
+            }
+          } else if (n.kind === "frame" && n.showName !== false && (selected || (!parentIsFrame && !selectedAncestor))) {
+            const sx = snap.panX + x * z;
+            const sy = snap.panY + y * z;
             if (mx >= sx - 2 && mx <= sx + nameW + 10 && my >= sy - 18 && my <= sy - 2) {
               hitFrame = n;
             }
@@ -5985,7 +6174,10 @@ export function Canvas({
       if (wp) {
         const sx = snap.panX + wp.x * snap.zoom;
         const sy = snap.panY + wp.y * snap.zoom;
-        setFrameEdit({ id: (frameLabelHit as XNode).id, name: (frameLabelHit as XNode).name, x: sx, y: sy - 22 });
+        // A section's title sits inside its top-left corner; a frame's label
+        // hangs above the frame, so the editor follows the label it replaces.
+        const onSection = (frameLabelHit as XNode).kind === "section";
+        setFrameEdit({ id: (frameLabelHit as XNode).id, name: (frameLabelHit as XNode).name, x: sx, y: onSection ? sy - 1 : sy - 22 });
         engine.dispatch({ type: "select", ids: [(frameLabelHit as XNode).id] });
         return;
       }
@@ -7115,6 +7307,9 @@ export function Canvas({
                 outline: nodes.some(
                   (n) => n.kind === "text" || n.kind === "line" || n.kind === "arrow" || n.strokeWidth > 0,
                 ),
+                // "Remove mask" instead of "Use as mask" once the layer is one
+                // (Figma's Masks article names that row for the right-click menu).
+                mask: !!nodes[0]?.isMask,
               };
             })(),
           )}
@@ -7397,6 +7592,110 @@ function polyPath(
     }
   }
   ctx.closePath();
+}
+
+/**
+ * The rounded-rect outline a node paints, as a path. Smoothed corners are not
+ * a roundRect: they go through the same polygon the hit test and the SVG export
+ * use, so the three cannot drift apart. Module scope so the mask-outline
+ * overlay can trace the same shape the layer paints.
+ */
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  z: number,
+) {
+  ctx.beginPath();
+  if (hasCornerSmoothing(n)) {
+    tracePath(ctx, shapePoly(n), sx, sy, z, true);
+    return;
+  }
+  const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
+  if (typeof ctx.roundRect === "function") ctx.roundRect(sx, sy, sw, sh, rr);
+  else ctx.rect(sx, sy, sw, sh);
+}
+
+/**
+ * One shape tracer for a node, in device space. The layer paint uses it for
+ * every fill, stroke and effect pass, and the mask-outline overlay (View >
+ * Mask outlines) uses it to stroke a mask: Figma's Masks article says "Once the
+ * setting on, masks in your file are outlined in green", so the green line has
+ * to follow exactly what the mask paints, whatever kind of layer it is.
+ */
+function traceNodeShape(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  z: number,
+) {
+  if (n.kind === "text") {
+    ctx.beginPath();
+  } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
+    if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
+      traceVectorNetwork(ctx, n.vectorNetwork, sx, sy, z);
+    } else {
+      tracePath(ctx, n.path, sx, sy, z, n.closed);
+    }
+  } else if (n.kind === "ellipse") {
+    ctx.beginPath();
+    if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
+      const sa = n.arcData.startingAngle ?? 0;
+      const ea = n.arcData.endingAngle ?? Math.PI * 2;
+      const ir = Math.max(0, Math.min(0.99, n.arcData.innerRadius ?? 0));
+      const cx = sx + sw / 2;
+      const cy = sy + sh / 2;
+      const rx = Math.abs(sw / 2);
+      const ry = Math.abs(sh / 2);
+      if (ir > 0.001) {
+        ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+        ctx.lineTo(cx + Math.cos(ea) * rx * ir, cy + Math.sin(ea) * ry * ir);
+        ctx.ellipse(cx, cy, rx * ir, ry * ir, 0, ea, sa, true);
+        ctx.closePath();
+      } else if (Math.abs(ea - sa) < Math.PI * 2 - 0.001) {
+        ctx.moveTo(cx, cy);
+        ctx.ellipse(cx, cy, rx, ry, 0, sa, ea, false);
+        ctx.closePath();
+      } else {
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      }
+    } else {
+      ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
+    }
+  } else if (n.kind === "line" || n.kind === "arrow") {
+    ctx.beginPath();
+    ctx.moveTo(sx, sy + sh / 2);
+    ctx.lineTo(sx + sw, sy + sh / 2);
+  } else if (n.kind === "star") {
+    starPath(
+      ctx,
+      sx + sw / 2,
+      sy + sh / 2,
+      Math.abs(sw / 2),
+      Math.abs(sh / 2),
+      n.count || 5,
+      n.starRatio || 0.4,
+      n.cornerRadii[0] || 0,
+    );
+  } else if (n.kind === "poly") {
+    polyPath(
+      ctx,
+      sx + sw / 2,
+      sy + sh / 2,
+      Math.abs(sw / 2),
+      Math.abs(sh / 2),
+      n.count || 3,
+      n.cornerRadii[0] || 0,
+    );
+  } else {
+    roundRectPath(ctx, n, sx, sy, sw, sh, z);
+  }
 }
 
 function tracePath(

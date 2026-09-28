@@ -11,6 +11,7 @@ import {
   isInstanceMember,
 } from "../engine/memory";
 import { shapePoly, shiftPoints } from "../engine/geometry";
+import { stopsMaskReach } from "../engine/paint";
 import { alignKey } from "../engine/layout";
 import { addAutoLayout, removeAllAutoLayout, removeAutoLayout, suggestAutoLayout } from "./layoutActions";
 import { Icon, TOOL_ICON, caretSize, kindIcon, rowIconSize, type IconName } from "./icons";
@@ -209,16 +210,28 @@ interface LayerDrag {
   zone: DropZone;
 }
 
-/** Display order (top-to-bottom) with the mask flag precomputed: a row is a
- *  masked child when any row above it has isMask. Computed incrementally in one
- *  pass so wide trees don't pay a findIndex scan per row. */
-function withMaskedAbove(kids: XNode[]): { n: XNode; maskedAbove: boolean }[] {
+/** Display order (top-to-bottom) with the mask flag precomputed. Figma's Masks
+ *  article: "Masks are positioned below masked layers on the z-axis", and the
+ *  panel shows "the mask icon ... with an upward-facing arrow along the layers
+ *  that are being masked" - so a row is a masked child when a mask sits BELOW
+ *  it, the same run the canvas clips (a mask clips the siblings after it until
+ *  the next mask). Computed in one bottom-up pass so wide trees don't pay a
+ *  findIndex scan per row. */
+function withMaskedBelow(kids: XNode[]): { n: XNode; maskedBelow: boolean }[] {
+  const rows = [...kids].reverse();
+  const out: { n: XNode; maskedBelow: boolean }[] = new Array(rows.length);
   let seenMask = false;
-  return [...kids].reverse().map((n) => {
-    const maskedAbove = seenMask;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const n = rows[i];
+    // The same stopping rule the canvas partitions with: a frame or component
+    // with clip content on is outside the mask, and so is everything above it,
+    // so neither that row nor the ones past it may carry the arrow.
+    const boundary = stopsMaskReach(n);
+    out[i] = { n, maskedBelow: !n.isMask && seenMask && !boundary };
     if (n.isMask) seenMask = true;
-    return { n, maskedAbove };
-  });
+    else if (boundary) seenMask = false;
+  }
+  return out;
 }
 
 interface LayerRowProps {
@@ -236,8 +249,8 @@ interface LayerRowProps {
   onDrop: (d: LayerDrag) => void;
   /** Bumped by the panel's Collapse button; every row folds on the next value. */
   collapseTick?: number;
-  /** Precomputed by withMaskedAbove (see above): any row above this one masked. */
-  maskedAbove: boolean;
+  /** Precomputed by withMaskedBelow (see above): a mask sits below this row. */
+  maskedBelow: boolean;
   /** True when an ancestor is locked: the row renders (and behaves) locked. */
   lockedAbove?: boolean;
 }
@@ -321,7 +334,7 @@ function rowPropsEqual(a: Readonly<LayerRowProps>, b: Readonly<LayerRowProps>): 
   if (a.q || b.q) return false;
   if (a.depth !== b.depth) return false;
   if ((a.collapseTick ?? 0) !== (b.collapseTick ?? 0)) return false;
-  if (a.maskedAbove !== b.maskedAbove) return false;
+  if (a.maskedBelow !== b.maskedBelow) return false;
   if (!!a.lockedAbove !== !!b.lockedAbove) return false;
   if (a.sel !== b.sel || a.engine !== b.engine || a.drag !== b.drag) return false;
   if (!sameIds(a.siblings, b.siblings)) return false;
@@ -345,14 +358,14 @@ function LayerRowImpl({
   setDrag,
   onDrop,
   collapseTick = 0,
-  maskedAbove,
+  maskedBelow,
   lockedAbove = false,
 }: LayerRowProps) {
   const [open, setOpen] = useState(true);
   const holds = sel.includes(n.id) || n.children.some(function test(c: XNode): boolean {
     return sel.includes(c.id) || c.children.some(test);
   });
-  const isMaskedChild = maskedAbove;
+  const isMaskedChild = maskedBelow;
   useEffect(() => {
     if (!collapseTick) return;
     // Keeps the selected layer visible when it folds everything, so a row
@@ -577,9 +590,21 @@ function LayerRowImpl({
           <span
             className="mask-child-badge"
             title="Masked by layer below"
-            style={{ fontSize: 11, color: "var(--muted)", marginRight: 2, userSelect: "none" }}
+            style={{ display: "flex", color: "var(--muted)", marginRight: 2, userSelect: "none" }}
           >
-            ↳
+            {/* Figma marks the masked layers themselves, with an arrow that
+                points up at the mask below them - not a corner arrow on the
+                mask's own row. */}
+            <svg width={10} height={10} viewBox="0 0 16 16" data-mask-arrow="up" aria-hidden="true" focusable="false">
+              <path
+                d="M8 14V3M3.5 7.5L8 3l4.5 4.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.6}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </span>
         ) : null}
         <Icon
@@ -656,12 +681,12 @@ function LayerRowImpl({
         </button>
       </div>
       {open &&
-        withMaskedAbove(n.children).map(({ n: c, maskedAbove }) => (
+        withMaskedBelow(n.children).map(({ n: c, maskedBelow }) => (
           <LayerRow
             key={c.id}
             rangeAnchor={rangeAnchor}
             n={c}
-            maskedAbove={maskedAbove}
+            maskedBelow={maskedBelow}
             lockedAbove={effLocked}
             depth={depth + 1}
             sel={sel}
@@ -683,6 +708,9 @@ function LayerRowImpl({
             // single row-node instead of the multi-selection.
             detach: !!n.componentId && !n.isComponent,
             reset: !!n.overrides && Object.keys(n.overrides).length > 0,
+            // Figma's Masks article: "Right-click the mask and select Remove
+            // mask" - the row toggles, so it has to say what it will do.
+            mask: !!n.isMask,
           })}
           onRun={(id) => runMenu(engine, id, { onRename: () => setRenaming(true) })}
           onClose={() => setMenu(null)}
@@ -933,12 +961,12 @@ function LeftPanelImpl({
                 page.
               </p>
             ) : (
-              withMaskedAbove(root.children).map(({ n, maskedAbove }) => (
+              withMaskedBelow(root.children).map(({ n, maskedBelow }) => (
               <LayerRow
                 key={n.id}
                 rangeAnchor={rangeAnchor}
                 n={n}
-                maskedAbove={maskedAbove}
+                maskedBelow={maskedBelow}
                 lockedAbove={false}
                 depth={0}
                 sel={snap.selection}
@@ -1565,7 +1593,15 @@ export function Actions({
     { label: "Flatten", sc: "⌘E", run: () => engine.dispatch({ type: "flatten" }) },
     { label: "Outline stroke", sc: "⇧⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
     { label: "Wrap in section", sc: "", run: () => engine.dispatch({ type: "wrapSection" }) },
-    { label: "Use as mask", sc: "⌃⌘M", run: () => runMenu(engine, "useAsMask") },
+    {
+      // Figma's Masks article: the same actions both set and clear the flag, so
+      // the palette names the one it will run.
+      label: snap.selection.some((id) => find(snap.pages[snap.page].root, id)?.isMask)
+        ? "Remove mask"
+        : "Use as mask",
+      sc: "⌃⌘M",
+      run: () => runMenu(engine, "useAsMask"),
+    },
     { label: "Bring to front", sc: "⇧⌘]", run: () => engine.dispatch({ type: "arrange", dir: "front" }) },
     { label: "Send to back", sc: "⇧⌘[", run: () => engine.dispatch({ type: "arrange", dir: "back" }) },
     {
