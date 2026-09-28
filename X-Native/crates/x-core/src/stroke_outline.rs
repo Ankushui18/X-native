@@ -21,14 +21,14 @@ use crate::{
 /// Cubic samples per segment used by the editable-outline dialect.
 pub const OUTLINE_FLATTEN_STEPS: usize = 12;
 /// Largest input command vector this pure operation accepts.
-pub const MAX_OUTLINE_INPUT_COMMANDS: usize = 4096;
+pub const MAX_OUTLINE_INPUT_COMMANDS: usize = 16384;
 /// Largest flattened centerline budget across all subpaths.
-pub const MAX_OUTLINE_CENTERLINE_POINTS: usize = 4096;
+pub const MAX_OUTLINE_CENTERLINE_POINTS: usize = 16384;
 /// Largest number of persisted dash entries. This matches admission's stroke
 /// budget and bounds a pathological short-dash expansion.
-pub const MAX_OUTLINE_DASH_ENTRIES: usize = 128;
+pub const MAX_OUTLINE_DASH_ENTRIES: usize = 256;
 /// Largest number of output anchors (`MoveTo`/`LineTo`, never `Close`).
-pub const MAX_OUTLINE_ANCHORS: usize = 8192;
+pub const MAX_OUTLINE_ANCHORS: usize = 65536;
 /// Outline Stroke accepts substantial imported strokes without allowing an
 /// overflow-sized outline to enter history.
 pub const MAX_OUTLINE_STROKE_WIDTH: f64 = 1_000_000.0;
@@ -664,35 +664,93 @@ fn side_outline(
         } else {
             None
         };
+
+        let (incoming, l_in, d_env_in, from) = if let Some(prev_idx) = previous {
+            let inc = direction(samples[prev_idx].point, point);
+            let len = distance(samples[prev_idx].point, point);
+            let prev_half = width
+                * sample_width_profile(&options.width_profile, samples[prev_idx].t)
+                * side_scale;
+            let dr = half - prev_half;
+            let sin_a = if len > EPS {
+                (dr / len).clamp(-0.999, 0.999)
+            } else {
+                0.0
+            };
+            let cos_a = (1.0 - sin_a * sin_a).sqrt();
+            let n_in = inc.map(left_normal);
+            let norm = match (n_in, inc) {
+                (Some(n), Some(u)) => Some(sub(mul(n, side * cos_a), mul(u, sin_a))),
+                _ => None,
+            };
+            let d_env = match (inc, n_in) {
+                (Some(u), Some(n)) => Some(add(mul(u, cos_a), mul(n, side * sin_a))),
+                _ => None,
+            };
+            let pt = norm.map(|n| add(point, mul(n, half)));
+            (inc, len, d_env, pt)
+        } else {
+            (None, 0.0, None, None)
+        };
+
+        let (outgoing, l_out, d_env_out, to) = if let Some(next_idx) = next {
+            let outg = direction(point, samples[next_idx].point);
+            let len = distance(point, samples[next_idx].point);
+            let next_half = width
+                * sample_width_profile(&options.width_profile, samples[next_idx].t)
+                * side_scale;
+            let dr = next_half - half;
+            let sin_b = if len > EPS {
+                (dr / len).clamp(-0.999, 0.999)
+            } else {
+                0.0
+            };
+            let cos_b = (1.0 - sin_b * sin_b).sqrt();
+            let n_out = outg.map(left_normal);
+            let norm = match (n_out, outg) {
+                (Some(n), Some(u)) => Some(sub(mul(n, side * cos_b), mul(u, sin_b))),
+                _ => None,
+            };
+            let d_env = match (outg, n_out) {
+                (Some(u), Some(n)) => Some(add(mul(u, cos_b), mul(n, side * sin_b))),
+                _ => None,
+            };
+            let pt = norm.map(|n| add(point, mul(n, half)));
+            (outg, len, d_env, pt)
+        } else {
+            (None, 0.0, None, None)
+        };
+
         match (previous, next) {
-            (None, Some(next)) => {
-                let d = direction(point, samples[next].point).expect("nondegenerate samples");
-                out.push(add(point, mul(left_normal(d), side * half)));
+            (None, Some(_)) => {
+                if let Some(p) = to {
+                    out.push(p);
+                }
             }
-            (Some(previous), None) => {
-                let d = direction(samples[previous].point, point).expect("nondegenerate samples");
-                out.push(add(point, mul(left_normal(d), side * half)));
+            (Some(_), None) => {
+                if let Some(p) = from {
+                    out.push(p);
+                }
             }
-            (Some(previous), Some(next)) => {
-                let Some(incoming) = direction(samples[previous].point, point) else {
+            (Some(_), Some(_)) => {
+                let (Some(incoming), Some(outgoing), Some(d_env_in), Some(d_env_out), Some(from), Some(to)) =
+                    (incoming, outgoing, d_env_in, d_env_out, from, to)
+                else {
                     continue;
                 };
-                let Some(outgoing) = direction(point, samples[next].point) else {
-                    continue;
-                };
-                let normal_in = left_normal(incoming);
-                let normal_out = left_normal(outgoing);
-                let from = add(point, mul(normal_in, side * half));
-                let to = add(point, mul(normal_out, side * half));
                 let turn = cross(incoming, outgoing);
                 let outside = side * turn < -EPS;
                 if turn.abs() <= EPS {
                     if dot(incoming, outgoing) >= 0.0 {
                         out.push(from);
+                        if distance(from, to) > EPS {
+                            if options.join == StrokeJoin::Round && half > EPS {
+                                append_round_join(&mut out, point, from, to, side);
+                            } else {
+                                out.push(to);
+                            }
+                        }
                     } else {
-                        // A U-turn has no stable line intersection. Treat it
-                        // as the conservative bevel/semicircle join instead of
-                        // sending an infinite miter into history.
                         out.push(from);
                         if options.join == StrokeJoin::Round && half > EPS {
                             append_round_join(&mut out, point, from, to, side);
@@ -702,11 +760,46 @@ fn side_outline(
                     }
                     continue;
                 }
-                let meet = line_intersection(from, incoming, to, outgoing);
+
+                let meet_res = line_intersection_params(from, d_env_in, to, d_env_out);
                 if !outside {
-                    out.push(meet.unwrap_or(to));
+                    let t_in = meet_res.map(|(_, t, _)| t).unwrap_or(-1e9);
+                    let s_out = meet_res.map(|(_, _, s)| s).unwrap_or(-1e9);
+                    if let Some((meet, _, _)) = meet_res {
+                        if -l_in - EPS <= t_in && t_in <= EPS && -EPS <= s_out && s_out <= l_out + EPS {
+                            out.push(meet);
+                            continue;
+                        }
+                    }
+                    let mut clipped = false;
+                    let search_limit = out.len().saturating_sub(32);
+                    for k in (search_limit + 1..out.len()).rev() {
+                        let p_a = out[k - 1];
+                        let p_b = out[k];
+                        let Some(d_ab) = direction(p_a, p_b) else { continue; };
+                        if let Some((pt_int, t_seg, s_ray)) =
+                            line_intersection_params(p_a, d_ab, to, d_env_out)
+                        {
+                            let d_seg = distance(p_a, p_b);
+                            if (-EPS..=d_seg + EPS).contains(&t_seg)
+                                && (-EPS..=l_out + EPS).contains(&s_ray)
+                            {
+                                out.truncate(k);
+                                if distance(p_a, pt_int) > EPS {
+                                    out.push(pt_int);
+                                }
+                                clipped = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !clipped {
+                        let clamp_pt = sub(from, mul(d_env_in, l_in));
+                        out.push(clamp_pt);
+                    }
                     continue;
                 }
+
                 match options.join {
                     StrokeJoin::Bevel => {
                         out.push(from);
@@ -717,16 +810,13 @@ fn side_outline(
                         append_round_join(&mut out, point, from, to, side);
                     }
                     StrokeJoin::Miter => {
-                        if let Some(meet) = meet {
+                        if let Some((meet, _, _)) = meet_res {
                             let ratio = if half <= EPS {
                                 1.0
                             } else {
                                 distance(meet, point) / half
                             };
-                            if meet.0.is_finite()
-                                && meet.1.is_finite()
-                                && ratio <= options.miter_limit + EPS
-                            {
+                            if ratio <= options.miter_limit + EPS {
                                 out.push(meet);
                             } else {
                                 out.push(from);
@@ -933,13 +1023,20 @@ fn direction(a: Point, b: Point) -> Option<Point> {
     (len > EPS).then_some((d.0 / len, d.1 / len))
 }
 
-fn line_intersection(a: Point, da: Point, b: Point, db: Point) -> Option<Point> {
+fn line_intersection_params(a: Point, da: Point, b: Point, db: Point) -> Option<(Point, f64, f64)> {
     let denominator = cross(da, db);
     if denominator.abs() <= EPS {
         return None;
     }
-    let t = cross(sub(b, a), db) / denominator;
-    Some(add(a, mul(da, t)))
+    let delta = sub(b, a);
+    let t = cross(delta, db) / denominator;
+    let s = cross(delta, da) / denominator;
+    let pt = add(a, mul(da, t));
+    if pt.0.is_finite() && pt.1.is_finite() && t.is_finite() && s.is_finite() {
+        Some((pt, t, s))
+    } else {
+        None
+    }
 }
 
 fn left_normal(direction: Point) -> Point {
