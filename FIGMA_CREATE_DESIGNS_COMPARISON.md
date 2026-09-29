@@ -40,6 +40,19 @@ Every feature audit runs these eight steps, in order, and leaves its evidence he
 8. **Checklist** — the row here and the matching row of
    `X-Native/docs/FIGMA_PARITY_MASTER_LIST.md`.
 
+### Pipeline run 18 — Handle drags in the layer's own axes · radius, padding, gap, arc ✅ (2026-09-29)
+
+| step | result |
+| --- | --- |
+| 1 · Figma docs | [Adjust corner radius](https://help.figma.com/hc/en-us/articles/360050986854-Adjust-corner-radius-and-smoothing), [Guide to auto layout](https://help.figma.com/hc/en-us/articles/360040451373-Guide-to-auto-layout) (padding and gap handles on canvas), [Arc tool](https://help.figma.com/hc/en-us/articles/360040450173): every one of these handles is drawn *on the layer* and drags *along the layer* — a rotated frame's padding handle moves along its edge, an arc handle sweeps around the ellipse's own centre. |
+| 2 · Living record | This run-18 row; closes run 16's residual (1). Table: `FRAME_INTERACTION_AUDIT_2026-09-29.md` §5. |
+| 3 · Audit (**measured**) | Same mounted-canvas probe pattern, two ancestries (rotated 90° layer; layer inside a 90° frame). Radius pin dragged 21 px down the local diagonal → **stayed 10**; padding handle +20 along local x → **stayed 10**; gap +15 → **stayed 10**; arc Sweep to the local bottom → **180° (page angle) instead of 90°**. **Broken on a plain rotated layer too**, not only under ancestry. Vector anchor (Enter → `patchPath`) and gradient handles: **already correct** — they use `nodeLocalPoint` on the placement that run 16 made ancestor-aware. |
+| 4 · Deviation | Delta- and angle-based drags (`radius`, `autoPad`, `autoGap`, `arc`, `star*`/`poly*`) computed on page axes: `wpt − wp.x`, `wpt − d.wx`, `atan2` about the page-space centre. |
+| 5 · Command / WASM | **No command change.** TypeScript only, `Canvas.tsx`. No Rust file, no WASM boundary touched. |
+| 6 · UI / Canvas | Pointer → `nodeLocalPoint(wpt, wp.x, wp.y, wp.node)` for radius / arc / star / poly (local centre `(w/2,h/2)`); new `localDragDelta` for padding and gap — the *linear* part only, so a hug frame that grows mid-drag does not drift. |
+| 7 · Tests | `frameInteraction.dom.test.mjs` **47 → 59** (radius, padding, gap, arc, vector anchor, gradient × 2 ancestries), in `npm test`. **Sabotage-verified** with the run-16 `Canvas.tsx`: **8 fail**, vector + gradient pass both ways as predicted. Whole suite green; `tsc -b` clean. |
+| 8 · Checklist | No scoreboard move. Remaining canvas-under-rotation items in the audit doc §6: text-on-path start handle (feature's own model), nested frame labels under rotation, mirrored-ancestry cursor index. |
+
 ### Pipeline run 16 — Frame interaction QA · placement under rotated/flipped ancestors, nested resize, handle priority ✅ (2026-09-29)
 
 | step | result |

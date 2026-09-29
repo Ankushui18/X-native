@@ -5759,8 +5759,12 @@ export function Canvas({
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp?.node.layout) {
         const [pl, pr, pt, pb] = d.origPad;
-        const dx = Math.round(wpt.x - d.wx);
-        const dy = Math.round(wpt.y - d.wy);
+        // Padding is measured along the frame's own edges: the drag is taken in
+        // the layer's local axes (own rotation and any rotated/flipped
+        // ancestor), not the page's.
+        const ld = localDragDelta(wp, d.wx, d.wy, wpt.x, wpt.y);
+        const dx = Math.round(ld.dx);
+        const dy = Math.round(ld.dy);
         // On-canvas modifiers:
         // ⌥ sets the padding on the opposite side too, ⌥⇧ sets it on all four,
         // and ⇧ alone drags in big-nudge steps.
@@ -5818,7 +5822,8 @@ export function Canvas({
         const horiz = wp.node.layout.direction === "horizontal";
         // ⇧ drags the gap in big-nudge steps, as it does for padding.
         const big = e.shiftKey && !e.altKey ? getNudgePrefs().big : 1;
-        const delta = Math.round(horiz ? wpt.x - d.wx : wpt.y - d.wy);
+        const ld = localDragDelta(wp, d.wx, d.wy, wpt.x, wpt.y);
+        const delta = Math.round(horiz ? ld.dx : ld.dy);
         const nextGap = Math.max(0, Math.round((d.origGap + delta) / big) * big);
         engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, gap: nextGap } });
       }
@@ -5826,10 +5831,9 @@ export function Canvas({
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
-        const cx = wp.x + wp.node.w / 2;
-        const cy = wp.y + wp.node.h / 2;
+        const lp = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
         const maxR = Math.hypot(wp.node.w / 2, wp.node.h / 2);
-        const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
+        const curR = Math.hypot(lp.x - wp.node.w / 2, lp.y - wp.node.h / 2);
         const ratio = Math.max(0.05, Math.min(0.95, curR / (maxR || 1)));
         engine.dispatch({ type: "patch", id: d.id, patch: { starRatio: ratio } });
       }
@@ -5837,9 +5841,9 @@ export function Canvas({
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
-        const cy = wp.y + wp.node.h / 2;
-        const topY = cy - wp.node.h / 2;
-        const dist = Math.max(0, wpt.y - topY);
+        // Distance down from the shape's own top edge, in its local axes.
+        const lp = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
+        const dist = Math.max(0, lp.y);
         const maxR = Math.min(wp.node.w, wp.node.h) * 0.4;
         const newR = Math.max(0, Math.min(maxR, Math.round(dist)));
         engine.dispatch({ type: "patch", id: d.id, patch: { cornerRadii: [newR, newR, newR, newR] } });
@@ -5848,9 +5852,8 @@ export function Canvas({
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
-        const cx = wp.x + wp.node.w / 2;
-        const cy = wp.y + wp.node.h / 2;
-        const angle = Math.atan2(wpt.y - cy, wpt.x - cx) + Math.PI / 2;
+        const lp = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
+        const angle = Math.atan2(lp.y - wp.node.h / 2, lp.x - wp.node.w / 2) + Math.PI / 2;
         const normAngle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
         const count = Math.max(3, Math.min(60, Math.round((normAngle / (Math.PI * 2)) * 16) + 3));
         engine.dispatch({ type: "patch", id: d.id, patch: { count } });
@@ -5864,8 +5867,11 @@ export function Canvas({
         // of each edge comes from where that corner actually sits.
         const left = ci === 0 || ci === 2;
         const top = ci === 0 || ci === 1;
-        const dx = left ? wpt.x - wp.x : wp.x + wp.node.w - wpt.x;
-        const dy = top ? wpt.y - wp.y : wp.y + wp.node.h - wpt.y;
+        // The pin slides along the corner's own diagonal, so the inset is
+        // measured in the layer's local axes (rotated / flipped ancestry too).
+        const lp = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
+        const dx = left ? lp.x : wp.node.w - lp.x;
+        const dy = top ? lp.y : wp.node.h - lp.y;
         const dist = Math.min(dx, dy);
         const maxR = Math.min(wp.node.w, wp.node.h) / 2;
         const newR = Math.max(0, Math.min(maxR, Math.round(dist)));
@@ -5890,11 +5896,14 @@ export function Canvas({
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
-        const cx = wp.x + wp.node.w / 2;
-        const cy = wp.y + wp.node.h / 2;
+        // Arc angles live in the ellipse's own frame: a rotated ellipse (or one
+        // inside a rotated frame) reads the pointer in local coordinates.
+        const lp = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
+        const cx = wp.node.w / 2;
+        const cy = wp.node.h / 2;
         const curArc = wp.node.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
         const angleAt = () => {
-          let ang = Math.atan2(wpt.y - cy, wpt.x - cx);
+          let ang = Math.atan2(lp.y - cy, lp.x - cx);
           if (ang < 0) ang += Math.PI * 2;
           if (e.shiftKey) ang = Math.round((ang * 180) / Math.PI / 15) * (Math.PI / 12);
           return ang;
@@ -5910,7 +5919,7 @@ export function Canvas({
           });
         } else if (d.handle === "in") {
           const maxR = Math.min(wp.node.w, wp.node.h) / 2;
-          const curR = Math.hypot(wpt.x - cx, wpt.y - cy);
+          const curR = Math.hypot(lp.x - cx, lp.y - cy);
           const ratio = Math.max(0, Math.min(0.95, curR / (maxR || 1)));
           engine.dispatch({
             type: "patch",
@@ -8210,6 +8219,17 @@ function unrot(px: number, py: number, cx: number, cy: number, deg: number) {
   const dx = px - cx;
   const dy = py - cy;
   return { x: cx + dx * Math.cos(a) - dy * Math.sin(a), y: cy + dx * Math.sin(a) + dy * Math.cos(a) };
+}
+
+/** A pointer drag measured in a layer's local axes: both ends of the page-space
+ *  drag go through the placement (own rotation/flip plus any rotated or flipped
+ *  ancestor, since `wp` comes from `worldPlacement`), so "drag right" means
+ *  "along the layer's +x" wherever the layer sits. */
+function localDragDelta(wp: { x: number; y: number; node: XNode }, fromX: number, fromY: number, toX: number, toY: number) {
+  // Only the linear part: a hug frame grows (and its centre moves) while its
+  // padding is dragged, so a point-based conversion would drift mid-drag.
+  const v = unrot(toX - fromX, toY - fromY, 0, 0, wp.node.rotation || 0);
+  return { dx: wp.node.flipH ? -v.x : v.x, dy: wp.node.flipV ? -v.y : v.y };
 }
 
 function nodeLocalPoint(px: number, py: number, x: number, y: number, n: XNode) {

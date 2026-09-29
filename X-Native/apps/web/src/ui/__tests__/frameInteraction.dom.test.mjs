@@ -262,5 +262,80 @@ const handleSquares = () => paints.filter(([c, , , w]) => c === "fillRect" && (w
   await ui.close();
 }
 
+
+// ------------------------------------------------ Run 18: the other handle drags
+// Each handle is pressed where it is painted (via localToWorld) and dragged
+// along the layer's *local* axis; the document value must change as if the
+// layer were upright. Covered for a rotated top-level layer and for a layer
+// inside a 90° frame.
+const parents = [
+  { label: "rotated 90° layer", wrap: (n, extra = {}) => [Object.assign(n, { rotation: 90 }, extra)] },
+  { label: "layer inside a 90° frame", wrap: (n) => [node("frame", "P", 100, 100, 400, 300, { children: [n], rotation: 90 })] },
+];
+for (const { label, wrap } of parents) {
+  // Corner radius pin (TL): pull it along the local diagonal.
+  {
+    const r = node("rect", "R", 60, 40, 200, 160, {});
+    const ui = await mount(wrap(r), [r.id]);
+    const p0 = ui.world(r.id, 9, 9); // pin at min inset 9
+    const p1 = ui.world(r.id, 30, 30);
+    await ui.drag(p0.x, p0.y, p1.x, p1.y);
+    t(`${label}: corner-radius pin dragged 21px down the local diagonal → radius 30`, ui.node(r.id).cornerRadii.every((v) => v === 30), JSON.stringify(ui.node(r.id).cornerRadii));
+    await ui.close();
+  }
+  // Auto layout padding (left edge) and gap.
+  {
+    const a = node("rect", "A", 0, 0, 40, 40, {});
+    const b = node("rect", "B", 0, 0, 40, 40, {});
+    const f = node("frame", "AL", 60, 40, 220, 100, { children: [a, b], layout: { direction: "horizontal", gap: 10, padding: [10, 10, 10, 10], align: "start", justify: "start" } });
+    const ui = await mount(wrap(f), [f.id]);
+    const padPt = ui.world(f.id, 10, 50); // left padding handle: x = pl, y = h/2
+    const padTo = ui.world(f.id, 30, 50);
+    await ui.drag(padPt.x, padPt.y, padTo.x, padTo.y);
+    t(`${label}: left padding handle dragged +20 along local x → padding-left 30`, ui.node(f.id).layout.padding[0] === 30, JSON.stringify(ui.node(f.id).layout.padding));
+    const fl = ui.node(f.id).layout;
+    const c0 = ui.node(f.id).children[0];
+    const gapPt = ui.world(f.id, c0.x + c0.w + fl.gap / 2, 50);
+    const gapTo = ui.world(f.id, c0.x + c0.w + fl.gap / 2 + 15, 50);
+    await ui.drag(gapPt.x, gapPt.y, gapTo.x, gapTo.y);
+    t(`${label}: gap handle dragged +15 along local x → gap 25`, ui.node(f.id).layout.gap === 25, String(ui.node(f.id).layout.gap));
+    await ui.close();
+  }
+  // Ellipse arc sweep: drag the Sweep handle from local 0° to local 90° (bottom).
+  {
+    const el = node("ellipse", "E", 60, 40, 200, 200, {});
+    const ui = await mount(wrap(el), [el.id]);
+    const h0 = ui.world(el.id, 200, 100); // sweep handle at angle 0 (local right)
+    const h1 = ui.world(el.id, 100, 200); // local bottom = 90°
+    await ui.drag(h0.x, h0.y, h1.x, h1.y);
+    const ang = ui.node(el.id).arcData?.endingAngle;
+    t(`${label}: arc sweep handle dragged to the local bottom → endingAngle 90°`, ang != null && Math.abs(ang - Math.PI / 2) < 0.02, String(ang));
+    await ui.close();
+  }
+  // Vector anchor drag (already placement-based - pinned so it stays so).
+  {
+    const v = node("vector", "V", 60, 40, 100, 100, { path: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }], closed: true });
+    const ui = await mount(wrap(v), [v.id]);
+    // Enter opens point editing on a selected vector (window keydown).
+    await act(async () => window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const a0 = ui.world(v.id, 100, 0);
+    const a1 = ui.world(v.id, 130, 0);
+    await ui.drag(a0.x, a0.y, a1.x, a1.y, { metaKey: true });
+    const pt = ui.node(v.id).path[1];
+    t(`${label}: vector anchor dragged +30 along local x (point edit, not resize)`, ui.commands.some((c) => c.type === "patchPath") && !ui.commands.some((c) => c.type === "resize") && Math.abs(pt.x - 130) < 1 && Math.abs(pt.y) < 1, JSON.stringify({ pt, cmds: ui.commands.map((c) => c.type) }));
+    await ui.close();
+  }
+  // Gradient handle (already placement-based - pinned).
+  {
+    const g = node("rect", "G", 60, 40, 200, 100, { fill: "#ff0000", fillB: "#0000ff", fillType: "linear", fillGX: 0.5, fillGY: 0, fillHX: 0.5, fillHY: 1 });
+    const ui = await mount(wrap(g), [g.id]);
+    const g0 = ui.world(g.id, 100, 0);
+    const g1 = ui.world(g.id, 150, 0);
+    await ui.drag(g0.x, g0.y, g1.x, g1.y);
+    t(`${label}: gradient start handle dragged +50 along local x → fillGX 0.75`, Math.abs(ui.node(g.id).fillGX - 0.75) < 0.01 && Math.abs(ui.node(g.id).fillGY) < 0.01, JSON.stringify([ui.node(g.id).fillGX, ui.node(g.id).fillGY]));
+    await ui.close();
+  }
+}
+
 console.log(`frameInteraction: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

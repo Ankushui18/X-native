@@ -115,25 +115,43 @@ FAIL small shape: the press honours that promise (resize, not rotate)
 frameInteraction: 32 passed, 15 failed
 ```
 
-## 5 · Still open after this pass (recorded, not hidden)
+## 5 · Run 18 — the other handle drags (2026-09-29, same day)
 
-1. **Vector / arc / gradient / radius / padding handle drags inside a rotated
-   ancestry** go through `nodeLocalPoint(wpt, wp.x, wp.y, wp.node)` with a
-   page-space `wpt`; the *placement* they read is now right (so the handles are
-   drawn and hit correctly) but the drag maths still assumes the parent's axes
-   are the page's. Same shape of fix as the resize drag (one
-   `worldPointToParent` before `nodeLocalPoint`); not done here to keep the
-   change reviewable.
+Re-measured every remaining single-selection handle drag with the same probe
+pattern, on (a) a rotated top-level layer and (b) a layer inside a 90° frame:
+
+| drag | pre-fix | root cause | fix |
+| --- | --- | --- | --- |
+| corner-radius pin | radius stayed 10 on both | inset measured as `wpt − wp.x/y` on page axes | pointer → `nodeLocalPoint` (placement), inset in local axes |
+| Auto Layout padding handle | padding stayed 10 on both — **broken on any rotated frame**, not only under ancestry | `wpt − d.wx` page delta | `localDragDelta` (linear part only, so a growing hug frame does not drift) |
+| Auto Layout gap handle | gap stayed 10 | same | same |
+| ellipse arc Sweep / Start / Ratio | sweep to the local bottom wrote **180°** (the page angle) | `atan2` around the page-space centre | local centre `(w/2, h/2)` + local pointer |
+| star / polygon count, radius, ratio | (not exercised by a test) | same shape | same shape |
+| vector anchor / Bézier handle, gradient handles, bend, crop, rotation origin | **already correct** — they go through `nodeLocalPoint(wpt, wp.x, wp.y, wp.node)` and `wp` has carried the composite transform since run 16 | — | pinned by tests so they stay so |
+
+Run 16's residual (1) above was therefore half right: the `nodeLocalPoint`
+drags were fine; the delta/angle-based ones were not, and were wrong even for
+a plain rotated layer.
+
+`frameInteraction.dom.test.mjs` grew to **59 assertions** (12 new: radius,
+padding, gap, arc, vector anchor via Enter + `patchPath`, gradient — × 2
+ancestries). Sabotage with the run-16 `Canvas.tsx`: **8 fail** (radius / pad /
+gap / arc × 2), vector + gradient pass both ways as predicted. Whole suite
+green, `tsc -b` clean.
+
+## 6 · Still open
+
+1. **Text-on-path start handle** (`pathStart`) projects `wpt − tw − geom.dx`
+   translation-only: the text-on-path model itself ignores the path node's
+   rotation, so this belongs to that feature, not to this sweep.
 2. **Frame name labels** (`labelNames`) walk the tree with translation only, so
    a *selected* nested frame inside a rotated frame draws its name at the
    unrotated corner. Unselected nested names are suppressed, so the idle canvas
    is unaffected.
 3. **Corner-radius pins vs corner resize handle** overlap in a ~2 px sliver on
-   the diagonal (pin ≥ 12.7 px from the corner, radius 7; resize radius 8). Pins
-   are tested first. Figma insets its pins similarly; left as is.
-4. **Hover cursor under a rotated ancestry** is derived from the total angle
-   (`resizeCursor(i, box.rot)`) — correct on screen — but a mirrored ancestry
-   still picks the cursor for the un-mirrored handle index.
+   the diagonal. Pins are tested first. Figma insets its pins similarly; left.
+4. **Hover cursor under a mirrored ancestry** still picks the cursor for the
+   un-mirrored handle index (the angle is right, the mirror is not).
 5. The comparison's Gradients row says "no web canvas handles"; `Canvas.tsx`
-   has a `grad` drag mode with `g`/`h` handles behind `gradTarget`. Worth a
-   re-measure before treating that row as current.
+   has a `grad` drag mode with `g`/`h` handles behind `gradTarget` — and run 18
+   now has a passing canvas-drag test for them. That row needs a re-measure.
