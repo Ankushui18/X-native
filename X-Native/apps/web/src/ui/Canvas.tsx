@@ -6950,6 +6950,7 @@ export function Canvas({
     payload: ClipPayload,
     at?: { x: number; y: number },
     inPlace = false,
+    over = false,
   ): Promise<boolean> => {
     const target = at ?? viewCentre();
     switch (payload.kind) {
@@ -6961,7 +6962,18 @@ export function Canvas({
         // node that arrives still holding `asset:…` paints nothing.
         const missing = await hydrateNodes(payload.nodes);
         engine.dispatch({ type: "loadClip", nodes: payload.nodes });
-        engine.dispatch({ type: "paste", x: target.x, y: target.y, inPlace });
+        // A paste at an explicit point is the menu's Paste here, whose
+        // top-left sits on the point; a ⌘V with no point centres the copy on
+        // the viewport. ⇧ rides `inPlace` for the text/link ladder and `over`
+        // for the node one — Figma's Paste over selection.
+        engine.dispatch({
+          type: "paste",
+          x: target.x,
+          y: target.y,
+          inPlace,
+          over,
+          anchor: at ? "topLeft" : "center",
+        });
         if (missing) toast(`${missing} image${missing > 1 ? "s" : ""} could not be loaded`);
         return true;
       }
@@ -7028,10 +7040,10 @@ export function Canvas({
     if (engine.snapshot().presentFrame) return;
     e.preventDefault();
     const inPlace = pasteInPlace();
-    void placeClipboard(parseClipboard(e.clipboardData)).then((handled) => {
+    void placeClipboard(parseClipboard(e.clipboardData), undefined, inPlace, inPlace).then((handled) => {
       // Nothing readable on the system clipboard: the copy made inside this
       // document still pastes, which is what ⌘V did before this existed.
-      if (!handled) engine.dispatch({ type: "paste", inPlace });
+      if (!handled) engine.dispatch({ type: "paste", inPlace, over: inPlace });
     });
   };
 
@@ -7050,11 +7062,19 @@ export function Canvas({
     // the event path does not, so a refusal falls back to the in-app clipboard
     // rather than reporting an error for a routine menu click.
     const onRequest = (e: Event) => {
-      const d = (e as CustomEvent<{ x?: number; y?: number; inPlace?: boolean }>).detail ?? {};
+      const d = (e as CustomEvent<{ x?: number; y?: number; inPlace?: boolean; over?: boolean }>).detail ?? {};
       const at = d.x != null && d.y != null ? { x: d.x, y: d.y } : undefined;
       void readSystemClipboard().then((src) =>
-        placeClipboard(parseClipboard(src), at, !!d.inPlace).then((handled) => {
-          if (!handled) engine.dispatch({ type: "paste", x: d.x, y: d.y, inPlace: d.inPlace });
+        placeClipboard(parseClipboard(src), at, !!d.inPlace, !!d.over).then((handled) => {
+          if (!handled)
+            engine.dispatch({
+              type: "paste",
+              x: d.x,
+              y: d.y,
+              inPlace: d.inPlace,
+              over: d.over,
+              anchor: at ? "topLeft" : "center",
+            });
         }),
       );
     };

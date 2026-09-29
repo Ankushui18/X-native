@@ -1518,6 +1518,7 @@ export function Actions({
     { label: "Undo", sc: "⌘Z", run: () => engine.dispatch({ type: "undo" }) },
     { label: "Redo", sc: "⇧⌘Z", run: () => engine.dispatch({ type: "redo" }) },
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
+    { label: "Paste to replace", sc: "⇧⌘R", run: () => engine.dispatch({ type: "pasteToReplace" }) },
     { label: "Delete", sc: "⌫", run: () => engine.dispatch({ type: "delete" }) },
     { label: "Rulers", sc: "⇧R", run: () => engine.dispatch({ type: "toggleRulers" }) },
     { label: "Minimap", sc: "⇧M", run: () => engine.dispatch({ type: "toggleMinimap" }) },
@@ -2116,6 +2117,14 @@ export function bindHotkeys(
       engine.dispatch({ type: "redo" });
       return;
     }
+    if (meta && e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+      // ⇧⌘R Paste to replace (4409078832791): "remove a selected object ...
+      // and replace it with the object copied to your clipboard". Claimed
+      // before the browser's hard reload, which this chord otherwise means.
+      e.preventDefault();
+      engine.dispatch({ type: "pasteToReplace" });
+      return;
+    }
     if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
       const id = engine.snapshot().selection[0];
       if (id) {
@@ -2241,7 +2250,7 @@ export function bindHotkeys(
       // paste event clears the flag within a frame, so this never doubles up.
       const inPlace = e.shiftKey;
       window.setTimeout(() => {
-        if (pasteEventMissing()) engine.dispatch({ type: "paste", inPlace });
+        if (pasteEventMissing()) engine.dispatch({ type: "paste", inPlace, over: inPlace });
       }, 250);
       return;
     }

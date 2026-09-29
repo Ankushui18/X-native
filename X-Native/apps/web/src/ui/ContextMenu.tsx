@@ -262,6 +262,12 @@ export function canvasMenu(
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
+    // Figma, Copy and paste objects (4409078832791): ⌘⇧V lands the copy at
+    // the selection's own x,y in its parent ("on top of a selected frame,
+    // not inside it"); ⇧⌘R swaps the selection for the clipboard at the same
+    // spot, adopting the replaced object's constraints.
+    { kind: "action", id: "pasteOver", label: "Paste over selection", shortcut: "⌘⇧V", icon: "clipboard" },
+    { kind: "action", id: "pasteToReplace", label: "Paste to replace", shortcut: "⇧⌘R", icon: "clipboard" },
     { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
     {
       // Grouped under "Copy/paste as", and the language list is the
@@ -376,6 +382,8 @@ export function layerMenu(isGroup: boolean, hasLayout = false, caps: MenuCaps = 
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
     { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
+    { kind: "action", id: "pasteOver", label: "Paste over selection", shortcut: "⌘⇧V", icon: "clipboard" },
+    { kind: "action", id: "pasteToReplace", label: "Paste to replace", shortcut: "⇧⌘R", icon: "clipboard" },
     { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
     { kind: "sep" },
@@ -461,6 +469,17 @@ export async function runMenu(
       window.dispatchEvent(
         new CustomEvent("x-native-paste", { detail: { x: extra?.x, y: extra?.y } }),
       );
+      break;
+    case "pasteOver":
+      // Same clipboard ladder as the menu Paste, but the landing mode is the
+      // ⌘⇧V one: the canvas reads the system clipboard and the engine places
+      // the copy over the selection instead of inside it.
+      window.dispatchEvent(new CustomEvent("x-native-paste", { detail: { over: true } }));
+      break;
+    case "pasteToReplace":
+      // The in-app clipboard is the one replace can reason about; with
+      // nothing on it the command no-ops, exactly like an empty ⌘V.
+      engine.dispatch({ type: "pasteToReplace" });
       break;
     case "copyCode":
       // The result lands on the clipboard with no visible change on canvas, so
