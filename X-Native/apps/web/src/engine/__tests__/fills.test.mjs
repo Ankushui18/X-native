@@ -81,6 +81,22 @@ console.log("F-A gradient-handle targeting:");
       return g && g.from === "#00ff00" && g.to === "#0000ff";
     })(),
   );
+  t(
+    "canvas receives the complete sorted stop ramp, including intermediates",
+    (() => {
+      const g = gradTarget(
+        node({
+          fillType: "linear",
+          gradientStops: [
+            { color: "#0000ff", position: 1 },
+            { color: "#00ff00", position: 0.5 },
+            { color: "#ff0000", position: 0 },
+          ],
+        }),
+      );
+      return g && g.type === "linear" && g.stops.map((s) => `${s.color}:${s.position}`).join() === "#ff0000:0,#00ff00:0.5,#0000ff:1";
+    })(),
+  );
   t("hidden base gradient has no handles", gradTarget(node({ fillType: "linear", fillVisible: false })) === null);
   t("removed base fill has no handles", gradTarget(node({ fillType: "linear", fill: "#00000000" })) === null);
   t(

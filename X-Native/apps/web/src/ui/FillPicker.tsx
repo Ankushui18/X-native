@@ -1032,7 +1032,8 @@ function GradientStops({
         </button>
         <button
           className="icon-btn"
-          title="Reverse gradient"
+          title="Flip gradient direction"
+          aria-label="Flip gradient direction"
           onClick={() => commit(stops.map((s) => ({ ...s, position: 1 - s.position })))}
         >
           <Icon name="flip-h" size={14} />

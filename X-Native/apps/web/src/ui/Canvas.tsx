@@ -5,7 +5,7 @@ import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveAllForMode, resolveVariable } from "../engine/variables";
 import { evaluateExpression } from "../engine/expressions";
 import { prefersReducedMotion } from "./a11y";
-import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, parentHandedness, previewBoolean, worldDeltaToParent, worldPointToParent, worldToLocal } from "../engine/memory";
+import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, localToWorld, parentHandedness, previewBoolean, worldDeltaToParent, worldPointToParent, worldToLocal } from "../engine/memory";
 // The canvas reads a layer's placement *including its ancestors' rotation and
 // flips*: the selection box, handles and drag maths must land where the layer
 // is painted, not where it would be if its parent were unrotated. The engine's
@@ -195,6 +195,7 @@ type Drag =
         | "vecResize"
         | "bend"
         | "grad"
+        | "gradStop"
         | "multiResize"
         | "multiRotate"
         | "autoPad"
@@ -220,6 +221,12 @@ type Drag =
       handle?: "in" | "out" | "start" | "g" | "h";
       /** Gradient-handle drag: which `fills` index the handles grabbed, -1 for the base fill. */
       gindex?: number;
+      /** An authored intermediate stop on that ramp. Keeping it bounded by its
+       * neighbours means it retains its identity while it is dragged instead
+       * of accidentally becoming a different stop after a sort. */
+      gradStop?: number;
+      gradStopMin?: number;
+      gradStopMax?: number;
       padEdge?: "top" | "right" | "bottom" | "left";
       forcedSide?: "right" | "bottom" | "left" | "top";
       /** ⌥ at the padding handle: the opposite side follows. ⌥⇧: all four. */
@@ -2496,12 +2503,14 @@ export function Canvas({
     // stays the same size as the canvas zooms. Selected or hovered, it takes
     // the accent colour indicating the name belongs to the frame you
     // are about to act on.
-    const labelNames = (n: XNode, parentIsFrame: boolean, px: number, py: number, selectedAncestor = false) => {
+    const labelNames = (n: XNode, parentIsFrame: boolean, selectedAncestor = false) => {
       if (!n.visible) return;
-      const x = px + n.x;
-      const y = py + n.y;
-      const screenX = snap.panX + x * z;
-      const screenY = snap.panY + y * z;
+      // A label is document chrome, but its anchor is still the layer's actual
+      // top-left corner. Summing x/y only works until an ancestor rotates or
+      // flips; use the same full matrix as the painter and selection chrome.
+      const origin = localToWorld(root, n.id, 0, 0);
+      const screenX = snap.panX + origin.x * z;
+      const screenY = snap.panY + origin.y * z;
       const selected = snap.selection.includes(n.id);
       // Skip labels whose layer is off-screen: at any zoom a page can hold
       // hundreds of them, and fillText for each is the one thing on this
@@ -2538,11 +2547,11 @@ export function Canvas({
         ctx.restore();
       }
       for (const c of n.children) {
-        labelNames(c, n.kind === "frame", x, y, selectedAncestor || selected);
+        labelNames(c, n.kind === "frame", selectedAncestor || selected);
       }
     };
     if (!snap.presentFrame) {
-      for (const ch of root.children) labelNames(ch, false, 0, 0);
+      for (const ch of root.children) labelNames(ch, false);
     }
 
     if (penBranch.current && snap.tool === "pen") {
@@ -3135,7 +3144,7 @@ export function Canvas({
       ctx.fillText(dim, bx + bw / 2, by + bh / 2);
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
-      const gt = gradTarget(wp.node);
+      const gt = !lockedSel ? gradTarget(wp.node) : null;
       if (gt) {
         const ax = sx + gt.gx * sw;
         const ay = sy + gt.gy * sh;
@@ -3147,6 +3156,19 @@ export function Canvas({
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
         ctx.stroke();
+        // Intermediate colour stops belong on the canvas, not only in the
+        // inspector. The end stops are the larger geometry handles below;
+        // keeping them separate gives endpoints first-class hit priority.
+        for (const stop of gt.stops) {
+          if (stop.position <= 0.001 || stop.position >= 0.999) continue;
+          const x = ax + (bx - ax) * stop.position;
+          const y = ay + (by - ay) * stop.position;
+          ctx.fillStyle = stop.color;
+          ctx.beginPath();
+          ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
         ctx.fillStyle = gt.from;
         ctx.beginPath();
         ctx.arc(ax, ay, 6, 0, Math.PI * 2);
@@ -4580,12 +4602,38 @@ export function Canvas({
             }
           }
         }
-        const gt = gradTarget(wp.node);
+        const gt = !isEffectivelyLocked(root, wp.node.id) ? gradTarget(wp.node) : null;
         if (gt) {
           const ax = sx + gt.gx * wp.node.w * z;
           const ay = sy + gt.gy * wp.node.h * z;
           const bx = sx + gt.hx * wp.node.w * z;
           const by = sy + gt.hy * wp.node.h * z;
+          // Colour-stop hit areas outrank endpoints, resize handles, and the
+          // layer body. A dragged stop is clamped between its neighbours so it
+          // remains the same stop even when it is pulled all the way against
+          // one of them.
+          for (let i = 0; i < gt.stops.length; i++) {
+            const stop = gt.stops[i];
+            if (stop.position <= 0.001 || stop.position >= 0.999) continue;
+            const x = ax + (bx - ax) * stop.position;
+            const y = ay + (by - ay) * stop.position;
+            if (Math.hypot(px - x, py - y) < 9) {
+              engine.dispatch({ type: "begin" });
+              drag.current = {
+                mode: "gradStop",
+                sx: e.clientX,
+                sy: e.clientY,
+                wx: wpt.x,
+                wy: wpt.y,
+                id: wp.node.id,
+                gindex: gt.index,
+                gradStop: i,
+                gradStopMin: gt.stops[i - 1]?.position ?? 0,
+                gradStopMax: gt.stops[i + 1]?.position ?? 1,
+              };
+              return;
+            }
+          }
           if (Math.hypot(px - ax, py - ay) < 8) {
             engine.dispatch({ type: "begin" });
             drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "g", gindex: gt.index };
@@ -5174,8 +5222,27 @@ export function Canvas({
           }
           for (let i = 0; i < hs.length; i++) {
             if (Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 8) {
-              next = resizeCursor(i, box.rot);
+              next = resizeCursor(visualHandleIndex(i, !!bb?.node.flipH, !!bb?.node.flipV), box.rot);
               break;
+            }
+          }
+          // Gradient controls are direct canvas affordances. Their cursor is
+          // deliberately resolved after selection chrome because their press
+          // wins over resize/rotate handles in onDown as well.
+          if (!locked && bb && snap.selection.length === 1) {
+            const gt = gradTarget(bb.node);
+            if (gt) {
+              const ax = sx0 + gt.gx * bb.node.w * z;
+              const ay = sy0 + gt.gy * bb.node.h * z;
+              const bx = sx0 + gt.hx * bb.node.w * z;
+              const by = sy0 + gt.hy * bb.node.h * z;
+              const onStop = gt.stops.some((stop) =>
+                stop.position > 0.001 &&
+                stop.position < 0.999 &&
+                Math.hypot(hx - (ax + (bx - ax) * stop.position), hy - (ay + (by - ay) * stop.position)) < 9,
+              );
+              if (onStop) next = "grab";
+              else if (Math.hypot(hx - ax, hy - ay) < 8 || Math.hypot(hx - bx, hy - by) < 8) next = "crosshair";
             }
           }
           if (!next && bb?.node.layout) {
@@ -5561,29 +5628,65 @@ export function Canvas({
         // ⌘/Ctrl-drag resizes past the children's constraints.
         ignoreConstraints: e.metaKey || e.ctrlKey,
       });
-    } else if (d.mode === "grad" && d.id) {
+    } else if ((d.mode === "grad" || d.mode === "gradStop") && d.id) {
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
         const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, wp.node);
-        const lx = local.x / Math.max(1, wp.node.w);
-        const ly = local.y / Math.max(1, wp.node.h);
+        const raw = {
+          x: local.x / Math.max(1, wp.node.w),
+          y: local.y / Math.max(1, wp.node.h),
+        };
         const gi = d.gindex ?? -1;
-        if (gi < 0) {
-          if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: lx, fillGY: ly } });
-          else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: lx, fillHY: ly } });
+        const gt = gradTarget(wp.node);
+        // A paint-stack reorder could change which fill is topmost during a
+        // drag. The drag owns the exact fill index it started on, so recover
+        // its geometry directly rather than accidentally editing a new top
+        // paint.
+        if (!gt || gt.index !== gi) return;
+        if (d.mode === "gradStop") {
+          const index = d.gradStop;
+          if (index == null || !gt.stops[index]) return;
+          const unclamped = gradientAxisPosition(raw, gt, wp.node, snap.zoom);
+          const position = Math.max(d.gradStopMin ?? 0, Math.min(d.gradStopMax ?? 1, unclamped));
+          const stops = gt.stops.map((stop, i) => (i === index ? { ...stop, position } : { ...stop }));
+          if (gi < 0) {
+            engine.dispatch({
+              type: "patch",
+              id: d.id,
+              patch: {
+                gradientStops: stops,
+                // Keep old two-colour consumers and serializers in sync.
+                fill: stops[0].color,
+                fillB: stops[stops.length - 1].color,
+              },
+            });
+          } else {
+            const fills = [...(wp.node.fills ?? [])];
+            const p = fills[gi];
+            if (!p) return;
+            fills[gi] = { ...p, stops, color: stops[0].color };
+            engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
+          }
         } else {
-          // The handles grabbed a stacked fill: write its own geometry. The
-          // first drag also pins down inherited base geometry explicitly, at
-          // the values the handles already showed, so nothing jumps.
-          const fills = [...(wp.node.fills ?? [])];
-          const p = fills[gi];
-          if (!p) return;
-          fills[gi] =
-            d.handle === "g"
-              ? { ...p, gx: lx, gy: ly, hx: p.hx ?? wp.node.fillHX ?? 0.5, hy: p.hy ?? wp.node.fillHY ?? 1 }
-              : { ...p, hx: lx, hy: ly, gx: p.gx ?? wp.node.fillGX ?? 0.5, gy: p.gy ?? wp.node.fillGY ?? 0 };
-          engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
+          const fixed = d.handle === "g" ? { x: gt.hx, y: gt.hy } : { x: gt.gx, y: gt.gy };
+          const point = snappedGradientEndpoint(raw, fixed, wp.node, snap.zoom, e.shiftKey);
+          if (gi < 0) {
+            if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: point.x, fillGY: point.y } });
+            else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: point.x, fillHY: point.y } });
+          } else {
+            // The handles grabbed a stacked fill: write its own geometry. The
+            // first drag also pins down inherited base geometry explicitly, at
+            // the values the handles already showed, so nothing jumps.
+            const fills = [...(wp.node.fills ?? [])];
+            const p = fills[gi];
+            if (!p) return;
+            fills[gi] =
+              d.handle === "g"
+                ? { ...p, gx: point.x, gy: point.y, hx: p.hx ?? wp.node.fillHX ?? 0.5, hy: p.hy ?? wp.node.fillHY ?? 1 }
+                : { ...p, hx: point.x, hy: point.y, gx: p.gx ?? wp.node.fillGX ?? 0.5, gy: p.gy ?? wp.node.fillGY ?? 0 };
+            engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
+          }
         }
       }
     } else if (d.mode === "vecResize" && d.id && d.corner != null && d.bounds && d.origNetwork && d.networkIndices) {
@@ -6061,6 +6164,7 @@ export function Canvas({
       d.mode === "vec" ||
       d.mode === "vecResize" ||
       d.mode === "grad" ||
+      d.mode === "gradStop" ||
       d.mode === "multiResize" ||
       d.mode === "multiRotate" ||
       d.mode === "rotOrigin" ||
@@ -6533,47 +6637,45 @@ export function Canvas({
         const my = e.clientY - r.top;
         const z = snap.zoom;
         let hitFrame: XNode | null = null;
-        const walk = (n: XNode, parentIsFrame: boolean, px: number, py: number, selectedAncestor = false) => {
+        const walk = (n: XNode, parentIsFrame: boolean, selectedAncestor = false) => {
           if (!n.visible) return;
-          const x = px + n.x;
-          const y = py + n.y;
+          const origin = localToWorld(root, n.id, 0, 0);
           const selected = snap.selection.includes(n.id);
           const nameW = Math.max(40, n.name.length * 6.5);
           if (n.kind === "section") {
             // The title sits inside the section's top-left (see labelNames).
-            const sx = snap.panX + x * z;
-            const sy = snap.panY + y * z;
+            const sx = snap.panX + origin.x * z;
+            const sy = snap.panY + origin.y * z;
             if (mx >= sx && mx <= sx + nameW + 8 && my >= sy + 2 && my <= sy + 20) {
               hitFrame = n;
             }
           } else if (n.kind === "frame" && n.showName !== false && (selected || (!parentIsFrame && !selectedAncestor))) {
-            const sx = snap.panX + x * z;
-            const sy = snap.panY + y * z;
+            const sx = snap.panX + origin.x * z;
+            const sy = snap.panY + origin.y * z;
             if (mx >= sx - 2 && mx <= sx + nameW + 10 && my >= sy - 18 && my <= sy - 2) {
               hitFrame = n;
             }
           }
           // Match labelNames: an invisible/culled label cannot start rename.
           for (const c of n.children) {
-            walk(c, n.kind === "frame", x, y, selectedAncestor || selected);
+            walk(c, n.kind === "frame", selectedAncestor || selected);
           }
         };
-        for (const ch of root.children) walk(ch, false, 0, 0);
+        for (const ch of root.children) walk(ch, false);
         frameLabelHit = hitFrame;
       }
     }
     if (frameLabelHit) {
-      const wp = worldPos(snap.pages[snap.page].root, (frameLabelHit as XNode).id);
-      if (wp) {
-        const sx = snap.panX + wp.x * snap.zoom;
-        const sy = snap.panY + wp.y * snap.zoom;
-        // A section's title sits inside its top-left corner; a frame's label
-        // hangs above the frame, so the editor follows the label it replaces.
-        const onSection = (frameLabelHit as XNode).kind === "section";
-        setFrameEdit({ id: (frameLabelHit as XNode).id, name: (frameLabelHit as XNode).name, x: sx, y: onSection ? sy - 1 : sy - 22 });
-        engine.dispatch({ type: "select", ids: [(frameLabelHit as XNode).id] });
-        return;
-      }
+      const frame = frameLabelHit as XNode;
+      const origin = localToWorld(snap.pages[snap.page].root, frame.id, 0, 0);
+      const sx = snap.panX + origin.x * snap.zoom;
+      const sy = snap.panY + origin.y * snap.zoom;
+      // A section's title sits inside its top-left corner; a frame's label
+      // hangs above the frame, so the editor follows the label it replaces.
+      const onSection = frame.kind === "section";
+      setFrameEdit({ id: frame.id, name: frame.name, x: sx, y: onSection ? sy - 1 : sy - 22 });
+      engine.dispatch({ type: "select", ids: [frame.id] });
+      return;
     }
     const root = snap.pages[snap.page].root;
     const hit = canvasClickTarget(root, wpt.x, wpt.y, snap.selection);
@@ -8242,6 +8344,61 @@ function nodeLocalPoint(px: number, py: number, x: number, y: number, n: XNode) 
   };
 }
 
+/**
+ * Snap a gradient endpoint to the layer's own edges and centre. The threshold
+ * stays in screen pixels, so it feels equally magnetic at 25% and 400% zoom.
+ * Shift also constrains the axis between the dragged endpoint and the fixed
+ * endpoint to 45° increments — moving either endpoint can therefore rotate a
+ * linear, angular, radial, or diamond gradient precisely on canvas.
+ */
+function snappedGradientEndpoint(
+  point: { x: number; y: number },
+  fixed: { x: number; y: number },
+  n: XNode,
+  zoom: number,
+  constrainAngle: boolean,
+) {
+  let x = point.x;
+  let y = point.y;
+  if (constrainAngle) {
+    const dx = (x - fixed.x) * n.w;
+    const dy = (y - fixed.y) * n.h;
+    const length = Math.hypot(dx, dy);
+    if (length > 1e-6) {
+      const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+      x = fixed.x + (Math.cos(angle) * length) / Math.max(1, n.w);
+      y = fixed.y + (Math.sin(angle) * length) / Math.max(1, n.h);
+    }
+  }
+  const snap = (v: number, pxPerUnit: number) => {
+    for (const target of [0, 0.5, 1]) if (Math.abs(v - target) * pxPerUnit <= SNAP_PX) return target;
+    return v;
+  };
+  return {
+    x: snap(x, Math.max(1, n.w * zoom)),
+    y: snap(y, Math.max(1, n.h * zoom)),
+  };
+}
+
+/** Position along a gradient's axis, in its normalised 0..1 ramp space. */
+function gradientAxisPosition(
+  point: { x: number; y: number },
+  gradient: { gx: number; gy: number; hx: number; hy: number },
+  n: XNode,
+  zoom: number,
+) {
+  const vx = (gradient.hx - gradient.gx) * n.w;
+  const vy = (gradient.hy - gradient.gy) * n.h;
+  const len2 = vx * vx + vy * vy;
+  if (len2 < 1e-8) return 0;
+  let position = ((point.x - gradient.gx) * n.w * vx + (point.y - gradient.gy) * n.h * vy) / len2;
+  // The three canonical ramp positions are valuable precision targets when
+  // placing a colour stop, exactly as the bounding-box centre is for geometry.
+  const lenPx = Math.sqrt(len2) * zoom;
+  for (const target of [0, 0.5, 1]) if (Math.abs(position - target) * lenPx <= SNAP_PX) position = target;
+  return Math.max(0, Math.min(1, position));
+}
+
 /** Axis-aligned world bounds enclosing every selected node. */
 function selectionBounds(
   root: XNode,
@@ -8285,6 +8442,18 @@ const RESIZE_CURSORS = [
 function resizeCursor(handle: number, rotation = 0): string {
   const step = Math.round(rotation / 45);
   return RESIZE_CURSORS[(((handle + step) % 8) + 8) % 8];
+}
+
+/** Map an unflipped handle index to where it appears after the canvas' local
+ * flip transform. Hit-testing unflips the pointer first, so cursor selection
+ * must put that reflection back before applying the on-screen rotation. */
+function visualHandleIndex(handle: number, flipH = false, flipV = false) {
+  const horizontal = [2, 1, 0, 7, 6, 5, 4, 3];
+  const vertical = [6, 5, 4, 3, 2, 1, 0, 7];
+  let out = handle;
+  if (flipH) out = horizontal[out] ?? out;
+  if (flipV) out = vertical[out] ?? out;
+  return out;
 }
 
 function handles(sx: number, sy: number, sw: number, sh: number): [number, number][] {
