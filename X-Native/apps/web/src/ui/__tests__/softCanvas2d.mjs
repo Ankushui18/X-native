@@ -26,6 +26,17 @@ export const near = (a, b, eps = 0.06) => Math.abs(a - b) <= eps;
  * paths, solid and linear-gradient fills, globalAlpha, source-over and
  * destination-in, and the pixel read-back the non-alpha mask reductions use.
  * Unknown calls are no-ops so text, effects and hit-test paths stay harmless.
+ *
+ * Path points are transformed by the CTM **when they are added to the path**,
+ * per the HTML spec ("the points passed to the methods, and the resulting lines
+ * added to current default path by these methods, must be transformed according
+ * to the current transformation matrix before being added to the path"); a
+ * translate() after the trace therefore cannot move a path. This backend used to
+ * apply the matrix at paint time, which is the opposite, and it hid a real
+ * defect: the drop-shadow painter traces the layer and then translates by the
+ * shadow's offset, so it "worked" here and did nothing in a browser. Shapes
+ * (fillRect, strokeRect, clearRect, drawImage) still transform when they paint,
+ * which the spec says for them too.
  * ------------------------------------------------------------------------- */
 let ctxSeq = 0;
 /** Every context this file hands out, tiles included (tiles are never in the
@@ -273,7 +284,9 @@ function makeContext(el) {
             break;
           case "rect":
           case "roundRect":
-            path.push([args[0], args[1], args[2], args[3]]);
+            // Baked at construction time: this is the spec's rule, and the one
+            // the shadow painter's trace-then-translate depends on.
+            path.push(bbox(target.m, args[0], args[1], args[2], args[3]));
             break;
           case "moveTo":
           case "lineTo":
@@ -283,11 +296,8 @@ function makeContext(el) {
           case "arc":
             break;
           case "fill": {
-            const m = [...target.m];
-            for (const r of path) {
-              const [x0, y0, x1, y1] = bbox(m, r[0], r[1], r[2], r[3]);
-              fill(x0, y0, x1, y1, target.fillStyle);
-            }
+            // `path` already holds device coordinates (see "rect" above).
+            for (const [x0, y0, x1, y1] of path) fill(x0, y0, x1, y1, target.fillStyle);
             if (!path.length) {
               const [x0, y0, x1, y1] = bbox(target.m, 0, 0, bw, bh);
               fill(x0, y0, x1, y1, target.fillStyle);
@@ -302,7 +312,7 @@ function makeContext(el) {
             break;
           case "clip": {
             if (!path.length) break;
-            const [x0, y0, x1, y1] = bbox(target.m, path[0][0], path[0][1], path[0][2], path[0][3]);
+            const [x0, y0, x1, y1] = path[0];
             clip = clip
               ? [Math.max(clip[0], x0), Math.max(clip[1], y0), Math.min(clip[2], x1), Math.min(clip[3], y1)]
               : [x0, y0, x1, y1];
@@ -310,7 +320,7 @@ function makeContext(el) {
               // Both subpaths must survive: a tracer calling beginPath between
               // them would erase the outer rect and turn this back into a
               // regular inside clip. Vector joins remain recording-only.
-              clipHoles.push(bbox(target.m, ...path[1]));
+              clipHoles.push([...path[1]]);
             }
             break;
           }
@@ -431,11 +441,14 @@ function makeContext(el) {
             // Rasterise rectangle stroke bands for pixel-level paint assertions.
             // Other paths still use the recording backend; do not approximate
             // their joins or claim their pixels are covered by this helper.
-            const rects = key === "strokeRect" ? [[...args]] : path;
-            for (const rect of rects) {
-              if (!rect) continue;
-              const [x0, y0, x1, y1] = bbox(target.m, ...rect);
-              const w = target.lineWidth / 2;
+            // strokeRect is a shape - the spec transforms it when it paints -
+            // while `path` was transformed as it was built.
+            const rects = key === "strokeRect" ? [bbox(target.m, args[0], args[1], args[2], args[3])] : path;
+            // "The stroke style is affected by the transformation during
+            // painting": line width is device-space at stroke time.
+            const scale = Math.hypot(target.m[0], target.m[1]) || 1;
+            for (const [x0, y0, x1, y1] of rects) {
+              const w = (target.lineWidth * scale) / 2;
               const b = ensure();
               for (let y = Math.max(0, Math.floor(y0 - w)); y < Math.min(bh, Math.ceil(y1 + w)); y++) {
                 for (let x = Math.max(0, Math.floor(x0 - w)); x < Math.min(bw, Math.ceil(x1 + w)); x++) {

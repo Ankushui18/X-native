@@ -45,7 +45,7 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
+import { dropMaskNeeds, fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, spreadApplies, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
 import { patternSourceNode, setPatternLookup } from "../engine/pattern";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
@@ -527,14 +527,6 @@ export function Canvas({
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, [cropId, placing]);
-  // Layer-blur raster cache: a filtered node repaints identically every pan
-  // frame while the blur dominates paint cost (profiled: 99.7% native in
-  // d-pan), so each eligible leaf's filtered raster is kept offscreen and
-  // blitted until its inputs change. The signature fully determines the
-  // raster, so entries are safe to share across documents; bounded by bytes
-  // with LRU eviction.
-  const blurCache = useRef(new Map<string, { c: HTMLCanvasElement; pad: number; bytes: number }>());
-  const blurCacheBytes = useRef(0);
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
@@ -1309,10 +1301,14 @@ export function Canvas({
     c.height = Math.max(1, Math.floor(h * dpr));
     const mainCtx = c.getContext("2d");
     if (!mainCtx) return;
-    // Swap slot for the blur cache: a cache miss re-enters paint() with ctx
-    // pointed at an offscreen canvas, guarded by cachingBlur.
+    // Swap slot for the offscreen passes below: a mask run, an effects
+    // composite and a source tile all re-enter paint() with ctx pointed at
+    // their own canvas.
     let ctx: CanvasRenderingContext2D = mainCtx;
-    let cachingBlur = false;
+    // Depth guard for the effects composite: the core of an effected layer is
+    // painted by re-entering this same paint with its effect rows stripped, and
+    // that pass must not start a second composite of its own.
+    let fxDepth = 0;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const css = getComputedStyle(document.documentElement);
     // One style resolution per frame buys every canvas chrome role (FR-U2).
@@ -1422,78 +1418,10 @@ export function Canvas({
           ? withPreviewEffect(n.effects ?? [], { ...previewFx, effect: defaultEffect(previewFx.kind) }, n.id)
           : (n.effects ?? []);
       const fxNode = { ...n, effects: [...fxList] };
-      const layerBlur = fxList.find((e) => e.kind === "layer-blur" && e.visible);
-      if (layerBlur) ctx.filter = `blur(${Math.max(0, layerBlur.blur) * z}px)`;
       const sx = snap.panX + x * z;
       const sy = snap.panY + y * z;
       const sw = n.w * z;
       const sh = n.h * z;
-      // Layer-blur raster cache. Eligible only when the node paints purely
-      // from its own fields: leaves (no child recursion to sign), unrotated
-      // (axis-aligned blit), source-over (associative compositing), no
-      // background-blur/glass (reads the live canvas), no image fill and no
-      // text (async loads would bake a half-painted raster). Blitting at
-      // fractional offsets resamples vs direct rasterization (measured max
-      // 7/255, mean 0.6/255 on the blur corpus at 32% zoom — visually
-      // identical); only smooth filtered content is cached, never crisp.
-      const cacheable =
-        !!layerBlur &&
-        !cachingBlur &&
-        !n.children.length &&
-        !n.rotation &&
-        !n.flipH &&
-        !n.flipV &&
-        n.kind !== "text" &&
-        ctx.globalCompositeOperation === "source-over" &&
-        !fxList.some((e) => e.visible && (e.kind === "background-blur" || e.kind === "glass")) &&
-        !(previewFx && previewFx.id === n.id) &&
-        !(n.fillType === "image" || (n.imageSrc && isNone(n.fill)));
-      if (cacheable && layerBlur) {
-        const pad = Math.ceil(Math.max(0, layerBlur.blur) * z * 3) + 2;
-        const sig = `${z.toFixed(4)}|${JSON.stringify(n)}`;
-        let hit = blurCache.current.get(sig);
-        if (hit) {
-          blurCache.current.delete(sig);
-          blurCache.current.set(sig, hit);
-        } else if (sw > 0 && sh > 0 && sw + pad * 2 <= 2048 && sh + pad * 2 <= 2048) {
-          // Miss: rasterize through the exact same paint path into an
-          // offscreen, shifted so screen coords land inside the bitmap.
-          const oc = document.createElement("canvas");
-          oc.width = Math.max(1, Math.floor((sw + pad * 2) * dpr));
-          oc.height = Math.max(1, Math.floor((sh + pad * 2) * dpr));
-          const octx = oc.getContext("2d");
-          if (octx) {
-            octx.setTransform(dpr, 0, 0, dpr, (pad - sx) * dpr, (pad - sy) * dpr);
-            const prev = ctx;
-            ctx = octx;
-            cachingBlur = true;
-            try {
-              paint(n, px, py);
-            } finally {
-              cachingBlur = false;
-              ctx = prev;
-            }
-            hit = { c: oc, pad, bytes: oc.width * oc.height * 4 };
-            blurCache.current.set(sig, hit);
-            blurCacheBytes.current += hit.bytes;
-            while (blurCacheBytes.current > 67108864 && blurCache.current.size > 1) {
-              const oldest = blurCache.current.keys().next();
-              if (oldest.done) break;
-              const ev = blurCache.current.get(oldest.value);
-              blurCache.current.delete(oldest.value);
-              if (ev) blurCacheBytes.current -= ev.bytes;
-            }
-          }
-        }
-        if (hit) {
-          ctx.globalAlpha = parentAlpha;
-          ctx.filter = "none";
-          ctx.drawImage(hit.c, sx - hit.pad, sy - hit.pad, sw + hit.pad * 2, sh + hit.pad * 2);
-          ctx.restore();
-          return;
-        }
-        // No hit and unrasterizable: fall through to the live paint below.
-      }
       const round = () => roundRectPath(ctx, n, sx, sy, sw, sh, z);
       if (n.kind === "boolean" && n.booleanOp && n.children.length) {
         // Every visible drop gets its own pass over the union; the stroke
@@ -1561,6 +1489,35 @@ export function Canvas({
       // path has to be rebuilt) and so the mask-outline overlay traces what the
       // layer actually paints instead of a second, drifting copy of this shape.
       const traceShape = (append = false) => traceNodeShape(ctx, n, sx, sy, sw, sh, z, append);
+      /** Noise and texture sit on top of everything the layer paints - strokes,
+       *  glyphs and children included - in row order, which is also where the
+       *  effect list puts them relative to a layer blur. The clip keeps them
+       *  inside the outline; open paths clip to the stroke's band instead of
+       *  their zero-area trace. */
+      const paintTopFx = (list: Effect[]) => {
+        if (!list.length) return;
+        ctx.save();
+        ctx.beginPath();
+        if (n.kind === "line" || n.kind === "arrow") {
+          const pad = Math.max(1, ((n.strokeWidth || 1) * z) / 2);
+          ctx.rect(sx - pad, sy - pad, sw + pad * 2, sh + pad * 2);
+        } else {
+          traceShape();
+        }
+        ctx.clip();
+        for (const e of list) {
+          if (e.kind === "noise") {
+            ctx.save();
+            const op = canvasBlend(e.blend);
+            if (op !== "source-over") ctx.globalCompositeOperation = op;
+            paintNoise(ctx, sx, sy, sw, sh, e.blur, e.spread, e.color);
+            ctx.restore();
+          } else {
+            paintTexture(ctx, sx, sy, sw, sh, e.blur || 16, e.spread || 4);
+          }
+        }
+        ctx.restore();
+      };
       traceShape();
       if (snap.outlineMode) {
         ctx.save();
@@ -1581,18 +1538,198 @@ export function Canvas({
         ctx.restore();
         return;
       }
-      const bgBlur = fxList.find((e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible);
-      if (bgBlur && sw > 1 && sh > 1) {
+      const paintBackdropBlur = () => {
+        const bgBlur = fxList.find((e) => (e.kind === "background-blur" || e.kind === "glass") && e.visible);
+        if (!bgBlur || sw <= 1 || sh <= 1) return;
         try {
           ctx.save();
           ctx.clip();
           ctx.filter = `blur(${Math.max(0, bgBlur.blur) * z}px)`;
-          ctx.drawImage(c, sx, sy, sw, sh, sx, sy, sw, sh);
+          // The backdrop blur samples the layers behind the selection, so the
+          // source rect is grown by the kernel's reach: reading only the
+          // selection's own box made the backdrop fade out at its edge
+          // instead of pulling in what sits just outside it.
+          const grow = Math.ceil(Math.max(0, bgBlur.blur) * z * 3);
+          ctx.drawImage(c, sx - grow, sy - grow, sw + grow * 2, sh + grow * 2, sx - grow, sy - grow, sw + grow * 2, sh + grow * 2);
           ctx.restore();
         } catch {
           /* tainted canvas */
         }
+      };
+      // ── The effect stack ──────────────────────────────────────────────────
+      // Figma renders a selection's effects as one pipeline (FIGMA_CREATE_
+      // DESIGNS_COMPARISON.md §6): background blur at the bottom, then the drop
+      // shadow, the fills, the inner shadow and the strokes, and on top
+      // "Layer blur, noise, texture (applied in their specified order)".
+      // Two of those steps cannot be expressed by painting the layer's ops
+      // straight onto the canvas with ctx.filter set:
+      //   · the layer blur is applied ONCE to the layer's whole composite. Set
+      //     per draw op it blurs every op against the transparent gap under it
+      //     (two abutting children show the background through their seam) and
+      //     an op carrying its own filter (a shadow with its own blur) replaces
+      //     it for that op's length;
+      //   · a drop shadow is the layer's *rendered alpha*, offset, blurred and
+      //     masked per pixel. A path trace cannot give that for an image fill's
+      //     transparency, for glyphs, for a Boolean result or for a group's
+      //     union of children - and the CTM is baked into a path as its points
+      //     are added, so a translate() after the trace cannot move it either.
+      // So an effected layer is rasterised once - shadow included - and the
+      // blur is applied to that raster, which also lets it reach outside the
+      // layer's own box the way "layer blurs … extend past a selection's
+      // boundary" requires. Layers without those two effects keep the direct
+      // paint path below, op for op.
+      const drops = fxList.filter((e) => e.kind === "drop-shadow" && e.visible && parseHex(e.color).a > 0);
+      const topGroup = fxList.filter(
+        (e) => e.visible && (e.kind === "layer-blur" || e.kind === "noise" || e.kind === "texture"),
+      );
+      const blurAt = topGroup.findIndex((e) => e.kind === "layer-blur");
+      const layerBlur = blurAt < 0 ? undefined : topGroup[blurAt];
+      // Rows listed after the layer blur paint on top of the blurred composite;
+      // a noise row listed before it is blurred with everything under it.
+      const postBlur = blurAt < 0 ? topGroup : topGroup.slice(blurAt + 1);
+      const blurPx = layerBlur ? Math.max(0, layerBlur.blur) * z : 0;
+      const fxReach = drops.reduce(
+        (m2, e) =>
+          Math.max(
+            m2,
+            Math.hypot(e.x, e.y) + Math.abs(e.blur) * 2 + (spreadApplies(n) ? Math.max(0, e.spread) : 0),
+          ),
+        0,
+      );
+      const core =
+        fxDepth === 0 && sw > 0 && sh > 0 && (drops.length > 0 || !!layerBlur)
+          ? effectsTile(ctx, sx, sy, sw, sh, fxReach + blurPx * 3 + 4)
+          : null;
+      if (core) {
+        // Background blur reads the live canvas, so it stays outside the tile;
+        // everything else is the layer's own composite.
+        paintBackdropBlur();
+        const plain = fxList.filter(
+          (e) =>
+            e.kind !== "drop-shadow" &&
+            e.kind !== "layer-blur" &&
+            e.kind !== "noise" &&
+            e.kind !== "texture" &&
+            e.kind !== "background-blur",
+        );
+        const outer = ctx;
+        fxDepth++;
+        try {
+          ctx = core.ctx;
+          paint({ ...n, effects: plain }, px, py, maskTile);
+        } finally {
+          ctx = outer;
+          fxDepth--;
+        }
+        // "Show behind transparent areas" is off by default, and off means the
+        // shadow is not displayed through the layer's transparent areas: its
+        // footprint is the composite's own alpha, thresholded. Rasterised, that
+        // works per pixel - an image's transparency, a glyph's coverage and a
+        // group's union of children included - where the path-based inverse clip
+        // could only approximate it. Known-opaque layers skip it: the shadow
+        // under an opaque fill is covered anyway.
+        const punch =
+          drops.some((e) => e.showBehind !== true) &&
+          (n.children.length > 0 || n.fillType === "image" || !!n.imageSrc || dropMaskNeeds(n))
+            ? (() => {
+                const mask = effectsTile(ctx, sx, sy, sw, sh, fxReach + blurPx * 3 + 4);
+                if (!mask) return null;
+                mask.ctx.setTransform(1, 0, 0, 1, 0, 0);
+                mask.ctx.drawImage(core.c, 0, 0);
+                try {
+                  const img = mask.ctx.getImageData(0, 0, mask.w, mask.h);
+                  const d = img.data;
+                  for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 0 ? 255 : 0;
+                  mask.ctx.putImageData(img, 0, 0);
+                } catch {
+                  return null; // tainted canvas: keep the un-thresholded alpha
+                }
+                return mask;
+              })()
+            : null;
+        /** One drop shadow: the composite's alpha, dilated by spread where Figma
+         *  applies it, blurred and moved in world axes (Figma never rotates an
+         *  effect with its layer), painted in the shadow's own colour and punched
+         *  through with the layer's footprint when "show behind transparent
+         *  areas" is off. */
+        const shadowRaster = (e: Effect) => {
+          const tile = effectsTile(ctx, sx, sy, sw, sh, fxReach + blurPx * 3 + 4);
+          if (!tile) return null;
+          const m = ctx.getTransform();
+          const dev = Math.hypot(m.a, m.b) || 1;
+          const t = tile.ctx;
+          // Device space from here on: the tiles are device rasters, and the
+          // offset is a screen-space translation.
+          t.setTransform(1, 0, 0, 1, 0, 0);
+          const dx = e.x * z * dev;
+          const dy = e.y * z * dev;
+          const spread = (spreadApplies(n) ? Math.max(0, e.spread) : 0) * dev;
+          let silhouette: { c: HTMLCanvasElement } = core;
+          if (spread > 0) {
+            const sil = effectsTile(ctx, sx, sy, sw, sh, fxReach + blurPx * 3 + 4);
+            if (sil) {
+              sil.ctx.setTransform(1, 0, 0, 1, 0, 0);
+              // A ring of draws unions the alpha outwards: the round-join
+              // stroke the direct path used cannot follow an image's alpha.
+              for (let i = 0; i < 16; i++) {
+                const a = (i / 16) * Math.PI * 2;
+                sil.ctx.drawImage(core.c, Math.cos(a) * spread, Math.sin(a) * spread);
+              }
+              sil.ctx.drawImage(core.c, 0, 0);
+              silhouette = sil;
+            }
+          }
+          t.filter = e.blur ? `blur(${Math.max(0, e.blur) * z}px)` : "none";
+          t.drawImage(silhouette.c, dx, dy);
+          t.filter = "none";
+          const { r, g, b, a } = parseHex(e.color);
+          t.globalCompositeOperation = "source-in";
+          t.fillStyle = `rgba(${r},${g},${b},${a})`;
+          t.fillRect(0, 0, tile.w, tile.h);
+          if (e.showBehind !== true) {
+            t.globalCompositeOperation = "destination-out";
+            t.drawImage((punch ?? core).c, 0, 0);
+          }
+          return tile;
+        };
+        const shadows = drops.map(shadowRaster);
+        ctx.save();
+        ctx.globalAlpha = parentAlpha;
+        if (layerBlur) {
+          // The blur is a step of its own: the shadows and the layer composite
+          // first, then one filter over the lot - so the shadow blurs with the
+          // layer and a clipped frame's content blurs past its own box.
+          const comp = effectsTile(ctx, sx, sy, sw, sh, fxReach + blurPx * 3 + 4);
+          if (comp) {
+            comp.ctx.setTransform(1, 0, 0, 1, 0, 0);
+            for (const list of [shadows]) {
+              for (let i = 0; i < list.length; i++) {
+                const op = canvasBlend(drops[i].blend);
+                comp.ctx.globalCompositeOperation = op;
+                comp.ctx.drawImage(list[i]!.c, 0, 0);
+              }
+            }
+            comp.ctx.globalCompositeOperation = "source-over";
+            comp.ctx.drawImage(core.c, 0, 0);
+            blitTile(ctx, comp, `blur(${blurPx}px)`);
+          }
+        } else {
+          for (let i = 0; i < shadows.length; i++) {
+            const op = canvasBlend(drops[i].blend);
+            ctx.globalCompositeOperation = op === "source-over" ? ctx.globalCompositeOperation : op;
+            blitTile(ctx, shadows[i]!);
+          }
+          ctx.globalCompositeOperation = canvasBlend(n.blendMode);
+          blitTile(ctx, core);
+        }
+        ctx.restore();
+        paintTopFx(postBlur);
+        ctx.restore();
+        return;
       }
+      // No tile (too large, or inside a composite): the direct path.
+      if (layerBlur) ctx.filter = `blur(${blurPx}px)`;
+      paintBackdropBlur();
       const canShadow =
         n.kind !== "text" &&
         (!!n.imageSrc ||
@@ -2148,34 +2285,7 @@ export function Canvas({
           strokeMaskOutline(run.mask, run.kids);
         }
       }
-      // Noise and texture sit on top of everything the layer paints -
-      // strokes, glyphs and children included - in row order. The clip keeps
-      // them inside the outline; open paths clip to the stroke's band instead
-      // of their zero-area trace.
-      const topFx = fxList.filter((e) => (e.kind === "noise" || e.kind === "texture") && e.visible);
-      if (topFx.length) {
-        ctx.save();
-        ctx.beginPath();
-        if (n.kind === "line" || n.kind === "arrow") {
-          const pad = Math.max(1, ((n.strokeWidth || 1) * z) / 2);
-          ctx.rect(sx - pad, sy - pad, sw + pad * 2, sh + pad * 2);
-        } else {
-          traceShape();
-        }
-        ctx.clip();
-        for (const e of topFx) {
-          if (e.kind === "noise") {
-            ctx.save();
-            const op = canvasBlend(e.blend);
-            if (op !== "source-over") ctx.globalCompositeOperation = op;
-            paintNoise(ctx, sx, sy, sw, sh, e.blur, e.spread, e.color);
-            ctx.restore();
-          } else {
-            paintTexture(ctx, sx, sy, sw, sh, e.blur || 16, e.spread || 4);
-          }
-        }
-        ctx.restore();
-      }
+      paintTopFx(fxList.filter((e) => (e.kind === "noise" || e.kind === "texture") && e.visible));
       if (!maskTile && snap.showMaskOutlines && n.isMask && n.visible) {
         ctx.save();
         ctx.strokeStyle = MASK;
@@ -7429,6 +7539,70 @@ export function Canvas({
       )}
     </div>
   );
+}
+
+/**
+ * A device-resolution raster tile for the effects composite.
+ *
+ * `box` is the layer's box in the painter's screen coordinates (the space
+ * `traceNodeShape` takes), and `pad` grows the tile in those units so an effect
+ * has room to reach outside the layer. The tile's transform mirrors the live
+ * one, so the painter keeps drawing at absolute screen coordinates and lands
+ * 1:1 in the tile; `blitTile` puts it back without resampling. Returns null when
+ * the tile would be unreasonably large, which sends the caller down the direct
+ * paint path instead.
+ */
+function effectsTile(
+  ctx: CanvasRenderingContext2D,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  pad: number,
+): { c: HTMLCanvasElement; ctx: CanvasRenderingContext2D; x: number; y: number; w: number; h: number } | null {
+  const m = ctx.getTransform();
+  const corners = [
+    [bx, by],
+    [bx + bw, by],
+    [bx, by + bh],
+    [bx + bw, by + bh],
+  ].map(([ux, uy]) => [m.a * ux + m.c * uy + m.e, m.b * ux + m.d * uy + m.f]);
+  // Device pixels per screen unit: the same matrix the paint is running under
+  // (a zoomed-out layer keeps its device footprint, not its nominal one).
+  const dev = Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) || 1;
+  const grow = pad * dev;
+  const x0 = Math.floor(Math.min(...corners.map((c) => c[0])) - grow);
+  const y0 = Math.floor(Math.min(...corners.map((c) => c[1])) - grow);
+  const x1 = Math.ceil(Math.max(...corners.map((c) => c[0])) + grow);
+  const y1 = Math.ceil(Math.max(...corners.map((c) => c[1])) + grow);
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (w < 1 || h < 1 || w > 4096 || h > 4096 || w * h > 16777216) return null;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const t = c.getContext("2d");
+  if (!t) return null;
+  t.setTransform(m.a, m.b, m.c, m.d, m.e - x0, m.f - y0);
+  return { c, ctx: t, x: x0, y: y0, w, h };
+}
+
+/**
+ * Paint a tile back, 1:1 in device space, under the live clip, alpha and blend
+ * mode. `filter` (a canvas filter string) applies to this blit alone, which is
+ * how the layer blur reaches the finished composite instead of every draw op
+ * inside it.
+ */
+function blitTile(
+  ctx: CanvasRenderingContext2D,
+  tile: { c: HTMLCanvasElement; x: number; y: number },
+  filter = "none",
+) {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.filter = filter;
+  ctx.drawImage(tile.c, tile.x, tile.y);
+  ctx.restore();
 }
 
 function paintNoise(
