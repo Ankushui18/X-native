@@ -5,7 +5,12 @@ import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveAllForMode, resolveVariable } from "../engine/variables";
 import { evaluateExpression } from "../engine/expressions";
 import { prefersReducedMotion } from "./a11y";
-import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, previewBoolean, worldToLocal, worldPos } from "../engine/memory";
+import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance, isEffectivelyLocked, isInstanceMember, parentHandedness, previewBoolean, worldDeltaToParent, worldPointToParent, worldToLocal } from "../engine/memory";
+// The canvas reads a layer's placement *including its ancestors' rotation and
+// flips*: the selection box, handles and drag maths must land where the layer
+// is painted, not where it would be if its parent were unrotated. The engine's
+// own `worldPos` stays translation-only (it is a reparenting offset there).
+import { worldPlacement as worldPos } from "../engine/memory";
 import { pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork } from "./pointBox";
 import { layersAt } from "./selectSame";
 import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit } from "./canvasSelection";
@@ -3098,7 +3103,7 @@ export function Canvas({
       // Dynamic rotation angle readout badge when rotating
       const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
       const dim = isRotating
-        ? `${Math.round(wp.node.rotation ?? 0)}°`
+        ? `${Math.round(find(root, wp.node.id)?.rotation ?? 0)}°`
         : lockedSel
           ? "Locked"
           : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
@@ -4855,12 +4860,26 @@ export function Canvas({
         const cy = sy + (nb.h * z) / 2;
         // Frames rotate only from the detached top-center handle; their
         // corners remain resize-only. Other layer kinds keep corner rotation.
-        if (!vecEdit && rotationHandleHit(wp.node.kind, px, py, sx, sy, nb.w * z, nb.h * z)) {
+        // A resize handle always outranks the rotation ring: on a layer with a
+        // side under ~44px the edge-midpoint handle sits inside the 8-22px
+        // corner ring, and the hover cursor (which tests resize last) already
+        // promises a resize there - the press must agree with it.
+        const onResizeHandle =
+          !vecEdit &&
+          hs.some(([hx, hy], i) => {
+            if ((wp.node.kind === "line" || wp.node.kind === "arrow") && i !== 3 && i !== 7) return false;
+            if (wp.node.kind === "text" && wp.node.sizingW === "hug" && wp.node.sizingH === "hug" && i % 2 === 0) return false;
+            return Math.hypot(px - hx, py - hy) < 8;
+          });
+        if (!vecEdit && !onResizeHandle && rotationHandleHit(wp.node.kind, px, py, sx, sy, nb.w * z, nb.h * z)) {
           if (isEffectivelyLocked(root, wp.node.id)) {
             toast("Locked · ⇧⌘L to unlock");
             return;
           }
           const startAngle = Math.atan2(rawY - cy, rawX - cx);
+          // `wp.node.rotation` is the on-page total (ancestors included); the
+          // patch below writes the layer's own value, so start from that.
+          const ownRotation = find(root, wp.node.id)?.rotation || 0;
           engine.dispatch({ type: "begin" });
           drag.current = {
             mode: "rotate",
@@ -4868,11 +4887,11 @@ export function Canvas({
             sy: e.clientY,
             wx: wpt.x,
             wy: wpt.y,
-            orig: { x: nb.x, y: nb.y, w: nb.w, h: nb.h, rotation: wp.node.rotation || 0 },
+            orig: { x: nb.x, y: nb.y, w: nb.w, h: nb.h, rotation: ownRotation },
             origLocal: { x: wp.node.x, y: wp.node.y },
             id: wp.node.id,
             startAngle,
-            origRotation: wp.node.rotation || 0,
+            origRotation: ownRotation,
             cx,
             cy,
           };
@@ -4900,7 +4919,7 @@ export function Canvas({
               sy: e.clientY,
               wx: wpt.x,
               wy: wpt.y,
-              orig: { x: wp.node.x, y: wp.node.y, w: wp.node.w, h: wp.node.h, rotation: wp.node.rotation },
+              orig: { x: wp.node.x, y: wp.node.y, w: wp.node.w, h: wp.node.h, rotation: find(root, wp.node.id)?.rotation ?? 0 },
               corner: i,
               id: wp.node.id,
             };
@@ -5328,7 +5347,7 @@ export function Canvas({
           setGuides([]);
           setGapBadges([]);
         }
-        engine.dispatch({ type: "move", ids: sel, dx, dy });
+        engine.dispatch({ type: "move", ids: sel, dx, dy, world: true });
         d.sx = e.clientX;
         d.sy = e.clientY;
       }
@@ -5473,12 +5492,26 @@ export function Canvas({
       }
       setBand({ x, y, w, h });
     } else if (d.mode === "resize" && d.orig && d.id != null && d.corner != null) {
-      const raw = toWorld(e.clientX, e.clientY);
-      const current = worldPos(snap.pages[snap.page].root, d.id);
-      const node = current?.node;
-      const shape = node ? { ...node, x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h } : null;
+      const rootNow = snap.pages[snap.page].root;
+      const pagePt = toWorld(e.clientX, e.clientY);
+      const current = worldPos(rootNow, d.id);
+      // `d.orig` is the layer's own box in its parent's coordinates (what
+      // `resize` writes back), so the pointer has to be brought into that same
+      // space first: a child of an offset or rotated frame otherwise measures
+      // the drag against the page origin and jumps by the parent's offset.
+      const raw = worldPointToParent(rootNow, d.id, pagePt.x, pagePt.y);
+      const own = find(rootNow, d.id);
+      const shape = own ? { ...own, x: d.orig.x, y: d.orig.y, w: d.orig.w, h: d.orig.h } : null;
       const local = shape ? nodeLocalPoint(raw.x, raw.y, d.orig.x, d.orig.y, shape) : { x: raw.x - d.orig.x, y: raw.y - d.orig.y };
       const b = shape ? { x: d.orig.x + local.x, y: d.orig.y + local.y } : raw;
+      const node = own;
+      // Page-axis snapping only makes sense while the parent's axes are the
+      // page's; under a rotated/flipped ancestry the edges being dragged are
+      // not page-aligned and a snap would shear the box.
+      const parentUpright = (() => {
+        const pm = worldDeltaToParent(rootNow, d.id, 1, 0);
+        return pm.dx === 1 && pm.dy === 0;
+      })();
       // Two escape hatches on this drag: the Scale tool always
       // holds the ratio, and Control releases a ratio that is locked on the layer.
       const forcing = snap.tool === "scale" || !!node?.aspectLocked;
@@ -5489,7 +5522,7 @@ export function Canvas({
       });
       // Snap the edges the handle is actually moving (skipped while aspect is
       // locked, since a snap would break the ratio, and on ⌘/Ctrl).
-      if (!lock && !e.altKey && !e.metaKey && !e.ctrlKey && current) {
+      if (!lock && !e.altKey && !e.metaKey && !e.ctrlKey && current && parentUpright) {
         const worldBox = {
           id: d.id,
           x: current.x + (next.x - node!.x),
@@ -5661,7 +5694,10 @@ export function Canvas({
       const cx = d.cx ?? (snap.panX + (wp.x + wp.node.w / 2) * z);
       const cy = d.cy ?? (snap.panY + (wp.y + wp.node.h / 2) * z);
       const curAngle = Math.atan2(rawY - cy, rawX - cx);
-      let deltaDeg = ((curAngle - (d.startAngle ?? 0)) * 180) / Math.PI;
+      const rootNow = snap.pages[snap.page].root;
+      // Inside a flipped ancestor the screen turns the other way from the
+      // layer's own angle.
+      let deltaDeg = (((curAngle - (d.startAngle ?? 0)) * 180) / Math.PI) * parentHandedness(rootNow, d.id);
       let nextRot = (d.origRotation ?? d.orig.rotation ?? 0) + deltaDeg;
       if (e.shiftKey) nextRot = Math.round(nextRot / 15) * 15;
       else nextRot = Math.round(nextRot * 10) / 10;
@@ -5674,12 +5710,15 @@ export function Canvas({
         wp.node.rotOrigin ?? [0.5, 0.5],
         Math.round(nextRot),
       );
+      // The pivot slide is measured on the page; the layer stores its offset
+      // in its parent's axes.
+      const slide = worldDeltaToParent(rootNow, d.id, next.x - d.orig.x, next.y - d.orig.y);
       engine.dispatch({
         type: "patch",
         id: d.id,
         patch: {
-          x: (d.origLocal?.x ?? wp.node.x) + (next.x - d.orig.x),
-          y: (d.origLocal?.y ?? wp.node.y) + (next.y - d.orig.y),
+          x: (d.origLocal?.x ?? wp.node.x) + slide.dx,
+          y: (d.origLocal?.y ?? wp.node.y) + slide.dy,
           rotation: next.rotation,
         },
       });

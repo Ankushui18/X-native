@@ -2487,8 +2487,9 @@ export class MemoryEngine implements Engine {
         for (const id of transformRoots(this.root(), cmd.ids)) {
           const n = find(this.root(), id);
           if (n && !isEffectivelyLocked(this.root(), id) && !isInstanceMember(this.root(), id)) {
-            n.x += cmd.dx;
-            n.y += cmd.dy;
+            const d = cmd.world ? worldDeltaToParent(this.root(), id, cmd.dx, cmd.dy) : { dx: cmd.dx, dy: cmd.dy };
+            n.x += d.dx;
+            n.y += d.dy;
             if (snapOn(this.state, s.page)) {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
@@ -5471,6 +5472,95 @@ function worldMatrix(root: XNode, id: string): Matrix | null {
   };
   visit(root, IDENTITY);
   return result;
+}
+
+/** The accumulated transform of a layer's ancestors: identity for a top-level
+ *  layer or one whose ancestors are all unrotated and unflipped. */
+export function parentWorldMatrix(root: XNode, id: string): Matrix {
+  const parent = findParent(root, id);
+  if (!parent || parent === root) return IDENTITY;
+  return worldMatrix(root, parent.id) ?? IDENTITY;
+}
+
+const isTranslation = (m: Matrix) => m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1;
+
+/** Map a page-space delta (a pointer drag) into a layer's parent-local axes:
+ *  inside a 90° frame, dragging right on screen moves the child along its
+ *  parent's y axis. Identity ancestry returns the delta unchanged. */
+export function worldDeltaToParent(root: XNode, id: string, dx: number, dy: number) {
+  const m = parentWorldMatrix(root, id);
+  if (isTranslation(m)) return { dx, dy };
+  const inv = inverse(m) ?? IDENTITY;
+  return { dx: inv.a * dx + inv.c * dy, dy: inv.b * dx + inv.d * dy };
+}
+
+/** Map a page-space point into a layer's parent-local coordinate system, the
+ *  space `n.x`/`n.y`/`n.w`/`n.h` are expressed in. */
+export function worldPointToParent(root: XNode, id: string, x: number, y: number) {
+  const m = parentWorldMatrix(root, id);
+  if (isTranslation(m)) return { x: x - m.e, y: y - m.f };
+  return applyMatrix(inverse(m) ?? IDENTITY, x, y);
+}
+
+/** +1 for an ancestry that preserves handedness, -1 when an ancestor flip
+ *  mirrors it: a clockwise screen rotation then decreases the layer's own
+ *  rotation. */
+export function parentHandedness(root: XNode, id: string): 1 | -1 {
+  const m = parentWorldMatrix(root, id);
+  return m.a * m.d - m.b * m.c < 0 ? -1 : 1;
+}
+
+/**
+ * Where a layer sits on the page, including every ancestor's rotation and
+ * flip: the canvas' selection chrome, handle hit-testing and drag maths.
+ *
+ * Every transform in the tree is rigid (rotate / flip about the box centre,
+ * then translate), so the composite of a rotated ancestry and the layer's own
+ * rotation is itself "an unrotated `w`×`h` box at some page position, turned
+ * by some total angle about its centre". That is exactly what `worldPos`
+ * callers already assume of `{x, y, node.rotation}`, so consumers that only
+ * read geometry keep working unchanged.
+ *
+ * When the ancestry is a plain translation this returns `worldPos` verbatim
+ * (the real node, same numbers). Otherwise `node` is a shallow copy carrying
+ * the *total* rotation / flip — never write those back to the document; read
+ * the layer's own values with `find` for that. `worldPos` itself stays
+ * translation-only because the engine's reparenting paths use it as a
+ * parent-offset, not as a placement.
+ */
+export function worldPlacement(root: XNode, id: string): { x: number; y: number; node: XNode } | null {
+  const wp = worldPos(root, id);
+  if (!wp) return null;
+  const pm = parentWorldMatrix(root, id);
+  if (isTranslation(pm)) return wp;
+  const n = wp.node;
+  const m = multiply(pm, nodeMatrix(n));
+  const c = applyMatrix(m, n.w / 2, n.h / 2);
+  const det = pm.a * pm.d - pm.b * pm.c;
+  let rotation: number;
+  let flipH = n.flipH;
+  let flipV = n.flipV;
+  if (det > 0) {
+    // Rotation-only ancestry: angles add and the layer's own flips survive.
+    rotation = n.rotation + (Math.atan2(pm.b, pm.a) * 180) / Math.PI;
+  } else {
+    // A mirrored ancestry: normalise the composite to rotate(θ)·flipH, the
+    // form `nodeMatrix` builds (a = cos·sH, b = sin·sH, c = -sin·sV, d = cos·sV).
+    const mdet = m.a * m.d - m.b * m.c;
+    if (mdet < 0) {
+      rotation = (Math.atan2(-m.c, m.d) * 180) / Math.PI;
+      flipH = true;
+      flipV = false;
+    } else {
+      rotation = (Math.atan2(m.b, m.a) * 180) / Math.PI;
+      flipH = false;
+      flipV = false;
+    }
+  }
+  while (rotation > 180) rotation -= 360;
+  while (rotation <= -180) rotation += 360;
+  rotation = Math.round(rotation * 1e6) / 1e6;
+  return { x: c.x - n.w / 2, y: c.y - n.h / 2, node: { ...n, rotation, flipH, flipV } };
 }
 
 /**

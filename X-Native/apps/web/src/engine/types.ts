@@ -1149,7 +1149,10 @@ export type Command =
       parent?: string;
       extra?: Partial<XNode>;
     }
-  | { type: "move"; ids: string[]; dx: number; dy: number }
+  /** `world`: the delta is measured on the page (a pointer drag); the engine
+   *  turns it into each layer's parent-local axes, so a child of a rotated or
+   *  flipped frame follows the cursor. Without it the delta is parent-local. */
+  | { type: "move"; ids: string[]; dx: number; dy: number; world?: boolean }
   | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean; ignoreConstraints?: boolean }
   | {
       type: "reparent";
