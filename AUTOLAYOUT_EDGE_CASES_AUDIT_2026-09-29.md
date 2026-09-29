@@ -3,10 +3,11 @@
 **Run**: pipeline run 11, 2026-09-29 · **Scope**: `apps/web/src/engine/layout.ts`,
 `apps/web/src/engine/memory.ts` — absolute positioning inside an auto-layout frame, and
 min/max constraints on Fill children.
-**Status**: **measured, not fixed.** The pipeline gate for this run is report-first;
-nothing in `layout.ts` / `memory.ts` has been touched.
-**Suite**: `npm test` green before and after writing the instrument — exit 0, **50 summary
-files, 3,018 assertions, 0 failing** (`/tmp/prefix-suite.log`), `tsc -b` clean.
+**Status**: **measured, then fixed and verified.** The report above is the pre-fix
+measurement (§3, unchanged); §6 records what shipped, with the sabotage results.
+**Suite**: `npm test` green before, during and after the fix — the final run, with this
+run's 43 assertions wired in, is **exit 0 · 51 files · 3,061 assertions · 0 failing**;
+`tsc -b` clean.
 
 Instrument: `apps/web/tests/probes/autolayout/edgeCases.mjs`
 (`npx vite-node tests/probes/autolayout/edgeCases.mjs`, run from `apps/web`) — **25
@@ -202,3 +203,87 @@ DIFF 1i  auto gap Between with a Fill child capped at 120       B at x=120, righ
  ok  3a  [Fill(maxW 180), fixed 40, absolute pinned] in 400×200  A 180 · B x=200 · C (350,150)
 4 deviation group(s) measured
 ```
+
+
+---
+
+## 6 · What shipped (step 5, approved 2026-09-29)
+
+### The logic
+
+`apps/web/src/engine/memory.ts`, in the linear-flow branch of `computeAutoLayout`. The
+"share once, then clamp" line is gone; the fillers now run the CSS flexbox loop:
+
+```
+leftover  = inner − (non-filler sizes) − gaps          // as before
+insets[i] = contentInset(child, mainAxis)              // border-box model, unchanged
+active    = every filler, free = leftover
+repeat up to MAX_REDISTRIBUTION_ITERATIONS:
+    share = (free − Σ active insets) / active.length
+    for each active child:
+        bid  = max(1, share + inset)
+        size = bid clamped to the child's own min/max on this axis
+        if size ≠ bid:  freeze it - free -= size      // its space leaves the pool
+        else:           it stays active for the next pass
+    if nothing clamped this pass: the sizes are final
+any child the cap left unassigned: even share of what is left
+then every filler is applied through fillPatch + clampDims, as before
+```
+
+Three new internals carry it: `MAX_REDISTRIBUTION_ITERATIONS = 10`, `mainLimit(n, horiz)`
+and `mainFloor(n, horiz)` (the last two keep `clampDims` the one place a *node* is clamped;
+the loop only decides *space*). Because each pass freezes every child that clamps, the loop
+settles in at most one pass per filler; the cap only guards a pathological document, and a
+pass that would exceed it still clamps - it just stops redistributing.
+
+The second half is one line in the same function: the auto gap's `slack` is now
+`hugMain ? 0 : max(0, inner − contentMain)` instead of `hugMain || fillers.length ? 0 : …`.
+A frame whose fillers consume the row still reports zero slack (they took it); a frame whose
+fillers *all* clamped now hands the residual to the gap, which is where the measured 1i
+case wanted it. `hugMain` is false whenever a filler exists (`effectiveSizing`), so nothing
+else moved.
+
+**Scope held:** `layout.ts` untouched, no new command, no model field, no Rust/WASM surface.
+`clampDims`, `contentInset`, `fillPatch`, the cross-axis fill pass, the grid branch, hug
+sizing and the absolute-position paths are all unchanged.
+
+### Measured after the fix (probe: 25 checks, **0 deviation groups**)
+
+| Probe | Before | After |
+| --- | --- | --- |
+| 1d — 500 frame, A `maxW 120` + B | A 120 + B 250 = **370 of 500** | A 120 + B 380 = **500 of 500** |
+| 1g — 300 frame, `minW 80` + `minW 160` | A 150 + B 160 = **310 of 300** (overflow) | A 140 + B 160 = **300 of 300** |
+| 1h — 500 frame, A padded `maxW 150` + B | A 150 + B 250 = **400 of 500** | A 150 + B 350 = **500 of 500** |
+| 1i — auto gap Between, A `maxW 120` + B fixed | B at **x=120**, edge 180 of 500 | gap 320, B at **x=440**, edge 500 |
+
+Unchanged where they already matched: 1a **180 → 180** on a 200 → 300 parent (the brief's
+own case), 1a′ **150** on a shrink to 100, 1b **160**, 1c **190**, 1e **200** (a min larger
+than the frame still overflows), 1f hug stays **100**, 1j **250**, 1l 300/100/200, 1m
+centred 160/280, all 11 absolute-position measurements, and 3a.
+
+### Sabotage (each run, then restored)
+
+| Sabotage | Result |
+| --- | --- |
+| Restore the pre-fix equal share (no freeze/redistribute) | **8 FAIL** — A2, A3, A6, A7, A8, A8b, A10, A14 (all the "the row adds up" assertions) |
+| Restore the auto-gap suppression (`\|\| fillers.length`) | **1 FAIL** — A16 (the released space becomes the gap) |
+| Drop the min/max clamp inside the loop | **8 FAIL** — the same eight, because nothing freezes and the share is never re-offered |
+
+Restored: `autoLayoutEdgeCases.test.mjs` **43 passed**, probe **25 ok / 0 deviation groups**,
+`tsc -b` clean, whole suite **exit 0 · 51 files · 3,061 assertions · 0 failing** (the
+pre-fix baseline was 50 files / 3,018 — identical with the fix, plus this file's 43).
+
+### Tests
+
+`apps/web/src/engine/__tests__/autoLayoutEdgeCases.test.mjs` (43 assertions, wired into
+`npm test` right after `autolayout.test.mjs`). **Test A · Fill min/max redistribution**
+(A1–A19): the brief's 300px case, the min-clamp pair, three fillers with one cap, the padded
+cap, a lone capped filler, a vertical flow, the auto gap taking the residual, the uncapped
+and no-filler controls, and a min larger than the frame. **Test B · ignoring auto layout**
+(B1–B19): no flow slot, the three pins, `stretch` + max, the hug rule, a toggle, grid cells,
+and the combined fill + fixed sibling + pinned child frame.
+
+Residual: the redistribution loop is main-axis only and is not mirrored in the Rust pass
+(`crates/x-core/src/auto_layout.rs`), which was out of scope for this run just as it was for
+pipeline run 2; a document that resizes through the native path keeps the equal-share
+semantics.
