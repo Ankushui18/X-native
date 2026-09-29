@@ -208,6 +208,7 @@ export function node(
     textAlignVertical: "top",
     textWrap: "auto",
     listStyle: "none",
+    listSpacing: 0,
     paragraphIndent: 0,
     textDecoration: "none",
     textCase: "none",

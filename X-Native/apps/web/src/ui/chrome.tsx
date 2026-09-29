@@ -2635,6 +2635,55 @@ export function bindHotkeys(
       }
       return;
     }
+    // ⌘⇧8 / ⌘⇧7 (360040449773's Tip): "turn an individual text selection or
+    // multiple text layers into a bulleted list" / a numbered one. A chord
+    // applies the style; ⌘Z right after takes the default styling back.
+    if (meta && e.shiftKey && (e.code === "Digit8" || e.code === "Digit7")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      const listStyle = e.code === "Digit8" ? "bulleted" : "numbered";
+      let touched = false;
+      for (const id of engine.snapshot().selection) {
+        const n = find(root, id);
+        if (n && n.kind === "text") {
+          e.preventDefault();
+          touched = true;
+          engine.dispatch({ type: "patch", id, patch: { listStyle } });
+          rehugText(engine, id, { listStyle });
+        }
+      }
+      if (touched) return;
+    }
+    // ⇧⌘U (360045942953): the link input box above the selected text.
+    if (meta && e.shiftKey && (e.code === "KeyU" || e.key.toLowerCase() === "u")) {
+      const root = engine.snapshot().pages[engine.snapshot().page].root;
+      const id = engine.snapshot().selection[0];
+      const n = id ? find(root, id) : null;
+      if (n && n.kind === "text") {
+        e.preventDefault();
+        let x = n.x, y = n.y, cur: XNode | null = n, par = findParent(root, n.id);
+        while (par && par !== root) {
+          x += par.x;
+          y += par.y;
+          cur = par;
+          par = findParent(root, par.id);
+        }
+        if (cur && par === root) {
+          x += par.x;
+          y += par.y;
+        }
+        const st = engine.snapshot();
+        window.dispatchEvent(
+          new CustomEvent("x-native:link-input", {
+            detail: {
+              left: st.panX + x * st.zoom,
+              top: st.panY + y * st.zoom - 40,
+              id: n.id,
+            },
+          }),
+        );
+        return;
+      }
+    }
     if ((meta && e.key === "0") || (!meta && e.shiftKey && e.code === "Digit0")) {
       e.preventDefault();
       zoomAboutCentre(engine, 1);

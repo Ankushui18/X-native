@@ -1,6 +1,6 @@
 import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Effect, Engine, Interaction, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
+import type { Effect, Engine, Interaction, ListStyle, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveAllForMode, resolveVariable } from "../engine/variables";
 import { evaluateExpression } from "../engine/expressions";
@@ -59,8 +59,8 @@ import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { hasMixedTextSpans, styledTextRows, truncateStyledRows } from "./textLayout";
-import { rememberTextRange, resolvedTextSpans, spansAfterTextEdit } from "./textSpans";
-import { applyTextCase, canvasTextFont, fitLineCount, hugSize, indentOf, invalidateTextMeasureCache, listGutter, listMarker, measureCached, textMetrics, valignApplies, wrapLines } from "./textLayout";
+import { rememberTextRange, resolvedTextSpans, spansAfterTextEdit, styleTextRange } from "./textSpans";
+import { applyTextCase, canvasTextFont, effectiveLineHeight, fitLineCount, hugSize, indentOf, invalidateTextMeasureCache, listCounters, listGutter, listLayout, listLevelOf, measureCached, paraListStyle, paraWrapOf, textMetrics, valignApplies, wrapLines } from "./textLayout";
 import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import type { ImportedNode } from "../engine/svgImport";
@@ -529,7 +529,10 @@ export function Canvas({
   }, [cropId, placing]);
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
-  const [edit, setEdit] = useState<{ id: string; text: string } | null>(null);
+  const [edit, setEdit] = useState<{ id: string; text: string; also?: string[] } | null>(null);
+  /** A URL pasted in place becomes a linked range (360045942953), committed
+   *  with the edit on blur so the runs keep their text offsets. */
+  const linkMarkRef = useRef<{ start: number; end: number; url: string } | null>(null);
   const [frameEdit, setFrameEdit] = useState<{ id: string; name: string; x: number; y: number } | null>(null);
   const [draftComment, setDraftComment] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; wx: number; wy: number } | null>(null);
@@ -595,6 +598,17 @@ export function Canvas({
     opp: boolean;
     all: boolean;
   } | null>(null);
+  /** Links (360045942953): the "Create link" input box above the selection. */
+  const [linkInput, setLinkInput] = useState<{ left: number; top: number; id: string; start?: number; end?: number } | null>(null);
+  const [linkHover, setLinkHover] = useState<{ left: number; top: number; url: string } | null>(null);
+  useEffect(() => {
+    const open = (ev: Event) => {
+      const d = (ev as CustomEvent).detail;
+      if (d) setLinkInput({ left: d.left, top: d.top, id: d.id, start: d.start, end: d.end });
+    };
+    window.addEventListener("x-native:link-input", open);
+    return () => window.removeEventListener("x-native:link-input", open);
+  }, []);
   /** Viewport size, tracked so the ruler overlay can size its own canvas. */
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [fontRevision, setFontRevision] = useState(0);
@@ -998,7 +1012,16 @@ export function Canvas({
           // deliver the Return to the new textarea as well - typing a line break
           // at the top of the copy before a character was entered.
           e.preventDefault();
-          setEdit({ id: n.id, text: n.text });
+          // Multi-edit text (360039956434): "Select the text layers you want to
+          // update … Edit the contents. Any changes you make will apply to all
+          // text layers you have selected." Layers with different content open
+          // empty; identical content is shown for editing.
+          const texts = snap.selection
+            .map((sid) => worldPos(root, sid)?.node)
+            .filter((x): x is XNode => !!x && x.kind === "text");
+          const shared = texts.length > 1 && texts.every((x) => x.text === texts[0].text) ? texts[0].text : texts.length > 1 ? "" : n.text;
+          const also = texts.length > 1 ? texts.slice(1).map((x) => x.id) : undefined;
+          setEdit({ id: n.id, text: shared, also });
         }
         else if (
           n &&
@@ -7002,11 +7025,21 @@ export function Canvas({
       height: textH * snap.zoom,
       fontSize: wp.node.fontSize * snap.zoom,
       fontWeight: wp.node.fontWeight,
-      lineHeight: `${(wp.node.lineHeight || wp.node.fontSize * 1.2) * snap.zoom}px`,
+      lineHeight: `${effectiveLineHeight(wp.node) * snap.zoom}px`,
       letterSpacing: `${wp.node.letterSpacing * snap.zoom}px`,
       textAlign: wp.node.textAlign === "justified" ? "left" : wp.node.textAlign,
       color: wp.node.fill,
       fontFamily: wp.node.fontFamily,
+      // Numbers (360039956634 §Numbers): the browser applies the same font
+      // features to the live editor that SVG export and Dev Mode emit.
+      fontVariantNumeric: [
+        wp.node.slashedZero ? "slashed-zero" : "",
+        wp.node.fractions ? "diagonal-fractions" : "",
+        wp.node.figureStyle === "proportional-oldstyle" ? "oldstyle-nums proportional-nums"
+          : wp.node.figureStyle === "monospace-lining" ? "lining-nums tabular-nums"
+          : wp.node.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
+          : wp.node.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
+      ].filter(Boolean).join(" ") || undefined,
       transform: wp.node.rotation ? `rotate(${wp.node.rotation}deg)` : undefined,
       transformOrigin: "center center",
       // The overlay is a real textarea, so the wrap style is handed to the
@@ -7027,8 +7060,30 @@ export function Canvas({
       className="canvas-wrap"
       ref={wrap}
       style={{ cursor }}
+      onClick={(e) => {
+        // Links (360045942953 §Interact with links): clicking linked text
+        // follows the link; "hold ⌘/Ctrl while clicking" just selects.
+        if (e.metaKey || e.ctrlKey || e.shiftKey || snap.presentFrame || edit || snap.tool !== "select") return;
+        const wpt = toWorld(e.clientX, e.clientY);
+        const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
+        const url = hit && hit.kind === "text" ? hit.link : undefined;
+        if (url) {
+          e.preventDefault();
+          window.open(url, "_blank", "noopener");
+        }
+      }}
+      onMouseMove={(e) => {
+        onMove(e);
+        // Hover previews the URL (§Interact: "hover over the linked text").
+        const wpt = toWorld(e.clientX, e.clientY);
+        const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
+        const url = hit && hit.kind === "text" ? hit.link : undefined;
+        const r = wrap.current?.getBoundingClientRect();
+        if (url) {
+          setLinkHover({ left: e.clientX - (r?.left ?? 0) + 12, top: e.clientY - (r?.top ?? 0) + 18, url });
+        } else if (linkHover) setLinkHover(null);
+      }}
       onMouseDown={onDown}
-      onMouseMove={onMove}
       onMouseUp={onUp}
       onMouseLeave={onLeave}
       onDoubleClick={onDbl}
@@ -7144,6 +7199,21 @@ export function Canvas({
           }}
           onKeyUp={(e) => captureRange(e.currentTarget, edit.id)}
           onMouseUp={(e) => captureRange(e.currentTarget, edit.id)}
+          onPaste={(e) => {
+            // Links (360045942953 §Use paste in place): a pasted URL becomes a
+            // linked range; ⇧ paste (and the ⌘⇧V chord's plain variant) keeps
+            // it as text. "Paste the shortcut twice - once to paste it as
+            // text, and once more to turn it into a link" falls out of this.
+            const t = e.clipboardData?.getData("text/plain") ?? "";
+            if (!/^https?:\/\/\S+$/i.test(t.trim()) || (e.nativeEvent as unknown as { shiftKey?: boolean }).shiftKey) return;
+            e.preventDefault();
+            const el = e.currentTarget;
+            const s = el.selectionStart ?? 0;
+            const en = el.selectionEnd ?? s;
+            setEdit({ ...edit, text: edit.text.slice(0, s) + t + edit.text.slice(en) });
+            linkMarkRef.current = { start: s, end: s + t.length, url: t.trim() };
+            setTimeout(() => el.setSelectionRange(s + t.length, s + t.length), 0);
+          }}
           onChange={(e) => {
             rememberTextRange(engine, null);
             capturedRange.current = null;
@@ -7158,10 +7228,31 @@ export function Canvas({
               rememberTextRange(engine, capturedRange.current);
             const n = worldPos(snap.pages[snap.page].root, edit.id)?.node;
             const patch: Partial<XNode> = { text: edit.text };
-            if (n && edit.text !== n.text) patch.textRuns = spansAfterTextEdit(n, edit.text);
+            let runs = n && edit.text !== n.text ? spansAfterTextEdit(n, edit.text) : undefined;
+            // A URL pasted in place (360045942953) lands as a linked run,
+            // underlined by default like Figma's links.
+            const lm = linkMarkRef.current;
+            if (n && lm) {
+              const base = { ...n, text: edit.text, textRuns: runs ?? n.textRuns ?? [] } as XNode;
+              runs = styleTextRange(base, lm.start, lm.end, {
+                link: lm.url,
+                ...(base.textDecoration === "none" ? { textDecoration: "underline" as const } : {}),
+              });
+            }
+            linkMarkRef.current = null;
+            if (runs) patch.textRuns = runs;
             if (n && (n.sizingW === "hug" || n.sizingH === "hug"))
               Object.assign(patch, hugSize({ ...n, ...patch } as XNode, edit.text));
             engine.dispatch({ type: "patch", id: edit.id, patch });
+            // Multi-edit: the same contents reach every selected text layer.
+            for (const id of edit.also ?? []) {
+              const ann = worldPos(snap.pages[snap.page].root, id)?.node;
+              if (!ann) continue;
+              const p2: Partial<XNode> = { text: edit.text };
+              if (ann.sizingW === "hug" || ann.sizingH === "hug")
+                Object.assign(p2, hugSize({ ...ann, ...p2 } as XNode, edit.text));
+              engine.dispatch({ type: "patch", id, patch: p2 });
+            }
             const sw = editSwitch.current;
             editSwitch.current = null;
             const nn = sw ? worldPos(snap.pages[snap.page].root, sw)?.node : null;
@@ -7174,6 +7265,126 @@ export function Canvas({
           onKeyDown={(e) => {
             if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter"))
               (e.target as HTMLTextAreaElement).blur();
+            // ⇧⌘U (360045942953): the link input box above the selection.
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === "KeyU") {
+              e.preventDefault();
+              const el = e.target as HTMLTextAreaElement;
+              const s = el.selectionStart ?? 0;
+              const en = el.selectionEnd ?? s;
+              window.dispatchEvent(new CustomEvent("x-native:link-input", {
+                detail: {
+                  left: parseFloat(el.style.left) || 0,
+                  top: (parseFloat(el.style.top) || 0) - 40,
+                  id: edit.id,
+                  start: s,
+                  end: en,
+                },
+              }));
+              return;
+            }
+            // List editing (360040449773): the paragraph under the caret owns
+            // its counter and its level; patches ride the normal undo stack.
+            const el = e.target as HTMLTextAreaElement;
+            const caret = el.selectionStart ?? 0;
+            const textNow = edit.text;
+            const paraIndex = (at: number) => textNow.slice(0, at).split("\n").length - 1;
+            const patchParas = (patch: Partial<XNode>) =>
+              engine.dispatch({ type: "patch", id: edit.id, patch });
+            const nodeNow = worldPos(snap.pages[snap.page].root, edit.id)?.node;
+            const pi = paraIndex(caret);
+            // Creation characters: "- " or "* " bulleted, "1. " or "1) "
+            // numbered (§Create a bulleted/numbered list) - the trigger text
+            // is consumed and the paragraph takes the counter.
+            if (e.key === " " && !e.metaKey && !e.ctrlKey && nodeNow) {
+              const before = textNow.slice(0, caret);
+              const paraStart = before.lastIndexOf("\n") + 1;
+              const typed = before.slice(paraStart);
+              const kind = typed === "-" || typed === "*" ? "bulleted"
+                : typed === "1." || typed === "1)" ? "numbered" : null;
+              if (kind) {
+                e.preventDefault();
+                const paraList = [...(nodeNow.paraList ?? [])];
+                while (paraList.length < pi) paraList.push(undefined as never);
+                paraList[pi] = kind;
+                const upd = textNow.slice(0, paraStart) + textNow.slice(caret);
+                setEdit({ ...edit, text: upd });
+                setTimeout(() => {
+                  el.setSelectionRange(paraStart, paraStart);
+                  if (nodeNow.listStyle === "none") patchParas({ paraList, listStyle: kind });
+                  else patchParas({ paraList });
+                }, 0);
+                return;
+              }
+            }
+            // ⌘⇧8 / ⌘⇧7 convert the paragraphs under the caret into a list
+            // (§Lists: "turn an individual text selection or multiple text
+            // layers").
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.code === "Digit8" || e.code === "Digit7")) {
+              e.preventDefault();
+              const kind: ListStyle = e.code === "Digit8" ? "bulleted" : "numbered";
+              const from = paraIndex(el.selectionStart ?? 0);
+              const to = paraIndex(el.selectionEnd ?? el.selectionStart ?? 0);
+              const paraList = [...(nodeNow?.paraList ?? [])];
+              for (let p = from; p <= to; p++) paraList[p] = kind;
+              patchParas({ paraList, listStyle: kind });
+              return;
+            }
+            // Tab, ⌘] or Ctrl+] increases the indent of the line (up to five
+            // levels); ⌘[ / Ctrl+[ decreases it.
+            if (
+              (e.key === "Tab" && !e.shiftKey && !e.metaKey && !e.ctrlKey) ||
+              ((e.metaKey || e.ctrlKey) && (e.code === "BracketRight" || e.code === "BracketLeft"))
+            ) {
+              if (nodeNow && paraListStyle(nodeNow, pi) !== "none") {
+                e.preventDefault();
+                const down = e.code === "BracketLeft" || e.shiftKey;
+                const listLevels = [...(nodeNow.listLevels ?? [])];
+                while (listLevels.length < pi) listLevels.push(0);
+                listLevels[pi] = Math.max(0, Math.min(4, listLevelOf(nodeNow, pi) + (down ? -1 : 1)));
+                patchParas({ listLevels });
+                return;
+              }
+            }
+            // Backspace/Delete at the very start of a list item: "delete the
+            // counter, but keep the same level of indentation".
+            if ((e.key === "Backspace" || e.key === "Delete") && nodeNow) {
+              const before = textNow.slice(0, caret);
+              const atStart = e.key === "Backspace"
+                ? before.length === 0 || before.endsWith("\n")
+                : caret === textNow.length || textNow[caret] === "\n";
+              if (atStart && paraListStyle(nodeNow, pi) !== "none") {
+                e.preventDefault();
+                const paraList = [...(nodeNow.paraList ?? [])];
+                while (paraList.length < pi) paraList.push(undefined as never);
+                paraList[pi] = null;
+                patchParas({ paraList });
+                return;
+              }
+            }
+            // Return on an empty list item decreases its indentation (and an
+            // empty level-0 item leaves the list).
+            if (e.key === "Enter" && !e.shiftKey && nodeNow) {
+              const before = textNow.slice(0, caret);
+              const paraStart = before.lastIndexOf("\n") + 1;
+              const after = textNow.slice(caret, textNow.indexOf("\n", caret) < 0 ? textNow.length : textNow.indexOf("\n", caret));
+              const emptyItem = !before.slice(paraStart).trim() && !after.trim();
+              if (emptyItem && paraListStyle(nodeNow, pi) !== "none") {
+                e.preventDefault();
+                const level = listLevelOf(nodeNow, pi);
+                const paraList = [...(nodeNow.paraList ?? [])];
+                while (paraList.length < pi) paraList.push(undefined as never);
+                if (level > 0) {
+                  const listLevels = [...(nodeNow.listLevels ?? [])];
+                  while (listLevels.length < pi) listLevels.push(0);
+                  listLevels[pi] = level - 1;
+                  patchParas({ listLevels });
+                } else {
+                  paraList[pi] = null;
+                  patchParas({ paraList });
+                }
+                return;
+              }
+            }
             e.stopPropagation();
           }}
         />
@@ -7206,6 +7417,77 @@ export function Canvas({
               boxShadow: "var(--elev-floating)",
             }}
           />
+        </div>
+      )}
+      {linkInput && (
+        /* Links (360045942953): "Type or paste a URL into the provided input
+           box above the selected text. Press Enter to apply the link." */
+        <div className="link-input" style={{ left: linkInput.left, top: linkInput.top, position: "absolute", zIndex: 30 }}>
+          <input
+            autoFocus
+            placeholder="https://…"
+            aria-label="Link URL"
+            defaultValue={worldPos(snap.pages[snap.page].root, linkInput.id)?.node?.link ?? ""}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setLinkInput(null);
+                return;
+              }
+              if (e.key !== "Enter") return;
+              const url = (e.target as HTMLInputElement).value.trim();
+              const node = worldPos(snap.pages[snap.page].root, linkInput.id)?.node;
+              if (node && linkInput.start != null && linkInput.end != null && linkInput.end > linkInput.start) {
+                const runs = styleTextRange(node, linkInput.start, linkInput.end, {
+                  ...(url ? { link: url } : {}),
+                  ...(url && node.textDecoration === "none" ? { textDecoration: "underline" as const } : {}),
+                });
+                engine.dispatch({ type: "patch", id: linkInput.id, patch: { textRuns: runs } });
+              } else if (node) {
+                engine.dispatch({
+                  type: "patch",
+                  id: linkInput.id,
+                  patch: {
+                    ...(url ? { link: url } : {}),
+                    // Links are underlined by default (360045942953 §Style
+                    // links); ⌘U removes the underline.
+                    ...(url && node.textDecoration === "none" ? { textDecoration: "underline" as const } : {}),
+                  },
+                });
+              }
+              setLinkInput(null);
+            }}
+            onBlur={() => setLinkInput(null)}
+            style={{
+              font: "12px Inter, system-ui",
+              padding: "4px 8px",
+              border: "1px solid var(--accent)",
+              borderRadius: 4,
+              background: "var(--elevated)",
+              color: "var(--text)",
+              minWidth: 220,
+              boxShadow: "var(--elev-floating)",
+            }}
+          />
+        </div>
+      )}
+      {linkHover && (
+        <div
+          className="link-hover"
+          style={{
+            left: linkHover.left,
+            top: linkHover.top,
+            position: "absolute",
+            zIndex: 25,
+            pointerEvents: "none",
+            font: "11px Inter, system-ui",
+            padding: "3px 7px",
+            borderRadius: 4,
+            background: "var(--elev-floating)",
+            color: "var(--text)",
+            boxShadow: "var(--elev-floating)",
+          }}
+        >
+          {linkHover.url} · click to open
         </div>
       )}
       {padInput && (
@@ -8153,18 +8435,24 @@ function traceVectorNetwork(
  * plain/uniform path above stays a single optimized fillText call. */
 function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy: number, sw: number, sh: number, z: number) {
   const rows = styledTextRows(ctx, n, n.text, sw, z);
-  const lh = Math.max(1, (n.lineHeight || Math.max(n.fontSize, ...resolvedTextSpans(n).map((r) => r.fontSize)) * 1.2) * z);
+  const lh = Math.max(1, effectiveLineHeight(n, Math.max(n.fontSize, ...resolvedTextSpans(n).map((r) => r.fontSize))) * z);
   const gap = (n.paragraphSpacing || 0) * z;
+  const listGap = (n.listSpacing || 0) * z;
   const limit = n.truncate ? (valignApplies(n) || (n.maxH ?? 0) > 0
-    ? fitLineCount(sh / Math.max(1e-6, z), n.lineHeight || n.fontSize * 1.2, n.paragraphSpacing || 0)
+    ? fitLineCount(sh / Math.max(1e-6, z), effectiveLineHeight(n, n.fontSize), n.paragraphSpacing || 0)
     : n.maxLines > 0 ? n.maxLines : Infinity) : Infinity;
   const lines = truncateStyledRows(ctx, n, rows, limit, n.sizingW === "hug" ? Infinity : sw, z);
-  const blockH = lines.reduce((h, r) => h + lh + (r.lastInPara ? gap : 0), 0) - gap;
+  const blockH =
+    lines.reduce((h, r) => h + lh + (r.lastInPara ? gap + (r.itemGap ? listGap : 0) : 0), 0) -
+    (lines.length && lines[lines.length - 1].lastInPara ? gap + (lines[lines.length - 1].itemGap ? listGap : 0) : 0);
   let y = sy;
   if (valignApplies(n)) {
     if (n.textAlignVertical === "middle") y += (sh - blockH) / 2;
     if (n.textAlignVertical === "bottom") y += sh - blockH;
   }
+  // Vertical trim (360039956634): the box behaves like any other component -
+  // cap height to the baseline. Ratio approximation, as in paintText.
+  y += n.verticalTrim ? Math.max(1, n.fontSize * 0.242 * z) : 0;
   ctx.textBaseline = "top";
   ctx.save();
   if (n.truncate) {
@@ -8175,7 +8463,7 @@ function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy
   const strokeStyle = n.strokeType === "pattern"
     ? patternStrokeStyle(ctx, n, sx, sy, z) ?? "rgba(0,0,0,0)" : cssRgba(n.strokePaint);
   const ls = (n.letterSpacing || 0) * z;
-  const draw = (mode: "fill" | "stroke") => {
+  const draw = (mode: "fill" | "stroke" | "none", phase: "post" | "pre" = "post") => {
     let ty = y;
     for (const row of lines) {
       const left = sx + row.lead;
@@ -8186,47 +8474,108 @@ function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy
         ctx.font = canvasTextFont(n, n.fontSize * z);
         ctx.textAlign = "left";
         ctx.fillStyle = textFill;
-        if (mode === "fill") ctx.fillText(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
-        else ctx.strokeText(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
+        if (mode === "fill") ctx.fillText(row.marker, sx + row.lead + row.markerX, ty);
+        else if (mode === "stroke") ctx.strokeText(row.marker, sx + row.lead + row.markerX, ty);
       }
       // Justification stretches only inter-word gaps on non-final rows.
       const text = row.pieces.map((p) => p.text).join("");
       const spaces = n.textAlign === "justified" && !row.lastInPara ? [...text.matchAll(/ /g)].length : 0;
       const extra = spaces ? Math.max(0, inner - row.width) / spaces : 0;
-      for (const [i, piece] of row.pieces.entries()) {
-        ctx.font = canvasTextFont(n, piece.run.fontSize * z, piece.run);
-        ctx.textAlign = "left";
-        ctx.fillStyle = piece.run.fill === n.fill ? textFill : cssRgba(piece.run.fill);
-        if (ls || n.textAlign === "justified") {
+      if (mode !== "none") {
+        for (const [i, piece] of row.pieces.entries()) {
+          // Faux super/subscript (§Numbers): shrunk glyphs repositioned when
+          // the font offers no dedicated forms (or mixed with ones that do).
+          const shift = piece.run.baselineShift ?? n.baselineShift;
+          const faux = shift === "super" || shift === "sub";
+          const psize = piece.run.fontSize * z;
+          ctx.font = canvasTextFont(n, psize * (faux ? 0.7 : 1), piece.run);
+          const pty = ty + (faux ? (shift === "super" ? -psize * 0.14 : psize * 0.38) : 0);
+          ctx.textAlign = "left";
+          ctx.fillStyle = piece.run.fill === n.fill ? textFill : cssRgba(piece.run.fill);
+          if (ls || n.textAlign === "justified") {
+            for (const ch of piece.text) {
+              if (mode === "fill") ctx.fillText(ch, x, pty);
+              else ctx.strokeText(ch, x, pty);
+              x += measureCached(ctx, ch) + ls + (ch === " " ? extra : 0);
+            }
+          } else {
+            if (mode === "fill") ctx.fillText(piece.text, x, pty);
+            else ctx.strokeText(piece.text, x, pty);
+            x += piece.width;
+          }
+          if (i < row.pieces.length - 1) x += ls;
+        }
+      } else {
+        for (const [i, piece] of row.pieces.entries()) {
+          x += piece.width + (i < row.pieces.length - 1 ? ls : 0);
+        }
+      }
+      // Per-run decoration uses the same segment starts and widths as glyphs.
+      let dx = n.textAlign === "center" ? left + (inner - row.width) / 2 : n.textAlign === "right" ? sx + sw - row.width : left;
+      for (const piece of row.pieces) {
+        const deco = piece.run.textDecoration ?? (n.textDecoration !== "none" ? n.textDecoration : "none");
+        const skip = piece.run.underlineSkipInk ?? n.underlineSkipInk ?? false;
+        const wantUnderline = deco === "underline" && (phase === "pre" ? skip : !skip);
+        const wantStrike = deco === "strikethrough" && phase === "post";
+        if (mode === "fill" && (wantUnderline || wantStrike)) {
+          ctx.save(); ctx.shadowColor = "transparent";
+          const psize = piece.run.fontSize * z;
+          if (wantUnderline) {
+            const yy = ty + psize + (piece.run.underlineOffset ?? n.underlineOffset ?? 0) * z;
+            const uW = Math.max(0.5, (piece.run.underlineThickness ?? n.underlineThickness ?? 1) * z);
+            const uStyle = piece.run.underlineStyle ?? n.underlineStyle ?? "solid";
+            ctx.strokeStyle = cssRgba(piece.run.underlineColor ?? n.underlineColor ?? piece.run.fill);
+            ctx.lineWidth = uW;
+            if (uStyle === "dotted") ctx.setLineDash([uW, uW * 2]);
+            ctx.beginPath();
+            if (uStyle === "wavy") {
+              const amp = Math.max(1, uW * 1.5);
+              for (let wx = dx; wx < dx + piece.width; wx += amp * 2) {
+                ctx.moveTo(wx, yy);
+                ctx.quadraticCurveTo(wx + amp / 2, yy - amp, wx + amp, yy);
+                ctx.quadraticCurveTo(wx + amp * 1.5, yy + amp, wx + amp * 2, yy);
+              }
+            } else {
+              ctx.moveTo(dx, yy); ctx.lineTo(dx + piece.width, yy);
+            }
+            ctx.stroke(); ctx.setLineDash([]);
+          }
+          if (wantStrike) {
+            ctx.strokeStyle = cssRgba(piece.run.fill);
+            ctx.lineWidth = Math.max(1, z);
+            const yy = ty + psize * 0.7;
+            ctx.beginPath(); ctx.moveTo(dx, yy); ctx.lineTo(dx + piece.width, yy); ctx.stroke();
+          }
+          ctx.restore();
+        }
+        if (mode === "fill" && phase === "post" && (piece.run.slashedZero ?? n.slashedZero) && piece.text.includes("0")) {
+          ctx.save(); ctx.shadowColor = "transparent";
+          const psize = piece.run.fontSize * z;
+          ctx.strokeStyle = piece.run.fill === n.fill ? textFill : cssRgba(piece.run.fill);
+          ctx.lineWidth = Math.max(1, psize * 0.06);
+          let acc = 0;
           for (const ch of piece.text) {
-            if (mode === "fill") ctx.fillText(ch, x, ty);
-            else ctx.strokeText(ch, x, ty);
-            x += measureCached(ctx, ch) + ls + (ch === " " ? extra : 0);
+            const w = measureCached(ctx, ch) + ls;
+            if (ch === "0") {
+              const gW = w - ls;
+              ctx.beginPath();
+              ctx.moveTo(dx + acc + gW * 0.18, ty + psize * 0.8);
+              ctx.lineTo(dx + acc + gW * 0.82, ty + psize * 0.1);
+              ctx.stroke();
+            }
+            acc += w;
           }
-        } else {
-          if (mode === "fill") ctx.fillText(piece.text, x, ty);
-          else ctx.strokeText(piece.text, x, ty);
-          x += piece.width;
+          ctx.restore();
         }
-        if (i < row.pieces.length - 1) x += ls;
+        dx += piece.width + ls;
       }
-      if (mode === "fill" && row.pieces.some((p) => p.run.textDecoration === "underline" || p.run.textDecoration === "strikethrough")) {
-        // Per-run decoration uses the same segment starts and widths as glyphs.
-        let dx = n.textAlign === "center" ? left + (inner - row.width) / 2 : n.textAlign === "right" ? sx + sw - row.width : left;
-        for (const piece of row.pieces) {
-          if (piece.run.textDecoration === "underline" || piece.run.textDecoration === "strikethrough") {
-            ctx.save(); ctx.shadowColor = "transparent"; ctx.strokeStyle = cssRgba(piece.run.fill);
-            ctx.lineWidth = Math.max(1, z); ctx.beginPath();
-            const yy = ty + piece.run.fontSize * z * (piece.run.textDecoration === "underline" ? 1 : 0.7);
-            ctx.moveTo(dx, yy); ctx.lineTo(dx + piece.width, yy); ctx.stroke(); ctx.restore();
-          }
-          dx += piece.width + ls;
-        }
-      }
-      ty += lh + (row.lastInPara ? gap : 0);
+      ty += lh + (row.lastInPara ? gap + (row.itemGap ? listGap : 0) : 0);
     }
   };
   if (n.fillVisible !== false && !isNone(n.fill)) {
+    // Skip ink: the underline goes under the glyphs so their ink covers the
+    // crossings (360039956634 §Decoration) - once, not per shadow pass.
+    draw("none", "pre");
     const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
     for (const drop of drops.length ? drops : [undefined]) {
       ctx.save();
@@ -8293,34 +8642,49 @@ function paintText(
   }
   content = applyTextCase(content, n.textCase);
   // Tight leading stays tight: the floor is degenerate input, not the font
-  // size, so the painter agrees with the hug box and the field.
-  const lh = Math.max(1, (n.lineHeight || (uniform?.fontSize ?? n.fontSize) * 1.2) * z);
+  // size, so the painter agrees with the hug box and the field. Percent
+  // leading resolves against the font size (360039956634 §Line height).
+  const lh = Math.max(1, effectiveLineHeight(n, uniform?.fontSize ?? n.fontSize) * z);
   const ls = (n.letterSpacing || 0) * z;
   const paraGap = (n.paragraphSpacing || 0) * z;
+  const listGap = (n.listSpacing || 0) * z;
   const wrap = n.sizingW !== "hug";
   const paras = content.split("\n");
   const indent = indentOf(n) * z;
-  type Row = { line: string; lastInPara: boolean; lead: number; marker: string };
+  type Row = {
+    line: string; lastInPara: boolean; lead: number; marker: string;
+    markerX: number; hangQ: number; itemGap: boolean;
+  };
   const rows: Row[] = [];
   const widthOfLine = (line: string) =>
     measureCached(ctx, line) + (ls ? ls * Math.max(0, line.length - 1) : 0);
-  // A list hangs its marker in the gutter and shrinks the width the wrapper may
-  // use; paragraphIndent then offsets the first line of each paragraph.
+  const counters = listCounters(n, paras.length);
+  // A list's marker sits beside (or, hanging, outside) the paragraph and the
+  // non-hanging gutter shrinks the width the wrapper may use; paragraphIndent
+  // then offsets the first line of each paragraph.
   paras.forEach((para, pi) => {
-    const marker = listMarker(n.listStyle, pi);
-    const gutter = marker ? widthOfLine(`${marker} `) : 0;
-    const avail = wrap ? sw - gutter - indent : 1e6;
+    const ll = listLayout(n, pi, counters[pi], (s) => widthOfLine(s));
+    const wrapStyle = paraWrapOf(n, pi);
+    const avail = wrap ? sw - ll.textLead - indent : 1e6;
     let wrapped = wrapLines(ctx, para || " ", avail > 0 ? avail : 1e6, ls);
     // Wrap style only has something to say when the layer wraps: an
     // auto-width layer breaks a line exactly where Return was pressed.
-    if (wrap && (n.textWrap === "balance" || n.textWrap === "pretty") && sw > 0)
-      wrapped = balanceLines(wrapped, avail, widthOfLine, n.textWrap);
+    if (wrap && (wrapStyle === "balance" || wrapStyle === "pretty") && sw > 0)
+      wrapped = balanceLines(wrapped, avail, widthOfLine, wrapStyle);
+    // Hanging quotes (360040449773): an opening quote on the first line
+    // moves outside the bounding box so the text aligns with it.
+    const quote = n.hangingQuotes ? (para || "").match(/^["'\u201c\u2018\u00ab]/u)?.[0] ?? "" : "";
+    const hangQ = quote ? widthOfLine(quote) : 0;
     wrapped.forEach((line, i) =>
       rows.push({
         line: para ? line : "",
         lastInPara: i === wrapped.length - 1,
-        lead: gutter + (i === 0 ? indent : 0),
-        marker: i === 0 && para ? marker : "",
+        lead: ll.textLead + (i === 0 ? indent : 0),
+        marker: i === 0 && para ? ll.marker : "",
+        markerX: ll.markerX,
+        hangQ: i === 0 ? hangQ : 0,
+        itemGap: i === wrapped.length - 1 && paraListStyle(n, pi) !== "none"
+          && pi + 1 < paras.length && paraListStyle(n, pi + 1) !== "none",
       }),
     );
   });
@@ -8329,7 +8693,7 @@ function paintText(
     // Fixed-size layers have no max-lines setting: the box itself decides
     // how many rows survive, with the ellipsis on the last one that fits.
     const limit = valignApplies(n) || (n.maxH ?? 0) > 0
-      ? fitLineCount(sh / Math.max(1e-6, z), n.lineHeight || n.fontSize * 1.2, n.paragraphSpacing || 0)
+      ? fitLineCount(sh / Math.max(1e-6, z), effectiveLineHeight(n, uniform?.fontSize ?? n.fontSize), n.paragraphSpacing || 0)
       : n.maxLines > 0 ? Math.max(1, n.maxLines) : Infinity;
     if (lines.length > limit) {
       const clipped = lines.slice(0, limit);
@@ -8348,14 +8712,24 @@ function paintText(
       lines = clipped;
     }
   }
-  const blockH = lines.reduce((h, r) => h + lh + (r.lastInPara ? paraGap : 0), 0) - paraGap;
+  const blockH =
+    lines.reduce((h, r) => h + lh + (r.lastInPara ? paraGap + (r.itemGap ? listGap : 0) : 0), 0) -
+    (lines.length && lines[lines.length - 1].lastInPara
+      ? paraGap + (lines[lines.length - 1].itemGap ? listGap : 0)
+      : 0);
   let y0 = sy;
+  // Vertical trim (360039956634 §Vertical trim): "remove the extra space above
+  // and below text" - the box hugs from the cap height to the baseline. The
+  // trims approximate Inter's (ascent − cap) and descent ratios; recorded as
+  // an approximation pending font metrics.
+  const trim = n.verticalTrim ? Math.max(1, (uniform?.fontSize ?? n.fontSize) * 0.242 * z) : 0;
   // Hug axes ignore vertical alignment: only a fixed box has spare room to
   // distribute (and a hug box that exactly fits would centre on zero anyway).
   if (valignApplies(n)) {
     if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
     if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
   }
+  y0 += trim;
   const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
   const setDrop = (drop?: Effect) => {
     if (!drop) {
@@ -8376,12 +8750,22 @@ function paintText(
   const textStroke = n.strokeType === "pattern"
     ? patternStrokeStyle(ctx, n, sx, sy, z) ?? "rgba(0,0,0,0)"
     : cssRgba(n.strokePaint);
+  // Numbers (360039956634 §Numbers) "Faux typography": without dedicated
+  // super/subscript glyphs Figma "shr[inks] it and position[s] it accordingly"
+  // - 0.7em glyphs raised toward the superscript line or dropped below the
+  // baseline. Ratios recorded as an approximation of Figma's synthesized form.
+  const faux = n.baselineShift === "super" || n.baselineShift === "sub";
+  const fauxFont = faux ? canvasTextFont(n, size * 0.7, uniform) : "";
+  const fauxDY = faux ? (n.baselineShift === "super" ? -size * 0.14 : size * 0.38) : 0;
   const paintFillLine = (str: string, x: number, y: number, maxW?: number) => {
     if (!fillOn) return;
     ctx.save();
     ctx.fillStyle = textFill;
     ctx.globalAlpha *= n.fillOpacity ?? 1;
-    ctx.fillText(str, x, y, maxW);
+    if (faux) {
+      ctx.font = fauxFont;
+      ctx.fillText(str, x, y + fauxDY);
+    } else ctx.fillText(str, x, y, maxW);
     ctx.restore();
   };
   const paintStrokeLine = (str: string, x: number, y: number, maxW?: number) => {
@@ -8393,17 +8777,27 @@ function paintText(
     ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
     ctx.globalAlpha *= n.strokeOpacity ?? 1;
     ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
-    ctx.strokeText(str, x, y, maxW);
+    if (faux) {
+      ctx.font = fauxFont;
+      ctx.strokeText(str, x, y + fauxDY);
+    } else ctx.strokeText(str, x, y, maxW);
     ctx.restore();
   };
-  const paintRows = (mode: "fill" | "stroke", decorate: boolean) => {
+  const paintRows = (mode: "fill" | "stroke" | "none", decorate: "none" | "underline" | "all") => {
   let ty = y0;
   lines.forEach((row) => {
-    const line = row.line;
+    const fullLine = row.line;
+    let line = fullLine;
     const left = sx + row.lead;
     const innerW = Math.max(0, sw - row.lead);
     const paintLine = mode === "fill" ? paintFillLine : paintStrokeLine;
-    if (row.marker) paintLine(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
+    // Hanging quotes draw the opening quote outside the box; the rest of the
+    // line sits on the paragraph's lead.
+    if (row.hangQ > 0 && line) {
+      const q = line.slice(0, 1);
+      line = line.slice(1);
+      if (mode !== "none") paintLine(q, sx + row.lead - row.hangQ, ty);
+    }
     const tx =
       n.textAlign === "center"
         ? left + innerW / 2
@@ -8411,63 +8805,117 @@ function paintText(
           ? sx + sw
           : left;
     const justify = n.textAlign === "justified" && wrap && !row.lastInPara && line.includes(" ");
-    if (justify) {
-      const words = line.trim().split(/\s+/);
-      const widths = words.map((w) => measureCached(ctx, w) + ls * Math.max(0, w.length - 1));
-      const total = widths.reduce((s, w) => s + w, 0);
-      // Letter-spacing still applies between the words; the distributed gap
-      // rides on top of it, as word-spacing does in CSS.
-      const gap = words.length > 1 ? (innerW - total - ls * (words.length - 1)) / (words.length - 1) : 0;
-      let x = left;
-      ctx.textAlign = "left";
-      for (let wi = 0; wi < words.length; wi++) {
-        paintLine(words[wi], x, ty);
-        x += widths[wi] + ls + gap;
+    if (mode !== "none") {
+      if (row.marker) paintLine(row.marker, sx + row.lead + row.markerX, ty);
+      if (justify) {
+        const words = line.trim().split(/\s+/);
+        const widths = words.map((w) => measureCached(ctx, w) + ls * Math.max(0, w.length - 1));
+        const total = widths.reduce((s, w) => s + w, 0);
+        // Letter-spacing still applies between the words; the distributed gap
+        // rides on top of it, as word-spacing does in CSS.
+        const gap = words.length > 1 ? (innerW - total - ls * (words.length - 1)) / (words.length - 1) : 0;
+        let x = left;
+        ctx.textAlign = "left";
+        for (let wi = 0; wi < words.length; wi++) {
+          paintLine(words[wi], x, ty);
+          x += widths[wi] + ls + gap;
+        }
+        ctx.textAlign = "left";
+      } else if (ls) {
+        let x = tx;
+        if (n.textAlign === "center") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1)) / 2;
+        if (n.textAlign === "right") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1));
+        ctx.textAlign = "left";
+        for (const ch of line) {
+          paintLine(ch, x, ty);
+          x += measureCached(ctx, ch) + ls;
+        }
+        ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
+      } else {
+        paintLine(line, tx, ty, wrap ? innerW : undefined);
       }
-      ctx.textAlign = "left";
-    } else if (ls) {
-      let x = tx;
-      if (n.textAlign === "center") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1)) / 2;
-      if (n.textAlign === "right") x = tx - (measureCached(ctx, line) + ls * Math.max(0, line.length - 1));
-      ctx.textAlign = "left";
-      for (const ch of line) {
-        paintLine(ch, x, ty);
-        x += measureCached(ctx, ch) + ls;
-      }
-      ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
-    } else {
-      paintLine(line, tx, ty, wrap ? innerW : undefined);
     }
-    if (decorate && fillOn && (n.textDecoration === "underline" || n.textDecoration === "strikethrough")) {
-      const textWidth = justify ? innerW : measureCached(ctx, line) + ls * Math.max(0, line.length - 1);
-      // Underline hugs the baseline; strikethrough crosses mid x-height.
-      const yy = n.textDecoration === "underline" ? ty + size : ty + size * 0.7;
-      const x0 = justify ? left : n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx;
+    const drawUnderline = n.textDecoration === "underline" && (decorate === "underline" || (decorate === "all" && !n.underlineSkipInk));
+    const drawStrike = n.textDecoration === "strikethrough" && decorate === "all";
+    if (fillOn && (drawUnderline || drawStrike)) {
+      const textWidth = justify ? innerW : measureCached(ctx, fullLine) + ls * Math.max(0, fullLine.length - 1);
+      const x0 =
+        (justify ? left : n.textAlign === "center" ? tx - textWidth / 2 : n.textAlign === "right" ? tx - textWidth : tx) -
+        row.hangQ;
       ctx.save();
       ctx.shadowColor = "transparent";
       ctx.globalAlpha *= n.fillOpacity ?? 1;
-      ctx.beginPath();
-      ctx.moveTo(x0, yy);
-      ctx.lineTo(x0 + textWidth, yy);
-      ctx.strokeStyle = cssRgba(uniform?.fill ?? n.fill);
-      ctx.lineWidth = Math.max(1, z);
-      ctx.stroke();
+      if (drawUnderline) {
+        // Underline hugs the baseline plus its offset; the details (360039956634
+        // §Decoration) choose the line style, weight and color.
+        const yy = ty + size + (n.underlineOffset ?? 0) * z;
+        const uW = Math.max(0.5, (n.underlineThickness ?? 1) * z);
+        ctx.strokeStyle = cssRgba(n.underlineColor ?? uniform?.fill ?? n.fill);
+        ctx.lineWidth = uW;
+        if ((n.underlineStyle ?? "solid") === "dotted") ctx.setLineDash([uW, uW * 2]);
+        ctx.beginPath();
+        if ((n.underlineStyle ?? "solid") === "wavy") {
+          const amp = Math.max(1, uW * 1.5);
+          for (let x = x0; x < x0 + textWidth; x += amp * 2) {
+            ctx.moveTo(x, yy);
+            ctx.quadraticCurveTo(x + amp / 2, yy - amp, x + amp, yy);
+            ctx.quadraticCurveTo(x + amp * 1.5, yy + amp, x + amp * 2, yy);
+          }
+        } else {
+          ctx.moveTo(x0, yy);
+          ctx.lineTo(x0 + textWidth, yy);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (drawStrike) {
+        // Strikethrough crosses mid x-height.
+        const yy = ty + size * 0.7;
+        ctx.strokeStyle = cssRgba(uniform?.fill ?? n.fill);
+        ctx.lineWidth = Math.max(1, z);
+        ctx.beginPath();
+        ctx.moveTo(x0, yy);
+        ctx.lineTo(x0 + textWidth, yy);
+        ctx.stroke();
+      }
+      if (n.slashedZero && line.includes("0")) {
+        // Slashed zero (§Numbers): a synthesised diagonal through each 0.
+        ctx.strokeStyle = cssRgba(uniform?.fill ?? n.fill);
+        ctx.lineWidth = Math.max(1, size * 0.06);
+        const t0 = x0 + row.hangQ;
+        let acc = 0;
+        for (const ch of line) {
+          const w = measureCached(ctx, ch) + ls;
+          if (ch === "0") {
+            const gW = w - ls;
+            ctx.beginPath();
+            ctx.moveTo(t0 + acc + gW * 0.18, ty + size * 0.8);
+            ctx.lineTo(t0 + acc + gW * 0.82, ty + size * 0.1);
+            ctx.stroke();
+          }
+          acc += w;
+        }
+      }
       ctx.restore();
     }
-    ty += lh + (row.lastInPara ? paraGap : 0);
+    ty += lh + (row.lastInPara ? paraGap + (row.itemGap ? listGap : 0) : 0);
   });
   };
   // Every visible drop gets its own pass: the glyphs repaint identically, so
   // N shadows accumulate behind one set of glyphs. Native shadows cannot
   // blend independently, so text shadows always composite Normal; spread
   // stays ignored on text, matching Figma's kind gate.
+  // Skip ink (360039956634 §Decoration): "the underline will skip areas where
+  // the part of a glyph character crosses an underline" - painted under the
+  // glyphs so their opaque ink covers it, which is exactly that skip.
+  if (n.textDecoration === "underline" && n.underlineSkipInk) paintRows("none", "underline");
   const passes = drops.length ? drops : [undefined];
   for (const d of passes) {
     setDrop(d);
-    paintRows("fill", false);
+    paintRows("fill", "none");
   }
   setDrop(undefined);
-  paintRows("stroke", true);
+  paintRows("stroke", "all");
 }
 
 function walkInteractions(

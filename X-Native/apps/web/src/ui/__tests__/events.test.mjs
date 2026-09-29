@@ -84,6 +84,7 @@ const BUS = {
   "x-native-find": { sent: ["ui/chrome.tsx"], heard: ["App.tsx"], why: "⌘F opens the find bar" },
   "x-native-hide-ui": { sent: ["ui/ContextMenu.tsx", "ui/inspector.tsx"], heard: ["App.tsx"], why: "the zen/hide commands" },
   "x-native-layer-copy": { sent: ["ui/chrome.tsx"], heard: ["ui/Canvas.tsx"], why: "copy commands clear the connection clipboard" },
+  "x-native:link-input": { sent: ["ui/chrome.tsx", "ui/Canvas.tsx"], heard: ["ui/Canvas.tsx"], why: "⇧⌘U opens the link URL input above the selection (360045942953)" },
   "x-native-minimize-ui": { sent: ["ui/ContextMenu.tsx"], heard: ["App.tsx"], why: "the minimize command" },
   "x-native-nudge-dialog": { sent: ["ui/chrome.tsx"], heard: ["App.tsx"], why: "palette ▸ Nudge amount; App opens the dialog" },
   "x-native-open-section": { sent: ["ui/inspector.tsx"], heard: ["ui/inspector.tsx"], why: "an inspector section is revealed and focused" },

@@ -577,8 +577,27 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
       .map((line, i) => `<tspan x="${tx}" dy="${i ? lineHeight : yOffset + n.fontSize}">${escXml(line)}</tspan>`)
       .join("");
     const textStroke = stroke;
+    // Numbers (360039956634 §Numbers) and underline details (§Decoration):
+    // style-only properties the attribute set cannot carry. Absent fields
+    // emit nothing, so existing exports are byte-identical.
+    const vnum = [
+      n.slashedZero ? "slashed-zero" : "",
+      n.fractions ? "diagonal-fractions" : "",
+      n.figureStyle === "proportional-oldstyle" ? "oldstyle-nums proportional-nums"
+        : n.figureStyle === "monospace-lining" ? "lining-nums tabular-nums"
+          : n.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
+            : n.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
+    ].filter(Boolean).join(" ");
+    const extraStyle = [
+      vnum ? `font-variant-numeric:${vnum}` : "",
+      n.underlineStyle && n.underlineStyle !== "solid" ? `text-decoration-style:${n.underlineStyle}` : "",
+      n.underlineColor ? `text-decoration-color:${n.underlineColor}` : "",
+      n.underlineThickness != null ? `text-decoration-thickness:${n.underlineThickness}px` : "",
+      n.underlineOffset ? `text-underline-offset:${n.underlineOffset}px` : "",
+      n.underlineSkipInk ? "text-decoration-skip-ink:auto" : "",
+    ].filter(Boolean).join(";");
     body.push(
-      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${filter}>${content}</text>`,
+      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${extraStyle ? ` style="${extraStyle}"` : ""}${filter}>${content}</text>`,
     );
     }
   } else if (n.fillType === "image" && n.imageSrc && n.fillExportVisible !== false) {

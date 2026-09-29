@@ -15,6 +15,8 @@ import {
   fitLineCount,
   hugHeight,
   indentOf,
+  listCounters,
+  listLayout,
   textMetrics,
   valignApplies,
 } from "../../ui/textLayout.ts";
@@ -75,9 +77,32 @@ console.log("X-A textMetrics:");
   const m7 = textMetrics(mctx(), node({ paragraphIndent: 15, textAlign: "center" }), "ab");
   t("centred text ignores the indent", m7.maxW === 20);
   const m8 = textMetrics(mctx(), node({ listStyle: "bulleted" }), "ab");
-  t("list rows clear the gutter", m8.maxW === 40);
+  // Hanging lists (360040449773: "move bullet points or numbers of each list
+  // item outside of the bounding box. This aligns text content with the
+  // bounding box") - the marker hangs outside, so the box hugs the text alone.
+  t("list rows hug the text with the marker hanging outside", m8.maxW === 20);
+  const m8b = textMetrics(mctx(), node({ listStyle: "bulleted", hangingLists: false }), "ab");
+  t("hangingLists:false clears the marker gutter instead", m8b.maxW === 40);
   const m9 = textMetrics(mctx(), node({ truncate: true, maxLines: 1 }), "a\nb");
   t("auto-width truncation budgets the ellipsis", m9.maxW === 20 && m9.lines === 1);
+}
+
+console.log("X-A2 list counters:");
+{
+  const lv = (lvls, plist) => {
+    const n = node({ listStyle: "numbered", listLevels: lvls, ...(plist ? { paraList: plist } : {}) });
+    const cs = listCounters(n, lvls.length);
+    return lvls.map((_, i) => listLayout(n, i, cs[i], (s) => s.length * 10).marker);
+  };
+  // Counter rotation (360040449773): numbered → lettered → roman as the
+  // nesting deepens, resetting at every third level.
+  t("level 0 counts numbers", JSON.stringify(lv([0, 0, 0])) === JSON.stringify(["1.", "2.", "3."]));
+  t("level 1 rotates to letters", JSON.stringify(lv([1, 1, 1])) === JSON.stringify(["a.", "b.", "c."]));
+  t("level 2 rotates to roman", JSON.stringify(lv([2, 2, 2])) === JSON.stringify(["i.", "ii.", "iii."]));
+  t("level 3 wraps back to numbers", JSON.stringify(lv([3, 3])) === JSON.stringify(["1.", "2."]));
+  // Backspace at the item start deletes the counter without changing the
+  // indent - the item stays levelled but is not counted.
+  t("a deleted counter skips the number", JSON.stringify(lv([0, 0, 0], [0, null, 0])) === JSON.stringify(["1.", "", "2."]));
 }
 
 console.log("X-B hugHeight:");

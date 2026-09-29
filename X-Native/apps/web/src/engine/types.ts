@@ -60,6 +60,21 @@ export type TextDecoration = "none" | "underline" | "strikethrough";
 /** §26 KB-002: node-level italic for the ⌘I chord (absent = "normal"). */
 export type FontStyle = "normal" | "italic";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
+/** Underline details (360039956634 §Decoration): solid, dotted or wavy line. */
+export type UnderlineStyle = "solid" | "dotted" | "wavy";
+/** Numbers (360039956634 §Numbers): proportional/monospace × lining/old-style. */
+export type FigureStyle =
+  | "proportional-lining"
+  | "proportional-oldstyle"
+  | "monospace-lining"
+  | "monospace-oldstyle";
+/** Numbers §Position: "subscript … below the line of type", "superscript …
+ * above", both "default to a smaller size". Faux typography when the font has
+ * no such glyph: shrink and reposition the standard character. */
+export type BaselineShift = "normal" | "super" | "sub";
+/** Line height unit (360039956634 §Line height): Auto (font default), a fixed
+ * px value, or a percentage of the font size that converts to the nearest px. */
+export type LineHeightUnit = "auto" | "px" | "percent";
 export type StrokeAlign = "inside" | "center" | "outside";
 export type StrokeCap =
   | "none"
@@ -418,6 +433,23 @@ export interface TextRun {
   fontSize?: number;
   fontFamily?: string;
   textDecoration?: TextDecoration;
+  /** Underline details (360039956634 §Decoration) - per-range overrides. */
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  underlineColor?: string;
+  /** Numbers (§Numbers): faux super/subscript, fractions, slashed zero, figures. */
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** Links (360045942953): a linked range, underlined by default. */
+  link?: string;
+  /** Wrap style at the paragraph level (360039956634 §Wrap style). */
+  textWrap?: TextWrap;
+  /** Italic run override (⌘I on a range). */
+  fontStyle?: FontStyle;
 }
 
 /**
@@ -793,6 +825,43 @@ export interface XNode {
   textCase: TextCase;
   truncate: boolean;
   maxLines: number;
+  /** List spacing (360040449773 §Spacing): extra px between line items of a
+   * bulleted/numbered list. Default 0. Items are also paragraphs, so the
+   * paragraph gap applies too. */
+  listSpacing: number;
+  /** Per-paragraph list indentation level (360040449773 §Indentation): "up to
+   * five levels", so 0..4. Absent = 0 for every paragraph. */
+  listLevels?: number[];
+  /** Per-paragraph list override: `null` = counter deleted on that line
+   * ("Backspace … delete the counter, but keep the same level of
+   * indentation"); absent = inherit `listStyle`. */
+  paraList?: (ListStyle | null)[];
+  /** Per-paragraph wrap style (360039956634 §Wrap style applies at the
+   * paragraph level too). Absent = inherit `textWrap`. */
+  paraWrap?: (TextWrap | null)[];
+  /** Hanging lists (360040449773): markers outside the bounding box so the
+   * text content aligns with it. Absent = on (Figma's pictured lists). */
+  hangingLists?: boolean;
+  /** Hanging quotes (360040449773): opening quotation marks outside the box. */
+  hangingQuotes?: boolean;
+  /** Vertical trim (360039956634 §Vertical trim): remove the space above and
+   * below the text ("leading-trim: both" in Dev Mode). */
+  verticalTrim?: boolean;
+  /** Underline details (360039956634 §Decoration). */
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  underlineColor?: string;
+  /** Numbers (360039956634 §Numbers) - faux super/sub, fractions, zero, figures. */
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** Line height unit: px value vs percent of the font size vs Auto. */
+  lineHeightUnit?: LineHeightUnit;
+  /** Links (360045942953): the whole text layer is a link. */
+  link?: string;
   children: XNode[];
   layout: AutoLayout | null;
   path: PathPoint[];
