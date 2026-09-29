@@ -32,7 +32,7 @@ import {
   outlineVariableStroke,
   widthProfileStations,
 } from "../engine/geometry";
-import { dashArray, dashOffset, miterLimitFromAngle, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
+import { dashArray, dashOffset, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   roundBox,
@@ -45,7 +45,7 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
 import { patternSourceNode, setPatternLookup } from "../engine/pattern";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
@@ -1525,8 +1525,24 @@ export function Canvas({
           ctx.globalAlpha *= n.strokeOpacity ?? 1;
           ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
           ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+          ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
           ctx.setLineDash(n.strokeDash > 0 ? [n.strokeDash * z, (n.strokeGap || n.strokeDash) * z] : []);
-          tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true);
+          const traceBooleanStroke = (append = false) => tracePath(
+            ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true, append,
+          );
+          if (n.strokeAlign === "inside") {
+            traceBooleanStroke();
+            ctx.clip();
+            traceBooleanStroke();
+            ctx.lineWidth *= 2;
+          } else if (n.strokeAlign === "outside") {
+            ctx.beginPath();
+            ctx.rect(-1e6, -1e6, 2e6, 2e6);
+            traceBooleanStroke(true);
+            ctx.clip("evenodd");
+            traceBooleanStroke();
+            ctx.lineWidth *= 2;
+          } else traceBooleanStroke();
           ctx.stroke();
           ctx.restore();
         }
@@ -1534,7 +1550,7 @@ export function Canvas({
           ctx,
           n,
           z,
-          () => tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true),
+          (append) => tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true, append),
           { x: sx, y: sy, w: sw, h: sh },
         );
         ctx.restore();
@@ -1544,7 +1560,7 @@ export function Canvas({
       // the same outline (a stroke pass changes lineWidth and may clip, so the
       // path has to be rebuilt) and so the mask-outline overlay traces what the
       // layer actually paints instead of a second, drifting copy of this shape.
-      const traceShape = () => traceNodeShape(ctx, n, sx, sy, sw, sh, z);
+      const traceShape = (append = false) => traceNodeShape(ctx, n, sx, sy, sw, sh, z, append);
       traceShape();
       if (snap.outlineMode) {
         ctx.save();
@@ -1675,7 +1691,7 @@ export function Canvas({
         ctx.strokeStyle = strokeStyle;
         ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
-        ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
+        ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
         const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
         // Dashes carry their own cap: a dotted line is a 1px dash
         // with round caps, and only the segments take the rounding.
@@ -1716,14 +1732,18 @@ export function Canvas({
             ctx.stroke();
             ctx.restore();
           } else if (align === "outside") {
+            // Canvas strokes are centred. Clip their doubled band to the
+            // exterior before drawing: overpainting the interior with the
+            // layer fill fails for hidden/transparent fills and covers content.
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(-1e6, -1e6, 2e6, 2e6);
+            traceShape(true);
+            ctx.clip("evenodd");
+            traceShape();
             ctx.lineWidth = w * 2;
             ctx.stroke();
-            if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
-              ctx.save();
-              ctx.globalCompositeOperation = "source-over";
-              paintFill(ctx, n, sx, sy, sw, sh, imgOf);
-              ctx.restore();
-            }
+            ctx.restore();
           } else {
             ctx.lineWidth = w;
             ctx.stroke();
@@ -1745,7 +1765,7 @@ export function Canvas({
               n.closed,
               n.strokeCap,
               n.strokeJoin,
-              miterLimitFromAngle(n.strokeMiterAngle),
+              strokeCanvasMiterLimit(n.strokeMiterAngle),
             );
           }
         }
@@ -7610,6 +7630,7 @@ function starPath(
   n: number,
   ratio = 0.4,
   cornerRadius = 0,
+  append = false,
 ) {
   const pts = Math.max(3, Math.min(60, Math.round(n)));
   const inner = Math.max(0.05, Math.min(0.95, ratio));
@@ -7622,7 +7643,7 @@ function starPath(
       y: cy + Math.sin(a) * ry * k,
     });
   }
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   const len = vertices.length;
   if (cornerRadius <= 0) {
     for (let i = 0; i < len; i++) {
@@ -7652,8 +7673,9 @@ function polyPath(
   ry: number,
   n: number,
   cornerRadius = 0,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   const pts = Math.max(3, Math.min(60, Math.round(n)));
   const vertices: { x: number; y: number }[] = [];
   for (let i = 0; i < pts; i++) {
@@ -7698,10 +7720,11 @@ function roundRectPath(
   sw: number,
   sh: number,
   z: number,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   if (hasCornerSmoothing(n)) {
-    tracePath(ctx, shapePoly(n), sx, sy, z, true);
+    tracePath(ctx, shapePoly(n), sx, sy, z, true, append);
     return;
   }
   const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
@@ -7724,17 +7747,18 @@ function traceNodeShape(
   sw: number,
   sh: number,
   z: number,
+  append = false,
 ) {
   if (n.kind === "text") {
-    ctx.beginPath();
+    if (!append) ctx.beginPath();
   } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
     if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
-      traceVectorNetwork(ctx, n.vectorNetwork, sx, sy, z);
+      traceVectorNetwork(ctx, n.vectorNetwork, sx, sy, z, append);
     } else {
-      tracePath(ctx, n.path, sx, sy, z, n.closed);
+      tracePath(ctx, n.path, sx, sy, z, n.closed, append);
     }
   } else if (n.kind === "ellipse") {
-    ctx.beginPath();
+    if (!append) ctx.beginPath();
     if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
       const sa = n.arcData.startingAngle ?? 0;
       const ea = n.arcData.endingAngle ?? Math.PI * 2;
@@ -7759,7 +7783,7 @@ function traceNodeShape(
       ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
     }
   } else if (n.kind === "line" || n.kind === "arrow") {
-    ctx.beginPath();
+    if (!append) ctx.beginPath();
     ctx.moveTo(sx, sy + sh / 2);
     ctx.lineTo(sx + sw, sy + sh / 2);
   } else if (n.kind === "star") {
@@ -7772,6 +7796,7 @@ function traceNodeShape(
       n.count || 5,
       n.starRatio || 0.4,
       n.cornerRadii[0] || 0,
+      append,
     );
   } else if (n.kind === "poly") {
     polyPath(
@@ -7782,9 +7807,10 @@ function traceNodeShape(
       Math.abs(sh / 2),
       n.count || 3,
       n.cornerRadii[0] || 0,
+      append,
     );
   } else {
-    roundRectPath(ctx, n, sx, sy, sw, sh, z);
+    roundRectPath(ctx, n, sx, sy, sw, sh, z, append);
   }
 }
 
@@ -7795,8 +7821,9 @@ function tracePath(
   oy: number,
   z: number,
   closed: boolean,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   path.forEach((pt, i) => {
     const vx = ox + pt.x * z;
     const vy = oy + pt.y * z;
@@ -7879,8 +7906,9 @@ function traceVectorNetwork(
   ox: number,
   oy: number,
   z: number,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   if (vn.regions && vn.regions.length > 0) {
     for (const region of vn.regions) {
       for (const loop of region.loops) {
@@ -8039,6 +8067,8 @@ function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy
     ctx.save();
     ctx.shadowColor = "transparent";
     ctx.strokeStyle = strokeStyle;
+    ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+    ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
     ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
     ctx.globalAlpha *= n.strokeOpacity ?? 1;
     draw("stroke");
@@ -8178,6 +8208,8 @@ function paintText(
     ctx.save();
     ctx.shadowColor = "transparent";
     ctx.strokeStyle = textStroke;
+    ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+    ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
     ctx.globalAlpha *= n.strokeOpacity ?? 1;
     ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
     ctx.strokeText(str, x, y, maxW);

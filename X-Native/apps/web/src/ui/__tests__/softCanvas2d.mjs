@@ -38,6 +38,8 @@ function makeContext(el) {
   let bh = 0;
   let path = [];
   let clip = null;
+  // Rectangle-only inverse clips for Outside stroke regression sampling.
+  let clipHoles = [];
   const strokes = [];
   ctxSeq++;
   const ctx = {
@@ -58,6 +60,7 @@ function makeContext(el) {
     textAlign: "left",
     textBaseline: "alphabetic",
     lineJoin: "miter",
+    miterLimit: 10,
     lineCap: "butt",
     /** The strokes this context was asked to paint, in order. */
     strokes,
@@ -135,6 +138,7 @@ function makeContext(el) {
     const b = ensure();
     if (x < 0 || y < 0 || x >= bw || y >= bh) return;
     if (clip && (x < clip[0] || y < clip[1] || x >= clip[2] || y >= clip[3])) return;
+    if (clipHoles.some(([x0, y0, x1, y1]) => x + 0.5 >= x0 && x + 0.5 < x1 && y + 0.5 >= y0 && y + 0.5 < y1)) return;
     const i = (y * bw + x) * 4;
     const sa = Math.max(0, Math.min(1, (rgba[3] ?? 1) * alpha));
     if (op === "destination-in") {
@@ -220,6 +224,8 @@ function makeContext(el) {
               clip ? [...clip] : null,
               target.lineJoin,
               target.lineWidth,
+              target.miterLimit,
+              clipHoles.map((hole) => [...hole]),
             ]);
             break;
           case "restore": {
@@ -233,6 +239,8 @@ function makeContext(el) {
               clip = s[5];
               target.lineJoin = s[6];
               target.lineWidth = s[7];
+              target.miterLimit = s[8];
+              clipHoles = s[9];
             }
             break;
           }
@@ -298,6 +306,12 @@ function makeContext(el) {
             clip = clip
               ? [Math.max(clip[0], x0), Math.max(clip[1], y0), Math.min(clip[2], x1), Math.min(clip[3], y1)]
               : [x0, y0, x1, y1];
+            if (args[0] === "evenodd" && path.length === 2) {
+              // Both subpaths must survive: a tracer calling beginPath between
+              // them would erase the outer rect and turn this back into a
+              // regular inside clip. Vector joins remain recording-only.
+              clipHoles.push(bbox(target.m, ...path[1]));
+            }
             break;
           }
           case "drawImage": {
@@ -413,7 +427,7 @@ function makeContext(el) {
           }
           case "stroke":
           case "strokeRect": {
-            strokes.push({ color: target.strokeStyle, inDoc: inDoc(), id: ctx.__id, join: target.lineJoin, width: target.lineWidth });
+            strokes.push({ color: target.strokeStyle, inDoc: inDoc(), id: ctx.__id, join: target.lineJoin, width: target.lineWidth, miterLimit: target.miterLimit });
             // Rasterise rectangle stroke bands for pixel-level paint assertions.
             // Other paths still use the recording backend; do not approximate
             // their joins or claim their pixels are covered by this helper.

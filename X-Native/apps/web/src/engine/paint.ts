@@ -397,6 +397,8 @@ function drawSourceTree(
       const style = m.strokeType === "pattern" ? patternStrokeStyle(ctx, m, ox, oy, k, imgOf) : cssRgba(m.strokePaint);
       if (style) {
         ctx.strokeStyle = style;
+        ctx.lineJoin = m.strokeJoin === "round" ? "round" : m.strokeJoin === "bevel" ? "bevel" : "miter";
+        ctx.miterLimit = strokeCanvasMiterLimit(m.strokeMiterAngle);
         ctx.lineWidth = m.strokeWidth * k;
         ctx.stroke();
       }
@@ -955,7 +957,8 @@ export function paintDropShadowsMasked(
       (n.strokeType === "pattern" ? !!patternSourceNode(n.strokePattern) : !isNone(n.strokePaint));
     const spread = spreadOn ? Math.max(0, drop.spread) : 0;
     if (ring) {
-      ctx.lineJoin = "miter";
+      ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+      ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
       ctx.lineCap = "butt";
       ctx.lineWidth = Math.max(0.5, n.strokeWidth * z) + spread * 2 * z;
       ctx.strokeStyle = ctx.fillStyle;
@@ -1087,11 +1090,18 @@ export function paintInnerShadows(
  * Alignment is emulated the same way the base stroke does it: canvas only
  * centres a stroke, so inside/outside double the width and clip or overdraw.
  */
+/** Default/zero miter angle is a safety limit, not an unbounded spike.
+ * Explicit positive angles keep their Figma-style bevel threshold. */
+export function strokeCanvasMiterLimit(angle?: number): number {
+  return angle != null && Number.isFinite(angle) && angle > 0
+    ? miterLimitFromAngle(angle) : 4;
+}
+
 export function paintExtraStrokes(
   ctx: CanvasRenderingContext2D,
   n: XNode,
   z: number,
-  trace: () => void,
+  trace: (append?: boolean) => void,
   /** Screen box of the node, needed to clip per-side strokes. */
   box?: { x: number; y: number; w: number; h: number },
 ) {
@@ -1104,7 +1114,7 @@ export function paintExtraStrokes(
     ctx.strokeStyle = cssRgba(colour);
     ctx.lineCap = s.cap === "round" ? "round" : s.cap === "square" ? "square" : "butt";
     ctx.lineJoin = s.join === "round" ? "round" : s.join === "bevel" ? "bevel" : "miter";
-    ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
+    ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
     const dash = s.dash ?? 0;
     const dashes = dashArray(s.pattern, dash, s.gap ?? 0, z);
     ctx.setLineDash(dashes);
@@ -1133,7 +1143,7 @@ export function paintExtraStrokes(
         ctx.save();
         ctx.beginPath();
         ctx.rect(-1e6, -1e6, 2e6, 2e6);
-        trace();
+        trace(true); // append the shape: a normal trace() clears the exterior rect
         ctx.clip("evenodd");
         trace();
         ctx.lineWidth = w * 2;
