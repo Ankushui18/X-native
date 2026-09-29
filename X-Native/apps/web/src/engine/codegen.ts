@@ -463,6 +463,15 @@ function resolveStyles(
       ].filter(Boolean).join(" ");
       if (vnum) decls.push(["font-variant-numeric", vnum]);
     }
+    {
+      // OpenType features & variable axes (4913951097367 / 5579502031511).
+      const cssEntries = (v?: Record<string, number>) =>
+        v && Object.keys(v).length ? Object.entries(v).map(([k, x]) => `"${k}" ${x}`).join(", ") : "";
+      const feat = cssEntries(n.fontFeatures);
+      const vari = cssEntries(n.fontVariations);
+      if (feat) decls.push(["font-feature-settings", feat]);
+      if (vari) decls.push(["font-variation-settings", vari]);
+    }
     if (n.truncate) {
       if (n.maxLines > 1) {
         decls.push(["display", "-webkit-box"]);

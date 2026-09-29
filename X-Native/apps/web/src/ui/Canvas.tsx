@@ -7040,6 +7040,14 @@ export function Canvas({
           : wp.node.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
           : wp.node.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
       ].filter(Boolean).join(" ") || undefined,
+      // OpenType features & variable axes (4913951097367 / 5579502031511):
+      // the live editor uses the same font settings the exports emit.
+      fontFeatureSettings: wp.node.fontFeatures && Object.keys(wp.node.fontFeatures).length
+        ? Object.entries(wp.node.fontFeatures).map(([k, v]) => `"${k}" ${v}`).join(", ")
+        : undefined,
+      fontVariationSettings: wp.node.fontVariations && Object.keys(wp.node.fontVariations).length
+        ? Object.entries(wp.node.fontVariations).map(([k, v]) => `"${k}" ${v}`).join(", ")
+        : undefined,
       transform: wp.node.rotation ? `rotate(${wp.node.rotation}deg)` : undefined,
       transformOrigin: "center center",
       // The overlay is a real textarea, so the wrap style is handed to the

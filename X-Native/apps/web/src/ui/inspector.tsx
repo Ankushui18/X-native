@@ -1460,6 +1460,13 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     if (n.baselineShift === "super") rules.push("vertical-align: super;");
     if (n.baselineShift === "sub") rules.push("vertical-align: sub;");
     if (n.verticalTrim) rules.push("leading-trim: both; text-edge: cap alphabetic;");
+    // OpenType features & variable axes (4913951097367 / 5579502031511).
+    const cssEntries = (v?: Record<string, number>) =>
+      v && Object.keys(v).length ? Object.entries(v).map(([k, x]) => `"${k}" ${x}`).join(", ") : "";
+    const feat = cssEntries(n.fontFeatures);
+    const vari = cssEntries(n.fontVariations);
+    if (feat) rules.push(`font-feature-settings: ${feat};`);
+    if (vari) rules.push(`font-variation-settings: ${vari};`);
   }
   if (n.effects?.length) {
     const shadows = n.effects
@@ -4107,6 +4114,114 @@ function Design({
                   mixed={mixedProp((m) => m.listSpacing, textTargets)}
                   values={multi ? manyVals((m) => m.listSpacing, textTargets) : undefined}
                   onChangeMany={multi ? (vs) => patchNumMany("listSpacing", vs, textTargets) : undefined}
+                />
+              </div>
+              {/* OpenType features (4913951097367) - the Details tab's common
+                  toggles: ligatures, stylistic sets, character variants. */}
+              <div className="dir-row">
+                <div className="seg icons">
+                  <label className="check" title="Standard ligatures (liga) - on by default in the font">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.liga !== 0}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) delete f.liga;
+                        else f.liga = 0;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Ligatures
+                  </label>
+                  <label className="check" title="Discretionary ligatures (dlig)">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.dlig === 1}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) f.dlig = 1;
+                        else delete f.dlig;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Discretionary
+                  </label>
+                  <label className="check" title="Contextual alternates (calt)">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.calt === 1}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) f.calt = 1;
+                        else delete f.calt;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Contextual
+                  </label>
+                </div>
+              </div>
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="ss"
+                  value={Number(Object.keys(n.fontFeatures ?? {}).find((k) => /^ss\d\d$/.test(k))?.slice(2) ?? 0)}
+                  aria="Stylistic set (1-20, 0 = off)"
+                  onChange={(v) => {
+                    const f = { ...(n.fontFeatures ?? {}) };
+                    for (const k of Object.keys(f)) if (/^ss\d\d$/.test(k)) delete f[k];
+                    const i = Math.round(v);
+                    if (i >= 1 && i <= 20) f[`ss${String(i).padStart(2, "0")}`] = 1;
+                    patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                  }}
+                />
+                <Field
+                  label="cv"
+                  value={Number(Object.keys(n.fontFeatures ?? {}).find((k) => /^cv\d\d$/.test(k))?.slice(2) ?? 0)}
+                  aria="Character variant (1-99, 0 = off)"
+                  onChange={(v) => {
+                    const f = { ...(n.fontFeatures ?? {}) };
+                    for (const k of Object.keys(f)) if (/^cv\d\d$/.test(k)) delete f[k];
+                    const i = Math.round(v);
+                    if (i >= 1 && i <= 99) f[`cv${String(i).padStart(2, "0")}`] = 1;
+                    patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                  }}
+                />
+              </div>
+              {/* Variable-font axes (5579502031511) - weight rides the regular
+                  weight control; width, optical size and slant are axes. */}
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="wdth"
+                  value={n.fontVariations?.wdth ?? 0}
+                  aria="Variable width axis (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.wdth = v;
+                    else delete g.wdth;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
+                <Field
+                  label="opsz"
+                  value={n.fontVariations?.opsz ?? 0}
+                  aria="Variable optical-size axis (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.opsz = v;
+                    else delete g.opsz;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
+                <Field
+                  label="slnt"
+                  value={n.fontVariations?.slnt ?? 0}
+                  aria="Variable slant axis in degrees (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.slnt = v;
+                    else delete g.slnt;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
                 />
               </div>
             </div>

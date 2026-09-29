@@ -179,6 +179,10 @@ console.log("X-D svg export text:");
   t("decoration passes through", svgNode(snode({ textDecoration: "underline" })).includes('text-decoration="underline"'));
   const trunc = svgNode(snode({ text: "a\nb\nc", truncate: true, maxLines: 2 }));
   t("truncate keeps max lines with an ellipsis", (trunc.match(/<tspan/g) || []).length === 2 && trunc.includes("…"));
+  // OpenType features & variable axes (4913951097367 / 5579502031511).
+  const feat = svgNode(snode({ fontFeatures: { liga: 0, ss02: 1 }, fontVariations: { wdth: 90 } }));
+  t("openType features export", feat.includes('font-feature-settings:"liga" 0, "ss02" 1') && feat.includes('font-variation-settings:"wdth" 90'));
+  t("absent openType emits nothing", !svgNode(snode({})).includes("font-feature-settings") && !svgNode(snode({})).includes("font-variation-settings"));
 }
 
 console.log("X-E text styles (360039957034):");

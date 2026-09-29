@@ -363,6 +363,12 @@ export interface TextStyleProps {
   fractions?: boolean;
   slashedZero?: boolean;
   figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): CSS `font-feature-settings` entries -
+   *  ligatures, stylistic sets, character variants. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): CSS `font-variation-settings` -
+   *  weight/width/optical-size/slant and friends. */
+  fontVariations?: Record<string, number>;
 }
 
 export interface ComponentPropertyDef {
@@ -479,6 +485,10 @@ export interface TextRun {
   fractions?: boolean;
   slashedZero?: boolean;
   figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): `font-feature-settings` entries. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): `font-variation-settings` entries. */
+  fontVariations?: Record<string, number>;
   /** Links (360045942953): a linked range, underlined by default. */
   link?: string;
   /** Wrap style at the paragraph level (360039956634 §Wrap style). */
@@ -896,6 +906,10 @@ export interface XNode {
   fractions?: boolean;
   slashedZero?: boolean;
   figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): `font-feature-settings` entries. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): `font-variation-settings` entries. */
+  fontVariations?: Record<string, number>;
   /** Line height unit: px value vs percent of the font size vs Auto. */
   lineHeightUnit?: LineHeightUnit;
   /** Links (360045942953): the whole text layer is a link. */

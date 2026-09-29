@@ -529,6 +529,8 @@ export function pickTextStyle(n: XNode): TextStyleProps {
     fractions: n.fractions,
     slashedZero: n.slashedZero,
     figureStyle: n.figureStyle,
+    fontFeatures: n.fontFeatures,
+    fontVariations: n.fontVariations,
   };
 }
 
