@@ -102,6 +102,34 @@ export function scaleMembers(box: Box, members: Box[], f: number, anchor: ScaleA
   return members.map(map);
 }
 
+/** Stateless affine map for a group bounding-box resize. `from` and `to` are
+ * page-space axis-aligned group bounds; each member's centre follows the same
+ * map and its dimensions receive the same x/y scale. */
+export function resizeGroupMembers(from: Box, members: Box[], to: Box): Box[] {
+  const sx = to.w / Math.max(1e-9, from.w);
+  const sy = to.h / Math.max(1e-9, from.h);
+  return members.map((m) => ({
+    x: to.x + (m.x + m.w / 2 - from.x) * sx - (m.w * sx) / 2,
+    y: to.y + (m.y + m.h / 2 - from.y) * sy - (m.h * sy) / 2,
+    w: m.w * sx,
+    h: m.h * sy,
+  }));
+}
+
+/** Stateless group rotation about the union-box centre. Coordinates are in
+ * page space; each member keeps its own dimensions and accumulates the turn. */
+export function rotateGroupMembers(box: Box, members: (Box & { rotation?: number })[], deg: number) {
+  const a = (deg * Math.PI) / 180;
+  const c = Math.cos(a), s = Math.sin(a);
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  return members.map((m) => {
+    const mx = m.x + m.w / 2 - cx, my = m.y + m.h / 2 - cy;
+    const x = cx + mx * c - my * s - m.w / 2;
+    const y = cy + mx * s + my * c - m.h / 2;
+    return { ...m, x, y, rotation: (m.rotation ?? 0) + deg };
+  });
+}
+
 /** The multiplier the panel should show for a box that has already been scaled:
  *  width over the value it had when the tool was armed. */
 export function factorBetween(from: number, to: number): number {

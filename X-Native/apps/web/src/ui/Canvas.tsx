@@ -15,7 +15,7 @@ import { pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork } from "./po
 import { layersAt } from "./selectSame";
 import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit } from "./canvasSelection";
 import { rememberImage, hydrateNodes } from "../engine/assets";
-import { rotateAboutOrigin } from "./scaleModel";
+import { resizeGroupMembers, rotateGroupMembers, rotateAboutOrigin, wrapRotationDeg } from "./scaleModel";
 import {
   erasePath,
   shapePoly,
@@ -279,21 +279,34 @@ type Drag =
       cy?: number;
     };
 
+/** Drop selected descendants whose selected ancestor already carries them. */
+function transformSelectionRoots(root: XNode, ids: string[]): string[] {
+  const wanted = new Set(ids), roots: string[] = [];
+  const walk = (n: XNode, carried: boolean) => {
+    const selected = wanted.has(n.id);
+    if (selected && !carried) roots.push(n.id);
+    for (const c of n.children) walk(c, carried || selected);
+  };
+  walk(root, false);
+  return roots;
+}
+
 /** Snapshot every selected node's world + local box before a group transform. */
 function multiOrigins(root: XNode, ids: string[]): MultiOrigin[] {
   const out: MultiOrigin[] = [];
-  for (const id of ids) {
+  for (const id of transformSelectionRoots(root, ids)) {
     const wp = worldPos(root, id);
-    if (!wp || isEffectivelyLocked(root, id) || isInstanceMember(root, id)) continue;
+    const own = find(root, id);
+    if (!wp || !own || isEffectivelyLocked(root, id) || isInstanceMember(root, id)) continue;
     out.push({
       id,
       x: wp.x,
       y: wp.y,
       w: wp.node.w,
       h: wp.node.h,
-      rotation: wp.node.rotation,
-      lx: wp.node.x,
-      ly: wp.node.y,
+      rotation: own.rotation,
+      lx: own.x,
+      ly: own.y,
     });
   }
   return out;
@@ -5458,19 +5471,21 @@ export function Canvas({
         aspect: e.shiftKey || snap.tool === "scale",
         fromCenter: e.altKey,
       });
-      const sxScale = next.w / Math.max(1e-6, d.bounds.w);
-      const syScale = next.h / Math.max(1e-6, d.bounds.h);
-      // Map each member through the same affine scale about the box origin.
-      for (const o of d.origs) {
-        const nx = next.x + (o.x - d.bounds.x) * sxScale;
-        const ny = next.y + (o.y - d.bounds.y) * syScale;
+      const mapped = resizeGroupMembers(d.bounds, d.origs, next);
+      const rootNow = snap.pages[snap.page].root;
+      for (let i = 0; i < d.origs.length; i++) {
+        const o = d.origs[i], m = mapped[i];
+        // Convert the mapped page-space centre back into the node's parent
+        // coordinates. This keeps nested selections correct under rotated or
+        // mirrored containers; subtracting page deltas from local x/y does not.
+        const pc = worldPointToParent(rootNow, o.id, m.x + m.w / 2, m.y + m.h / 2);
         engine.dispatch({
           type: "resize",
           id: o.id,
-          x: o.lx + (nx - o.x),
-          y: o.ly + (ny - o.y),
-          w: Math.max(1, o.w * sxScale),
-          h: Math.max(1, o.h * syScale),
+          x: pc.x - m.w / 2,
+          y: pc.y - m.h / 2,
+          w: Math.max(1, m.w),
+          h: Math.max(1, m.h),
           scaleProps: snap.tool === "scale",
           ignoreConstraints: e.metaKey || e.ctrlKey,
         });
@@ -5486,28 +5501,16 @@ export function Canvas({
       let deltaDeg = ((curAngle - (d.startAngle ?? 0)) * 180) / Math.PI;
       let ang = deltaDeg;
       if (e.shiftKey) ang = Math.round(ang / 15) * 15;
-      const rad = (ang * Math.PI) / 180;
-      const cos = Math.cos(rad);
-      const sin = Math.sin(rad);
-      const wcx = d.bounds.x + d.bounds.w / 2;
-      const wcy = d.bounds.y + d.bounds.h / 2;
-      for (const o of d.origs) {
-        const ox = o.x + o.w / 2 - wcx;
-        const oy = o.y + o.h / 2 - wcy;
-        const wx = wcx + ox * cos - oy * sin - o.w / 2;
-        const wy = wcy + ox * sin + oy * cos - o.h / 2;
-        engine.dispatch({
-          type: "resize",
-          id: o.id,
-          x: o.lx + (wx - o.x),
-          y: o.ly + (wy - o.y),
-          w: o.w,
-          h: o.h,
-        });
+      const rotated = rotateGroupMembers(d.bounds, d.origs, ang);
+      const rootNow = snap.pages[snap.page].root;
+      for (let i = 0; i < d.origs.length; i++) {
+        const o = d.origs[i], m = rotated[i];
+        const pc = worldPointToParent(rootNow, o.id, m.x + m.w / 2, m.y + m.h / 2);
+        engine.dispatch({ type: "resize", id: o.id, x: pc.x - o.w / 2, y: pc.y - o.h / 2, w: o.w, h: o.h });
         engine.dispatch({
           type: "patch",
           id: o.id,
-          patch: { rotation: Math.round(((o.rotation || 0) + ang) * 10) / 10 },
+          patch: { rotation: wrapRotationDeg(Math.round(((o.rotation || 0) + ang * parentHandedness(rootNow, o.id)) * 10) / 10) },
         });
       }
     } else if ((d.mode === "crop" || d.mode === "cropMove") && d.id && d.cropStart) {
@@ -8408,14 +8411,24 @@ function selectionBounds(
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const id of ids) {
-    const wp = worldPos(root, id);
-    if (!wp) continue;
-    const b = nodeVisualBounds(wp);
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    maxX = Math.max(maxX, b.x + b.w);
-    maxY = Math.max(maxY, b.y + b.h);
+  for (const id of transformSelectionRoots(root, ids)) {
+    const n = find(root, id);
+    if (!n) continue;
+    const pb = (n.kind === "vector" || n.kind === "boolean") && n.path.length
+      ? pathBounds(n.path, n.closed)
+      : { minX: 0, minY: 0, w: n.w, h: n.h };
+    const corners = [
+      localToWorld(root, id, pb.minX, pb.minY),
+      localToWorld(root, id, pb.minX + pb.w, pb.minY),
+      localToWorld(root, id, pb.minX + pb.w, pb.minY + pb.h),
+      localToWorld(root, id, pb.minX, pb.minY + pb.h),
+    ];
+    for (const p of corners) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
   }
   if (!isFinite(minX)) return null;
   return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
