@@ -1372,7 +1372,14 @@ export function Canvas({
     // `maskTile` marks the pass that paints a mask into its own offscreen tile,
     // where only the mask's alpha matters: the green mask outline belongs on the
     // canvas, not in the mask (it would widen the clip by its stroke width).
-    const paint = (n: XNode, px: number, py: number, maskTile = false) => {
+    /** `tilePass`: this paint runs inside a composite tile whose transform
+     * already carries the node's rotation/flip (the tile captured the live CTM
+     * after `paint` applied it, see `effectsTile`). Re-applying it here would
+     * rotate the subtree twice — children at double the angle and, for a
+     * clipped frame, a clip square that maps back onto its own axis-aligned
+     * box so content leaks past the frame. The pass paints fills/clip/children
+     * exactly like the direct path and leaves the transform to the tile. */
+    const paint = (n: XNode, px: number, py: number, maskTile = false, tilePass = false) => {
       if (!n.visible) return;
       const x = px + n.x;
       const y = py + n.y;
@@ -1396,7 +1403,7 @@ export function Canvas({
         if (sx0 + n.w * z + m < 0 || sy0 + n.h * z + m < 0 || sx0 - m > w || sy0 - m > h) return;
       }
       ctx.save();
-      if (n.rotation || n.flipH || n.flipV) {
+      if (!tilePass && (n.rotation || n.flipH || n.flipV)) {
         const cx = snap.panX + (x + n.w / 2) * z;
         const cy = snap.panY + (y + n.h / 2) * z;
         ctx.translate(cx, cy);
@@ -1616,7 +1623,7 @@ export function Canvas({
         fxDepth++;
         try {
           ctx = core.ctx;
-          paint({ ...n, effects: plain }, px, py, maskTile);
+          paint({ ...n, effects: plain }, px, py, maskTile, true);
         } finally {
           ctx = outer;
           fxDepth--;

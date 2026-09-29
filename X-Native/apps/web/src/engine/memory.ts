@@ -3221,8 +3221,18 @@ export class MemoryEngine implements Engine {
           if ((n.kind !== "frame" && n.kind !== "group") || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) continue;
           const kids = n.children.filter((c) => c.visible && (!n.layout || !c.absolutePosition));
           if (!kids.length) continue;
-          const corners = kids.flatMap((c) => [[0, 0], [c.w, 0], [c.w, c.h], [0, c.h]]
-            .map(([x, y]) => applyMatrix(nodeMatrix(c), x, y)));
+          // The objects' outermost bounds — each corner run through the
+          // child's own matrix, and the box padded by the child's stroke
+          // spill (outside strokes by their full weight, centre strokes by
+          // half): Figma redraws the frame "around the outermost bounds of
+          // the objects within it", and a stroke is part of an object's
+          // bounds. A symmetric local pad maps correctly under the child's
+          // own rotation/flip.
+          const corners = kids.flatMap((c) => {
+            const s = strokeSpill(c);
+            return [[-s, -s], [c.w + s, -s], [c.w + s, c.h + s], [-s, c.h + s]]
+              .map(([x, y]) => applyMatrix(nodeMatrix(c), x, y));
+          });
           const x0 = Math.min(...corners.map((p) => p.x)), y0 = Math.min(...corners.map((p) => p.y));
           const w = Math.max(1, Math.max(...corners.map((p) => p.x)) - x0);
           const h = Math.max(1, Math.max(...corners.map((p) => p.y)) - y0);
