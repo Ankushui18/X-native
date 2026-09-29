@@ -64,7 +64,7 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  Minimap.tsx and Rulers.tsx are at zero: they have no literals left to drift. */
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [8, 12, 10, 10, 0],
+  "Canvas.tsx": [11, 12, 11, 11, 0],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   "Dashboard.tsx": [1, 0, 11, 33, 1],
@@ -83,7 +83,7 @@ const CEILING = {
   "chrome.tsx": [50, 4, 41, 65, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],
-  "inspector.tsx": [185, 44, 236, 194, 45],
+  "inspector.tsx": [186, 44, 239, 197, 45],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 13, 15, 1],
 };

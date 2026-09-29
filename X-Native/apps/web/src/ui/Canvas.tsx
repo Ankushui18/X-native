@@ -64,6 +64,15 @@ import { Comments } from "./Comments";
 import { useTheme } from "./theme";
 import { hasMixedTextSpans, styledTextRows, truncateStyledRows } from "./textLayout";
 import { rememberTextRange, resolvedTextSpans, spansAfterTextEdit, styleTextRange } from "./textSpans";
+import {
+  emojiCompletions,
+  emojiQueryAt,
+  fontFamilyStack,
+  insertEmoji,
+  smartConvert,
+  directionOf,
+} from "../engine/textInput";
+import { smartSymbolsEnabled } from "./smartSymbols";
 import { applyTextCase, canvasTextFont, effectiveLineHeight, fitLineCount, hugSize, indentOf, invalidateTextMeasureCache, listCounters, listGutter, listLayout, listLevelOf, measureCached, paraListStyle, paraWrapOf, textMetrics, valignApplies, wrapLines } from "./textLayout";
 import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
@@ -606,6 +615,15 @@ export function Canvas({
   /** Links (360045942953): the "Create link" input box above the selection. */
   const [linkInput, setLinkInput] = useState<{ left: number; top: number; id: string; start?: number; end?: number } | null>(null);
   const [linkHover, setLinkHover] = useState<{ left: number; top: number; url: string } | null>(null);
+  /** Emoji `:code` completion (360039957174): the open picker while a
+   *  `:name` fragment sits at the caret. */
+  const [emojiPick, setEmojiPick] = useState<{ left: number; top: number; start: number; query: string } | null>(null);
+  const emojiApply = (_code: string, emoji: string) => {
+    if (!emojiPick) return;
+    const next = insertEmoji(edit?.text ?? "", emojiPick.start, emojiPick.start + emojiPick.query.length + 1, emoji);
+    if (edit) setEdit({ ...edit, text: next.text });
+    setEmojiPick(null);
+  };
   useEffect(() => {
     const open = (ev: Event) => {
       const d = (ev as CustomEvent).detail;
@@ -7127,7 +7145,8 @@ export function Canvas({
       letterSpacing: `${wp.node.letterSpacing * snap.zoom}px`,
       textAlign: wp.node.textAlign === "justified" ? "left" : wp.node.textAlign,
       color: wp.node.fill,
-      fontFamily: wp.node.fontFamily,
+      // Font fallback (360040449673): unsupported characters render in Noto.
+      fontFamily: fontFamilyStack(wp.node.fontFamily),
       // Numbers (360039956634 §Numbers): the browser applies the same font
       // features to the live editor that SVG export and Dev Mode emit.
       fontVariantNumeric: [
@@ -7298,6 +7317,12 @@ export function Canvas({
           style={editBox}
           value={edit.text}
           autoFocus
+          // RTL (4972283635863): "Figma automatically handles text direction
+          // based on language detection" unless the layer overrides it.
+          dir={(() => {
+            const t = worldPos(snap.pages[snap.page].root, edit.id)?.node;
+            return t && (t.textDirection === "ltr" || t.textDirection === "rtl") ? t.textDirection : "auto";
+          })()}
           onSelect={(e) => {
             // A select event may fire again with a collapsed range during blur.
             if (e.currentTarget.selectionStart < e.currentTarget.selectionEnd)
@@ -7323,7 +7348,29 @@ export function Canvas({
           onChange={(e) => {
             rememberTextRange(engine, null);
             capturedRange.current = null;
-            setEdit({ ...edit, text: e.target.value });
+            const raw = e.target.value;
+            let next = raw;
+            let caret = e.target.selectionStart ?? raw.length;
+            // Smart quotes/symbols (360039957174): "->" becomes "→" and
+            // friends, straight quotes curl - behind the Preferences toggle.
+            if (smartSymbolsEnabled()) {
+              next = smartConvert(raw);
+              if (next !== raw) caret = smartConvert(raw.slice(0, caret)).length;
+            }
+            setEdit({ ...edit, text: next });
+            // Emoji `:codes` (360039957174): typing ":name" opens the picker.
+            const q = emojiQueryAt(next, caret);
+            setEmojiPick(
+              q
+                ? {
+                    left: parseFloat(e.target.style.left) || 0,
+                    top: (parseFloat(e.target.style.top) || 0) + 26,
+                    start: q.start,
+                    query: q.query,
+                  }
+                : null,
+            );
+            if (next !== raw) setTimeout(() => e.target.setSelectionRange(caret, caret), 0);
           }}
           onBlur={(e) => {
             // Some browsers collapse the DOM selection as focus moves to the
@@ -7369,6 +7416,17 @@ export function Canvas({
             } else setEdit(null);
           }}
           onKeyDown={(e) => {
+            // Emoji `:code` picker (360039957174) owns the keys first: Tab or
+            // Enter takes the top suggestion, Escape just closes the picker.
+            if (emojiPick && (e.key === "Escape" || e.key === "Tab" || e.key === "Enter")) {
+              e.preventDefault();
+              if (e.key === "Escape") setEmojiPick(null);
+              else {
+                const sug = emojiCompletions(emojiPick.query, 1)[0];
+                if (sug) emojiApply(sug.code, sug.emoji);
+              }
+              return;
+            }
             if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter"))
               (e.target as HTMLTextAreaElement).blur();
             // ⇧⌘U (360045942953): the link input box above the selection.
@@ -7523,6 +7581,40 @@ export function Canvas({
               boxShadow: "var(--elev-floating)",
             }}
           />
+        </div>
+      )}
+      {emojiPick && emojiCompletions(emojiPick.query).length > 0 && (
+        // Emoji `:codes` (360039957174): type ":name" and take a suggestion.
+        <div
+          className="link-input"
+          style={{ left: emojiPick.left, top: emojiPick.top, position: "absolute", zIndex: 31 }}
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: 2,
+              padding: "4px 6px",
+              background: "var(--elevated)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              boxShadow: "var(--elev-floating)",
+            }}
+          >
+            {emojiCompletions(emojiPick.query).map(({ code, emoji }) => (
+              <button
+                key={code}
+                className="icon-btn"
+                title={`:${code}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  emojiApply(code, emoji);
+                }}
+                style={{ font: "16px Inter, system-ui" }}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
         </div>
       )}
       {linkInput && (
@@ -8572,6 +8664,9 @@ function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy
   const draw = (mode: "fill" | "stroke" | "none", phase: "post" | "pre" = "post") => {
     let ty = y;
     for (const row of lines) {
+      // RTL/bidi (4972283635863): per-paragraph direction - override, else
+      // the row's own content decides.
+      ctx.direction = directionOf(row.pieces.map((p) => p.text).join(""), n.paraDir?.[row.pi] ?? n.textDirection);
       const left = sx + row.lead;
       const inner = Math.max(0, sw - row.lead);
       let x = n.textAlign === "center" ? left + (inner - row.width) / 2
@@ -8852,7 +8947,7 @@ function paintText(
   const indent = indentOf(n) * z;
   type Row = {
     line: string; lastInPara: boolean; lead: number; marker: string;
-    markerX: number; hangQ: number; itemGap: boolean;
+    markerX: number; hangQ: number; itemGap: boolean; pi: number;
   };
   const rows: Row[] = [];
   const widthOfLine = (line: string) =>
@@ -8884,6 +8979,7 @@ function paintText(
         hangQ: i === 0 ? hangQ : 0,
         itemGap: i === wrapped.length - 1 && paraListStyle(n, pi) !== "none"
           && pi + 1 < paras.length && paraListStyle(n, pi + 1) !== "none",
+        pi,
       }),
     );
   });
@@ -8985,6 +9081,9 @@ function paintText(
   const paintRows = (mode: "fill" | "stroke" | "none", decorate: "none" | "underline" | "all") => {
   let ty = y0;
   lines.forEach((row) => {
+    // RTL/bidi (4972283635863): each paragraph resolves its direction -
+    // an explicit override, else the language detection of its content.
+    ctx.direction = directionOf(row.line, n.paraDir?.[row.pi] ?? n.textDirection);
     const fullLine = row.line;
     let line = fullLine;
     const left = sx + row.lead;

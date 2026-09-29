@@ -21,6 +21,7 @@ import {
   valignApplies,
 } from "../../ui/textLayout.ts";
 import { balanceLines, outlineWalk, walkAt, walkNearest } from "../geometry.ts";
+import { emojiCompletions, emojiQueryAt, fontFamilyStack, insertEmoji, smartConvert, hasRtlScript, directionOf } from "../textInput.ts";
 import { svgNode } from "../svgExport.ts";
 import { MemoryEngine, find } from "../memory.ts";
 import { styleTextRange } from "../../ui/textSpans.ts";
@@ -261,5 +262,40 @@ console.log("X-F text on a path (360039956434):");
     e.dispatch({ type: "patch", id, patch: { onPath: "some-path", pathStart: 0.25, pathSide: "right" } });
     const n = find(e.snapshot().pages[e.snapshot().page].root, id);
     return n.onPath === "some-path" && n.pathStart === 0.25 && n.pathSide === "right";
+  })());
+}
+
+console.log("X-G emoji, smart symbols, CJK/RTL (360039957174/360040449673/4972283635863):");
+{
+  // Emoji `:codes` (360039957174): ":heart" and friends, keyword search.
+  t("emoji codes resolve", emojiCompletions("heart")[0]?.emoji === "❤️");
+  t("emoji search matches keywords", emojiCompletions("plus").some((e) => e.code === "plus"));
+  t("emoji search needs a query", emojiCompletions("").length === 0);
+  const q = emojiQueryAt("say :he", 7);
+  t("the :query sits at the caret", !!q && q.query === "he" && q.start === 4);
+  t("no query mid-word", emojiQueryAt("a:b", 3) === null);
+  const ins = insertEmoji("say :heart!", 4, 10, "❤️");
+  t("insertEmoji swaps the code", ins.text === "say ❤️!" && ins.caret === 6);
+  // Smart symbols (360039957174): the documented pairs and curly quotes.
+  t("smart arrows", smartConvert("a -> b <- c") === "a → b ← c");
+  t("smart up/down", smartConvert("vv then ^^") === "↓ then ↑");
+  t("smart marks", smartConvert("(c)(r)(tm)") === "©®™");
+  t("smart box", smartConvert("[ ]") === "▢");
+  t("smart quotes open and close", smartConvert(`"hi" and 'yes'`) === "\u201chi\u201d and \u2018yes\u2019");
+  // RTL (4972283635863): automatic by language detection, overridable.
+  t("rtl scripts detected", hasRtlScript("שלום") && hasRtlScript("مرحبا") && !hasRtlScript("hello"));
+  t("direction detects rtl", directionOf("שלום world") === "rtl");
+  t("direction override wins", directionOf("שלום world", "ltr") === "ltr" && directionOf("hello", "rtl") === "rtl");
+  // Font fallback (360040449673): unsupported characters land in Noto.
+  t("font stacks fall back to Noto", fontFamilyStack("Inter").startsWith(`"Inter", Inter,`) &&
+    fontFamilyStack("Inter").includes(`"Noto Sans SC"`) && fontFamilyStack("X").includes(`"Noto Sans Arabic"`));
+  // The on-path of the CJK/RTL model: per-paragraph overrides.
+  t("text layers carry direction overrides", (() => {
+    const e = new MemoryEngine(false);
+    e.dispatch({ type: "add", kind: "text", x: 0, y: 0, w: 40, h: 20 });
+    const id = e.snapshot().selection[0];
+    e.dispatch({ type: "patch", id, patch: { textDirection: "rtl", paraDir: ["rtl", null] } });
+    const n = find(e.snapshot().pages[e.snapshot().page].root, id);
+    return n.textDirection === "rtl" && n.paraDir[0] === "rtl" && n.paraDir[1] === null;
   })());
 }

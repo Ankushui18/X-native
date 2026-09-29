@@ -19,6 +19,7 @@
 
 import type { StrokeCap, XNode } from "./types";
 import { outlineStroke, outlineVariableStroke, shapePoly } from "./geometry";
+import { directionOf, fontFamilyStack } from "./textInput";
 import { applyTextCase, valignApplies } from "../ui/textLayout";
 import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
@@ -603,7 +604,7 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
       variCss ? `font-variation-settings:${variCss}` : "",
     ].filter(Boolean).join(";");
     body.push(
-      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${extraStyle ? ` style="${extraStyle}"` : ""}${filter}>${content}</text>`,
+      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging"${directionOf(n.text, n.paraDir?.[0] ?? n.textDirection) === "rtl" ? ' direction="rtl"' : ""} fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(fontFamilyStack(n.fontFamily))}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${extraStyle ? ` style="${extraStyle}"` : ""}${filter}>${content}</text>`,
     );
     }
   } else if (n.fillType === "image" && n.imageSrc && n.fillExportVisible !== false) {

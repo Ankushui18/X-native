@@ -1,5 +1,6 @@
 import type { XNode } from "../engine/types";
 import { balanceLines } from "../engine/geometry";
+import { fontFamilyStack } from "../engine/textInput";
 import { resolvedTextSpans, type StyledSpan } from "./textSpans";
 
 /**
@@ -161,8 +162,7 @@ export function listLayout(
 
 /** Same font shorthand for painting, measuring text, and measuring list gutters. */
 export function canvasTextFont(n: XNode, size = n.fontSize, run?: StyledSpan): string {
-  const family = (run?.fontFamily || n.fontFamily || "Inter").replace(/["\\]/g, "");
-  return `${n.textCase === "small-caps" ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${run?.fontWeight ?? n.fontWeight} ${Math.max(1, size)}px "${family}", Inter, system-ui`;
+  return `${n.textCase === "small-caps" ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${run?.fontWeight ?? n.fontWeight} ${Math.max(1, size)}px ${fontFamilyStack(run?.fontFamily || n.fontFamily)}`;
 }
 
 /**
@@ -410,6 +410,8 @@ export type StyledRow = {
   markerX: number;
   /** Extra list spacing after this paragraph's last row (360040449773). */
   itemGap: boolean;
+  /** Paragraph index - each row resolves its own bidi direction (4972283635863). */
+  pi: number;
   lastInPara: boolean;
 };
 /** The same run-aware widths and line breaks feed hug sizing and Canvas paint.
@@ -481,6 +483,7 @@ export function styledTextRows(ctx: CanvasRenderingContext2D, n: XNode, text: st
         marker: i === 0 && paraEnd > paraStart ? ll.marker : "", markerX: ll.markerX,
         itemGap: i === ranges.length - 1 && paraListStyle(n, pi) !== "none"
           && pi + 1 < paraCount && paraListStyle(n, pi + 1) !== "none",
+        pi,
         lastInPara: i === ranges.length - 1 });
     });
     if (nextBreak < 0) break;

@@ -12,6 +12,7 @@ import {
   pickTextStyle,
 } from "../engine/memory";
 import { selectedTextRange, styleTextRange } from "./textSpans";
+import { setSmartSymbols, smartSymbolsEnabled } from "./smartSymbols";
 import { shapePoly, shiftPoints } from "../engine/geometry";
 import { stopsMaskReach } from "../engine/paint";
 import { alignKey } from "../engine/layout";
@@ -1585,6 +1586,12 @@ export function Actions({
       label: "Nudge amount…",
       sc: "",
       run: () => window.dispatchEvent(new CustomEvent("x-native-nudge-dialog")),
+    },
+    {
+      // 360039957174 §Add smart symbols: Preferences ▸ Use smart quotes/symbols.
+      label: `${smartSymbolsEnabled() ? "✓ " : ""}Use smart quotes/symbols`,
+      sc: "",
+      run: () => setSmartSymbols(!smartSymbolsEnabled()),
     },
     { label: "Create component", sc: "⌘⌥K", run: () => engine.dispatch({ type: "makeComponent" }) },
     { label: "Detach instance", sc: "", run: () => engine.dispatch({ type: "detachInstance" }) },

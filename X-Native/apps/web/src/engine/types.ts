@@ -918,6 +918,12 @@ export interface XNode {
   /** Which side of the path the baseline sits on; "right" is Flip text
    *  orientation. */
   pathSide?: "left" | "right";
+  /** RTL/bidi (4972283635863): explicit text direction. Absent/"auto" = the
+   *  language detection the article describes. */
+  textDirection?: "auto" | "ltr" | "rtl";
+  /** Per-paragraph direction overrides (the article's per-paragraph control);
+   *  `null` falls back to `textDirection`/detection. */
+  paraDir?: ("ltr" | "rtl" | null)[];
   /** Line height unit: px value vs percent of the font size vs Auto. */
   lineHeightUnit?: LineHeightUnit;
   /** Links (360045942953): the whole text layer is a link. */

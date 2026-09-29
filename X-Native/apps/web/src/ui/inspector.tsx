@@ -101,6 +101,7 @@ import {
 } from "../engine/layout";
 import { hugSize } from "./textLayout";
 import { resolvedTextSpans, selectedTextRange, styleTextRange, type SpanStyle } from "./textSpans";
+import { hasRtlScript, directionOf } from "../engine/textInput";
 import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
@@ -1460,6 +1461,8 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     if (n.baselineShift === "super") rules.push("vertical-align: super;");
     if (n.baselineShift === "sub") rules.push("vertical-align: sub;");
     if (n.verticalTrim) rules.push("leading-trim: both; text-edge: cap alphabetic;");
+    // RTL/bidi (4972283635863).
+    if (directionOf(n.text || "", n.textDirection) === "rtl") rules.push("direction: rtl;");
     // OpenType features & variable axes (4913951097367 / 5579502031511).
     const cssEntries = (v?: Record<string, number>) =>
       v && Object.keys(v).length ? Object.entries(v).map(([k, x]) => `"${k}" ${x}`).join(", ") : "";
@@ -3633,6 +3636,20 @@ function Design({
                     "Outfit",
                     "Fira Code",
                     "JetBrains Mono",
+                    // CJK (360040449673): Figma lists the Noto CJK fonts in
+                    // shorthand (SC/TC/JP/KR) and falls back to Noto for
+                    // unsupported characters. RTL (4972283635863): RTL fonts
+                    // are in the default list. These resolve from the system
+                    // when installed, like Figma's desktop fonts.
+                    "— Noto fonts —",
+                    "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR",
+                    "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR",
+                    "Noto Sans Arabic", "Noto Sans Hebrew",
+                    // Icon fonts (360040449513): Font Awesome; an icon's
+                    // Regular/Solid variant is the font weight (400/900).
+                    "— Icon fonts —",
+                    "Font Awesome 6 Free", "Font Awesome 6 Brands",
+                    "Font Awesome 5 Free", "Font Awesome 5 Brands",
                     "system-ui",
                   ];
                   const merged = (() => {
@@ -4017,6 +4034,37 @@ function Design({
                   onChange={(v) => patchType({ underlineOffset: v })}
                 />
               </div>
+              {/* RTL/bidi (4972283635863): "If an RTL script is detected in
+                  your text layer, a [control] will appear in the text section
+                  … allowing you to control the text direction." */}
+              {(hasRtlScript(n.text || "") || (n.textDirection !== undefined && n.textDirection !== "auto")) && (
+                <div className="dir-row">
+                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>Text direction</span>
+                  <div className="seg icons">
+                    <button
+                      className={`mini${(n.textDirection ?? "auto") === "ltr" ? " on" : ""}`}
+                      title="Left to right text direction"
+                      onClick={() => patchType({ textDirection: "ltr" })}
+                    >
+                      LTR
+                    </button>
+                    <button
+                      className={`mini${n.textDirection === "rtl" ? " on" : ""}`}
+                      title="Right to left text direction"
+                      onClick={() => patchType({ textDirection: "rtl" })}
+                    >
+                      RTL
+                    </button>
+                    <button
+                      className={`mini${(n.textDirection ?? "auto") === "auto" ? " on" : ""}`}
+                      title="Automatic - text direction follows language detection"
+                      onClick={() => patchType({ textDirection: "auto" })}
+                    >
+                      Auto
+                    </button>
+                  </div>
+                </div>
+              )}
               {/* Text on a path (360039956434): the start handle slides along
                   the path on canvas; Flip moves the text to its other side. */}
               {n.onPath && (
