@@ -1,7 +1,7 @@
 /**
- * Auto-layout edge cases (pipeline run 11): what a Fill child does when its own
- * min/max clamps its share, and what an "Ignore auto layout" (absolute
- * position) child does to the flow around it.
+ * Auto-layout edge cases (pipeline run 11, extended by run 12): what a Fill
+ * child does when its own min/max clamps its share, and what an "Ignore auto
+ * layout" (absolute position) child does to the flow around it.
  *
  * The evidence for the expected numbers:
  *
@@ -28,7 +28,15 @@
  *
  * Test A is the redistribution case; Test B is the absolute-position case. Both
  * are written to fail against the pre-fix engine (see the sabotage notes in
- * AUTOLAYOUT_EDGE_CASES_AUDIT_2026-09-29.md).
+ * AUTOLAYOUT_EDGE_CASES_AUDIT_2026-09-29.md). Section C is the run-12 re-audit
+ * (AUTOLAYOUT_EDGE_CASES_REAUDIT_2026-09-29.md): an independent second witness
+ * for the brief's two cases, plus the corners no probe measured before -
+ * auto-gap around/evenly residuals, grid-cell and aspect-locked fill clamps,
+ * scale pins, wrap + fill clamps, fill + baseline, nested clamp cascades, and
+ * the inspector-driven patch paths. All C numbers were measured on this base
+ * before being encoded, and each section is sabotage-verified: break the
+ * redistribute loop, re-suppress the auto-gap residual, or let absolute
+ * children back into the flow and these fail.
  *
  * Run with:  npx vite-node src/engine/__tests__/autoLayoutEdgeCases.test.mjs
  */
@@ -326,6 +334,229 @@ console.log("B · Ignore auto layout (absolute position):");
     near(g(e, abs, "x"), 450) && near(g(e, abs, "y"), 250));
   t("B19c the flow is unchanged by the resize",
     near(g(e, a, "w"), 180) && near(g(e, b, "x"), 200));
+}
+
+/* =================================================================== *
+ * C · Run 12 re-audit: independent second witness + unmeasured corners
+ * =================================================================== */
+console.log("C · Run 12 re-audit (20+ adversarial measurements):");
+
+{
+  // The brief's own case A, measured from scratch: a Fill child with
+  // minW 150 / maxW 180 under a parent that goes 200 -> 300 -> 100. The max
+  // clamps the growth (180, NOT 300), and the min outranks the fill on the
+  // way down.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 200, 200, layout({}));
+  const k = addKid(e, F, 100, 100, { sizingW: "fill", minW: 150, maxW: 180 });
+  t("C1 brief A: w=180 at parent 200 (the fill's 200 share clamps to maxW)", near(g(e, k, "w"), 180));
+  e.dispatch({ type: "resize", id: F, w: 300, h: 300 });
+  t("C2 brief A: w=180 at parent 300 - it clamps, it does not stretch to 300", near(g(e, k, "w"), 180));
+  e.dispatch({ type: "resize", id: F, w: 100, h: 300 });
+  t("C3 brief A: w=150 at parent 100 - the min outranks the fill", near(g(e, k, "w"), 150));
+}
+
+{
+  // The brief's own case B: an absolute child pinned bottom-right keeps its
+  // insets through the resize and never enters the flow (sibling slots and the
+  // 10px gap stay exactly as computed without it).
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 200, 200, layout({ gap: 10 }));
+  const a = addKid(e, F, 60, 60);
+  const b = addKid(e, F, 60, 60);
+  const abs = addKid(e, F, 40, 40, {
+    x: 150, y: 150, absolutePosition: true, constraintH: "max", constraintV: "max",
+  });
+  t("C4 brief B: pinned child starts 10/10 inside the bottom-right corner",
+    near(g(e, abs, "x"), 150) && near(g(e, abs, "y"), 150));
+  e.dispatch({ type: "resize", id: F, w: 300, h: 300 });
+  t("C5 brief B: after 200 -> 300 it sits at (250, 250), insets still 10/10",
+    near(g(e, abs, "x"), 250) && near(g(e, abs, "y"), 250) &&
+    near(300 - (g(e, abs, "x") + g(e, abs, "w")), 10) && near(300 - (g(e, abs, "y") + g(e, abs, "h")), 10));
+  t("C6 brief B: the flow siblings keep (0,0) and (70,0) - no slot, no push",
+    near(g(e, a, "x"), 0) && near(g(e, a, "y"), 0) && near(g(e, b, "x"), 70) && near(g(e, b, "y"), 0));
+}
+
+{
+  // Run 11's pre-fix deviation signatures, re-measured: 120 + 380 of 500 (the
+  // released 260 goes to the open filler), the auto-gap residual, and the
+  // min-squeeze that keeps the row at 300 of 300.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 500, 100, layout({}));
+  const a = addKid(e, F, 100, 100, { sizingW: "fill", maxW: 120 });
+  const b = addKid(e, F, 100, 100, { sizingW: "fill" });
+  t("C7 a capped filler hands its released share to the open filler",
+    near(g(e, a, "w"), 120) && near(g(e, b, "w"), 380) && near(g(e, b, "x"), 120));
+  const e2 = new MemoryEngine(false);
+  const F2 = addFrame(e2, 500, 100, layout({ gapMode: "auto", spacing: "between" }));
+  const a2 = addKid(e2, F2, 60, 60, { sizingW: "fill", maxW: 120 });
+  const b2 = addKid(e2, F2, 60, 60);
+  t("C8 with nothing open to absorb it, the auto gap takes the residual",
+    near(g(e2, a2, "w"), 120) && near(g(e2, b2, "x"), 440) && near(g(e2, b2, "x") + g(e2, b2, "w"), 500));
+  const e3 = new MemoryEngine(false);
+  const F3 = addFrame(e3, 300, 100, layout({}));
+  const a3 = addKid(e3, F3, 100, 100, { sizingW: "fill", minW: 80 });
+  const b3 = addKid(e3, F3, 100, 100, { sizingW: "fill", minW: 160 });
+  t("C9 a min above the equal share squeezes the sibling, not the frame",
+    near(g(e3, a3, "w"), 140) && near(g(e3, b3, "w"), 160));
+}
+
+{
+  // Auto gap "around" and "evenly" split a capped filler's residual
+  // symmetrically: 320 of slack -> lead 80 / gap 160 / trail 80, and
+  // lead = gap = trail = 320/3. (A fixed gap packed left instead leaves the
+  // residual at the trailing edge - also correct, and not what these assert.)
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 500, 60, layout({ gapMode: "auto", spacing: "around" }));
+  const a = addKid(e, F, 60, 60, { sizingW: "fill", maxW: 120 });
+  const b = addKid(e, F, 60, 60);
+  t("C10 auto gap around: the capped residual splits 80 / 160 / 80",
+    near(g(e, a, "x"), 80) && near(g(e, b, "x"), 360) && near(500 - (g(e, b, "x") + g(e, b, "w")), 80));
+  const e2 = new MemoryEngine(false);
+  const F2 = addFrame(e2, 500, 60, layout({ gapMode: "auto", spacing: "evenly" }));
+  const a2 = addKid(e2, F2, 60, 60, { sizingW: "fill", maxW: 120 });
+  const b2 = addKid(e2, F2, 60, 60);
+  t("C11 auto gap evenly: lead = gap = trail = 320/3",
+    near(g(e2, a2, "x"), 320 / 3, 0.02) && near(g(e2, b2, "x"), 1000 / 3, 0.02) &&
+    near(500 - (g(e2, b2, "x") + g(e2, b2, "w")), 320 / 3, 0.02));
+}
+
+{
+  // A fill inside a grid cell clamps to its own limits: the track offers 200,
+  // the max stops it at 150 on both axes.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 400, 400, layout({ direction: "grid", columns: 2 }));
+  const a = addKid(e, F, 50, 50, { sizingW: "fill", sizingH: "fill", maxW: 150, maxH: 150 });
+  t("C12 a grid-cell fill stops at its own maxW/maxH",
+    near(g(e, a, "w"), 150) && near(g(e, a, "h"), 150));
+}
+
+{
+  // An aspect-locked fill stops at its maxW and takes its height with it from
+  // the ratio it was locked at (180 x 90, not a square).
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 400, 200, layout({}));
+  const a = addKid(e, F, 100, 50, { sizingW: "fill", maxW: 180, aspectLocked: true, aspectRatio: 0.5 });
+  t("C13 an aspect-locked fill clamp keeps the locked ratio",
+    near(g(e, a, "w"), 180) && near(g(e, a, "h"), 90));
+}
+
+{
+  // A scale-pinned absolute child scales its position AND its size with the
+  // frame: 200 -> 300 is x1.5 on both axes.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 200, 200, layout({}));
+  const abs = addKid(e, F, 40, 40, {
+    x: 30, y: 30, absolutePosition: true, constraintH: "scale", constraintV: "scale",
+  });
+  e.dispatch({ type: "resize", id: F, w: 300, h: 300 });
+  t("C14 a scale-pinned absolute child scales to (45, 45) 60x60",
+    near(g(e, abs, "x"), 45) && near(g(e, abs, "y"), 45) && near(g(e, abs, "w"), 60) && near(g(e, abs, "h"), 60));
+}
+
+{
+  // Wrap + fill clamp: a fill child pushed to its minW 150 makes the row
+  // 250 wide inside a 200 frame, so its sibling wraps - and the cross-hug
+  // frame grows to the two lines (200x80) rather than staying 200x200.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 200, 200, layout({ wrap: true, cross: "hug" }));
+  const a = addKid(e, F, 100, 40, { sizingW: "fill", minW: 150 });
+  const b = addKid(e, F, 100, 40);
+  t("C15 a fill min-clamp that overflows the line forces the wrap",
+    near(g(e, a, "w"), 150) && near(g(e, a, "x"), 0) && near(g(e, a, "y"), 0) &&
+    near(g(e, b, "x"), 0) && near(g(e, b, "y"), 40));
+  t("C16 the cross hug measures the wrapped lines (200x80)",
+    near(g(e, F, "w"), 200) && near(g(e, F, "h"), 80));
+}
+
+{
+  // Wrap + two fills where one caps: the freeze/redistribute loop runs before
+  // the line break, so the 40 the capped child refused lands on its sibling
+  // (80) and the three still fit one 300 line - 40 + 80 + 160 + two 10 gaps.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 300, 200, layout({ wrap: true, gap: 10 }));
+  const a = addKid(e, F, 100, 40, { sizingW: "fill", maxW: 40 });
+  const b = addKid(e, F, 100, 40, { sizingW: "fill" });
+  const c = addKid(e, F, 160, 40);
+  t("C17 a capped filler in a wrapped row still redistributes to its sibling",
+    near(g(e, a, "w"), 40) && near(g(e, b, "w"), 80) && near(g(e, c, "w"), 160) &&
+    near(g(e, b, "x"), 50) && near(g(e, c, "x"), 140));
+}
+
+{
+  // Fill + baseline: the clamp still holds, and boxes without text share a
+  // baseline synthesised from their bottom edges - the 40-tall capped fill
+  // drops 20 below the 60-tall sibling (both bottoms at 60).
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 400, 100, layout({ align: "baseline", gap: 10 }));
+  const a = addKid(e, F, 100, 40, { sizingW: "fill", maxW: 180 });
+  const b = addKid(e, F, 60, 60);
+  t("C18 a baseline row still clamps the fill (180) and keeps the gap",
+    near(g(e, a, "w"), 180) && near(g(e, b, "x"), 190));
+  t("C19 the shorter fill drops onto the shared baseline (bottoms at 60)",
+    near(g(e, a, "y"), 20) && near(g(e, b, "y"), 0) &&
+    near(g(e, a, "y") + g(e, a, "h"), 60) && near(g(e, b, "y") + g(e, b, "h"), 60));
+  e.dispatch({ type: "resize", id: F, w: 500, h: 100 });
+  t("C19b on resize the clamp and the baseline both hold",
+    near(g(e, a, "w"), 180) && near(g(e, a, "y"), 20) && near(g(e, b, "x"), 190));
+}
+
+{
+  // Nested clamp cascade: an inner fill frame capped at 250 inside an outer
+  // fill row, with its own fill child capped at 100. Every level clamps
+  // independently as the outer frame grows - and the inner one tracks the
+  // outer when it shrinks below the caps.
+  const e = new MemoryEngine(false);
+  const outer = addFrame(e, 500, 200, layout({}));
+  // Frames added to a parent directly (addFrame only targets the page root).
+  const before = new Set(byId(e, outer).children.map((c) => c.id));
+  e.dispatch({ type: "add", kind: "frame", x: 0, y: 0, w: 100, h: 100, parent: outer });
+  const inner = byId(e, outer).children.find((c) => !before.has(c.id)).id;
+  e.dispatch({ type: "autoLayout", id: inner, layout: layout({}) });
+  e.dispatch({ type: "patch", id: inner, patch: { sizingW: "fill", maxW: 250 } });
+  const a = addKid(e, inner, 50, 50, { sizingW: "fill", maxW: 100 });
+  const sib = addKid(e, outer, 60, 60);
+  t("C20 nested: the inner fill frame clamps at its own maxW (250)",
+    near(g(e, inner, "w"), 250) && near(g(e, a, "w"), 100) && near(g(e, sib, "x"), 250));
+  e.dispatch({ type: "resize", id: outer, w: 800, h: 200 });
+  t("C21 nested: growth past the caps changes nothing (250 / 100 / x=250)",
+    near(g(e, inner, "w"), 250) && near(g(e, a, "w"), 100) && near(g(e, sib, "x"), 250));
+  e.dispatch({ type: "resize", id: outer, w: 100, h: 200 });
+  t("C22 nested: shrink below the caps re-clamps down (40 / 40 / x=40)",
+    near(g(e, inner, "w"), 40) && near(g(e, a, "w"), 40) && near(g(e, sib, "x"), 40));
+}
+
+{
+  // Scale tools: a scaled resize takes the min/max limits with the box
+  // (scaleProps), so the clamp cannot outlive the geometry it was drawn for.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 400, 100, layout({}));
+  const a = addKid(e, F, 100, 100, { sizingW: "fill", minW: 200, maxW: 320 });
+  t("C23 the fill starts at its maxW (320)", near(g(e, a, "w"), 320));
+  e.dispatch({ type: "resize", id: F, w: 200, h: 100, scaleProps: true });
+  const n = byId(e, a);
+  t("C24 a scaled parent resize scales the limits (minW 150, maxW 240) and the clamp follows",
+    near(n.minW, 150) && near(n.maxW, 240) && near(n.w, 200));
+}
+
+{
+  // The inspector's numeric fields dispatch `patch` with the limits; a patch
+  // must re-clamp the fill immediately on both axes.
+  const e = new MemoryEngine(false);
+  const F = addFrame(e, 400, 100, layout({}));
+  const a = addKid(e, F, 100, 100, { sizingW: "fill" });
+  e.dispatch({ type: "patch", id: a, patch: { maxW: 150 } });
+  t("C25 patching maxW re-clamps at once (w 400 -> 150)", near(g(e, a, "w"), 150));
+  e.dispatch({ type: "patch", id: a, patch: { minW: 200, maxW: 320 } });
+  t("C26 patching minW/maxW together settles at the frame's share capped to 320",
+    near(g(e, a, "w"), 320));
+  const e2 = new MemoryEngine(false);
+  const F2 = addFrame(e2, 100, 400, layout({ direction: "vertical" }));
+  const h = addKid(e2, F2, 100, 100, { sizingH: "fill" });
+  e2.dispatch({ type: "patch", id: h, patch: { maxH: 160 } });
+  t("C27 the height axis re-clamps the same way (h 400 -> 160)", near(g(e2, h, "h"), 160));
+  e2.dispatch({ type: "patch", id: h, patch: { minH: 200, maxH: 320 } });
+  t("C28 vertical min/max patch settles at 320", near(g(e2, h, "h"), 320));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
