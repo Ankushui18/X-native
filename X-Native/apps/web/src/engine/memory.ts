@@ -584,6 +584,28 @@ function clampDims(n: XNode) {
   if (n.maxH != null && Number.isFinite(n.maxH) && n.h > n.maxH) n.h = n.maxH;
 }
 
+/**
+ * A Fill child's min/max clamps its share, and the space it gives back is
+ * redistributed among the other fill children. Each pass freezes every child
+ * that clamped - a finite set - so a flow settles in at most one pass per
+ * filler; the cap is only here so a pathological document (dozens of clamps,
+ * or a future share rule that clamps without freezing) cannot spin, and any
+ * pass that would exceed it still clamps, it just stops redistributing.
+ */
+const MAX_REDISTRIBUTION_ITERATIONS = 10;
+
+/** The main-axis limit a fill child clamps its share to, if it has one. */
+function mainLimit(n: XNode, horiz: boolean): number | undefined {
+  const limit = horiz ? n.maxW : n.maxH;
+  return limit != null && Number.isFinite(limit) ? limit : undefined;
+}
+
+/** The main-axis floor a fill child will not shrink below, if it has one. */
+function mainFloor(n: XNode, horiz: boolean): number | undefined {
+  const floor = horiz ? n.minW : n.minH;
+  return floor != null && Number.isFinite(floor) ? floor : undefined;
+}
+
 /** Every size in the tree, rounded: what "settled" means for a reflow. */
 function sizeSignature(n: XNode): string {
   let s = `${Math.round(n.w * 100)}:${Math.round(n.h * 100)}`;
@@ -719,10 +741,53 @@ function applyLayout(n: XNode, gesture = false) {
     // matches its sibling's"). The shares still add up to `leftover`, so the
     // frame's own padding keeps its room.
     const insets = fillers.map((c) => contentInset(c, horiz ? "w" : "h"));
-    const each = (leftover - insets.reduce((s, v) => s + v, 0)) / fillers.length;
-    fillers.forEach((c, i) => {
+    // The share is a starting bid, not the final answer: a child that hits its
+    // own min/max cannot take that share, and the space it gives back belongs
+    // to the fill children that are still free. Offer everyone an equal share,
+    // freeze whoever clamps at the limit they hit, and offer what is left to
+    // the rest - CSS `flex-grow` with min/max, which is also how Figma
+    // describes the model (help 42031586813719), and the exact bug Figma
+    // shipped a fix for in Sep 2026 ("fails to distribute remaining space",
+    // forum 57215: Child B -> its 160 min, Child A -> the remaining 140).
+    // Freezing the clamped children first is what keeps a min from overflowing
+    // the frame: the sibling is then sized from what is actually left.
+    const sizes = new Map<XNode, number>();
+    let active = fillers.map((c, i) => ({ c, inset: insets[i] }));
+    let free = leftover;
+    for (let pass = 0; pass < MAX_REDISTRIBUTION_ITERATIONS && active.length; pass++) {
+      const insetTotal = active.reduce((s, a) => s + a.inset, 0);
+      const share = (free - insetTotal) / active.length;
+      const still: typeof active = [];
+      let clamped = false;
+      for (const a of active) {
+        const bid = Math.max(1, share + a.inset);
+        const floor = mainFloor(a.c, horiz);
+        const limit = mainLimit(a.c, horiz);
+        const size = floor != null && bid < floor ? floor : limit != null && bid > limit ? limit : bid;
+        sizes.set(a.c, size);
+        if (size !== bid) {
+          // The child is settled: its space is gone from the pool, and the
+          // next pass offers what is left to the children that are still open.
+          free -= size;
+          clamped = true;
+        } else {
+          still.push(a);
+        }
+      }
+      if (!clamped) break;
+      active = still;
+    }
+    // Only reachable when the iteration cap stops a pass early: the children
+    // still open take an even share of the room that is left, and the clamps
+    // below are applied to every filler either way.
+    if (active.length) {
+      const insetTotal = active.reduce((s, a) => s + a.inset, 0);
+      const share = (free - insetTotal) / active.length;
+      for (const a of active) sizes.set(a.c, Math.max(1, share + a.inset));
+    }
+    fillers.forEach((c) => {
       const otherFills = (horiz ? c.sizingH : c.sizingW) === "fill";
-      const patch = fillPatch(c, horiz ? "w" : "h", Math.max(1, each + insets[i]), otherFills);
+      const patch = fillPatch(c, horiz ? "w" : "h", sizes.get(c) ?? 1, otherFills);
       if (patch.w != null) c.w = patch.w;
       if (patch.h != null) c.h = patch.h;
       clampDims(c);
@@ -829,7 +894,12 @@ function applyLayout(n: XNode, gesture = false) {
   const contentMain = flow.reduce((s, c) => s + (horiz ? c.w : c.h), 0);
   // Auto gap distributes whatever is left after the objects have taken their
   // share; a fixed gap and the older `justify` packing do what they always did.
-  const slack = hugMain || fillers.length ? 0 : Math.max(0, inner - contentMain);
+  // A fill child normally claims the whole residual, so the slack it leaves is
+  // zero - but when every filler has clamped at its own min/max, the space they
+  // could not take is free space again, and the auto gap is where Figma puts it
+  // (the same forum-57215 fix: a capped filler pushes its sibling to the frame's
+  // trailing edge instead of leaving the frame half empty).
+  const slack = hugMain ? 0 : Math.max(0, inner - contentMain);
   const pack = auto ? autoSpacing(slack, flow.length, spacing) : { lead: 0, gap: packedGap };
   let origin = horiz ? pl : pt;
   if (!auto) {
