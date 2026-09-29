@@ -445,6 +445,33 @@ function resolveStyles(
     else if (n.textCase === "small-caps") decls.push(["font-variant", "small-caps"]);
     if (n.textDecoration === "underline") decls.push(["text-decoration", "underline"]);
     else if (n.textDecoration === "strikethrough") decls.push(["text-decoration", "line-through"]);
+    if (n.textDecoration === "underline") {
+      if (n.underlineStyle && n.underlineStyle !== "solid") decls.push(["text-decoration-style", n.underlineStyle]);
+      if (n.underlineColor) decls.push(["text-decoration-color", n.underlineColor]);
+      if (n.underlineThickness != null) decls.push(["text-decoration-thickness", `${n.underlineThickness}px`]);
+      if (n.underlineOffset) decls.push(["text-underline-offset", `${n.underlineOffset}px`]);
+      if (n.underlineSkipInk) decls.push(["text-decoration-skip-ink", "auto"]);
+    }
+    {
+      const vnum = [
+        n.slashedZero ? "slashed-zero" : "",
+        n.fractions ? "diagonal-fractions" : "",
+        n.figureStyle === "proportional-oldstyle" ? "oldstyle-nums proportional-nums"
+          : n.figureStyle === "monospace-lining" ? "lining-nums tabular-nums"
+            : n.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
+              : n.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
+      ].filter(Boolean).join(" ");
+      if (vnum) decls.push(["font-variant-numeric", vnum]);
+    }
+    {
+      // OpenType features & variable axes (4913951097367 / 5579502031511).
+      const cssEntries = (v?: Record<string, number>) =>
+        v && Object.keys(v).length ? Object.entries(v).map(([k, x]) => `"${k}" ${x}`).join(", ") : "";
+      const feat = cssEntries(n.fontFeatures);
+      const vari = cssEntries(n.fontVariations);
+      if (feat) decls.push(["font-feature-settings", feat]);
+      if (vari) decls.push(["font-variation-settings", vari]);
+    }
     if (n.truncate) {
       if (n.maxLines > 1) {
         decls.push(["display", "-webkit-box"]);

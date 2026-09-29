@@ -101,6 +101,7 @@ import {
 } from "../engine/layout";
 import { hugSize } from "./textLayout";
 import { resolvedTextSpans, selectedTextRange, styleTextRange, type SpanStyle } from "./textSpans";
+import { hasRtlScript, directionOf } from "../engine/textInput";
 import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
@@ -1424,7 +1425,17 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
     if (n.textAlign && n.textAlign !== "left")
       rules.push(`text-align: ${n.textAlign === "justified" ? "justify" : n.textAlign};`);
-    if (n.textDecoration && n.textDecoration !== "none") rules.push(`text-decoration: ${n.textDecoration};`);
+    if (n.textDecoration && n.textDecoration !== "none") {
+      rules.push(`text-decoration: ${n.textDecoration};`);
+      // Underline details (360039956634 §Decoration).
+      if (n.textDecoration === "underline") {
+        if (n.underlineStyle && n.underlineStyle !== "solid") rules.push(`text-decoration-style: ${n.underlineStyle};`);
+        if (n.underlineColor) rules.push(`text-decoration-color: ${n.underlineColor};`);
+        if (n.underlineThickness != null) rules.push(`text-decoration-thickness: ${devLen(n.underlineThickness, unit)};`);
+        if (n.underlineOffset) rules.push(`text-underline-offset: ${devLen(n.underlineOffset, unit)};`);
+        if (n.underlineSkipInk) rules.push("text-decoration-skip-ink: auto;");
+      }
+    }
     if (n.textCase && n.textCase !== "none")
       rules.push(
         `text-transform: ${n.textCase === "upper" ? "uppercase" : n.textCase === "lower" ? "lowercase" : n.textCase === "title" ? "capitalize" : "none"};`,
@@ -1437,6 +1448,28 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     if (n.listStyle && n.listStyle !== "none")
       rules.push(`list-style-type: ${n.listStyle === "numbered" ? "decimal" : "disc"};`);
     if (n.paragraphIndent) rules.push(`text-indent: ${devLen(n.paragraphIndent, unit)};`);
+    // Numbers (360039956634 §Numbers) and vertical trim (§Vertical trim).
+    const nums = [
+      n.slashedZero ? "slashed-zero" : "",
+      n.fractions ? "diagonal-fractions" : "",
+      n.figureStyle === "proportional-oldstyle" ? "oldstyle-nums proportional-nums"
+        : n.figureStyle === "monospace-lining" ? "lining-nums tabular-nums"
+          : n.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
+            : n.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
+    ].filter(Boolean);
+    if (nums.length) rules.push(`font-variant-numeric: ${nums.join(" ")};`);
+    if (n.baselineShift === "super") rules.push("vertical-align: super;");
+    if (n.baselineShift === "sub") rules.push("vertical-align: sub;");
+    if (n.verticalTrim) rules.push("leading-trim: both; text-edge: cap alphabetic;");
+    // RTL/bidi (4972283635863).
+    if (directionOf(n.text || "", n.textDirection) === "rtl") rules.push("direction: rtl;");
+    // OpenType features & variable axes (4913951097367 / 5579502031511).
+    const cssEntries = (v?: Record<string, number>) =>
+      v && Object.keys(v).length ? Object.entries(v).map(([k, x]) => `"${k}" ${x}`).join(", ") : "";
+    const feat = cssEntries(n.fontFeatures);
+    const vari = cssEntries(n.fontVariations);
+    if (feat) rules.push(`font-feature-settings: ${feat};`);
+    if (vari) rules.push(`font-variation-settings: ${vari};`);
   }
   if (n.effects?.length) {
     const shadows = n.effects
@@ -2025,7 +2058,7 @@ function DevTokens({ snap }: { snap: Snapshot }) {
     });
   }
   for (const s of snap.styles) {
-    if (s.kind === "paint") rows.push({ group: "Styles", name: s.name, value: s.color, color: s.color });
+    if (s.kind === "paint") rows.push({ group: "Styles", name: s.name, value: s.color ?? "", color: s.color });
   }
   if (!rows.length) return null;
 
@@ -2481,7 +2514,11 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   ] as [string, string | undefined][]) {
     if (!id) continue;
     const style = snap.styles.find((s) => s.id === id || s.name === id);
-    L(label, style ? `${style.name} · ${style.color.toUpperCase()}` : String(id), "Styles", style?.color);
+    L(label, style ? (style.color ? `${style.name} · ${style.color.toUpperCase()}` : style.name) : String(id), "Styles", style?.color);
+  }
+  if (n.textStyle) {
+    const style = snap.styles.find((s) => s.id === n.textStyle);
+    L("Text style", style ? style.name : String(n.textStyle), "Styles");
   }
   if (n.exports?.length) {
     L(
@@ -3258,7 +3295,7 @@ function Design({
     return true;
   };
   const num = (
-    key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing",
+    key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing" | "listSpacing",
     v: number,
   ) => {
     if (key === "x" || key === "y") {
@@ -3410,7 +3447,7 @@ function Design({
   // A committed number per layer, with num()'s floors, then a hug refit
   // for the metrics that change how much room the copy needs.
   const patchNumMany = (
-    key: "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing" | "paragraphIndent" | "strokeWidth",
+    key: "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing" | "paragraphIndent" | "listSpacing" | "strokeWidth",
     vals: number[],
     pool: XNode[] = selNodes,
     extra?: (m: XNode, v: number) => Partial<XNode>,
@@ -3599,6 +3636,20 @@ function Design({
                     "Outfit",
                     "Fira Code",
                     "JetBrains Mono",
+                    // CJK (360040449673): Figma lists the Noto CJK fonts in
+                    // shorthand (SC/TC/JP/KR) and falls back to Noto for
+                    // unsupported characters. RTL (4972283635863): RTL fonts
+                    // are in the default list. These resolve from the system
+                    // when installed, like Figma's desktop fonts.
+                    "— Noto fonts —",
+                    "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR",
+                    "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR",
+                    "Noto Sans Arabic", "Noto Sans Hebrew",
+                    // Icon fonts (360040449513): Font Awesome; an icon's
+                    // Regular/Solid variant is the font weight (400/900).
+                    "— Icon fonts —",
+                    "Font Awesome 6 Free", "Font Awesome 6 Brands",
+                    "Font Awesome 5 Free", "Font Awesome 5 Brands",
                     "system-ui",
                   ];
                   const merged = (() => {
@@ -3904,7 +3955,7 @@ function Design({
                   </select>
                   <select
                     aria-label="List"
-                    title="List - markers hang in the gutter beside the paragraph"
+                    title="List - markers hang beside the paragraph"
                     value={n.listStyle}
                     onChange={(e) => patchType({ listStyle: e.target.value as XNode["listStyle"] })}
                   >
@@ -3913,6 +3964,334 @@ function Design({
                     <option value="numbered">Numbered</option>
                   </select>
                 </div>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  {/* Line height unit (360039956634 §Line height): px or a
+                      percentage of the font size - "Figma will convert the
+                      value for you, to the nearest pixel". */}
+                  <select
+                    aria-label="Line height unit"
+                    title="Line height unit - converts the value on switch"
+                    value={n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto")}
+                    onChange={(e) => {
+                      const u = e.target.value as XNode["lineHeightUnit"];
+                      const cur = n.lineHeight || n.fontSize * 1.2;
+                      const val =
+                        u === "auto" ? 0
+                          : u === "percent" ? Math.round((cur / Math.max(1, n.fontSize)) * 100)
+                            : Math.round((n.lineHeight / 100) * n.fontSize);
+                      patchType({ lineHeightUnit: u, lineHeight: val });
+                    }}
+                  >
+                    <option value="auto">Leading: Auto</option>
+                    <option value="px">Leading: px</option>
+                    <option value="percent">Leading: %</option>
+                  </select>
+                  <label className="check" title="Vertical trim - remove the space above and below the text">
+                    <input
+                      type="checkbox"
+                      checked={!!n.verticalTrim}
+                      onChange={(e) => patchType({ verticalTrim: e.target.checked })}
+                    />
+                    Vertical trim
+                  </label>
+                </div>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Underline style"
+                    title="Underline style (360039956634 §Decoration)"
+                    value={n.underlineStyle ?? "solid"}
+                    onChange={(e) => patchType({ underlineStyle: e.target.value as XNode["underlineStyle"] })}
+                  >
+                    <option value="solid">Underline: solid</option>
+                    <option value="dotted">Underline: dotted</option>
+                    <option value="wavy">Underline: wavy</option>
+                  </select>
+                  <label className="check" title="Skip ink - the underline steps around glyph crossings">
+                    <input
+                      type="checkbox"
+                      checked={!!n.underlineSkipInk}
+                      onChange={(e) => patchType({ underlineSkipInk: e.target.checked })}
+                    />
+                    Skip ink
+                  </label>
+                </div>
+              </div>
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="U━"
+                  value={n.underlineThickness ?? 1}
+                  aria="Underline thickness"
+                  onChange={(v) => patchType({ underlineThickness: Math.max(0, v) })}
+                />
+                <Field
+                  label="U↕"
+                  value={n.underlineOffset ?? 0}
+                  aria="Underline offset"
+                  onChange={(v) => patchType({ underlineOffset: v })}
+                />
+              </div>
+              {/* RTL/bidi (4972283635863): "If an RTL script is detected in
+                  your text layer, a [control] will appear in the text section
+                  … allowing you to control the text direction." */}
+              {(hasRtlScript(n.text || "") || (n.textDirection !== undefined && n.textDirection !== "auto")) && (
+                <div className="dir-row">
+                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>Text direction</span>
+                  <div className="seg icons">
+                    <button
+                      className={`mini${(n.textDirection ?? "auto") === "ltr" ? " on" : ""}`}
+                      title="Left to right text direction"
+                      onClick={() => patchType({ textDirection: "ltr" })}
+                    >
+                      LTR
+                    </button>
+                    <button
+                      className={`mini${n.textDirection === "rtl" ? " on" : ""}`}
+                      title="Right to left text direction"
+                      onClick={() => patchType({ textDirection: "rtl" })}
+                    >
+                      RTL
+                    </button>
+                    <button
+                      className={`mini${(n.textDirection ?? "auto") === "auto" ? " on" : ""}`}
+                      title="Automatic - text direction follows language detection"
+                      onClick={() => patchType({ textDirection: "auto" })}
+                    >
+                      Auto
+                    </button>
+                  </div>
+                </div>
+              )}
+              {/* Text on a path (360039956434): the start handle slides along
+                  the path on canvas; Flip moves the text to its other side. */}
+              {n.onPath && (
+                <div className="dir-row">
+                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>On a path</span>
+                  <button
+                    className="mini"
+                    title="Flip text orientation - the text turns over to the other side of the path"
+                    onClick={() => patchType({ pathSide: n.pathSide === "right" ? "left" : "right" })}
+                  >
+                    Flip text
+                  </button>
+                  <button
+                    className="mini"
+                    title="Take the text off its path"
+                    onClick={() => patchType({ onPath: undefined, pathStart: undefined, pathSide: undefined })}
+                  >
+                    Detach
+                  </button>
+                </div>
+              )}
+              {/* Links (360045942953): "Click Create link … Type or paste a URL
+                  … Press Enter to apply the link." Underlined by default. */}
+              <div className="dir-row" style={{ padding: "2px 0" }}>
+                <input
+                  aria-label="Link URL"
+                  placeholder="Link URL (⇧⌘U)"
+                  key={n.id + (n.link ?? "")}
+                  defaultValue={n.link ?? ""}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    const url = (e.target as HTMLInputElement).value.trim();
+                    patchType({
+                      ...(url ? { link: url } : {}),
+                      ...(url && n.textDecoration === "none" ? { textDecoration: "underline" as const } : {}),
+                    });
+                  }}
+                  style={{ flex: 1, minWidth: 0, font: "11px Inter, system-ui", padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--text)" }}
+                />
+                <button
+                  className="icon-btn"
+                  title="Remove link"
+                  onClick={() => patchType({ link: undefined })}
+                >
+                  Unlink
+                </button>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Numbers position"
+                    title="Numbers - position (superscript / subscript)"
+                    value={n.baselineShift ?? "normal"}
+                    onChange={(e) => patchType({ baselineShift: e.target.value as XNode["baselineShift"] })}
+                  >
+                    <option value="normal">Numbers: normal</option>
+                    <option value="super">Numbers: superscript</option>
+                    <option value="sub">Numbers: subscript</option>
+                  </select>
+                  <select
+                    aria-label="Figure style"
+                    title="Numbers - figure style (proportional/monospace, lining/old-style)"
+                    value={n.figureStyle ?? "proportional-lining"}
+                    onChange={(e) => patchType({ figureStyle: e.target.value as XNode["figureStyle"] })}
+                  >
+                    <option value="proportional-lining">Fig: prop lining</option>
+                    <option value="proportional-oldstyle">Fig: prop old-style</option>
+                    <option value="monospace-lining">Fig: mono lining</option>
+                    <option value="monospace-oldstyle">Fig: mono old-style</option>
+                  </select>
+                </div>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <label className="check" title="Fractions - X/X renders as a fraction">
+                    <input
+                      type="checkbox"
+                      checked={!!n.fractions}
+                      onChange={(e) => patchType({ fractions: e.target.checked })}
+                    />
+                    Fractions
+                  </label>
+                  <label className="check" title="Slashed zero">
+                    <input
+                      type="checkbox"
+                      checked={!!n.slashedZero}
+                      onChange={(e) => patchType({ slashedZero: e.target.checked })}
+                    />
+                    Slashed zero
+                  </label>
+                  <label className="check" title="Hanging lists - markers outside the bounding box">
+                    <input
+                      type="checkbox"
+                      checked={n.hangingLists !== false}
+                      onChange={(e) => patchType({ hangingLists: e.target.checked })}
+                    />
+                    Hanging lists
+                  </label>
+                  <label className="check" title="Hanging quotes - opening quotes outside the box">
+                    <input
+                      type="checkbox"
+                      checked={!!n.hangingQuotes}
+                      onChange={(e) => patchType({ hangingQuotes: e.target.checked })}
+                    />
+                    Hanging quotes
+                  </label>
+                </div>
+              </div>
+              <div className="insp-pad">
+                <Field
+                  label="≡"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="listSpacing" onOpenVariables={onOpenVariables} />}
+                  value={n.listSpacing || 0}
+                  aria="List spacing - distance between line items"
+                  onChange={(v) => patchType({ listSpacing: Math.max(0, v) })}
+                  mixed={mixedProp((m) => m.listSpacing, textTargets)}
+                  values={multi ? manyVals((m) => m.listSpacing, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("listSpacing", vs, textTargets) : undefined}
+                />
+              </div>
+              {/* OpenType features (4913951097367) - the Details tab's common
+                  toggles: ligatures, stylistic sets, character variants. */}
+              <div className="dir-row">
+                <div className="seg icons">
+                  <label className="check" title="Standard ligatures (liga) - on by default in the font">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.liga !== 0}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) delete f.liga;
+                        else f.liga = 0;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Ligatures
+                  </label>
+                  <label className="check" title="Discretionary ligatures (dlig)">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.dlig === 1}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) f.dlig = 1;
+                        else delete f.dlig;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Discretionary
+                  </label>
+                  <label className="check" title="Contextual alternates (calt)">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.calt === 1}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) f.calt = 1;
+                        else delete f.calt;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Contextual
+                  </label>
+                </div>
+              </div>
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="ss"
+                  value={Number(Object.keys(n.fontFeatures ?? {}).find((k) => /^ss\d\d$/.test(k))?.slice(2) ?? 0)}
+                  aria="Stylistic set (1-20, 0 = off)"
+                  onChange={(v) => {
+                    const f = { ...(n.fontFeatures ?? {}) };
+                    for (const k of Object.keys(f)) if (/^ss\d\d$/.test(k)) delete f[k];
+                    const i = Math.round(v);
+                    if (i >= 1 && i <= 20) f[`ss${String(i).padStart(2, "0")}`] = 1;
+                    patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                  }}
+                />
+                <Field
+                  label="cv"
+                  value={Number(Object.keys(n.fontFeatures ?? {}).find((k) => /^cv\d\d$/.test(k))?.slice(2) ?? 0)}
+                  aria="Character variant (1-99, 0 = off)"
+                  onChange={(v) => {
+                    const f = { ...(n.fontFeatures ?? {}) };
+                    for (const k of Object.keys(f)) if (/^cv\d\d$/.test(k)) delete f[k];
+                    const i = Math.round(v);
+                    if (i >= 1 && i <= 99) f[`cv${String(i).padStart(2, "0")}`] = 1;
+                    patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                  }}
+                />
+              </div>
+              {/* Variable-font axes (5579502031511) - weight rides the regular
+                  weight control; width, optical size and slant are axes. */}
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="wdth"
+                  value={n.fontVariations?.wdth ?? 0}
+                  aria="Variable width axis (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.wdth = v;
+                    else delete g.wdth;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
+                <Field
+                  label="opsz"
+                  value={n.fontVariations?.opsz ?? 0}
+                  aria="Variable optical-size axis (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.opsz = v;
+                    else delete g.opsz;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
+                <Field
+                  label="slnt"
+                  value={n.fontVariations?.slnt ?? 0}
+                  aria="Variable slant axis in degrees (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.slnt = v;
+                    else delete g.slnt;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
               </div>
             </div>
           )}

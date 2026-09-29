@@ -1,5 +1,6 @@
 import type { XNode } from "../engine/types";
 import { balanceLines } from "../engine/geometry";
+import { fontFamilyStack } from "../engine/textInput";
 import { resolvedTextSpans, type StyledSpan } from "./textSpans";
 
 /**
@@ -45,29 +46,133 @@ export function measureCached(ctx: CanvasRenderingContext2D, s: string): number 
  * its own text.
  */
 /**
- * A list paragraph's marker, hung in the gutter. x-core's ListStyle, the same
- * three values; the width of the marker plus a space is the gutter every line
- * of that paragraph then clears.
+ * A list paragraph's marker and its level (360040449773): "Figma currently
+ * supports up to five levels of indentation" and "numbered list counters
+ * rotate between numbers, alphabetical characters, and roman numerals with
+ * each indentation". Bullets keep one glyph at every level.
  */
-export function listMarker(style: XNode["listStyle"], index: number): string {
+export function listLevelOf(n: XNode, pi: number): number {
+  const lv = n.listLevels?.[pi];
+  return Math.max(0, Math.min(4, Math.round(lv ?? 0)));
+}
+
+/** Per-paragraph list override: `null` = the counter was deleted on that line
+ *  ("Backspace or Delete at the beginning of a list item to delete the
+ *  counter, but keep the same level of indentation"). */
+export function paraListStyle(n: XNode, pi: number): XNode["listStyle"] {
+  // `paraList[pi] === null` marks a counter deleted by Backspace at the item
+  // start: the paragraph keeps its indent level but stops counting. Any
+  // other entry leaves the layer's list style in charge.
+  const p = n.paraList?.[pi];
+  return p === null ? "none" : n.listStyle ?? "none";
+}
+
+/** Per-paragraph wrap style (360039956634 §Wrap style applies per paragraph). */
+export function paraWrapOf(n: XNode, pi: number): XNode["textWrap"] {
+  return n.paraWrap?.[pi] ?? n.textWrap ?? "auto";
+}
+
+/**
+ * Effective line height in world units (360039956634 §Line height): a fixed
+ * px value, a percentage of the font size ("Figma will convert the value for
+ * you, to the nearest pixel" — the caller converts on unit switch; here the
+ * percent simply resolves against the font size), or Auto = the font's own
+ * default, which the editor approximates as 1.2em as before.
+ */
+export function effectiveLineHeight(n: XNode, fontSize?: number): number {
+  const fs = Math.max(1, fontSize ?? n.fontSize);
+  const unit = n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto");
+  if (unit === "percent" && n.lineHeight > 0) return Math.max(1, (n.lineHeight / 100) * fs);
+  if (unit === "px" && n.lineHeight > 0) return Math.max(1, n.lineHeight);
+  return Math.max(1, fs * 1.2);
+}
+
+function alphaCounter(i: number): string {
+  let s = "";
+  let v = i;
+  do {
+    s = String.fromCharCode(97 + (v % 26)) + s;
+    v = Math.floor(v / 26) - 1;
+  } while (v >= 0);
+  return s;
+}
+
+function romanCounter(n: number): string {
+  const table: [number, string][] = [
+    [1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"],
+    [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"],
+  ];
+  let v = Math.max(1, Math.floor(n));
+  let s = "";
+  for (const [k, r] of table) while (v >= k) { s += r; v -= k; }
+  return s;
+}
+
+export function listMarker(style: XNode["listStyle"], index: number, level = 0): string {
   if (style === "bulleted") return "\u2022";
-  if (style === "numbered") return `${index + 1}.`;
+  if (style === "numbered") {
+    // Level % 3 rotates the counter form: 1. / a. / i. / 1. / a. ...
+    const rot = level % 3;
+    if (rot === 1) return `${alphaCounter(index)}.`;
+    if (rot === 2) return `${romanCounter(index + 1)}.`;
+    return `${index + 1}.`;
+  }
   return "";
+}
+
+/** 0-based counter per paragraph: each item increments its level's counter and
+ *  resets the deeper ones; paragraphs without a counter keep their indent but
+ *  never count. */
+export function listCounters(n: XNode, paraCount: number): number[] {
+  const stack: number[] = [];
+  const out: number[] = [];
+  for (let pi = 0; pi < paraCount; pi++) {
+    const style = paraListStyle(n, pi);
+    const level = listLevelOf(n, pi);
+    if (style === "none") {
+      out.push(0);
+      continue;
+    }
+    stack.length = Math.min(stack.length, level + 1);
+    stack[level] = (stack[level] ?? 0) + 1;
+    out.push(stack[level] - 1);
+  }
+  return out;
+}
+
+/**
+ * Marker geometry for one paragraph. Hanging lists (absent = on) move the
+ * marker outside the bounding box so the text content aligns with it; with
+ * `hangingLists: false` the marker sits at the box edge and every line clears
+ * it (the gutter). `textLead`/`markerX` are offsets from the paragraph's
+ * first-line indent.
+ */
+export function listLayout(
+  n: XNode,
+  pi: number,
+  counter: number,
+  widthOf: (s: string) => number,
+): { marker: string; gutter: number; textLead: number; markerX: number } {
+  const style = paraListStyle(n, pi);
+  const marker = style === "none" ? "" : listMarker(style, counter, listLevelOf(n, pi));
+  const gutter = marker ? widthOf(`${marker} `) : 0;
+  const hang = n.hangingLists !== false;
+  return { marker, gutter, textLead: gutter && !hang ? gutter : 0, markerX: gutter ? -gutter : 0 };
 }
 
 /** Same font shorthand for painting, measuring text, and measuring list gutters. */
 export function canvasTextFont(n: XNode, size = n.fontSize, run?: StyledSpan): string {
-  const family = (run?.fontFamily || n.fontFamily || "Inter").replace(/["\\]/g, "");
-  return `${n.textCase === "small-caps" ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${run?.fontWeight ?? n.fontWeight} ${Math.max(1, size)}px "${family}", Inter, system-ui`;
+  return `${n.textCase === "small-caps" ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${run?.fontWeight ?? n.fontWeight} ${Math.max(1, size)}px ${fontFamilyStack(run?.fontFamily || n.fontFamily)}`;
 }
 
 /**
- * Width the markers of a list need, in world units. The editor overlay indents
- * by this much so the caret starts where the text will be painted; the marker
- * itself only reappears on commit, since a textarea cannot draw one.
+ * How far the editor overlay indents its caret so it starts where the text
+ * will be painted. Hanging lists put the marker outside the box, so the caret
+ * needs no gutter; `hangingLists: false` clears the marker like any text does.
  */
 export function listGutter(ctx: CanvasRenderingContext2D | null, n: XNode): number {
   if (!ctx || !n.listStyle || n.listStyle === "none") return 0;
+  if (n.hangingLists !== false) return 0;
   ctx.font = canvasTextFont(n);
   return measureCached(ctx, `${listMarker(n.listStyle, 9)} `);
 }
@@ -119,7 +224,7 @@ export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: strin
     const limit = n.truncate && n.maxLines > 0 ? Math.max(1, n.maxLines) : Infinity;
     const taken = truncateStyledRows(ctx, n, rows, limit, n.sizingW === "hug" ? Infinity : n.w);
     const gaps = Math.max(0, taken.filter((r) => r.lastInPara).length - (taken.length ? 1 : 0));
-    return { lines: taken.length, gaps, maxW: Math.max(8, ...taken.map((r) => r.lead + r.width)) };
+    return { lines: taken.length, gaps, maxW: Math.max(8, ...taken.map((r) => r.lead + r.width)), extra: 0 };
   }
   const uniform = n.textRuns?.length ? resolvedTextSpans(n) : [];
   ctx.font = uniform.length === 1 ? canvasTextFont(n, uniform[0].fontSize, uniform[0]) : canvasTextFont(n);
@@ -132,30 +237,44 @@ export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: strin
   // Truncation cuts the taken rows at max lines, exactly like the painter;
   // the gaps counted are the paragraph breaks that survive the cut.
   const limit = n.truncate && n.maxLines > 0 ? Math.max(1, n.maxLines) : Infinity;
+  const paras = (text || " ").split("\n");
+  const counters = listCounters(n, paras.length);
   let lines = 0;
   let completeParas = 0;
   let partialTake = false;
   let maxW = 8;
   let cut = false;
-  for (const [pi, para] of (text || " ").split("\n").entries()) {
+  let itemGaps = 0;
+  for (const [pi, para] of paras.entries()) {
     if (lines >= limit) {
       cut = true;
       break;
     }
-    const marker = listMarker(n.listStyle, pi);
-    const gutter = marker ? widthOf(`${marker} `) : 0;
-    const avail = wrap ? n.w - gutter - indent : 1e6;
+    const ll = listLayout(n, pi, counters[pi], widthOf);
+    const wrapStyle = paraWrapOf(n, pi);
+    // Hanging lists put the marker outside the box: only the non-hanging
+    // gutter eats into the wrap width.
+    const avail = wrap ? n.w - ll.textLead - indent : 1e6;
     let wrapped = wrapLines(ctx, para || " ", avail > 0 ? avail : 1e6, ls);
-    if (wrap && (n.textWrap === "balance" || n.textWrap === "pretty") && n.w > 0)
-      wrapped = balanceLines(wrapped, avail, widthOf, n.textWrap);
+    if (wrap && (wrapStyle === "balance" || wrapStyle === "pretty") && n.w > 0)
+      wrapped = balanceLines(wrapped, avail, widthOf, wrapStyle);
     const take = Math.min(wrapped.length, Math.max(0, limit - lines));
     for (let i = 0; i < take; i++) {
-      maxW = Math.max(maxW, gutter + (i === 0 ? indent : 0) + widthOf(wrapped[i]));
+      maxW = Math.max(maxW, ll.textLead + (i === 0 ? indent : 0) + widthOf(wrapped[i]));
     }
     if (take < wrapped.length) cut = true;
     if (take > 0 && take < wrapped.length) partialTake = true;
     if (take >= wrapped.length && take > 0) completeParas += 1;
     lines += Math.max(1, take);
+  }
+  // List spacing (360040449773): "the distance between each line item" - the
+  // gap between two consecutive list items, on top of the paragraph gap
+  // (items are paragraphs too).
+  {
+    const takenParas = Math.min(paras.length, Math.max(0, completeParas + (partialTake ? 1 : 0)));
+    for (let pi = 0; pi + 1 < takenParas; pi++) {
+      if (paraListStyle(n, pi) !== "none" && paraListStyle(n, pi + 1) !== "none") itemGaps += 1;
+    }
   }
   // The painter hangs a gap on every taken paragraph's last row, then takes
   // one back: a cut mid-paragraph forces the flag on the cut row, which is
@@ -164,7 +283,7 @@ export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: strin
   // An auto-width layer appends the ellipsis past the last line instead of
   // trimming to fit, so the box budgets for it when a cut happened.
   if (cut && !wrap) maxW += widthOf("\u2026");
-  return { lines, gaps, maxW };
+  return { lines, gaps, maxW, extra: itemGaps * Math.max(0, n.listSpacing || 0) };
 }
 
 export function wrapLines(
@@ -254,10 +373,10 @@ export function measureCtx(): CanvasRenderingContext2D | null {
  * paragraph break its gap, never shorter than one leading. Pure, so the
  * headless checks cover the rule the canvas-backed hugSize applies.
  */
-export function hugHeight(lines: number, gaps: number, lh: number, paraGap: number): number {
+export function hugHeight(lines: number, gaps: number, lh: number, paraGap: number, extra = 0): number {
   return Math.max(
     Math.ceil(lh),
-    Math.ceil(Math.max(1, lines) * lh + Math.max(0, gaps) * Math.max(0, paraGap)),
+    Math.ceil(Math.max(1, lines) * lh + Math.max(0, gaps) * Math.max(0, paraGap) + Math.max(0, extra)),
   );
 }
 
@@ -271,11 +390,11 @@ export function hugSize(
   const wantW = axes?.w ?? n.sizingW === "hug";
   const wantH = axes?.h ?? n.sizingH === "hug";
   const m = textMetrics(ctx, n, text);
-  const lh = n.lineHeight || Math.max(n.fontSize, ...resolvedTextSpans(n).map((r) => r.fontSize)) * 1.2;
+  const lh = effectiveLineHeight(n, Math.max(n.fontSize, ...resolvedTextSpans(n).map((r) => r.fontSize)));
   const gap = n.paragraphSpacing || 0;
   const out: { w?: number; h?: number } = {};
   if (wantW) out.w = Math.max(8, Math.ceil(m.maxW + 4));
-  if (wantH) out.h = hugHeight(m.lines, m.gaps, lh, gap);
+  if (wantH) out.h = hugHeight(m.lines, m.gaps, lh, gap, m.extra ?? 0);
   return out;
 }
 
@@ -286,6 +405,13 @@ export function hasMixedTextSpans(n: XNode, text = n.text): boolean {
 export type StyledPiece = { text: string; run: StyledSpan; width: number };
 export type StyledRow = {
   pieces: StyledPiece[]; width: number; lead: number; marker: string;
+  /** Offset of the marker from the paragraph's first-line lead (hanging lists
+   *  put it outside the box: a negative offset). */
+  markerX: number;
+  /** Extra list spacing after this paragraph's last row (360040449773). */
+  itemGap: boolean;
+  /** Paragraph index - each row resolves its own bidi direction (4972283635863). */
+  pi: number;
   lastInPara: boolean;
 };
 /** The same run-aware widths and line breaks feed hug sizing and Canvas paint.
@@ -310,15 +436,16 @@ export function styledTextRows(ctx: CanvasRenderingContext2D, n: XNode, text: st
     return pieces.reduce((sum, p) => sum + p.width, 0) + ls * Math.max(0, b - a - pieces.length);
   };
   const result: StyledRow[] = [];
+  const paraCount = text.split("\n").length;
+  const counters = listCounters(n, paraCount);
   let paraStart = 0, pi = 0;
   while (paraStart <= text.length) {
     const nextBreak = text.indexOf("\n", paraStart);
     const paraEnd = nextBreak < 0 ? text.length : nextBreak;
-    const marker = listMarker(n.listStyle, pi);
     ctx.font = canvasTextFont(n, n.fontSize * scale);
-    const gutter = marker ? measureCached(ctx, `${marker} `) : 0;
+    const ll = listLayout(n, pi, counters[pi], (s) => measureCached(ctx, s));
     const indent = indentOf(n) * scale;
-    const avail = n.sizingW === "hug" ? Infinity : Math.max(1, boxW - gutter - indent);
+    const avail = n.sizingW === "hug" ? Infinity : Math.max(1, boxW - ll.textLead - indent);
     const ranges: { start: number; end: number }[] = [];
     let start = paraStart, end = paraStart;
     const trim = (a: number, b: number) => b - (text.slice(a, b).match(/\s+$/)?.[0].length ?? 0);
@@ -352,8 +479,12 @@ export function styledTextRows(ctx: CanvasRenderingContext2D, n: XNode, text: st
     ranges.forEach((r, i) => {
       const pieces = width(r.start, r.end);
       const measured = measure(r.start, r.end);
-      result.push({ pieces, width: measured, lead: gutter + (i === 0 ? indent : 0),
-        marker: i === 0 && paraEnd > paraStart ? marker : "", lastInPara: i === ranges.length - 1 });
+      result.push({ pieces, width: measured, lead: ll.textLead + (i === 0 ? indent : 0),
+        marker: i === 0 && paraEnd > paraStart ? ll.marker : "", markerX: ll.markerX,
+        itemGap: i === ranges.length - 1 && paraListStyle(n, pi) !== "none"
+          && pi + 1 < paraCount && paraListStyle(n, pi + 1) !== "none",
+        pi,
+        lastInPara: i === ranges.length - 1 });
     });
     if (nextBreak < 0) break;
     paraStart = nextBreak + 1;

@@ -60,6 +60,21 @@ export type TextDecoration = "none" | "underline" | "strikethrough";
 /** §26 KB-002: node-level italic for the ⌘I chord (absent = "normal"). */
 export type FontStyle = "normal" | "italic";
 export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
+/** Underline details (360039956634 §Decoration): solid, dotted or wavy line. */
+export type UnderlineStyle = "solid" | "dotted" | "wavy";
+/** Numbers (360039956634 §Numbers): proportional/monospace × lining/old-style. */
+export type FigureStyle =
+  | "proportional-lining"
+  | "proportional-oldstyle"
+  | "monospace-lining"
+  | "monospace-oldstyle";
+/** Numbers §Position: "subscript … below the line of type", "superscript …
+ * above", both "default to a smaller size". Faux typography when the font has
+ * no such glyph: shrink and reposition the standard character. */
+export type BaselineShift = "normal" | "super" | "sub";
+/** Line height unit (360039956634 §Line height): Auto (font default), a fixed
+ * px value, or a percentage of the font size that converts to the nearest px. */
+export type LineHeightUnit = "auto" | "px" | "percent";
 export type StrokeAlign = "inside" | "center" | "outside";
 export type StrokeCap =
   | "none"
@@ -312,9 +327,48 @@ export interface ComponentVariant {
 export interface SharedStyle {
   id: string;
   name: string;
-  kind: "paint";
-  /** #rrggbb or #rrggbbaa, matching every other colour field in the engine. */
-  color: string;
+  kind: "paint" | "text";
+  /** #rrggbb or #rrggbbaa, matching every other colour field in the engine.
+   *  Paint styles only: a text style carries no colour (360039957034). */
+  color?: string;
+  /** Text styles (360039957034): the type properties the style carries -
+   *  family, weight, size, line height, letter spacing, paragraph spacing,
+   *  indent, decoration, case, lists and OpenType; alignment and colour stay
+   *  out, per the article's property table. */
+  text?: TextStyleProps;
+}
+
+/** The property set of a text style. Every field is optional so a style made
+ *  from a partial selection propagates only what it captured. */
+export interface TextStyleProps {
+  fontFamily?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  lineHeight?: number;
+  lineHeightUnit?: LineHeightUnit;
+  letterSpacing?: number;
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  textDecoration?: TextDecoration;
+  textCase?: TextCase;
+  listStyle?: ListStyle;
+  listSpacing?: number;
+  textWrap?: TextWrap;
+  verticalTrim?: boolean;
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): CSS `font-feature-settings` entries -
+   *  ligatures, stylistic sets, character variants. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): CSS `font-variation-settings` -
+   *  weight/width/optical-size/slant and friends. */
+  fontVariations?: Record<string, number>;
 }
 
 export interface ComponentPropertyDef {
@@ -413,11 +467,34 @@ export interface GradientStop {
 export interface TextRun {
   start: number;
   end: number;
+  /** Text-style binding (360039957034): which shared style this run follows. */
+  textStyle?: string;
   fill?: string;
   fontWeight?: number;
   fontSize?: number;
   fontFamily?: string;
   textDecoration?: TextDecoration;
+  /** Underline details (360039956634 §Decoration) - per-range overrides. */
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  underlineColor?: string;
+  /** Numbers (§Numbers): faux super/subscript, fractions, slashed zero, figures. */
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): `font-feature-settings` entries. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): `font-variation-settings` entries. */
+  fontVariations?: Record<string, number>;
+  /** Links (360045942953): a linked range, underlined by default. */
+  link?: string;
+  /** Wrap style at the paragraph level (360039956634 §Wrap style). */
+  textWrap?: TextWrap;
+  /** Italic run override (⌘I on a range). */
+  fontStyle?: FontStyle;
 }
 
 /**
@@ -648,6 +725,9 @@ export interface XNode {
   fillStyle?: string;
   /** Id of the SharedStyle driving `strokePaint`. */
   strokeStyle?: string;
+  /** Id of the SharedStyle carrying this text layer's type properties
+   *  (360039957034). Editing that style re-types every bound node and run. */
+  textStyle?: string;
   /**
    * Variable bindings: layer prop name -> variable id. Bound props are
    * re-applied from the resolved variable (under the active mode) on every
@@ -793,6 +873,61 @@ export interface XNode {
   textCase: TextCase;
   truncate: boolean;
   maxLines: number;
+  /** List spacing (360040449773 §Spacing): extra px between line items of a
+   * bulleted/numbered list. Default 0. Items are also paragraphs, so the
+   * paragraph gap applies too. */
+  listSpacing: number;
+  /** Per-paragraph list indentation level (360040449773 §Indentation): "up to
+   * five levels", so 0..4. Absent = 0 for every paragraph. */
+  listLevels?: number[];
+  /** Per-paragraph list override: `null` = counter deleted on that line
+   * ("Backspace … delete the counter, but keep the same level of
+   * indentation"); absent = inherit `listStyle`. */
+  paraList?: (ListStyle | null)[];
+  /** Per-paragraph wrap style (360039956634 §Wrap style applies at the
+   * paragraph level too). Absent = inherit `textWrap`. */
+  paraWrap?: (TextWrap | null)[];
+  /** Hanging lists (360040449773): markers outside the bounding box so the
+   * text content aligns with it. Absent = on (Figma's pictured lists). */
+  hangingLists?: boolean;
+  /** Hanging quotes (360040449773): opening quotation marks outside the box. */
+  hangingQuotes?: boolean;
+  /** Vertical trim (360039956634 §Vertical trim): remove the space above and
+   * below the text ("leading-trim: both" in Dev Mode). */
+  verticalTrim?: boolean;
+  /** Underline details (360039956634 §Decoration). */
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  underlineColor?: string;
+  /** Numbers (360039956634 §Numbers) - faux super/sub, fractions, zero, figures. */
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): `font-feature-settings` entries. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): `font-variation-settings` entries. */
+  fontVariations?: Record<string, number>;
+  /** Text on a path (360039956434): id of the path node the text follows. */
+  onPath?: string;
+  /** Where along the path the text starts, as a fraction of its length. The
+   *  start handle slides this. */
+  pathStart?: number;
+  /** Which side of the path the baseline sits on; "right" is Flip text
+   *  orientation. */
+  pathSide?: "left" | "right";
+  /** RTL/bidi (4972283635863): explicit text direction. Absent/"auto" = the
+   *  language detection the article describes. */
+  textDirection?: "auto" | "ltr" | "rtl";
+  /** Per-paragraph direction overrides (the article's per-paragraph control);
+   *  `null` falls back to `textDirection`/detection. */
+  paraDir?: ("ltr" | "rtl" | null)[];
+  /** Line height unit: px value vs percent of the font size vs Auto. */
+  lineHeightUnit?: LineHeightUnit;
+  /** Links (360045942953): the whole text layer is a link. */
+  link?: string;
   children: XNode[];
   layout: AutoLayout | null;
   path: PathPoint[];
@@ -1099,15 +1234,16 @@ export type Command =
   | { type: "boolean"; op: BooleanOp }
   /** Arm (`op`) or clear (`null`) the boolean live preview overlay. View-only. */
   | { type: "setBooleanPreview"; op: BooleanOp | null }
-  /** Create a named style from the selection's current fill or stroke and
-   *  bind the selection to it. */
-  | { type: "createStyle"; kind: "fill" | "stroke"; name: string }
-  /** Point the selection at an existing style. */
-  | { type: "applyStyle"; kind: "fill" | "stroke"; styleId: string }
-  /** Drop the binding, keeping the painted colour. */
-  | { type: "detachStyle"; kind: "fill" | "stroke" }
-  /** Recolour a style; every bound node follows. */
-  | { type: "editStyle"; id: string; color?: string; name?: string }
+  /** Create a named style from the selection's current fill, stroke or type
+   *  properties and bind the selection to it. */
+  | { type: "createStyle"; kind: "fill" | "stroke" | "text"; name: string }
+  /** Point the selection at an existing style. A text style may target just a
+   *  captured range by passing its merged runs (range application). */
+  | { type: "applyStyle"; kind: "fill" | "stroke" | "text"; styleId: string; runs?: TextRun[] }
+  /** Drop the binding, keeping the painted colour / type properties. */
+  | { type: "detachStyle"; kind: "fill" | "stroke" | "text" }
+  /** Recolour or retype a style; every bound node and run follows. */
+  | { type: "editStyle"; id: string; color?: string; name?: string; text?: Partial<TextStyleProps> }
   | { type: "deleteStyle"; id: string }
   | { type: "addGuide"; axis: "x" | "y"; at: number; frameId?: string }
   | { type: "moveGuide"; id: string; at: number }

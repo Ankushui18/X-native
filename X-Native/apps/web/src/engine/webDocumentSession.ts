@@ -42,7 +42,7 @@ const NODE_KEYS_V1 = `
   letterSpacing paragraphSpacing textAlign textAlignVertical textWrap listStyle
   paragraphIndent textDecoration textCase truncate maxLines children layout path
   closed booleanOp componentId isComponent interactions flipH flipV fillGX fillGY
-  fillHX fillHY isMask maskType variant
+  fillHX fillHY isMask maskType variant listSpacing
 `.trim().split(/\s+/);
 const ROOT = node("frame", "", 0, 0, 1, 1, { fill: "#00000000", overflow: "visible", showName: false });
 const RECT = node("rect", "", 0, 0, 1, 1);

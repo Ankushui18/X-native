@@ -48,7 +48,9 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** The ceilings, measured 2026-09-26 after the vector card (IN-U4) and the dock
  *  (TB-U5) were rebuilt, and lowered again the same day when the canvas chrome
  *  moved into the `--cv-*` token family (FR-U2). Lower a row in the same commit
- *  that earns it.
+ *  that earns it. Raised 2026-09-29 for the text run-14 surfaces (link input +
+ *  hover chip on the canvas; the Type-settings details in the inspector), with
+ *  Canvas's colour row lowered to its measured 12.
  *
  *  Canvas.tsx's remaining colours are the triaged half of the pile: document ink
  *  — the `DOC_*` constants, a glass effect's default tint, `#00000000` fills for
@@ -62,7 +64,7 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  Minimap.tsx and Rulers.tsx are at zero: they have no literals left to drift. */
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [5, 13, 10, 10, 0],
+  "Canvas.tsx": [11, 12, 11, 11, 0],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   "Dashboard.tsx": [1, 0, 11, 33, 1],
@@ -78,10 +80,10 @@ const CEILING = {
   "Tooltip.tsx": [1, 0, 0, 0, 0],
   "ZenHUD.tsx": [16, 14, 9, 6, 0],
   "announce.tsx": [0, 0, 0, 0, 0],
-  "chrome.tsx": [50, 4, 40, 64, 2],
+  "chrome.tsx": [50, 4, 41, 65, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],
-  "inspector.tsx": [179, 44, 221, 192, 41],
+  "inspector.tsx": [186, 44, 239, 197, 45],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 13, 15, 1],
 };

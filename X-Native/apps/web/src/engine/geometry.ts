@@ -867,6 +867,95 @@ export function samplePathPoints(path: PathPoint[], closed: boolean): PathPoint[
   return result;
 }
 
+/**
+ * Walk a node's outline as dense polyline samples with cumulative arc length
+ * and tangent angles - the spine text-on-a-path glyphs follow (360039956434
+ * §Add text to a path). Points are in the node's local space, like `path` and
+ * `shapePoly`; callers translate by the node's position. Null for kinds with
+ * no outline.
+ */
+export type OutlineWalk = {
+  pts: { x: number; y: number; a: number }[];
+  cum: number[];
+  len: number;
+};
+
+export function outlineWalk(n: XNode): OutlineWalk | null {
+  let poly: PathPoint[];
+  let closed = false;
+  if (n.path?.length) {
+    poly = samplePathPoints(n.path, !!n.closed);
+    closed = !!n.closed;
+  } else if (n.vectorNetwork?.vertices?.length) {
+    const r = vectorNetworkToPath(n.vectorNetwork);
+    poly = samplePathPoints(r.path, r.closed);
+    closed = r.closed;
+  } else if (n.kind === "line" || n.kind === "arrow") {
+    poly = [{ x: 0, y: 0 }, { x: n.w, y: n.h }];
+  } else if (["rect", "ellipse", "poly", "star", "frame", "section", "boolean", "component", "instance"].includes(n.kind)) {
+    poly = shapePoly(n);
+    closed = true;
+  } else return null;
+  if (!poly || poly.length < 2) return null;
+  // Close the loop so the walk's length is the whole perimeter.
+  if (closed) poly = [...poly, poly[0]];
+  const pts: { x: number; y: number; a: number }[] = [];
+  const cum: number[] = [];
+  let len = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    if (i > 0) len += Math.hypot(p.x - poly[i - 1].x, p.y - poly[i - 1].y);
+    cum.push(len);
+    pts.push({ x: p.x, y: p.y, a: 0 });
+  }
+  if (!(len > 0)) return null;
+  for (let i = 0; i < pts.length; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[Math.min(pts.length - 1, i + 1)];
+    pts[i].a = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+  }
+  return { pts, cum, len };
+}
+
+/** Point + tangent at arc-length `d` along a walk (clamped to the ends). */
+export function walkAt(w: OutlineWalk, d: number): { x: number; y: number; a: number } {
+  if (!(w.pts.length && w.len > 0)) return { x: 0, y: 0, a: 0 };
+  d = Math.max(0, Math.min(w.len, d));
+  let lo = 0, hi = w.cum.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (w.cum[mid] <= d) lo = mid;
+    else hi = mid;
+  }
+  const seg = w.cum[hi] - w.cum[lo];
+  const t = seg > 0 ? (d - w.cum[lo]) / seg : 0;
+  const p0 = w.pts[lo], p1 = w.pts[hi];
+  return {
+    x: p0.x + (p1.x - p0.x) * t,
+    y: p0.y + (p1.y - p0.y) * t,
+    a: Math.atan2(p1.y - p0.y, p1.x - p0.x),
+  };
+}
+
+/** Nearest point on the walk to a local-space point: its arc length and the
+ *  distance to it. The start handle drops the text at `at`; the text tool's
+ *  outline snap checks `dist`. */
+export function walkNearest(w: OutlineWalk, x: number, y: number): { at: number; dist: number } {
+  let bestD = Infinity, best = 0;
+  for (let i = 1; i < w.pts.length; i++) {
+    const p0 = w.pts[i - 1], p1 = w.pts[i];
+    const dx = p1.x - p0.x, dy = p1.y - p0.y;
+    const seg = dx * dx + dy * dy;
+    const t = seg > 0 ? Math.max(0, Math.min(1, ((x - p0.x) * dx + (y - p0.y) * dy) / seg)) : 0;
+    const px = p0.x + dx * t, py = p0.y + dy * t;
+    const d = Math.hypot(x - px, y - py);
+    if (d < bestD) {
+      bestD = d;
+      best = w.cum[i - 1] + Math.sqrt(seg) * t;
+    }
+  }
+  return { at: best, dist: bestD };
+}
+
 export function pathBounds(
   path: PathPoint[],
   closed: boolean,
@@ -1889,15 +1978,24 @@ export function balanceLines(
   const hit = BALANCE_CACHE.get(key);
   if (hit) return hit;
   let out = evenPartition(lines, maxW, widthOf);
-  if (mode === "pretty" && out.length > 1) {
-    const last = out[out.length - 1];
-    if (last.trim().split(/\s+/).length === 1) {
-      const prev = out[out.length - 2];
-      const words = prev.trim().split(/\s+/);
-      if (words.length > 1 && widthOf(`${last} ${words[words.length - 1]}`) <= maxW)
-        out = [...out.slice(0, -2), words.slice(0, -1).join(" "), [...words.slice(-1), last].join(" ")];
-      else if (widthOf(`${prev} ${last}`) <= maxW) out = [...out.slice(0, -2), `${prev} ${last}`];
+  if (mode === "pretty") {
+    // Pretty (360039956634): "adjusts the last four lines of a paragraph" -
+    // the head keeps its natural wrap and only the tail window is re-flowed,
+    // evenly, never stranding a single word on the last line.
+    const tailN = Math.min(4, lines.length);
+    const head = lines.slice(0, lines.length - tailN);
+    let tail = evenPartition(lines.slice(lines.length - tailN), maxW, widthOf);
+    if (tail.length > 1) {
+      const last = tail[tail.length - 1];
+      if (last.trim().split(/\s+/).length === 1) {
+        const prev = tail[tail.length - 2];
+        const words = prev.trim().split(/\s+/);
+        if (words.length > 1 && widthOf(`${last} ${words[words.length - 1]}`) <= maxW)
+          tail = [...tail.slice(0, -2), words.slice(0, -1).join(" "), [...words.slice(-1), last].join(" ")];
+        else if (widthOf(`${prev} ${last}`) <= maxW) tail = [...tail.slice(0, -2), `${prev} ${last}`];
+      }
     }
+    out = [...head, ...tail];
   }
   if (BALANCE_CACHE.size >= BALANCE_CACHE_MAX) BALANCE_CACHE.clear();
   BALANCE_CACHE.set(key, out);

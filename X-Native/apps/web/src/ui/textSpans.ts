@@ -3,7 +3,18 @@ import type { Engine, TextRun, XNode } from "../engine/types";
 /** Offsets are UTF-16 offsets, like HTMLTextAreaElement.selectionStart/End.
  * Runs written here partition [0, text.length); imported sparse runs are
  * resolved against the layer defaults. Adjacent identical runs are coalesced. */
-const keys = ["fontFamily", "fontWeight", "fontSize", "fill", "textDecoration"] as const;
+const keys = [
+  "fontFamily", "fontWeight", "fontSize", "fill", "textDecoration",
+  // Text-and-typography section (360006606853): underline details, numbers
+  // and links style ranges too.
+  "underlineStyle", "underlineThickness", "underlineOffset", "underlineSkipInk", "underlineColor",
+  "baselineShift", "fractions", "slashedZero", "figureStyle", "link", "textWrap", "fontStyle",
+  // Text styles (360039957034): ranges carry their style binding so edits to
+  // the shared style propagate into them.
+  "textStyle",
+  // OpenType features & variable-font axes (4913951097367 / 5579502031511).
+  "fontFeatures", "fontVariations",
+] as const;
 export type SpanStyle = Pick<XNode, (typeof keys)[number]>;
 export type StyledSpan = TextRun & SpanStyle;
 export type TextRange = { id: string; start: number; end: number };
@@ -24,6 +35,21 @@ const styleOf = (n: XNode, run?: TextRun): SpanStyle => ({
   fontSize: run?.fontSize ?? n.fontSize,
   fill: run?.fill ?? n.fill,
   textDecoration: run?.textDecoration ?? n.textDecoration,
+  underlineStyle: run?.underlineStyle ?? n.underlineStyle,
+  underlineThickness: run?.underlineThickness ?? n.underlineThickness,
+  underlineOffset: run?.underlineOffset ?? n.underlineOffset,
+  underlineSkipInk: run?.underlineSkipInk ?? n.underlineSkipInk,
+  underlineColor: run?.underlineColor ?? n.underlineColor,
+  baselineShift: run?.baselineShift ?? n.baselineShift,
+  fractions: run?.fractions ?? n.fractions,
+  slashedZero: run?.slashedZero ?? n.slashedZero,
+  figureStyle: run?.figureStyle ?? n.figureStyle,
+  link: run?.link ?? n.link,
+  textWrap: run?.textWrap ?? n.textWrap,
+  fontStyle: run?.fontStyle ?? n.fontStyle,
+  textStyle: run?.textStyle ?? n.textStyle,
+  fontFeatures: run?.fontFeatures ?? n.fontFeatures,
+  fontVariations: run?.fontVariations ?? n.fontVariations,
 });
 const sameStyle = (a: StyledSpan, b: StyledSpan) => keys.every((key) => a[key] === b[key]);
 function merge(parts: StyledSpan[]): StyledSpan[] {
