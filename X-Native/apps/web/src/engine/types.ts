@@ -1190,7 +1190,21 @@ export type Command =
   | { type: "end" }
   | { type: "cut" }
   | { type: "copy" }
-  | { type: "paste"; x?: number; y?: number; inPlace?: boolean }
+  /** Paste the in-app clipboard. `x/y` aim the copy at a world point;
+   *  `anchor` picks the point on the clipboard group that lands there — the
+   *  group centre for a ⌘V at the middle of the viewport, the top-left for a
+   *  Paste here at the cursor (4409078832791: "Position your cursor where you
+   *  want the top left of your copied object to be placed"). `inPlace` keeps
+   *  the copied coordinates; `over` (⌘⇧V, Paste over selection) places the
+   *  copy at the selection's own position, in the selection's parent — "on
+   *  top of a selected frame, not inside it". */
+  | { type: "paste"; x?: number; y?: number; inPlace?: boolean; over?: boolean; anchor?: "center" | "topLeft" }
+  /** Paste to replace (⇧⌘R): "remove a selected object from your canvas or
+   *  frame and replace it with the object copied to your clipboard ... The
+   *  pasted object will adopt the constraints of the object it replaced."
+   *  Every selected object is replaced by a fresh clone of the clipboard at
+   *  the replaced object's position and z-slot. */
+  | { type: "pasteToReplace" }
   /** Replace the in-app clipboard with layers that came from outside this
    *  document — the system clipboard's own payload, so a copy made in another
    *  tab or another file pastes with full fidelity. Not a document edit, so it

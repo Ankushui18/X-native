@@ -3486,11 +3486,14 @@ console.log("system clipboard — direct copy/paste from Figma and cross-tab fid
   const aId = e2.snapshot().pages[e2.snapshot().page].root.children.slice(-2)[0].id;
   e2.dispatch({ type: "select", ids: [aId, e2.snapshot().selection[0]] });
   e2.dispatch({ type: "copy" });
-  e2.dispatch({ type: "paste", x: 200, y: 100 });
+  e2.dispatch({ type: "paste", x: 200, y: 100, anchor: "center" });
   const pasted = e2.snapshot().pages[e2.snapshot().page].root.children.slice(-2);
   const cx = (Math.min(...pasted.map((n) => n.x)) + Math.max(...pasted.map((n) => n.x + n.w))) / 2;
   const cy = (Math.min(...pasted.map((n) => n.y)) + Math.max(...pasted.map((n) => n.y + n.h))) / 2;
-  t("paste centres the group at the target", Math.abs(cx - 200) < 1 && Math.abs(cy - 100) < 1);
+  // Run 16 made a bare pointed paste top-left-anchored (Paste here,
+  // 4409078832791); the center anchor is what ⌘V at the viewport middle
+  // sends, and it keeps centering the group at the point.
+  t("paste with the center anchor centres the group at the target", Math.abs(cx - 200) < 1 && Math.abs(cy - 100) < 1);
   t("paste keeps the arrangement rather than stacking", Math.abs((pasted[1].x - pasted[0].x) - 60) < 1);
   t("paste in place keeps source coordinates", (() => {
     const e3 = new MemoryEngine(false);
@@ -4162,7 +4165,10 @@ console.log("variable-width export + modifiers:");
     f.dispatch({ type: "select", ids: [c1] });
     f.dispatch({ type: "duplicate" });
     const d2 = find(R(), f.snapshot().selection[0]);
-    t("override leaves the duplicate cascade alone", d2.x === 10 && d2.y === 10);
+    // Run 16: a plain ⌘D lands on top of the original (4409078832791:
+    // "new objects are placed on top of the original") — the explicit ±100
+    // above must not leak into the cascade, so this copy is at c1's own x,y.
+    t("override leaves the duplicate cascade alone (plain ⌘D on top)", d2.x === 0 && d2.y === 0);
   }
   // §6 selection audit: a plain click lands on the group/boolean even when it
   // is already selected (drilling is double-click's/Enter's job), frames stay

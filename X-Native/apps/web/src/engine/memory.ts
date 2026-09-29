@@ -112,6 +112,12 @@ function sectionStaysTopLevel(kind: NodeKind, into: XNode, root: XNode): XNode {
  *  border color for a section", neutral enough to read on a white page. */
 const SECTION_STROKE = "#e6e6e6";
 
+/** Clearance left between a duplicated top-level frame and its original.
+ *  Figma's doc fixes the direction ("the new frame will be placed to the
+ *  right of the original") but not the pixels; 20 matches the spacing the
+ *  canvas uses elsewhere (quick-add guides, default grid multiples). */
+const DUP_FRAME_GAP = 20;
+
 /** Node factory. Exported so the file store can seed new documents from the
  *  dashboard templates with exactly the same defaults the editor uses. */
 export function node(
@@ -1405,7 +1411,17 @@ export class MemoryEngine implements Engine {
   private lastHist: { type: string; at: number } | null = null;
   private clip: XNode[] = [];
   private copiedProps: Partial<XNode> | null = null;
-  private lastDupDelta: { dx: number; dy: number } | null = null;
+  /** The Smart-Duplicate cascade transform: the *applied* delta between the
+   *  previous duplicate pair — translation AND rotation, because Figma's
+   *  rotate-then-⌘D rule repeats both ("the new objects will continue
+   *  rotating at the degree amount of the original duplicate"). Re-derived
+   *  from the copy's net displacement against `dupBaseline` at the next ⌘D,
+   *  so a drag followed by arrow-key nudges composes instead of overwriting. */
+  private lastDupDelta: { dx: number; dy: number; dRot: number } | null = null;
+  /** Pose of each just-created duplicate at placement time, keyed by id. The
+   *  next duplicate measures how far the user moved/rotated the copy from
+   *  here; the difference becomes the new cascade delta. */
+  private dupBaseline: Map<string, { x: number; y: number; rotation: number }> | null = null;
   private lastFrameSize: { w: number; h: number } | null = null;
   private justDuplicated = false;
 
@@ -2089,7 +2105,11 @@ export class MemoryEngine implements Engine {
         s.selectedGuide = null;
         s.previewStroke = null;
         s.previewEffect = null;
+        // A fresh selection breaks the duplicate chain: the next ⌘D starts a
+        // new pair on top of its original, not a continuation of the old one.
         this.justDuplicated = false;
+        this.dupBaseline = null;
+        this.lastDupDelta = null;
         if (s.vecEdit && !s.selection.includes(s.vecEdit)) {
           s.vecEdit = null;
           s.vecPoint = null;
@@ -2461,10 +2481,9 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "move":
-        if (this.justDuplicated) {
-          this.lastDupDelta = { dx: cmd.dx, dy: cmd.dy };
-          this.justDuplicated = false;
-        }
+        // No cascade bookkeeping here on purpose: the move is measured against
+        // `dupBaseline` when the next ⌘D arrives, which composes repeated
+        // moves/nudges instead of remembering only the last command's delta.
         for (const id of transformRoots(this.root(), cmd.ids)) {
           const n = find(this.root(), id);
           if (n && !isEffectivelyLocked(this.root(), id) && !isInstanceMember(this.root(), id)) {
@@ -2725,13 +2744,38 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "duplicate": {
+        // Figma, Copy and paste objects (4409078832791 §Duplicate):
+        // "If you are duplicating a top-level frame, the new frame will be
+        // placed to the right of the original. Otherwise, new objects are
+        // placed on top of the original." Repeats form the Smart-Duplicate
+        // cascade: "Figma will continue the same distance between objects",
+        // and a rotated copy keeps "rotating at the degree amount".
         const created: string[] = [];
+        const explicit = cmd.dx !== undefined || cmd.dy !== undefined;
+        // Retune the cascade against the copy the user has since transformed:
+        // the net displacement from its placement baseline is the delta to
+        // keep repeating. Composition (drag + nudges + rotation) is exactly
+        // what the baseline measures, so no per-command capture is needed.
+        if (!explicit && this.justDuplicated && this.dupBaseline) {
+          for (const id of s.selection) {
+            const n = find(this.root(), id);
+            const b = this.dupBaseline.get(id);
+            if (!n || !b) continue;
+            const dx = n.x - b.x;
+            const dy = n.y - b.y;
+            const dRot = (n.rotation ?? 0) - b.rotation;
+            if (dx || dy || dRot) {
+              this.lastDupDelta = { dx, dy, dRot };
+              break;
+            }
+          }
+        }
         // An explicit dx/dy (frame quick-add) places the copy exactly and
         // leaves the ⌘D cascade delta alone.
-        const delta =
-          cmd.dx !== undefined || cmd.dy !== undefined
-            ? { dx: cmd.dx ?? 0, dy: cmd.dy ?? 0 }
-            : (this.lastDupDelta ?? { dx: 10, dy: 10 });
+        const delta = explicit
+          ? { dx: cmd.dx ?? 0, dy: cmd.dy ?? 0, dRot: 0 }
+          : (this.lastDupDelta ?? { dx: 0, dy: 0, dRot: 0 });
+        const baselines = new Map<string, { x: number; y: number; rotation: number }>();
         for (const id of s.selection) {
           const n = find(this.root(), id);
           const p = findParent(this.root(), id) ?? this.root();
@@ -2741,6 +2785,15 @@ export class MemoryEngine implements Engine {
           reid(copy);
           copy.x += delta.dx;
           copy.y += delta.dy;
+          copy.rotation = (copy.rotation ?? 0) + delta.dRot;
+          if (!explicit && !this.lastDupDelta && n.kind === "frame" && p === this.root()) {
+            // First duplicate of a top-level frame: to the right of the
+            // original, and repeated ⌘D keeps marching right, so this
+            // placement seeds the cascade for the pair it just created.
+            copy.x = n.x + n.w + DUP_FRAME_GAP;
+            copy.y = n.y;
+            this.lastDupDelta = { dx: copy.x - n.x, dy: 0, dRot: 0 };
+          }
           const baseName = n.name;
           const copyMatch = baseName.match(/^(.*?)(?: copy(?: (\d+))?)?$/);
           if (copyMatch) {
@@ -2764,10 +2817,12 @@ export class MemoryEngine implements Engine {
           const at = p.children.findIndex((c) => c.id === n.id);
           if (at === -1) p.children.push(copy);
           else p.children.splice(at + 1, 0, copy);
+          baselines.set(copy.id, { x: copy.x, y: copy.y, rotation: copy.rotation ?? 0 });
           created.push(copy.id);
           this.publishIfMasterEdit(copy.id);
         }
         s.selection = created;
+        this.dupBaseline = baselines;
         this.justDuplicated = true;
         break;
       }
@@ -3015,6 +3070,43 @@ export class MemoryEngine implements Engine {
       case "paste": {
         if (!this.clip.length) break;
         const created: string[] = [];
+        const clipBox = clipBounds(this.clip);
+        const grid = snapOn(this.state, s.page);
+
+        // Multi-paste (4409078832791 §Multi-paste): with several frames
+        // selected, "objects are pasted in the order that they are copied and
+        // will repeat if there are additional frames"; extra objects land in
+        // the last frame. Each object is centred in the frame it lands on —
+        // the doc fixes the distribution, not the per-item point.
+        const hosts = s.selection
+          .map((id) => find(this.root(), id))
+          .filter(
+            (n): n is XNode =>
+              !!n &&
+              (n.kind === "frame" || n.kind === "section") &&
+              !insideInstance(this.root(), n.id) &&
+              !isEffectivelyLocked(this.root(), n.id),
+          );
+        if (!cmd.inPlace && !cmd.over && cmd.x == null && s.selection.length > 1 && hosts.length === s.selection.length) {
+          hosts.forEach((host, j) => {
+            const items =
+              j < hosts.length - 1 || this.clip.length <= hosts.length
+                ? [this.clip[j % this.clip.length]]
+                : this.clip.slice(j);
+            for (const n of items) {
+              const copy = clone(n);
+              reid(copy);
+              copy.x = Math.round((host.w - copy.w) / 2);
+              copy.y = Math.round((host.h - copy.h) / 2);
+              host.children.push(copy);
+              created.push(copy.id);
+              this.publishIfMasterEdit(copy.id);
+            }
+          });
+          s.selection = created;
+          break;
+        }
+
         const selected = s.selection.length === 1 ? find(this.root(), s.selection[0]) : null;
         // Instances take no pasted children: with an instance (or member)
         // selected, the paste lands beside it instead of inside it.
@@ -3022,6 +3114,32 @@ export class MemoryEngine implements Engine {
           selected && insideInstance(this.root(), selected.id)
             ? findParent(this.root(), selected.id) ?? this.root()
             : null;
+
+        // Paste over selection (⌘⇧V): "place a copied object on top of a
+        // selected frame, not inside it. The pasted object will match the
+        // x, y position of the selected object." The copy enters the
+        // selection's own parent, one z-slot above it, its top-left on the
+        // selection's x,y.
+        if (cmd.over && selected) {
+          const par = selParent ?? findParent(this.root(), selected.id) ?? this.root();
+          const at = par.children.findIndex((c) => c.id === selected.id);
+          this.clip.forEach((n, k) => {
+            const copy = clone(n);
+            reid(copy);
+            copy.x = selected.x + (n.x - clipBox.minX);
+            copy.y = selected.y + (n.y - clipBox.minY);
+            if (grid) {
+              copy.x = Math.round(copy.x);
+              copy.y = Math.round(copy.y);
+            }
+            par.children.splice((at === -1 ? par.children.length : at + 1) + k, 0, copy);
+            created.push(copy.id);
+            this.publishIfMasterEdit(copy.id);
+          });
+          s.selection = created;
+          break;
+        }
+
         const parent =
           selParent ??
           (selected && (selected.kind === "frame" || selected.kind === "group" || selected.kind === "boolean")
@@ -3030,15 +3148,17 @@ export class MemoryEngine implements Engine {
               ? findParent(this.root(), selected.id) ?? this.root()
               : this.root());
         const parentWorld = parent === this.root() ? { x: 0, y: 0 } : worldPos(this.root(), parent.id) ?? { x: 0, y: 0 };
-        const grid = snapOn(this.state, s.page);
-        // "Paste here" aims the whole copy at one point, so the group's centre
-        // lands there and the layers keep the arrangement they were copied in.
-        // Stacking every root on the same coordinate — what an unadjusted
-        // `copy.x = cmd.x` does — turns a three-layer copy into one visible
-        // layer, which reads as a paste that silently dropped content.
-        const clipBox = clipBounds(this.clip);
-        const aimX = cmd.x != null ? cmd.x - clipBox.cx : 0;
-        const aimY = cmd.y != null ? cmd.y - clipBox.cy : 0;
+        // A paste aims the whole copy at one point and keeps the arrangement
+        // the layers were copied in (stacking every root on the coordinate
+        // would turn a three-layer copy into one visible layer). The point
+        // that lands on the target depends on the gesture: Paste here puts
+        // the group's top-left on the cursor — "Position your cursor where
+        // you want the top left of your copied object to be placed" — which
+        // is the default for any paste aimed at a point; only the keyboard
+        // ⌘V at the middle of the viewport passes anchor: "center".
+        const topLeft = cmd.anchor !== "center";
+        const aimX = cmd.x != null ? cmd.x - (topLeft ? clipBox.minX : clipBox.cx) : 0;
+        const aimY = cmd.y != null ? cmd.y - (topLeft ? clipBox.minY : clipBox.cy) : 0;
         for (const n of this.clip) {
           const copy = clone(n);
           reid(copy);
@@ -3052,6 +3172,10 @@ export class MemoryEngine implements Engine {
             copy.x = n.x + 16;
             copy.y = n.y + 16;
           }
+          // "When you use Paste here with an auto layout frame, the object
+          // will be pasted on top of the frame, not inside it" — an absolute
+          // child keeps its spot out of the flow.
+          if (topLeft && parent.layout) copy.absolutePosition = true;
           if (grid) {
             copy.x = Math.round(copy.x);
             copy.y = Math.round(copy.y);
@@ -3059,6 +3183,59 @@ export class MemoryEngine implements Engine {
           parent.children.push(copy);
           created.push(copy.id);
           this.publishIfMasterEdit(copy.id);
+        }
+        s.selection = created;
+        break;
+      }
+      case "pasteToReplace": {
+        // Figma, Copy and paste objects (4409078832791 §Paste to replace):
+        // "remove a selected object from your canvas or frame and replace it
+        // with the object copied to your clipboard ... The pasted object will
+        // adopt the constraints of the object it replaced." Every selected
+        // object is swapped for a fresh clone of the clipboard at the
+        // replaced object's own position and z-slot; one undo step covers the
+        // whole batch.
+        if (!this.clip.length) break;
+        const created: string[] = [];
+        const clipBox = clipBounds(this.clip);
+        const grid = snapOn(this.state, s.page);
+        for (const id of s.selection) {
+          const target = id === this.root().id ? null : find(this.root(), id);
+          const par = target ? findParent(this.root(), id) : null;
+          if (!target || !par) continue;
+          if (isEffectivelyLocked(this.root(), id) || insideInstance(this.root(), id)) continue;
+          const at = par.children.findIndex((c) => c.id === id);
+          if (at === -1) continue;
+          const fresh: XNode[] = [];
+          for (const n of this.clip) {
+            const copy = clone(n);
+            reid(copy);
+            copy.x = target.x + (n.x - clipBox.minX);
+            copy.y = target.y + (n.y - clipBox.minY);
+            if (target.constraintH) copy.constraintH = target.constraintH;
+            if (target.constraintV) copy.constraintV = target.constraintV;
+            if (grid) {
+              copy.x = Math.round(copy.x);
+              copy.y = Math.round(copy.y);
+            }
+            fresh.push(copy);
+          }
+          par.children.splice(at, 1, ...fresh);
+          for (const copy of fresh) {
+            created.push(copy.id);
+            this.publishIfMasterEdit(copy.id);
+          }
+          this.publishIfMasterEdit(par.id);
+        }
+        if (!created.length) break;
+        // Frame-level guides die with their frame rather than going stale —
+        // the same sweep the delete command runs.
+        const goneGuides = new Set(
+          s.pages[s.page].guides.map((g) => g.frameId).filter((f): f is string => !!f && !find(this.root(), f)),
+        );
+        if (goneGuides.size) {
+          s.pages[s.page].guides = s.pages[s.page].guides.filter((g) => !g.frameId || !goneGuides.has(g.frameId));
+          if (s.selectedGuide && !s.pages[s.page].guides.some((g) => g.id === s.selectedGuide)) s.selectedGuide = null;
         }
         s.selection = created;
         break;
