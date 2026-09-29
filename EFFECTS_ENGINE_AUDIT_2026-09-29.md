@@ -2,9 +2,11 @@
 
 **Run**: effects pipeline, 2026-09-29 · **Scope**: `apps/web/src/engine/paint.ts`,
 `apps/web/src/ui/Canvas.tsx` — drop shadow, inner shadow, layer blur, background blur.
-**Status**: **measured, not fixed.** Step 5 (engine fix) is deliberately not written yet —
-the pipeline gate says report the deviation first. No production file has been touched.
-**Suite**: `npm test` green before and after the audit — **3,018 assertions / 50 suites, 0 failing**.
+**Status**: **measured, then fixed and verified** (steps 5–8 below; PR #43). The deviation
+report below is the pre-fix measurement, kept as the audit record.
+**Suite**: green before, during and after — final run **3,599 assertions / 76 test files, 0
+failing**, `tsc -b` clean, GitHub Actions `scripts/check.sh` and *Web chrome (npm test +
+build)* both green on PR #43.
 
 Instrument: `apps/web/tests/probes/effects/realCanvas.mjs` + `probe.mjs`
 (`npx vite-node tests/probes/effects/probe.mjs`, needs `npm i --no-save @napi-rs/canvas`).
@@ -273,3 +275,42 @@ DIFF 3b  [blur, noise] vs [noise, blur]   max Δ 0.000; specks 0 vs 0 (control: 
 DIFF 4   background blur over a backdrop edge   worst |ours − true| = 0.161 at the edge
 10 deviation group(s) measured
 ```
+
+
+---
+
+## 6 · What shipped (steps 5–8)
+
+Landed in PR #43, all inside `ui/Canvas.tsx` (plus the test tree) — no command, model field
+or Rust file changed, so no WASM guard was touched.
+
+| Deviation | Fix |
+| --- | --- |
+| §3.1 offset never applied to a path-based shadow | The shadow is no longer a fill of the caller's path. It is `ctx.shadowOffsetX/Y` + `shadowBlur` over the layer's raster, so the offset is applied where the spec applies it (at paint time). |
+| §3.2 silhouette was the outline | The shadow is derived from the effected layer's offscreen tile **alpha**: image transparency, glyph coverage, Boolean results and a container's union of children are all per-pixel by construction. Spread dilates that alpha with 16 offset draws. |
+| §3.3 blur computed per draw op | The layer paints once into a tile; the blur is a single filtered blit of the composite. Two abutting children now read 1.000 through their seam, fill + inside stroke 1.000. |
+| §3.3 blur cut by the frame's clip | The blur is the top-most step of the pipeline: the tile is rasterised *inside* the clip and blurred *after* it, so a clipped frame's own blur spills past its box until a parent's clip stops it. |
+| §3.4 list order ignored | `noise`/`texture` rows are split by their index relative to the layer blur: rows above it paint into the tile (and are blurred), rows below paint on top of the blurred composite. |
+| §3.4 shadow's own blur replaced the layer blur | A shadow's blur is applied while the tile is built; the layer blur is applied to the finished composite, so both reach the shadow. |
+| §3.5 background blur read only the box | The backdrop blit's source rect is grown by `3 × blur`, with the clip still at the node's outline. |
+| Method: the baseline canvas hid §3.1 | `softCanvas2d.mjs` bakes the CTM in when a path point is added, per the spec. |
+
+**Verification.** `apps/web/src/ui/__tests__/effects.test.mjs` (26 assertions) runs the real
+paint path on Skia through `src/ui/__tests__/realCanvas2d.mjs`; `@napi-rs/canvas` is a
+devDependency. Sabotage runs, each restored afterwards:
+
+| sabotage | expected failure | measured |
+| --- | --- | --- |
+| the shadow's silhouette is the tile's rectangular footprint, not its alpha | A1–A4 | **3 FAIL** (A1 1008 px over-shadowed, A2, A4 a 200×60 box shadow) |
+| the effect list's order is ignored (`postBlur = topGroup`) | C, C-order | **2 FAIL** (`[noise, blur]` rendered crisp: 794 specks vs 0) |
+| the layer blur is set per draw op again (the pre-fix behaviour) | B2, B3, B4, C2 | **4 FAIL** (B3 seam 0.749, B4 edge 0.675, C2 0.075 off the documented profile) |
+| restored | — | **26 passed** |
+
+Full suite after restore: **3,599 assertions, 0 failing**; `tsc -b` clean; PR #43's *Web
+chrome (npm test + build)* and `scripts/check.sh` jobs both green.
+
+**Residual, recorded rather than hidden:** progressive (non-uniform) layer and background
+blurs are still uniform; the leaf blur raster cache was removed along with the per-op path,
+so an animated effected layer re-rasterises its tile each frame (the tile itself has no
+cache yet); a canvas too large for the tile budget (> 4096 px a side or > 16.7 M px) falls
+back to the direct paint path and therefore to the old per-op behaviour.
