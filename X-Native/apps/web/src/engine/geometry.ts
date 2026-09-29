@@ -1889,15 +1889,24 @@ export function balanceLines(
   const hit = BALANCE_CACHE.get(key);
   if (hit) return hit;
   let out = evenPartition(lines, maxW, widthOf);
-  if (mode === "pretty" && out.length > 1) {
-    const last = out[out.length - 1];
-    if (last.trim().split(/\s+/).length === 1) {
-      const prev = out[out.length - 2];
-      const words = prev.trim().split(/\s+/);
-      if (words.length > 1 && widthOf(`${last} ${words[words.length - 1]}`) <= maxW)
-        out = [...out.slice(0, -2), words.slice(0, -1).join(" "), [...words.slice(-1), last].join(" ")];
-      else if (widthOf(`${prev} ${last}`) <= maxW) out = [...out.slice(0, -2), `${prev} ${last}`];
+  if (mode === "pretty") {
+    // Pretty (360039956634): "adjusts the last four lines of a paragraph" -
+    // the head keeps its natural wrap and only the tail window is re-flowed,
+    // evenly, never stranding a single word on the last line.
+    const tailN = Math.min(4, lines.length);
+    const head = lines.slice(0, lines.length - tailN);
+    let tail = evenPartition(lines.slice(lines.length - tailN), maxW, widthOf);
+    if (tail.length > 1) {
+      const last = tail[tail.length - 1];
+      if (last.trim().split(/\s+/).length === 1) {
+        const prev = tail[tail.length - 2];
+        const words = prev.trim().split(/\s+/);
+        if (words.length > 1 && widthOf(`${last} ${words[words.length - 1]}`) <= maxW)
+          tail = [...tail.slice(0, -2), words.slice(0, -1).join(" "), [...words.slice(-1), last].join(" ")];
+        else if (widthOf(`${prev} ${last}`) <= maxW) tail = [...tail.slice(0, -2), `${prev} ${last}`];
+      }
     }
+    out = [...head, ...tail];
   }
   if (BALANCE_CACHE.size >= BALANCE_CACHE_MAX) BALANCE_CACHE.clear();
   BALANCE_CACHE.set(key, out);

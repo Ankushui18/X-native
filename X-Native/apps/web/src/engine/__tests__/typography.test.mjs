@@ -20,7 +20,10 @@ import {
   textMetrics,
   valignApplies,
 } from "../../ui/textLayout.ts";
+import { balanceLines } from "../geometry.ts";
 import { svgNode } from "../svgExport.ts";
+import { MemoryEngine, find } from "../memory.ts";
+import { styleTextRange } from "../../ui/textSpans.ts";
 
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) { pass++; console.log("  ok  " + n); } else { fail++; console.log("  FAIL " + n); } };
@@ -105,6 +108,26 @@ console.log("X-A2 list counters:");
   t("a deleted counter skips the number", JSON.stringify(lv([0, 0, 0], [0, null, 0])) === JSON.stringify(["1.", "", "2."]));
 }
 
+console.log("X-A3 pretty tail:");
+{
+  const widthOf = (s) => s.length;
+  // Pretty (360039956634): "adjusts the last four lines of a paragraph" -
+  // the head keeps its natural wrap; only the last ≤4 lines are re-flowed,
+  // and a single-word last line is never left stranded.
+  const natural = ["one two three four five", "six seven", "eight nine", "ten", "tiny"];
+  const pretty = balanceLines(natural, 23, widthOf, "pretty");
+  t("pretty keeps the natural head", pretty[0] === "one two three four five");
+  t("pretty rescues a stranded last word", pretty[pretty.length - 1].split(" ").length >= 2);
+  t("pretty keeps every word", pretty.join(" ").split(/\s+/).length === natural.join(" ").split(/\s+/).length);
+  t("pretty never overflows", pretty.every((l) => widthOf(l) <= 23));
+  // The window is the last FOUR lines: lines beyond it never move.
+  const long = ["keep me", "a b c", "d e f", "g h i", "j k l", "tail word"];
+  const pretty2 = balanceLines(long, 10, widthOf, "pretty");
+  t("pretty leaves lines outside the window alone", pretty2[0] === "keep me" && pretty2[1] === "a b c");
+  t("pretty still rescues inside the window", pretty2[pretty2.length - 1].split(" ").length >= 2);
+  t("pretty keeps every word of a long paragraph", pretty2.join(" ").split(/\s+/).length === long.join(" ").split(/\s+/).length);
+}
+
 console.log("X-B hugHeight:");
 {
   t("one row is one leading", hugHeight(1, 0, 20, 0) === 20);
@@ -156,4 +179,54 @@ console.log("X-D svg export text:");
   t("decoration passes through", svgNode(snode({ textDecoration: "underline" })).includes('text-decoration="underline"'));
   const trunc = svgNode(snode({ text: "a\nb\nc", truncate: true, maxLines: 2 }));
   t("truncate keeps max lines with an ellipsis", (trunc.match(/<tspan/g) || []).length === 2 && trunc.includes("…"));
+}
+
+console.log("X-E text styles (360039957034):");
+{
+  const e = new MemoryEngine(false);
+  const at = (id) => find(e.snapshot().pages[e.snapshot().page].root, id);
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 0, w: 200, h: 40 });
+  const id = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id, patch: { text: "Hello world", fontSize: 16, fontWeight: 400, lineHeight: 20 } });
+  const n0 = at(id);
+  e.dispatch({ type: "createStyle", kind: "text", name: "Body" });
+  const st = e.snapshot().styles.find((s) => s.name === "Body");
+  t("createStyle makes a text style with captured properties", !!st && st.kind === "text" &&
+    st.text?.fontSize === 16 && st.text?.fontFamily === n0.fontFamily && st.text?.lineHeight === 20);
+  t("createStyle binds the layer", at(id).textStyle === st.id);
+  t("a text style carries no colour", st.color === undefined);
+
+  // Whole-layer application copies the properties and binds layer + runs.
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 100, w: 200, h: 40 });
+  const id2 = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: id2, patch: { text: "Second layer", fontSize: 8, textRuns: [{ start: 0, end: 6, fontSize: 8 }, { start: 6, end: 12 }] } });
+  e.dispatch({ type: "applyStyle", kind: "text", styleId: st.id });
+  const n2 = at(id2);
+  t("applyStyle re-types the layer", n2.textStyle === st.id && n2.fontSize === 16);
+  t("applyStyle re-types every run", n2.textRuns.every((r) => r.textStyle === st.id && r.fontSize === 16));
+
+  // Range application: the caller merges the style into the range's runs.
+  e.dispatch({ type: "add", kind: "text", x: 0, y: 200, w: 200, h: 40 });
+  const id3 = e.snapshot().selection[0];
+  e.dispatch({ type: "patch", id: id3, patch: { text: "Hello world", fontSize: 8 } });
+  const runs = styleTextRange(at(id3), 0, 6, { fontSize: 8, textStyle: st.id });
+  e.dispatch({ type: "applyStyle", kind: "text", styleId: st.id, runs });
+  const n3 = at(id3);
+  t("range application binds only the range's runs",
+    n3.textRuns.length === 2 && n3.textRuns[0].textStyle === st.id && n3.textRuns[1].textStyle === undefined);
+  t("range application leaves the layer unbound", n3.textStyle === undefined);
+
+  // Edit propagation reaches whole layers and range-bound runs alike.
+  e.dispatch({ type: "editStyle", id: st.id, text: { fontSize: 22 } });
+  const n4 = at(id), n5 = at(id3);
+  t("edit propagation re-types bound layers", n4.fontSize === 22);
+  t("edit propagation re-types range-bound runs", n5.textRuns[0].fontSize === 22 && n5.textRuns[0].textStyle === st.id);
+  t("edit propagation leaves unbound runs alone", n5.textRuns[1].fontSize === 8);
+
+  // Detach keeps the type properties; only the link goes away.
+  e.dispatch({ type: "select", ids: [id] });
+  e.dispatch({ type: "detachStyle", kind: "text" });
+  const n6 = at(id);
+  t("detachStyle keeps the type properties", n6.fontSize === 22);
+  t("detachStyle drops the binding", n6.textStyle === undefined);
 }

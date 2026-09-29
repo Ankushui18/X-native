@@ -1,6 +1,7 @@
 import type {
   AutoLayout,
   SharedStyle,
+  TextStyleProps,
   Command,
   ComponentMaster,
   Effect,
@@ -498,6 +499,39 @@ function layoutSpacingFragment(l: Partial<AutoLayout> | null | undefined): Parti
  * into the override record, or the next master sync restores the master's
  * own style link. Plain layers need no record (nothing syncs them back).
  */
+/**
+ * The type properties a text style captures from a layer (360039957034): the
+ * property table's family/weight/size/line height/letter spacing/paragraph
+ * spacing/indent/decoration/case/lists plus the run-14 type settings and wrap
+ * style. Alignment and colour stay out of the style, per the article.
+ */
+export function pickTextStyle(n: XNode): TextStyleProps {
+  return {
+    fontFamily: n.fontFamily,
+    fontWeight: n.fontWeight,
+    fontSize: n.fontSize,
+    lineHeight: n.lineHeight,
+    lineHeightUnit: n.lineHeightUnit,
+    letterSpacing: n.letterSpacing,
+    paragraphSpacing: n.paragraphSpacing,
+    paragraphIndent: n.paragraphIndent,
+    textDecoration: n.textDecoration,
+    textCase: n.textCase,
+    listStyle: n.listStyle,
+    listSpacing: n.listSpacing,
+    textWrap: n.textWrap,
+    verticalTrim: n.verticalTrim,
+    underlineStyle: n.underlineStyle,
+    underlineThickness: n.underlineThickness,
+    underlineOffset: n.underlineOffset,
+    underlineSkipInk: n.underlineSkipInk,
+    baselineShift: n.baselineShift,
+    fractions: n.fractions,
+    slashedZero: n.slashedZero,
+    figureStyle: n.figureStyle,
+  };
+}
+
 function recordStyleOverride(root: XNode, n: XNode, kind: "fill" | "stroke"): void {
   if (!findInstanceRoot(root, n.id)) return;
   n.overrides =
@@ -3430,6 +3464,14 @@ export class MemoryEngine implements Engine {
         const nodes = s.selection.map((id) => find(this.root(), id)).filter((n): n is XNode => !!n);
         if (!nodes.length) break;
         const first = nodes[0];
+        if (cmd.kind === "text") {
+          // Text styles (360039957034): capture the type properties of the
+          // first selected text layer and bind the selection to them.
+          const style: SharedStyle = { id: uid("style"), name: cmd.name.trim() || "Style", kind: "text", text: pickTextStyle(first) };
+          s.styles.push(style);
+          for (const n of nodes) n.textStyle = style.id;
+          break;
+        }
         const color = cmd.kind === "fill" ? first.fill : first.strokePaint;
         const style: SharedStyle = { id: uid("style"), name: cmd.name.trim() || "Style", kind: "paint", color };
         s.styles.push(style);
@@ -3456,13 +3498,28 @@ export class MemoryEngine implements Engine {
         for (const id of s.selection) {
           const n = find(this.root(), id);
           if (!n) continue;
+          if (cmd.kind === "text") {
+            if (cmd.runs) {
+              // Range application: the caller merged the style properties (and
+              // the binding) into the captured range's runs.
+              n.textRuns = cmd.runs;
+            } else {
+              // Whole-layer application: the type properties land on the layer
+              // and on every run, all bound to the style.
+              n.textStyle = style.id;
+              if (style.text) Object.assign(n, style.text);
+              if (n.textRuns?.length)
+                n.textRuns = n.textRuns.map((r) => ({ ...r, ...style.text, textStyle: style.id }));
+            }
+            continue;
+          }
           if (cmd.kind === "fill") {
             n.fillStyle = style.id;
-            n.fill = style.color;
+            n.fill = style.color ?? n.fill;
             n.fillVisible = true;
           } else {
             n.strokeStyle = style.id;
-            n.strokePaint = style.color;
+            n.strokePaint = style.color ?? n.strokePaint;
             n.strokeVisible = true;
             if (!(n.strokeWidth > 0)) n.strokeWidth = 1;
           }
@@ -3471,10 +3528,20 @@ export class MemoryEngine implements Engine {
         break;
       }
       case "detachStyle": {
-        // Keep the painted colour; only the link goes away.
+        // Keep the painted colour / type properties; only the link goes away.
         for (const id of s.selection) {
           const n = find(this.root(), id);
           if (!n) continue;
+          if (cmd.kind === "text") {
+            delete n.textStyle;
+            if (n.textRuns?.length)
+              n.textRuns = n.textRuns.map((r) => {
+                const rest = { ...r };
+                delete rest.textStyle;
+                return rest;
+              });
+            continue;
+          }
           if (cmd.kind === "fill") delete n.fillStyle;
           else delete n.strokeStyle;
           recordStyleDetach(this.root(), n, cmd.kind === "fill" ? "fill" : "stroke");
@@ -3489,8 +3556,21 @@ export class MemoryEngine implements Engine {
           style.color = cmd.color;
           // The binding is live: repaint every node pointing at this style.
           const walk = (n: XNode) => {
-            if (n.fillStyle === style.id) n.fill = style.color;
-            if (n.strokeStyle === style.id) n.strokePaint = style.color;
+            if (n.fillStyle === style.id) n.fill = style.color ?? n.fill;
+            if (n.strokeStyle === style.id) n.strokePaint = style.color ?? n.strokePaint;
+            n.children.forEach(walk);
+          };
+          for (const pg of s.pages) walk(pg.root);
+        }
+        if (cmd.text !== undefined) {
+          // Edit propagation (360039957034): retyping the style re-types every
+          // layer and every run bound to it, whole layers and ranges alike.
+          style.text = { ...(style.text ?? {}), ...cmd.text };
+          const props = style.text;
+          const walk = (n: XNode) => {
+            if (n.textStyle === style.id) Object.assign(n, props);
+            if (n.textRuns?.length && n.textRuns.some((r) => r.textStyle === style.id))
+              n.textRuns = n.textRuns.map((r) => (r.textStyle === style.id ? { ...r, ...props } : r));
             n.children.forEach(walk);
           };
           for (const pg of s.pages) walk(pg.root);
@@ -3503,6 +3583,13 @@ export class MemoryEngine implements Engine {
         const walk = (n: XNode) => {
           if (n.fillStyle === cmd.id) delete n.fillStyle;
           if (n.strokeStyle === cmd.id) delete n.strokeStyle;
+          if (n.textStyle === cmd.id) delete n.textStyle;
+          if (n.textRuns?.length && n.textRuns.some((r) => r.textStyle === cmd.id))
+            n.textRuns = n.textRuns.map((r) => {
+              const rest = { ...r };
+              if (rest.textStyle === cmd.id) delete rest.textStyle;
+              return rest;
+            });
           n.children.forEach(walk);
         };
         for (const pg of s.pages) walk(pg.root);

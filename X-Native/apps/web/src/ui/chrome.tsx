@@ -9,7 +9,9 @@ import {
   find,
   findParent,
   isInstanceMember,
+  pickTextStyle,
 } from "../engine/memory";
+import { selectedTextRange, styleTextRange } from "./textSpans";
 import { shapePoly, shiftPoints } from "../engine/geometry";
 import { stopsMaskReach } from "../engine/paint";
 import { alignKey } from "../engine/layout";
@@ -3746,18 +3748,21 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                 const hasStroke = selNode.strokeWidth > 0 && !isNone(selNode.strokePaint);
                 // Was `confirm`: OK meant stroke and Cancel meant fill, so the
                 // dialog had no way to say "neither" — and pressing Cancel
-                // created a style anyway. Both outcomes are buttons now.
+                // created a style anyway. Both outcomes are buttons now. A
+                // text layer additionally offers its type properties (text
+                // styles, 360039957034).
                 const kind =
-                  (hasStroke
-                    ? await askChoice({
-                        title: "Create style from",
-                        body: `"${selNode.name}" has both a fill and a stroke.`,
-                        options: [
-                          { label: "Stroke", value: "stroke" },
-                          { label: "Fill", value: "fill", primary: true },
-                        ],
-                      })
-                    : "fill") as "fill" | "stroke" | null;
+                  (await askChoice({
+                    title: "Create style from",
+                    body: selNode.kind === "text"
+                      ? `"${selNode.name}" is a text layer.`
+                      : `"${selNode.name}" has ${hasStroke ? "both a fill and a stroke" : "a fill"}.`,
+                    options: [
+                      ...(selNode.kind === "text" ? [{ label: "Text", value: "text", primary: true }] : []),
+                      ...(hasStroke ? [{ label: "Stroke", value: "stroke" }] : []),
+                      { label: "Fill", value: "fill", primary: selNode.kind !== "text" },
+                    ],
+                  })) as "fill" | "stroke" | "text" | null;
                 if (kind === null) return;
                 const name = await askPrompt({
                   title: `Style name (${kind})`,
@@ -3781,26 +3786,52 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             {snap.styles.map((st) => {
               const bound = selNode?.fillStyle === st.id;
               const boundStroke = selNode?.strokeStyle === st.id;
+              const boundText = selNode?.textStyle === st.id;
               return (
                 <div key={st.id} className="color-row" style={{ width: "100%" }}>
                   <button
                     className="swatch"
-                    title={`Apply ${st.name} to the fill — shift-click for the stroke`}
+                    title={st.kind === "text"
+                      ? `Apply ${st.name} to the text${selNode?.kind === "text" ? " — a selected range only restyles that range" : ""}`
+                      : `Apply ${st.name} to the fill — shift-click for the stroke`}
                     aria-label={`Apply style ${st.name}`}
                     style={{
-                      background: st.color,
-                      border: bound || boundStroke ? "2px solid var(--accent)" : undefined,
+                      background: st.kind === "text" ? "var(--elevated)" : st.color ?? "transparent",
+                      color: st.kind === "text" ? "var(--text)" : undefined,
+                      fontWeight: st.kind === "text" ? 600 : undefined,
+                      border: bound || boundStroke || boundText ? "2px solid var(--accent)" : undefined,
                     }}
                     onClick={(e) => {
                       if (!sel) {
                         toast("Select a layer first");
                         return;
                       }
+                      if (st.kind === "text") {
+                        // Text styles (360039957034): apply to the captured
+                        // range when one is selected, else the whole layer.
+                        if (selNode?.kind !== "text") {
+                          toast("Select a text layer");
+                          return;
+                        }
+                        const range = selectedTextRange(engine, selNode, snap.selection);
+                        if (range && st.text) {
+                          const runs = styleTextRange(selNode, range.start, range.end, {
+                            ...st.text,
+                            textStyle: st.id,
+                          });
+                          engine.dispatch({ type: "applyStyle", kind: "text", styleId: st.id, runs });
+                        } else {
+                          engine.dispatch({ type: "applyStyle", kind: "text", styleId: st.id });
+                        }
+                        return;
+                      }
                       const kind = e.shiftKey ? "stroke" : "fill";
                       engine.dispatch({ type: "applyStyle", kind, styleId: st.id });
                       if (kind === "stroke") toast(`Applied ${st.name} to the stroke`);
                     }}
-                  />
+                  >
+                    {st.kind === "text" ? "T" : undefined}
+                  </button>
                   <span
                     className="hex"
                     style={{ flex: 1 }}
@@ -3818,7 +3849,20 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                   >
                     {st.name}
                   </span>
-                  {(bound || boundStroke) && (
+                  {st.kind === "text" && selNode?.kind === "text" && (
+                    <button
+                      className="mini"
+                      title={`Update ${st.name} from the selection's type properties`}
+                      aria-label={`Update style ${st.name} from selection`}
+                      onClick={() => {
+                        engine.dispatch({ type: "editStyle", id: st.id, text: pickTextStyle(selNode) });
+                        toast(`Updated ${st.name}`);
+                      }}
+                    >
+                      <Icon name="refresh" size={14} />
+                    </button>
+                  )}
+                  {(bound || boundStroke || boundText) && (
                     <button
                       className="mini"
                       title={`Detach the selection from ${st.name}`}
@@ -3826,6 +3870,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                       onClick={() => {
                         if (bound) engine.dispatch({ type: "detachStyle", kind: "fill" });
                         if (boundStroke) engine.dispatch({ type: "detachStyle", kind: "stroke" });
+                        if (boundText) engine.dispatch({ type: "detachStyle", kind: "text" });
                         toast(`Detached from ${st.name}`);
                       }}
                     >

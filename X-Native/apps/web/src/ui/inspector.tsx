@@ -2048,7 +2048,7 @@ function DevTokens({ snap }: { snap: Snapshot }) {
     });
   }
   for (const s of snap.styles) {
-    if (s.kind === "paint") rows.push({ group: "Styles", name: s.name, value: s.color, color: s.color });
+    if (s.kind === "paint") rows.push({ group: "Styles", name: s.name, value: s.color ?? "", color: s.color });
   }
   if (!rows.length) return null;
 
@@ -2504,7 +2504,11 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
   ] as [string, string | undefined][]) {
     if (!id) continue;
     const style = snap.styles.find((s) => s.id === id || s.name === id);
-    L(label, style ? `${style.name} · ${style.color.toUpperCase()}` : String(id), "Styles", style?.color);
+    L(label, style ? (style.color ? `${style.name} · ${style.color.toUpperCase()}` : style.name) : String(id), "Styles", style?.color);
+  }
+  if (n.textStyle) {
+    const style = snap.styles.find((s) => s.id === n.textStyle);
+    L("Text style", style ? style.name : String(n.textStyle), "Styles");
   }
   if (n.exports?.length) {
     L(

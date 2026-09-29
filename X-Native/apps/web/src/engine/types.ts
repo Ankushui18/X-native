@@ -327,9 +327,42 @@ export interface ComponentVariant {
 export interface SharedStyle {
   id: string;
   name: string;
-  kind: "paint";
-  /** #rrggbb or #rrggbbaa, matching every other colour field in the engine. */
-  color: string;
+  kind: "paint" | "text";
+  /** #rrggbb or #rrggbbaa, matching every other colour field in the engine.
+   *  Paint styles only: a text style carries no colour (360039957034). */
+  color?: string;
+  /** Text styles (360039957034): the type properties the style carries -
+   *  family, weight, size, line height, letter spacing, paragraph spacing,
+   *  indent, decoration, case, lists and OpenType; alignment and colour stay
+   *  out, per the article's property table. */
+  text?: TextStyleProps;
+}
+
+/** The property set of a text style. Every field is optional so a style made
+ *  from a partial selection propagates only what it captured. */
+export interface TextStyleProps {
+  fontFamily?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  lineHeight?: number;
+  lineHeightUnit?: LineHeightUnit;
+  letterSpacing?: number;
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  textDecoration?: TextDecoration;
+  textCase?: TextCase;
+  listStyle?: ListStyle;
+  listSpacing?: number;
+  textWrap?: TextWrap;
+  verticalTrim?: boolean;
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
 }
 
 export interface ComponentPropertyDef {
@@ -428,6 +461,8 @@ export interface GradientStop {
 export interface TextRun {
   start: number;
   end: number;
+  /** Text-style binding (360039957034): which shared style this run follows. */
+  textStyle?: string;
   fill?: string;
   fontWeight?: number;
   fontSize?: number;
@@ -680,6 +715,9 @@ export interface XNode {
   fillStyle?: string;
   /** Id of the SharedStyle driving `strokePaint`. */
   strokeStyle?: string;
+  /** Id of the SharedStyle carrying this text layer's type properties
+   *  (360039957034). Editing that style re-types every bound node and run. */
+  textStyle?: string;
   /**
    * Variable bindings: layer prop name -> variable id. Bound props are
    * re-applied from the resolved variable (under the active mode) on every
@@ -1168,15 +1206,16 @@ export type Command =
   | { type: "boolean"; op: BooleanOp }
   /** Arm (`op`) or clear (`null`) the boolean live preview overlay. View-only. */
   | { type: "setBooleanPreview"; op: BooleanOp | null }
-  /** Create a named style from the selection's current fill or stroke and
-   *  bind the selection to it. */
-  | { type: "createStyle"; kind: "fill" | "stroke"; name: string }
-  /** Point the selection at an existing style. */
-  | { type: "applyStyle"; kind: "fill" | "stroke"; styleId: string }
-  /** Drop the binding, keeping the painted colour. */
-  | { type: "detachStyle"; kind: "fill" | "stroke" }
-  /** Recolour a style; every bound node follows. */
-  | { type: "editStyle"; id: string; color?: string; name?: string }
+  /** Create a named style from the selection's current fill, stroke or type
+   *  properties and bind the selection to it. */
+  | { type: "createStyle"; kind: "fill" | "stroke" | "text"; name: string }
+  /** Point the selection at an existing style. A text style may target just a
+   *  captured range by passing its merged runs (range application). */
+  | { type: "applyStyle"; kind: "fill" | "stroke" | "text"; styleId: string; runs?: TextRun[] }
+  /** Drop the binding, keeping the painted colour / type properties. */
+  | { type: "detachStyle"; kind: "fill" | "stroke" | "text" }
+  /** Recolour or retype a style; every bound node and run follows. */
+  | { type: "editStyle"; id: string; color?: string; name?: string; text?: Partial<TextStyleProps> }
   | { type: "deleteStyle"; id: string }
   | { type: "addGuide"; axis: "x" | "y"; at: number; frameId?: string }
   | { type: "moveGuide"; id: string; at: number }

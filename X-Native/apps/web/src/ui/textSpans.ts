@@ -9,6 +9,9 @@ const keys = [
   // and links style ranges too.
   "underlineStyle", "underlineThickness", "underlineOffset", "underlineSkipInk", "underlineColor",
   "baselineShift", "fractions", "slashedZero", "figureStyle", "link", "textWrap", "fontStyle",
+  // Text styles (360039957034): ranges carry their style binding so edits to
+  // the shared style propagate into them.
+  "textStyle",
 ] as const;
 export type SpanStyle = Pick<XNode, (typeof keys)[number]>;
 export type StyledSpan = TextRun & SpanStyle;
@@ -42,6 +45,7 @@ const styleOf = (n: XNode, run?: TextRun): SpanStyle => ({
   link: run?.link ?? n.link,
   textWrap: run?.textWrap ?? n.textWrap,
   fontStyle: run?.fontStyle ?? n.fontStyle,
+  textStyle: run?.textStyle ?? n.textStyle,
 });
 const sameStyle = (a: StyledSpan, b: StyledSpan) => keys.every((key) => a[key] === b[key]);
 function merge(parts: StyledSpan[]): StyledSpan[] {
