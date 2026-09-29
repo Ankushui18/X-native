@@ -32,7 +32,7 @@ import {
   outlineVariableStroke,
   widthProfileStations,
 } from "../engine/geometry";
-import { dashArray, dashOffset, miterLimitFromAngle, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
+import { dashArray, dashOffset, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   roundBox,
@@ -45,9 +45,9 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
+import { fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
-import { setPatternLookup } from "../engine/pattern";
+import { patternSourceNode, setPatternLookup } from "../engine/pattern";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
 import { coverCrop, normalizeCropRect } from "../engine/paint";
 import { registerPenFinisher } from "./penDraft";
@@ -58,7 +58,9 @@ import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
-import { applyTextCase, canvasTextFont, fitLineCount, hugSize, indentOf, listGutter, listMarker, measureCached, textMetrics, valignApplies, wrapLines } from "./textLayout";
+import { hasMixedTextSpans, styledTextRows, truncateStyledRows } from "./textLayout";
+import { rememberTextRange, resolvedTextSpans, spansAfterTextEdit } from "./textSpans";
+import { applyTextCase, canvasTextFont, fitLineCount, hugSize, indentOf, invalidateTextMeasureCache, listGutter, listMarker, measureCached, textMetrics, valignApplies, wrapLines } from "./textLayout";
 import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import type { ImportedNode } from "../engine/svgImport";
@@ -375,6 +377,13 @@ export function Canvas({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const editRef = useRef<HTMLTextAreaElement | null>(null);
+  const capturedRange = useRef<{ id: string; start: number; end: number } | null>(null);
+  const captureRange = (el: HTMLTextAreaElement, id: string) => {
+    const { selectionStart: start, selectionEnd: end } = el;
+    const range = start < end ? { id, start, end } : null;
+    capturedRange.current = range;
+    rememberTextRange(engine, range);
+  };
   // Mousedown lands before blur: when editing text A and pressing on text B,
   // the intercept below stashes B here so the blur commits A and opens B
   // instead of closing the editor outright.
@@ -596,6 +605,13 @@ export function Canvas({
   } | null>(null);
   /** Viewport size, tracked so the ruler overlay can size its own canvas. */
   const [box, setBox] = useState({ w: 0, h: 0 });
+  const [fontRevision, setFontRevision] = useState(0);
+  const requestedFonts = useRef(new Set<string>());
+  const canvasMounted = useRef(true);
+  useEffect(() => {
+    canvasMounted.current = true;
+    return () => { canvasMounted.current = false; };
+  }, []);
   /** Live smart-guide overlay, produced by the snapping pass during a drag. */
   const [guides, setGuides] = useState<Guide[]>([]);
   const [gapBadges, setGapBadges] = useState<GapBadge[]>([]);
@@ -1245,6 +1261,43 @@ export function Canvas({
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [snap.presentFrame, snap.page, snap.pages, runInteraction]);
 
+  // Canvas2D can measure a fallback under the requested ctx.font before a
+  // bundled web font arrives. Load each family/weight once; when it resolves,
+  // discard the fallback widths, re-hug text that follows its content, and
+  // repaint without moving the layer's x/y or touching fixed-size boxes.
+  useEffect(() => {
+    const fonts = document.fonts;
+    if (!fonts?.load) return;
+    const walk = (n: XNode) => {
+      if (n.kind === "text" && n.text && n.visible) {
+        for (const face of [{ fontFamily: n.fontFamily, fontWeight: n.fontWeight, fontSize: n.fontSize }, ...resolvedTextSpans(n)]) {
+          const key = `${face.fontFamily}\u0000${face.fontWeight}`;
+          if (!requestedFonts.current.has(key)) {
+            requestedFonts.current.add(key);
+            const family = face.fontFamily.replaceAll('"', "");
+          void fonts.load(`${face.fontWeight} ${Math.max(1, face.fontSize)}px "${family}"`, n.text).then((faces) => {
+            if (!faces.length || !canvasMounted.current) return;
+            invalidateTextMeasureCache();
+            setFontRevision((v) => v + 1);
+            const root = engine.snapshot().pages[engine.snapshot().page].root;
+            const refit = (m: XNode) => {
+              if (m.kind === "text" && (m.sizingW === "hug" || m.sizingH === "hug") && [{ fontFamily: m.fontFamily, fontWeight: m.fontWeight }, ...resolvedTextSpans(m)].some((f) => `${f.fontFamily}\u0000${f.fontWeight}` === key)) {
+                const dims = hugSize(m, m.text);
+                if ((dims.w !== undefined && dims.w !== m.w) || (dims.h !== undefined && dims.h !== m.h))
+                  engine.dispatch({ type: "patch", id: m.id, patch: dims });
+              }
+              for (const child of m.children) refit(child);
+            };
+            refit(root);
+            }).catch(() => { /* unavailable font: keep the fallback visible */ });
+          }
+        }
+      }
+      for (const child of n.children) walk(child);
+    };
+    walk(snap.pages[snap.page].root);
+  }, [snap, engine]);
+
   useEffect(() => {
     const c = ref.current;
     const box = wrap.current;
@@ -1464,14 +1517,32 @@ export function Canvas({
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
-        if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+        if (n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint))) {
           ctx.save();
-          ctx.strokeStyle = cssRgba(n.strokePaint);
+          ctx.strokeStyle = n.strokeType === "pattern"
+            ? patternStrokeStyle(ctx, n, sx, sy, z, imgOf) ?? "rgba(0,0,0,0)"
+            : cssRgba(n.strokePaint);
           ctx.globalAlpha *= n.strokeOpacity ?? 1;
           ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
           ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+          ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
           ctx.setLineDash(n.strokeDash > 0 ? [n.strokeDash * z, (n.strokeGap || n.strokeDash) * z] : []);
-          tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true);
+          const traceBooleanStroke = (append = false) => tracePath(
+            ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true, append,
+          );
+          if (n.strokeAlign === "inside") {
+            traceBooleanStroke();
+            ctx.clip();
+            traceBooleanStroke();
+            ctx.lineWidth *= 2;
+          } else if (n.strokeAlign === "outside") {
+            ctx.beginPath();
+            ctx.rect(-1e6, -1e6, 2e6, 2e6);
+            traceBooleanStroke(true);
+            ctx.clip("evenodd");
+            traceBooleanStroke();
+            ctx.lineWidth *= 2;
+          } else traceBooleanStroke();
           ctx.stroke();
           ctx.restore();
         }
@@ -1479,7 +1550,7 @@ export function Canvas({
           ctx,
           n,
           z,
-          () => tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true),
+          (append) => tracePath(ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true, append),
           { x: sx, y: sy, w: sw, h: sh },
         );
         ctx.restore();
@@ -1489,7 +1560,7 @@ export function Canvas({
       // the same outline (a stroke pass changes lineWidth and may clip, so the
       // path has to be rebuilt) and so the mask-outline overlay traces what the
       // layer actually paints instead of a second, drifting copy of this shape.
-      const traceShape = () => traceNodeShape(ctx, n, sx, sy, sw, sh, z);
+      const traceShape = (append = false) => traceNodeShape(ctx, n, sx, sy, sw, sh, z, append);
       traceShape();
       if (snap.outlineMode) {
         ctx.save();
@@ -1526,7 +1597,7 @@ export function Canvas({
         n.kind !== "text" &&
         (!!n.imageSrc ||
           paintsAnyFill(n) ||
-          (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)));
+          (n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" ? !!patternSourceNode(n.strokePattern) : !isNone(n.strokePaint))));
       if (canShadow) paintDropShadowsMasked(ctx, fxNode, z, { trace: traceShape });
       if (n.fillType === "image" || (n.imageSrc && isNone(n.fill))) {
         // A hidden base image paints nothing, but the stack above it still
@@ -1611,13 +1682,16 @@ export function Canvas({
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
       paintInnerShadows(ctx, fxNode, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
-      if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+      if (n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint))) {
         ctx.save();
         ctx.globalAlpha *= n.strokeOpacity ?? 1;
-        ctx.strokeStyle = cssRgba(n.strokePaint);
+        const strokeStyle = n.strokeType === "pattern"
+          ? patternStrokeStyle(ctx, n, sx, sy, z, imgOf) ?? "rgba(0,0,0,0)"
+          : cssRgba(n.strokePaint);
+        ctx.strokeStyle = strokeStyle;
         ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
         ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
-        ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
+        ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
         const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
         // Dashes carry their own cap: a dotted line is a 1px dash
         // with round caps, and only the segments take the rounding.
@@ -1658,14 +1732,18 @@ export function Canvas({
             ctx.stroke();
             ctx.restore();
           } else if (align === "outside") {
+            // Canvas strokes are centred. Clip their doubled band to the
+            // exterior before drawing: overpainting the interior with the
+            // layer fill fails for hidden/transparent fills and covers content.
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(-1e6, -1e6, 2e6, 2e6);
+            traceShape(true);
+            ctx.clip("evenodd");
+            traceShape();
             ctx.lineWidth = w * 2;
             ctx.stroke();
-            if (n.fillVisible && !isNone(n.fill) && n.kind !== "line" && n.kind !== "arrow") {
-              ctx.save();
-              ctx.globalCompositeOperation = "source-over";
-              paintFill(ctx, n, sx, sy, sw, sh, imgOf);
-              ctx.restore();
-            }
+            ctx.restore();
           } else {
             ctx.lineWidth = w;
             ctx.stroke();
@@ -1687,13 +1765,13 @@ export function Canvas({
               n.closed,
               n.strokeCap,
               n.strokeJoin,
-              miterLimitFromAngle(n.strokeMiterAngle),
+              strokeCanvasMiterLimit(n.strokeMiterAngle),
             );
           }
         }
         if (varOutline && varOutline.length >= 2) {
           tracePath(ctx, varOutline, snap.panX + x * z, snap.panY + y * z, z, true);
-          ctx.fillStyle = cssRgba(n.strokePaint);
+          ctx.fillStyle = strokeStyle;
           ctx.fill();
         } else if (perSide) {
           const cones = sideCones(sx, sy, sw, sh);
@@ -1783,7 +1861,7 @@ export function Canvas({
               // Ring on the endpoint, stroked at the path's own weight.
               ctx.arc(e.ex, e.ey, Math.max(1, eah * 0.55), 0, Math.PI * 2);
               ctx.lineWidth = Math.max(0.5, n.strokeWidth * tipScale(e.at) * z);
-              ctx.strokeStyle = cssRgba(n.strokePaint);
+              ctx.strokeStyle = strokeStyle;
               ctx.stroke();
               continue;
             }
@@ -1805,7 +1883,7 @@ export function Canvas({
               ctx.lineTo(back(e, eah * 0.75, -1).x, back(e, eah * 0.75, -1).y);
             }
             ctx.closePath();
-            ctx.fillStyle = cssRgba(n.strokePaint);
+            ctx.fillStyle = strokeStyle;
             ctx.fill();
           }
         }
@@ -3699,7 +3777,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -6795,7 +6873,7 @@ export function Canvas({
     let textW = wp.node.w;
     let textH = wp.node.h;
     if (measure && (wp.node.sizingW === "hug" || wp.node.sizingH === "hug")) {
-      const m = textMetrics(measure, wp.node, edit.text);
+      const m = textMetrics(measure, { ...wp.node, text: edit.text, textRuns: spansAfterTextEdit(wp.node, edit.text) }, edit.text);
       textW = Math.max(wp.node.w, m.maxW + 4);
       textH = Math.max(wp.node.h, m.lines * (wp.node.lineHeight || wp.node.fontSize * 1.2));
     }
@@ -6942,18 +7020,39 @@ export function Canvas({
           style={editBox}
           value={edit.text}
           autoFocus
-          onChange={(e) => setEdit({ ...edit, text: e.target.value })}
-          onBlur={() => {
+          onSelect={(e) => {
+            // A select event may fire again with a collapsed range during blur.
+            if (e.currentTarget.selectionStart < e.currentTarget.selectionEnd)
+              captureRange(e.currentTarget, edit.id);
+          }}
+          onKeyUp={(e) => captureRange(e.currentTarget, edit.id)}
+          onMouseUp={(e) => captureRange(e.currentTarget, edit.id)}
+          onChange={(e) => {
+            rememberTextRange(engine, null);
+            capturedRange.current = null;
+            setEdit({ ...edit, text: e.target.value });
+          }}
+          onBlur={(e) => {
+            // Some browsers collapse the DOM selection as focus moves to the
+            // inspector. Retain the last non-collapsed onSelect/mouseUp range.
+            if (e.currentTarget.selectionStart < e.currentTarget.selectionEnd)
+              captureRange(e.currentTarget, edit.id);
+            else if (capturedRange.current?.id === edit.id)
+              rememberTextRange(engine, capturedRange.current);
             const n = worldPos(snap.pages[snap.page].root, edit.id)?.node;
             const patch: Partial<XNode> = { text: edit.text };
+            if (n && edit.text !== n.text) patch.textRuns = spansAfterTextEdit(n, edit.text);
             if (n && (n.sizingW === "hug" || n.sizingH === "hug"))
-              Object.assign(patch, hugSize(n, edit.text));
+              Object.assign(patch, hugSize({ ...n, ...patch } as XNode, edit.text));
             engine.dispatch({ type: "patch", id: edit.id, patch });
             const sw = editSwitch.current;
             editSwitch.current = null;
             const nn = sw ? worldPos(snap.pages[snap.page].root, sw)?.node : null;
-            if (nn && nn.kind === "text") setEdit({ id: sw as string, text: nn.text });
-            else setEdit(null);
+            if (nn && nn.kind === "text") {
+              rememberTextRange(engine, null);
+              capturedRange.current = null;
+              setEdit({ id: sw as string, text: nn.text });
+            } else setEdit(null);
           }}
           onKeyDown={(e) => {
             if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.key === "Enter"))
@@ -7531,6 +7630,7 @@ function starPath(
   n: number,
   ratio = 0.4,
   cornerRadius = 0,
+  append = false,
 ) {
   const pts = Math.max(3, Math.min(60, Math.round(n)));
   const inner = Math.max(0.05, Math.min(0.95, ratio));
@@ -7543,7 +7643,7 @@ function starPath(
       y: cy + Math.sin(a) * ry * k,
     });
   }
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   const len = vertices.length;
   if (cornerRadius <= 0) {
     for (let i = 0; i < len; i++) {
@@ -7573,8 +7673,9 @@ function polyPath(
   ry: number,
   n: number,
   cornerRadius = 0,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   const pts = Math.max(3, Math.min(60, Math.round(n)));
   const vertices: { x: number; y: number }[] = [];
   for (let i = 0; i < pts; i++) {
@@ -7619,10 +7720,11 @@ function roundRectPath(
   sw: number,
   sh: number,
   z: number,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   if (hasCornerSmoothing(n)) {
-    tracePath(ctx, shapePoly(n), sx, sy, z, true);
+    tracePath(ctx, shapePoly(n), sx, sy, z, true, append);
     return;
   }
   const rr = roundRectRadii(n).map((r) => Math.max(0, r * z)) as [number, number, number, number];
@@ -7645,17 +7747,18 @@ function traceNodeShape(
   sw: number,
   sh: number,
   z: number,
+  append = false,
 ) {
   if (n.kind === "text") {
-    ctx.beginPath();
+    if (!append) ctx.beginPath();
   } else if ((n.kind === "vector" || n.kind === "boolean") && (n.vectorNetwork || n.path.length)) {
     if (n.vectorNetwork && n.vectorNetwork.segments.length > 0) {
-      traceVectorNetwork(ctx, n.vectorNetwork, sx, sy, z);
+      traceVectorNetwork(ctx, n.vectorNetwork, sx, sy, z, append);
     } else {
-      tracePath(ctx, n.path, sx, sy, z, n.closed);
+      tracePath(ctx, n.path, sx, sy, z, n.closed, append);
     }
   } else if (n.kind === "ellipse") {
-    ctx.beginPath();
+    if (!append) ctx.beginPath();
     if (n.arcData && (n.arcData.endingAngle < Math.PI * 2 - 0.001 || n.arcData.innerRadius > 0.001 || n.arcData.startingAngle > 0.001)) {
       const sa = n.arcData.startingAngle ?? 0;
       const ea = n.arcData.endingAngle ?? Math.PI * 2;
@@ -7680,7 +7783,7 @@ function traceNodeShape(
       ctx.ellipse(sx + sw / 2, sy + sh / 2, Math.abs(sw / 2), Math.abs(sh / 2), 0, 0, Math.PI * 2);
     }
   } else if (n.kind === "line" || n.kind === "arrow") {
-    ctx.beginPath();
+    if (!append) ctx.beginPath();
     ctx.moveTo(sx, sy + sh / 2);
     ctx.lineTo(sx + sw, sy + sh / 2);
   } else if (n.kind === "star") {
@@ -7693,6 +7796,7 @@ function traceNodeShape(
       n.count || 5,
       n.starRatio || 0.4,
       n.cornerRadii[0] || 0,
+      append,
     );
   } else if (n.kind === "poly") {
     polyPath(
@@ -7703,9 +7807,10 @@ function traceNodeShape(
       Math.abs(sh / 2),
       n.count || 3,
       n.cornerRadii[0] || 0,
+      append,
     );
   } else {
-    roundRectPath(ctx, n, sx, sy, sw, sh, z);
+    roundRectPath(ctx, n, sx, sy, sw, sh, z, append);
   }
 }
 
@@ -7716,8 +7821,9 @@ function tracePath(
   oy: number,
   z: number,
   closed: boolean,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   path.forEach((pt, i) => {
     const vx = ox + pt.x * z;
     const vy = oy + pt.y * z;
@@ -7800,8 +7906,9 @@ function traceVectorNetwork(
   ox: number,
   oy: number,
   z: number,
+  append = false,
 ) {
-  ctx.beginPath();
+  if (!append) ctx.beginPath();
   if (vn.regions && vn.regions.length > 0) {
     for (const region of vn.regions) {
       for (const loop of region.loops) {
@@ -7861,6 +7968,115 @@ function traceVectorNetwork(
 }
 
 
+/** Rich rows share the exact measured segments used by textMetrics. The
+ * plain/uniform path above stays a single optimized fillText call. */
+function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy: number, sw: number, sh: number, z: number) {
+  const rows = styledTextRows(ctx, n, n.text, sw, z);
+  const lh = Math.max(1, (n.lineHeight || Math.max(n.fontSize, ...resolvedTextSpans(n).map((r) => r.fontSize)) * 1.2) * z);
+  const gap = (n.paragraphSpacing || 0) * z;
+  const limit = n.truncate ? (valignApplies(n) || (n.maxH ?? 0) > 0
+    ? fitLineCount(sh / Math.max(1e-6, z), n.lineHeight || n.fontSize * 1.2, n.paragraphSpacing || 0)
+    : n.maxLines > 0 ? n.maxLines : Infinity) : Infinity;
+  const lines = truncateStyledRows(ctx, n, rows, limit, n.sizingW === "hug" ? Infinity : sw, z);
+  const blockH = lines.reduce((h, r) => h + lh + (r.lastInPara ? gap : 0), 0) - gap;
+  let y = sy;
+  if (valignApplies(n)) {
+    if (n.textAlignVertical === "middle") y += (sh - blockH) / 2;
+    if (n.textAlignVertical === "bottom") y += sh - blockH;
+  }
+  ctx.textBaseline = "top";
+  ctx.save();
+  if (n.truncate) {
+    ctx.beginPath(); ctx.rect(sx, sy, sw, sh); ctx.clip();
+  }
+  const textFill = fillStyle(ctx, n, sx, sy, sw, sh);
+  const strokeOn = n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint));
+  const strokeStyle = n.strokeType === "pattern"
+    ? patternStrokeStyle(ctx, n, sx, sy, z) ?? "rgba(0,0,0,0)" : cssRgba(n.strokePaint);
+  const ls = (n.letterSpacing || 0) * z;
+  const draw = (mode: "fill" | "stroke") => {
+    let ty = y;
+    for (const row of lines) {
+      const left = sx + row.lead;
+      const inner = Math.max(0, sw - row.lead);
+      let x = n.textAlign === "center" ? left + (inner - row.width) / 2
+        : n.textAlign === "right" ? sx + sw - row.width : left;
+      if (row.marker) {
+        ctx.font = canvasTextFont(n, n.fontSize * z);
+        ctx.textAlign = "left";
+        ctx.fillStyle = textFill;
+        if (mode === "fill") ctx.fillText(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
+        else ctx.strokeText(row.marker, sx + (n.paragraphIndent || 0) * z, ty);
+      }
+      // Justification stretches only inter-word gaps on non-final rows.
+      const text = row.pieces.map((p) => p.text).join("");
+      const spaces = n.textAlign === "justified" && !row.lastInPara ? [...text.matchAll(/ /g)].length : 0;
+      const extra = spaces ? Math.max(0, inner - row.width) / spaces : 0;
+      for (const [i, piece] of row.pieces.entries()) {
+        ctx.font = canvasTextFont(n, piece.run.fontSize * z, piece.run);
+        ctx.textAlign = "left";
+        ctx.fillStyle = piece.run.fill === n.fill ? textFill : cssRgba(piece.run.fill);
+        if (ls || n.textAlign === "justified") {
+          for (const ch of piece.text) {
+            if (mode === "fill") ctx.fillText(ch, x, ty);
+            else ctx.strokeText(ch, x, ty);
+            x += measureCached(ctx, ch) + ls + (ch === " " ? extra : 0);
+          }
+        } else {
+          if (mode === "fill") ctx.fillText(piece.text, x, ty);
+          else ctx.strokeText(piece.text, x, ty);
+          x += piece.width;
+        }
+        if (i < row.pieces.length - 1) x += ls;
+      }
+      if (mode === "fill" && row.pieces.some((p) => p.run.textDecoration === "underline" || p.run.textDecoration === "strikethrough")) {
+        // Per-run decoration uses the same segment starts and widths as glyphs.
+        let dx = n.textAlign === "center" ? left + (inner - row.width) / 2 : n.textAlign === "right" ? sx + sw - row.width : left;
+        for (const piece of row.pieces) {
+          if (piece.run.textDecoration === "underline" || piece.run.textDecoration === "strikethrough") {
+            ctx.save(); ctx.shadowColor = "transparent"; ctx.strokeStyle = cssRgba(piece.run.fill);
+            ctx.lineWidth = Math.max(1, z); ctx.beginPath();
+            const yy = ty + piece.run.fontSize * z * (piece.run.textDecoration === "underline" ? 1 : 0.7);
+            ctx.moveTo(dx, yy); ctx.lineTo(dx + piece.width, yy); ctx.stroke(); ctx.restore();
+          }
+          dx += piece.width + ls;
+        }
+      }
+      ty += lh + (row.lastInPara ? gap : 0);
+    }
+  };
+  if (n.fillVisible !== false && !isNone(n.fill)) {
+    const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
+    for (const drop of drops.length ? drops : [undefined]) {
+      ctx.save();
+      ctx.globalAlpha *= n.fillOpacity ?? 1;
+      if (drop) {
+        const { r, g, b, a } = parseHex(drop.color);
+        ctx.shadowColor = `rgba(${r},${g},${b},${a})`;
+        ctx.shadowBlur = Math.max(0, drop.blur) * z;
+        ctx.shadowOffsetX = drop.x * z;
+        ctx.shadowOffsetY = drop.y * z;
+      } else {
+        ctx.shadowColor = "transparent";
+      }
+      draw("fill");
+      ctx.restore();
+    }
+  }
+  if (strokeOn) {
+    ctx.save();
+    ctx.shadowColor = "transparent";
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+    ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
+    ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
+    ctx.globalAlpha *= n.strokeOpacity ?? 1;
+    draw("stroke");
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function paintText(
   ctx: CanvasRenderingContext2D,
   n: XNode,
@@ -7870,11 +8086,16 @@ function paintText(
   sh: number,
   z: number,
 ) {
-  const textFill = fillStyle(ctx, n, sx, sy, sw, sh);
-  const size = Math.max(1, n.fontSize * z);
+  if (hasMixedTextSpans(n)) {
+    paintStyledText(ctx, n, sx, sy, sw, sh, z);
+    return;
+  }
+  const uniform = n.textRuns?.length ? resolvedTextSpans(n)[0] : undefined;
+  const textFill = uniform?.fill && uniform.fill !== n.fill ? cssRgba(uniform.fill) : fillStyle(ctx, n, sx, sy, sw, sh);
+  const size = Math.max(1, (uniform?.fontSize ?? n.fontSize) * z);
   // Small caps rides the font's own small-cap glyphs (with the copy lowered
   // so every letter takes part), not full-height capitals.
-  ctx.font = canvasTextFont(n, size);
+  ctx.font = uniform ? canvasTextFont(n, uniform.fontSize * z, uniform) : canvasTextFont(n, size);
   ctx.textBaseline = "top";
   ctx.textAlign = n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left";
   const clipped = n.truncate;
@@ -7892,7 +8113,7 @@ function paintText(
   content = applyTextCase(content, n.textCase);
   // Tight leading stays tight: the floor is degenerate input, not the font
   // size, so the painter agrees with the hug box and the field.
-  const lh = Math.max(1, (n.lineHeight || n.fontSize * 1.2) * z);
+  const lh = Math.max(1, (n.lineHeight || (uniform?.fontSize ?? n.fontSize) * 1.2) * z);
   const ls = (n.letterSpacing || 0) * z;
   const paraGap = (n.paragraphSpacing || 0) * z;
   const wrap = n.sizingW !== "hug";
@@ -7970,7 +8191,10 @@ function paintText(
     ctx.shadowOffsetY = drop.y * z;
   };
   const fillOn = n.fillVisible !== false && !isNone(n.fill);
-  const strokeOn = n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint);
+  const strokeOn = n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint));
+  const textStroke = n.strokeType === "pattern"
+    ? patternStrokeStyle(ctx, n, sx, sy, z) ?? "rgba(0,0,0,0)"
+    : cssRgba(n.strokePaint);
   const paintFillLine = (str: string, x: number, y: number, maxW?: number) => {
     if (!fillOn) return;
     ctx.save();
@@ -7983,7 +8207,9 @@ function paintText(
     if (!strokeOn) return;
     ctx.save();
     ctx.shadowColor = "transparent";
-    ctx.strokeStyle = cssRgba(n.strokePaint);
+    ctx.strokeStyle = textStroke;
+    ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+    ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
     ctx.globalAlpha *= n.strokeOpacity ?? 1;
     ctx.lineWidth = Math.max(0.5, n.strokeWidth * z);
     ctx.strokeText(str, x, y, maxW);
@@ -8042,7 +8268,7 @@ function paintText(
       ctx.beginPath();
       ctx.moveTo(x0, yy);
       ctx.lineTo(x0 + textWidth, yy);
-      ctx.strokeStyle = cssRgba(n.fill);
+      ctx.strokeStyle = cssRgba(uniform?.fill ?? n.fill);
       ctx.lineWidth = Math.max(1, z);
       ctx.stroke();
       ctx.restore();

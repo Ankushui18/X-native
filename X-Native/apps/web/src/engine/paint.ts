@@ -390,13 +390,18 @@ function drawSourceTree(
     } else if (m.fills?.length) {
       paintStack(ctx, m, ox, oy, w, h, imgOf);
     }
-    if (m.strokeVisible && m.strokeWidth > 0 && !isNone(m.strokePaint)) {
+    if (m.strokeVisible && m.strokeWidth > 0 && (m.strokeType === "pattern" || !isNone(m.strokePaint))) {
       traceSource(ctx, m, ox, oy, k);
       ctx.save();
       ctx.globalAlpha *= m.strokeOpacity ?? 1;
-      ctx.strokeStyle = cssRgba(m.strokePaint);
-      ctx.lineWidth = m.strokeWidth * k;
-      ctx.stroke();
+      const style = m.strokeType === "pattern" ? patternStrokeStyle(ctx, m, ox, oy, k, imgOf) : cssRgba(m.strokePaint);
+      if (style) {
+        ctx.strokeStyle = style;
+        ctx.lineJoin = m.strokeJoin === "round" ? "round" : m.strokeJoin === "bevel" ? "bevel" : "miter";
+        ctx.miterLimit = strokeCanvasMiterLimit(m.strokeMiterAngle);
+        ctx.lineWidth = m.strokeWidth * k;
+        ctx.stroke();
+      }
       ctx.restore();
     }
   }
@@ -426,6 +431,65 @@ function patternTile(src: XNode, k: number, imgOf?: (src: string) => HTMLImageEl
   tileCache.set(key, c);
   while (tileCache.size > 48) tileCache.delete(tileCache.keys().next().value as string);
   return c;
+}
+
+/** A transparent, repeating pattern for Canvas2D's stroke (or filled stroke
+ * outline). Canvas does the actual stroking, so its caps, joins, dashes and
+ * alignment clips remain the authority for the final band. The lattice is
+ * anchored in layer coordinates, not restarted at every corner/path segment.
+ * Weight changes the exposed band, not the source tile's scale.
+ */
+export function patternStrokeStyle(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  sx: number,
+  sy: number,
+  z: number,
+  imgOf?: (src: string) => HTMLImageElement | undefined,
+): CanvasPattern | null {
+  const src = patternSourceNode(n.strokePattern);
+  if (!src || src.w <= 0 || src.h <= 0 || n.w <= 0 || n.h <= 0 || patternDepth > 2) return null;
+  const p = patternSettings(n.strokePattern);
+  const per = patternPeriod(p, src.w, src.h, n.w, n.h);
+  const pw = per.stepX * (per.hex && per.vertical ? 2 : 1) * z;
+  const ph = per.stepY * (per.hex && !per.vertical ? 2 : 1) * z;
+  // Same bounds as patternTile: avoid allocating arbitrarily large offscreens.
+  if (pw < 0.01 || ph < 0.01 || pw > 2048 || ph > 2048) return null;
+  patternDepth++;
+  try {
+    const tile = patternTile({ ...src, x: 0, y: 0 }, z * p.scale, imgOf);
+    if (!tile || typeof ctx.createPattern !== "function") return null;
+    const cell = document.createElement("canvas");
+    cell.width = Math.max(1, Math.ceil(pw));
+    cell.height = Math.max(1, Math.ceil(ph));
+    const tctx = cell.getContext("2d");
+    if (!tctx) return null;
+    // Render at the cell's native pixel scale, then setTransform makes its
+    // possibly fractional period exact. Copies that cross an edge wrap into
+    // the neighbouring cell; this also handles spacing below 100%.
+    const scaleX = cell.width / pw;
+    const scaleY = cell.height / ph;
+    const bases: [number, number][] = [[0, 0]];
+    if (per.hex && !per.vertical) bases.push([per.stepX * z / 2, per.stepY * z]);
+    if (per.hex && per.vertical) bases.push([per.stepX * z, per.stepY * z / 2]);
+    const tw = per.tw * z;
+    const th = per.th * z;
+    const nx = Math.ceil(tw / pw);
+    const ny = Math.ceil(th / ph);
+    for (const [bx, by] of bases) {
+      for (let ix = -nx; ix <= 0; ix++) {
+        for (let iy = -ny; iy <= 0; iy++) {
+          tctx.drawImage(tile, (bx + ix * pw) * scaleX, (by + iy * ph) * scaleY, tw * scaleX, th * scaleY);
+        }
+      }
+    }
+    const style = ctx.createPattern(cell, "repeat");
+    if (!style) return null;
+    style.setTransform({ a: pw / cell.width, b: 0, c: 0, d: ph / cell.height, e: sx + per.ox * z, f: sy + per.oy * z });
+    return style;
+  } finally {
+    patternDepth--;
+  }
 }
 
 /**
@@ -890,10 +954,11 @@ export function paintDropShadowsMasked(
       !paintsFill &&
       n.strokeVisible !== false &&
       n.strokeWidth > 0 &&
-      !isNone(n.strokePaint);
+      (n.strokeType === "pattern" ? !!patternSourceNode(n.strokePattern) : !isNone(n.strokePaint));
     const spread = spreadOn ? Math.max(0, drop.spread) : 0;
     if (ring) {
-      ctx.lineJoin = "miter";
+      ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+      ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
       ctx.lineCap = "butt";
       ctx.lineWidth = Math.max(0.5, n.strokeWidth * z) + spread * 2 * z;
       ctx.strokeStyle = ctx.fillStyle;
@@ -1025,11 +1090,18 @@ export function paintInnerShadows(
  * Alignment is emulated the same way the base stroke does it: canvas only
  * centres a stroke, so inside/outside double the width and clip or overdraw.
  */
+/** Default/zero miter angle is a safety limit, not an unbounded spike.
+ * Explicit positive angles keep their Figma-style bevel threshold. */
+export function strokeCanvasMiterLimit(angle?: number): number {
+  return angle != null && Number.isFinite(angle) && angle > 0
+    ? miterLimitFromAngle(angle) : 4;
+}
+
 export function paintExtraStrokes(
   ctx: CanvasRenderingContext2D,
   n: XNode,
   z: number,
-  trace: () => void,
+  trace: (append?: boolean) => void,
   /** Screen box of the node, needed to clip per-side strokes. */
   box?: { x: number; y: number; w: number; h: number },
 ) {
@@ -1042,7 +1114,7 @@ export function paintExtraStrokes(
     ctx.strokeStyle = cssRgba(colour);
     ctx.lineCap = s.cap === "round" ? "round" : s.cap === "square" ? "square" : "butt";
     ctx.lineJoin = s.join === "round" ? "round" : s.join === "bevel" ? "bevel" : "miter";
-    ctx.miterLimit = miterLimitFromAngle(n.strokeMiterAngle);
+    ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
     const dash = s.dash ?? 0;
     const dashes = dashArray(s.pattern, dash, s.gap ?? 0, z);
     ctx.setLineDash(dashes);
@@ -1071,7 +1143,7 @@ export function paintExtraStrokes(
         ctx.save();
         ctx.beginPath();
         ctx.rect(-1e6, -1e6, 2e6, 2e6);
-        trace();
+        trace(true); // append the shape: a normal trace() clears the exterior rect
         ctx.clip("evenodd");
         trace();
         ctx.lineWidth = w * 2;

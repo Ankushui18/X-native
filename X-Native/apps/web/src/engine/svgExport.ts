@@ -258,7 +258,7 @@ function variableStrokeSvg(n: XNode, stroke: string): string {
   );
   if (outline.length < 3) return "";
   const d = outline.map((p, i) => `${i ? "L" : "M"} ${round(p.x)} ${round(p.y)}`).join(" ") + " Z";
-  const opacity = Math.max(0, Math.min(1, n.strokeOpacity * alphaOf(n.strokePaint)));
+  const opacity = Math.max(0, Math.min(1, n.strokeOpacity * (n.strokeType === "pattern" ? 1 : alphaOf(n.strokePaint))));
   return `<path d="${d}" fill="${stroke}" fill-opacity="${opacity}" stroke="none"/>`;
 }
 
@@ -280,7 +280,7 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = "", op
   const perSideEarly = sidesSupported(n.kind) && (n.strokeSides ?? "all") !== "all";
   let strokeEl = stroke === "none" ? "" : variableStrokeSvg(n, stroke);
   if (stroke !== "none" && !strokeEl) {
-    const opacity = Math.max(0, Math.min(1, n.strokeOpacity * alphaOf(n.strokePaint)));
+    const opacity = Math.max(0, Math.min(1, n.strokeOpacity * (n.strokeType === "pattern" ? 1 : alphaOf(n.strokePaint))));
     const attrs = `stroke="${stroke}" stroke-opacity="${opacity}" stroke-linecap="${caps}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
     // "Simplify strokes": Figma's enabled output draws a non-centre stroke as
     // a filled outline instead of a clipped or masked stroke, which is what a
@@ -342,7 +342,7 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = "", op
       const ux = dx / len;
       const uy = dy / len;
       const ah = Math.max(6, n.strokeWidth * 3);
-      const strokeColor = svgColor(n.strokePaint);
+      const strokeColor = stroke;
       if (n.strokeCap === "arrow" || n.kind === "arrow") {
         const p1x = round(a.x - ux * ah + uy * ah * 0.72);
         const p1y = round(a.y - uy * ah - ux * ah * 0.72);
@@ -502,10 +502,12 @@ export function patternDef(n: XNode, id: string, opts: SvgOpts = {}): { def: str
   // offset past the cell edge still wrap seamlessly.
   const copies: string[] = [];
   for (const [bx, by] of base) {
-    for (const dx of [-pw, 0, pw]) {
-      for (const dy of [-ph, 0, ph]) {
-        const x = bx + dx;
-        const y = by + dy;
+    // A source may be wider than one cell when spacing is under 100%; include
+    // every wrapping copy, just as the CanvasPattern cell raster does.
+    for (let ix = -Math.ceil(per.tw / pw); ix <= 0; ix++) {
+      for (let iy = -Math.ceil(per.th / ph); iy <= 0; iy++) {
+        const x = bx + ix * pw;
+        const y = by + iy * ph;
         if (x >= pw || y >= ph || x + per.tw <= 0 || y + per.th <= 0) continue;
         copies.push(`<g transform="translate(${round(x)} ${round(y)}) scale(${round(p.scale)})">${inner}</g>`);
       }
@@ -526,8 +528,13 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
   const id = safeId("paint", n);
   const fill =
     n.fillVisible !== false && n.fillExportVisible !== false ? svgColor(n.fill) : "none";
-  const stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
   const defs: string[] = [];
+  let stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokeType === "pattern") {
+    const pd = patternDef({ ...n, pattern: n.strokePattern }, `${id}-stroke`, opts);
+    if (pd) defs.push(pd.def);
+    stroke = pd?.paint ?? "none";
+  }
   let paint = fill;
   if (fill !== "none" && n.fillType === "pattern") {
     // A pattern exports as a real <pattern> of its source layer; with no
@@ -569,7 +576,7 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
     const content = lines
       .map((line, i) => `<tspan x="${tx}" dy="${i ? lineHeight : yOffset + n.fontSize}">${escXml(line)}</tspan>`)
       .join("");
-    const textStroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
+    const textStroke = stroke;
     body.push(
       `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(n.fontFamily)}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${filter}>${content}</text>`,
     );

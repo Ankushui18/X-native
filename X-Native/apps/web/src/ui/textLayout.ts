@@ -1,5 +1,6 @@
 import type { XNode } from "../engine/types";
 import { balanceLines } from "../engine/geometry";
+import { resolvedTextSpans, type StyledSpan } from "./textSpans";
 
 /**
  * The web layer's single source of truth for text layout.
@@ -18,6 +19,12 @@ import { balanceLines } from "../engine/geometry";
  *  session from growing the cache without limit. */
 const MEASURE_CACHE = new Map<string, number>();
 const MEASURE_CACHE_MAX = 20000;
+
+/** A web font can resolve after we first measured its fallback under the same
+ * ctx.font string. Clear those widths when FontFaceSet finishes loading. */
+export function invalidateTextMeasureCache() {
+  MEASURE_CACHE.clear();
+}
 
 export function measureCached(ctx: CanvasRenderingContext2D, s: string): number {
   if (!s) return 0;
@@ -49,8 +56,9 @@ export function listMarker(style: XNode["listStyle"], index: number): string {
 }
 
 /** Same font shorthand for painting, measuring text, and measuring list gutters. */
-export function canvasTextFont(n: XNode, size = n.fontSize): string {
-  return `${n.textCase === "small-caps" ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${n.fontWeight} ${Math.max(1, size)}px ${n.fontFamily}, Inter, system-ui`;
+export function canvasTextFont(n: XNode, size = n.fontSize, run?: StyledSpan): string {
+  const family = (run?.fontFamily || n.fontFamily || "Inter").replace(/["\\]/g, "");
+  return `${n.textCase === "small-caps" ? "small-caps " : ""}${n.fontStyle === "italic" ? "italic " : ""}${run?.fontWeight ?? n.fontWeight} ${Math.max(1, size)}px "${family}", Inter, system-ui`;
 }
 
 /**
@@ -106,7 +114,15 @@ export function fitLineCount(boxH: number, lineH: number, paraGap: number): numb
 }
 
 export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: string) {
-  ctx.font = canvasTextFont(n);
+  if (hasMixedTextSpans(n, text)) {
+    const rows = styledTextRows(ctx, n, text, n.w);
+    const limit = n.truncate && n.maxLines > 0 ? Math.max(1, n.maxLines) : Infinity;
+    const taken = truncateStyledRows(ctx, n, rows, limit, n.sizingW === "hug" ? Infinity : n.w);
+    const gaps = Math.max(0, taken.filter((r) => r.lastInPara).length - (taken.length ? 1 : 0));
+    return { lines: taken.length, gaps, maxW: Math.max(8, ...taken.map((r) => r.lead + r.width)) };
+  }
+  const uniform = n.textRuns?.length ? resolvedTextSpans(n) : [];
+  ctx.font = uniform.length === 1 ? canvasTextFont(n, uniform[0].fontSize, uniform[0]) : canvasTextFont(n);
   text = applyTextCase(text, n.textCase);
   const wrap = n.sizingW !== "hug";
   const ls = n.letterSpacing || 0;
@@ -255,10 +271,124 @@ export function hugSize(
   const wantW = axes?.w ?? n.sizingW === "hug";
   const wantH = axes?.h ?? n.sizingH === "hug";
   const m = textMetrics(ctx, n, text);
-  const lh = n.lineHeight || n.fontSize * 1.2;
+  const lh = n.lineHeight || Math.max(n.fontSize, ...resolvedTextSpans(n).map((r) => r.fontSize)) * 1.2;
   const gap = n.paragraphSpacing || 0;
   const out: { w?: number; h?: number } = {};
   if (wantW) out.w = Math.max(8, Math.ceil(m.maxW + 4));
   if (wantH) out.h = hugHeight(m.lines, m.gaps, lh, gap);
   return out;
+}
+
+/** A single uniform run is still one Canvas fillText and one measureText. */
+export function hasMixedTextSpans(n: XNode, text = n.text): boolean {
+  return !!n.textRuns?.length && text === n.text && resolvedTextSpans(n).length > 1;
+}
+export type StyledPiece = { text: string; run: StyledSpan; width: number };
+export type StyledRow = {
+  pieces: StyledPiece[]; width: number; lead: number; marker: string;
+  lastInPara: boolean;
+};
+/** The same run-aware widths and line breaks feed hug sizing and Canvas paint.
+ * Positions are UTF-16 offsets into the original copy, not transformed copy.
+ * A piece's own case transformation happens AFTER range lookup. */
+export function styledTextRows(ctx: CanvasRenderingContext2D, n: XNode, text: string, boxW: number, scale = 1): StyledRow[] {
+  const spans = resolvedTextSpans(n);
+  const ls = (n.letterSpacing || 0) * scale;
+  const cased = applyTextCase(text, n.textCase);
+  const width = (a: number, b: number): StyledPiece[] => spans.flatMap((run) => {
+    const start = Math.max(a, run.start), end = Math.min(b, run.end);
+    if (end <= start) return [];
+    const part = cased.length === text.length ? cased.slice(start, end) : applyTextCase(text.slice(start, end), n.textCase);
+    ctx.font = canvasTextFont(n, run.fontSize * scale, run);
+    const glyphWidth = (ls || n.textAlign === "justified")
+      ? Array.from(part).reduce((sum, ch) => sum + measureCached(ctx, ch), 0)
+      : measureCached(ctx, part);
+    return [{ text: part, run, width: glyphWidth + ls * Math.max(0, Array.from(part).length - 1) }];
+  });
+  const measure = (a: number, b: number) => {
+    const pieces = width(a, b);
+    return pieces.reduce((sum, p) => sum + p.width, 0) + ls * Math.max(0, b - a - pieces.length);
+  };
+  const result: StyledRow[] = [];
+  let paraStart = 0, pi = 0;
+  while (paraStart <= text.length) {
+    const nextBreak = text.indexOf("\n", paraStart);
+    const paraEnd = nextBreak < 0 ? text.length : nextBreak;
+    const marker = listMarker(n.listStyle, pi);
+    ctx.font = canvasTextFont(n, n.fontSize * scale);
+    const gutter = marker ? measureCached(ctx, `${marker} `) : 0;
+    const indent = indentOf(n) * scale;
+    const avail = n.sizingW === "hug" ? Infinity : Math.max(1, boxW - gutter - indent);
+    const ranges: { start: number; end: number }[] = [];
+    let start = paraStart, end = paraStart;
+    const trim = (a: number, b: number) => b - (text.slice(a, b).match(/\s+$/)?.[0].length ?? 0);
+    const emit = () => { ranges.push({ start, end: trim(start, end) }); start = end; };
+    // Keep whitespace in the original offsets, including the trailing space
+    // before a wrap, so later spans never drift out of alignment.
+    const tokens = text.slice(paraStart, paraEnd).match(/\S+\s*|\s+/gu) ?? [];
+    let pos = paraStart;
+    for (const token of tokens) {
+      let target = pos + token.length;
+      if (start < end && measure(start, target) > avail) {
+        emit();
+        while (start < target && /\s/u.test(text[start])) start++;
+        end = start;
+      }
+      // Split an over-wide word by code point, without splitting surrogates.
+      while (start < target && measure(start, target) > avail && avail !== Infinity) {
+        let split = start;
+        for (const ch of text.slice(start, target)) {
+          if (split > start && measure(start, split + ch.length) > avail) break;
+          split += ch.length;
+        }
+        if (split === start) split += Array.from(text.slice(start, target))[0]?.length ?? 1;
+        ranges.push({ start, end: split });
+        start = split;
+      }
+      end = target;
+      pos = target;
+    }
+    ranges.push({ start, end: trim(start, end) });
+    ranges.forEach((r, i) => {
+      const pieces = width(r.start, r.end);
+      const measured = measure(r.start, r.end);
+      result.push({ pieces, width: measured, lead: gutter + (i === 0 ? indent : 0),
+        marker: i === 0 && paraEnd > paraStart ? marker : "", lastInPara: i === ranges.length - 1 });
+    });
+    if (nextBreak < 0) break;
+    paraStart = nextBreak + 1;
+    pi++;
+  }
+  return result;
+}
+
+/** Apply the same ellipsis and measured run advances to Canvas and hug sizing. */
+export function truncateStyledRows(
+  ctx: CanvasRenderingContext2D, n: XNode, rows: StyledRow[], limit: number, boxW: number, scale = 1,
+): StyledRow[] {
+  if (rows.length <= limit) return rows;
+  const taken = rows.slice(0, Math.max(1, limit));
+  const last = taken[taken.length - 1];
+  const run = last.pieces.at(-1)?.run ?? resolvedTextSpans(n).at(-1);
+  if (!run) return taken;
+  const ls = (n.letterSpacing || 0) * scale;
+  const pieces = last.pieces.map((p) => ({ ...p }));
+  const pieceWidth = (text: string, style: StyledSpan) => {
+    ctx.font = canvasTextFont(n, style.fontSize * scale, style);
+    const chars = Array.from(text);
+    const glyphs = ls || n.textAlign === "justified"
+      ? chars.reduce((sum, ch) => sum + measureCached(ctx, ch), 0)
+      : measureCached(ctx, text);
+    return glyphs + ls * Math.max(0, chars.length - 1);
+  };
+  const ellipsis: StyledPiece = { text: "…", run, width: pieceWidth("…", run) };
+  const total = () => [...pieces, ellipsis].reduce((w, p) => w + p.width, 0) + ls * pieces.length;
+  while (pieces.length && total() > boxW - last.lead) {
+    const tail = pieces[pieces.length - 1];
+    tail.text = Array.from(tail.text).slice(0, -1).join("");
+    if (tail.text) tail.width = pieceWidth(tail.text, tail.run);
+    else pieces.pop();
+  }
+  taken[taken.length - 1] = { ...last, pieces: [...pieces, ellipsis], width: total(), lastInPara: true };
+  return taken;
 }
