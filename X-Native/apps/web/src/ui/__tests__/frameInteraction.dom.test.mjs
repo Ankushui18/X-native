@@ -205,6 +205,19 @@ const handleSquares = () => paints.filter(([c, , , w]) => c === "fillRect" && (w
   await ui.close();
 }
 
+// The resize cursor has to reflect a mirrored ancestry before it applies the
+// apparent rotation; otherwise the diagonal cue points the wrong way even
+// though the handle hit-test itself is correct.
+{
+  const child = node("rect", "Mirror cursor", 20, 20, 80, 40, {});
+  const parent = node("frame", "Mirrored & rotated", 100, 100, 300, 200, { children: [child], rotation: 45, flipH: true });
+  const ui = await mount([parent], [child.id]);
+  const visualTopLeft = ui.world(child.id, 0, 0);
+  await ui.mouse("mousemove", visualTopLeft.x, visualTopLeft.y);
+  t("mirrored rotated corner advertises its visual resize axis", ui.surface.style.cursor === "ew-resize", ui.surface.style.cursor);
+  await ui.close();
+}
+
 // Handle priority on a small top-level shape: 80×40 puts every edge-midpoint
 // handle 20px from a corner, inside the 8-22px rotation ring.
 {
@@ -259,6 +272,20 @@ const handleSquares = () => paints.filter(([c, , , w]) => c === "fillRect" && (w
   paints = [];
   await act(async () => ui.engine.dispatch({ type: "select", ids: [inner.id] }));
   t("selecting a nested frame adds only its own label", new Set(names()).size === 2 && names().includes("Inner") && !names().includes("Inner 2"), names().join());
+  await ui.close();
+}
+
+// Labels and inline rename follow a nested frame's actual painted corner —
+// including a rotated ancestor — while retaining the quiet-label policy above.
+{
+  const inner = shape("frame", "Rotated label", [], { x: 20, y: 30, w: 100, h: 60 });
+  const outer = shape("frame", "Parent", [inner], { x: 100, y: 100, w: 300, h: 200, rotation: 90 });
+  const ui = await mount([outer], [inner.id]);
+  const label = paints.find(([c, text]) => c === "fillText" && text === "Rotated label");
+  const origin = ui.world(inner.id, 0, 0);
+  t("nested rotated frame label follows its painted top-left", !!label && near(label[2], origin.x) && near(label[3], origin.y - 8), JSON.stringify({ label, origin }));
+  await ui.mouse("dblclick", origin.x + 3, origin.y - 10);
+  t("double-clicking that transformed label opens its inline rename field", !!ui.host.querySelector(".frame-name-edit"));
   await ui.close();
 }
 
@@ -335,6 +362,56 @@ for (const { label, wrap } of parents) {
     t(`${label}: gradient start handle dragged +50 along local x → fillGX 0.75`, Math.abs(ui.node(g.id).fillGX - 0.75) < 0.01 && Math.abs(ui.node(g.id).fillGY) < 0.01, JSON.stringify([ui.node(g.id).fillGX, ui.node(g.id).fillGY]));
     await ui.close();
   }
+}
+
+// ------------------------------------------------ Canvas-first gradients
+// Endpoints have long been direct canvas controls. Intermediate stops now use
+// the same selected-layer overlay, win over resize handles, retain their own
+// identity, and snap to the ramp's precision positions.
+{
+  const g = node("rect", "Three stop gradient", 100, 100, 200, 100, {
+    fill: "#ff0000",
+    fillB: "#0000ff",
+    fillType: "linear",
+    fillGX: 0,
+    fillGY: 0.5,
+    fillHX: 1,
+    fillHY: 0.5,
+    gradientStops: [
+      { color: "#ff0000", position: 0 },
+      { color: "#00ff00", position: 0.5 },
+      { color: "#0000ff", position: 1 },
+    ],
+  });
+  const ui = await mount([g], [g.id]);
+  const stop = ui.world(g.id, 100, 50);
+  const to = ui.world(g.id, 150, 50);
+  await ui.mouse("mousemove", stop.x, stop.y);
+  t("gradient intermediate stop advertises a direct grab cursor", ui.surface.style.cursor === "grab", ui.surface.style.cursor);
+  await ui.drag(stop.x, stop.y, to.x, to.y);
+  const moved = ui.node(g.id).gradientStops.find((s) => s.color === "#00ff00");
+  t("gradient stop drag changes the selected stop distribution, not layer geometry", Math.abs((moved?.position ?? 0) - 0.75) < 0.01 && !ui.commands.some((c) => c.type === "resize"), JSON.stringify(ui.node(g.id).gradientStops));
+  t("gradient stop drag is one history gesture", ui.commands.some((c) => c.type === "begin") && ui.commands.some((c) => c.type === "end"));
+  await ui.close();
+}
+{
+  const g = node("rect", "Snapped gradient", 100, 100, 200, 200, {
+    fill: "#ff0000",
+    fillB: "#0000ff",
+    fillType: "linear",
+    fillGX: 0,
+    fillGY: 0,
+    fillHX: 1,
+    fillHY: 0,
+  });
+  const ui = await mount([g], [g.id]);
+  const end = ui.world(g.id, 200, 0);
+  const nearCentre = ui.world(g.id, 101, 99);
+  await ui.drag(end.x, end.y, nearCentre.x, nearCentre.y);
+  const n = ui.node(g.id);
+  t("gradient endpoint wins over the coincident resize handle", ui.commands.some((c) => c.type === "patch") && !ui.commands.some((c) => c.type === "resize"));
+  t("gradient endpoint snaps to the layer centre on both axes", n.fillHX === 0.5 && n.fillHY === 0.5, JSON.stringify([n.fillHX, n.fillHY]));
+  await ui.close();
 }
 
 console.log(`frameInteraction: ${pass} passed, ${fail} failed`);

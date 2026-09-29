@@ -88,6 +88,8 @@ function isGradientType(t: string): boolean {
 export interface GradTarget {
   /** Index into `fills`, or -1 for the base fill. */
   index: number;
+  /** The gradient family whose geometry the canvas is editing. */
+  type: "linear" | "radial" | "angular" | "diamond";
   gx: number;
   gy: number;
   hx: number;
@@ -95,6 +97,10 @@ export interface GradTarget {
   /** Endpoint colours for the handle dots. */
   from: string;
   to: string;
+  /** Sorted, resolved ramp. The legacy two-colour gradient is materialised
+   * here too, so canvas and inspector controls always describe the pixels
+   * currently being painted. */
+  stops: GradientStop[];
 }
 
 /**
@@ -107,29 +113,41 @@ export function gradTarget(n: XNode): GradTarget | null {
   for (let i = fills.length - 1; i >= 0; i--) {
     const p = fills[i];
     if (p.visible === false || !isGradientType(p.type)) continue;
-    const st = p.stops && p.stops.length >= 2 ? [...p.stops].sort((a, b) => a.position - b.position) : null;
+    const stops =
+      p.stops && p.stops.length >= 2
+        ? [...p.stops].sort((a, b) => a.position - b.position)
+        : [
+            { color: p.color, position: 0 },
+            // `paintStack` borrows fillB for an extra paint with no authored
+            // stops, so this mirrors the exact ramp it renders.
+            { color: n.fillB || "#ffffff", position: 1 },
+          ];
     return {
       index: i,
+      type: p.type as "linear" | "radial" | "angular" | "diamond",
       // An extra without explicit geometry inherits the base handles in
       // render (see paintFill), so the handles show — and write — the same.
       gx: p.gx ?? n.fillGX ?? 0.5,
       gy: p.gy ?? n.fillGY ?? 0,
       hx: p.hx ?? n.fillHX ?? 0.5,
       hy: p.hy ?? n.fillHY ?? 1,
-      from: st ? st[0].color : p.color,
-      to: st ? st[st.length - 1].color : n.fillB || "#ffffff",
+      from: stops[0].color,
+      to: stops[stops.length - 1].color,
+      stops,
     };
   }
   if (n.fillVisible === false || !n.fill || isNone(n.fill) || !isGradientType(n.fillType)) return null;
   const stops = stopsOf(n);
   return {
     index: -1,
+    type: n.fillType as "linear" | "radial" | "angular" | "diamond",
     gx: n.fillGX ?? 0.5,
     gy: n.fillGY ?? 0,
     hx: n.fillHX ?? 0.5,
     hy: n.fillHY ?? 1,
     from: stops[0].color,
     to: stops[stops.length - 1].color,
+    stops,
   };
 }
 
