@@ -14,6 +14,7 @@ import type {
   Snapshot,
   Tool,
   XNode,
+  VectorNetwork,
   StrokeAlign,
   BooleanOp,
   VariableItem,
@@ -2572,8 +2573,19 @@ export class MemoryEngine implements Engine {
           }
           if (cmd.scaleProps && oldW > 0 && oldH > 0) {
             scaleProps(n, n.w / oldW, n.h / oldH);
-          } else if (!cmd.ignoreConstraints) {
-            applyConstraints(n, oldW, oldH, n.w, n.h);
+          } else {
+            // A vector's artwork lives in its own box: a plain resize stretches
+            // the geometry while the stroke weight stays fixed — that IS the
+            // documented resize-vs-scale difference (Run 15). Shapes redraw from
+            // w/h and need no remap. Boolean caches are deliberately NOT remapped
+            // here: their children move by constraints, so a ratio remap would
+            // distort; re-baking is Run 17 (P2d).
+            if (n.kind === "vector" && oldW > 0 && oldH > 0) {
+              remapVectorGeometry(n, n.w / oldW, n.h / oldH);
+            }
+            if (!cmd.ignoreConstraints) {
+              applyConstraints(n, oldW, oldH, n.w, n.h);
+            }
           }
           this.publishMaster(n);
           this.publishIfMasterEdit(cmd.id);
@@ -5482,6 +5494,45 @@ function applyConstraints(parent: XNode, oldW: number, oldH: number, newW: numbe
   }
 }
 
+/** Scale a live vector network by (sx, sy): every vertex position and every
+ *  relative handle delta. Vertex corner radii are scalar lengths, so they take
+ *  the averaged factor like stroke weights do. Regions are vertex-index
+ *  topology (+ paint), so they are left untouched. Run 15. */
+function scaleNetwork(vn: VectorNetwork, sx: number, sy: number): void {
+  const s = (Math.abs(sx) + Math.abs(sy)) / 2;
+  for (const v of vn.vertices) {
+    v.x *= sx;
+    v.y *= sy;
+    if (v.cornerRadius != null) v.cornerRadius *= s;
+  }
+  for (const seg of vn.segments) {
+    if (seg.tangentStart) {
+      seg.tangentStart = { x: seg.tangentStart.x * sx, y: seg.tangentStart.y * sy };
+    }
+    if (seg.tangentEnd) {
+      seg.tangentEnd = { x: seg.tangentEnd.x * sx, y: seg.tangentEnd.y * sy };
+    }
+  }
+}
+
+/** Remap a node's own vector artwork (path points + live network) into a new
+ *  box. The one owner of geometry remapping: the Scale tool calls it with
+ *  props, a plain vector resize calls it with the stroke left fixed. */
+function remapVectorGeometry(n: XNode, sx: number, sy: number): void {
+  const s = (Math.abs(sx) + Math.abs(sy)) / 2;
+  n.path = n.path.map((pt) => ({
+    ...pt,
+    x: pt.x * sx,
+    y: pt.y * sy,
+    ix: pt.ix == null ? pt.ix : pt.ix * sx,
+    iy: pt.iy == null ? pt.iy : pt.iy * sy,
+    ox: pt.ox == null ? pt.ox : pt.ox * sx,
+    oy: pt.oy == null ? pt.oy : pt.oy * sy,
+    cornerRadius: pt.cornerRadius == null ? pt.cornerRadius : pt.cornerRadius * s,
+  }));
+  if (n.vectorNetwork) scaleNetwork(n.vectorNetwork, sx, sy);
+}
+
 function scaleProps(n: XNode, sx: number, sy: number) {
   const s = (Math.abs(sx) + Math.abs(sy)) / 2;
   n.strokeWidth *= s;
@@ -5496,6 +5547,19 @@ function scaleProps(n: XNode, sx: number, sy: number) {
   n.paragraphSpacing *= s;
   n.paragraphIndent *= s;
   if (n.lineHeight) n.lineHeight *= s;
+  // Type lengths that used to stay behind (Run 15): list gaps, underline
+  // metrics, and every per-range override of size/underline. Older documents
+  // lack the optionals, hence the guards; listSpacing 0 stays 0 either way.
+  if (n.listSpacing != null) n.listSpacing *= s;
+  if (n.underlineThickness != null) n.underlineThickness *= s;
+  if (n.underlineOffset != null) n.underlineOffset *= s;
+  if (n.textRuns) {
+    for (const r of n.textRuns) {
+      if (r.fontSize != null) r.fontSize *= s;
+      if (r.underlineThickness != null) r.underlineThickness *= s;
+      if (r.underlineOffset != null) r.underlineOffset *= s;
+    }
+  }
   // Auto layout limits travel with the box, or a shrunk layer would still refuse
   // to grow past the minimum it had before scaling.
   for (const key of ["minW", "maxW", "minH", "maxH"] as const) {
@@ -5522,15 +5586,7 @@ function scaleProps(n: XNode, sx: number, sy: number) {
       if (ef.spread != null) ef.spread *= s;
     }
   }
-  n.path = n.path.map((p) => ({
-    ...p,
-    x: p.x * sx,
-    y: p.y * sy,
-    ix: p.ix == null ? p.ix : p.ix * sx,
-    iy: p.iy == null ? p.iy : p.iy * sy,
-    ox: p.ox == null ? p.ox : p.ox * sx,
-    oy: p.oy == null ? p.oy : p.oy * sy,
-  }));
+  remapVectorGeometry(n, sx, sy);
   if (n.layout) {
     n.layout = {
       ...n.layout,
