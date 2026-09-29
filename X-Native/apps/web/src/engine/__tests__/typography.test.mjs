@@ -246,6 +246,7 @@ console.log("X-F text on a path (360039956434):");
   t("the walk starts and closes at one corner", !!p0 && !!pEnd && Math.abs(p0.x - pEnd.x) < 0.001 && Math.abs(p0.y - pEnd.y) < 0.001);
   const q = r && walkAt(r, 50);
   const nq = r && q && walkNearest(r, q.x, q.y);
+  t("walkAt advances along the walk", !!q && !!p0 && (Math.abs(q.x - p0.x) > 0.001 || Math.abs(q.y - p0.y) > 0.001));
   t("walkAt points sit on the outline", !!nq && nq.dist < 0.001);
   const el = outlineWalk(node({ kind: "ellipse", w: 40, h: 40 }));
   t("ellipse outline approximates its circumference", !!el && el.len > 115 && el.len < 130);
