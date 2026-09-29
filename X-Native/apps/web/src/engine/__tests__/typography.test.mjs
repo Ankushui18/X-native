@@ -20,7 +20,7 @@ import {
   textMetrics,
   valignApplies,
 } from "../../ui/textLayout.ts";
-import { balanceLines } from "../geometry.ts";
+import { balanceLines, outlineWalk, walkAt, walkNearest } from "../geometry.ts";
 import { svgNode } from "../svgExport.ts";
 import { MemoryEngine, find } from "../memory.ts";
 import { styleTextRange } from "../../ui/textSpans.ts";
@@ -56,6 +56,7 @@ const node = (over = {}) => ({
   listStyle: "none",
   truncate: false,
   maxLines: 1,
+  cornerRadii: [0, 0, 0, 0],
   ...over,
 });
 
@@ -233,4 +234,31 @@ console.log("X-E text styles (360039957034):");
   const n6 = at(id);
   t("detachStyle keeps the type properties", n6.fontSize === 22);
   t("detachStyle drops the binding", n6.textStyle === undefined);
+}
+
+console.log("X-F text on a path (360039956434):");
+{
+  // The outline walk is the spine the glyphs follow: closed shapes walk the
+  // whole perimeter, open paths the whole chain.
+  const r = outlineWalk(node({ kind: "rect", w: 100, h: 50 }));
+  t("rect outline is the full perimeter", !!r && Math.abs(r.len - 300) < 0.001);
+  const p0 = r && walkAt(r, 0), pEnd = r && walkAt(r, r.len);
+  t("the walk starts and closes at one corner", !!p0 && !!pEnd && Math.abs(p0.x - pEnd.x) < 0.001 && Math.abs(p0.y - pEnd.y) < 0.001);
+  const q = r && walkAt(r, 50);
+  const nq = r && q && walkNearest(r, q.x, q.y);
+  t("walkAt points sit on the outline", !!nq && nq.dist < 0.001);
+  const el = outlineWalk(node({ kind: "ellipse", w: 40, h: 40 }));
+  t("ellipse outline approximates its circumference", !!el && el.len > 115 && el.len < 130);
+  const open = outlineWalk(node({ kind: "line", w: 30, h: 40 }));
+  t("a line walks its length", !!open && Math.abs(open.len - 50) < 0.001);
+  const near = r && walkNearest(r, 50, -5);
+  t("walkNearest projects onto the outline", !!near && near.dist <= 5.001 && near.at >= 0 && near.at <= 300.001);
+  t("text carries its on-path model", (() => {
+    const e = new MemoryEngine(false);
+    e.dispatch({ type: "add", kind: "text", x: 10, y: 10, w: 40, h: 20 });
+    const id = e.snapshot().selection[0];
+    e.dispatch({ type: "patch", id, patch: { onPath: "some-path", pathStart: 0.25, pathSide: "right" } });
+    const n = find(e.snapshot().pages[e.snapshot().page].root, id);
+    return n.onPath === "some-path" && n.pathStart === 0.25 && n.pathSide === "right";
+  })());
 }

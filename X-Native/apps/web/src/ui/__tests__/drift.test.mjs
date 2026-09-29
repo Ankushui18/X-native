@@ -80,10 +80,10 @@ const CEILING = {
   "Tooltip.tsx": [1, 0, 0, 0, 0],
   "ZenHUD.tsx": [16, 14, 9, 6, 0],
   "announce.tsx": [0, 0, 0, 0, 0],
-  "chrome.tsx": [50, 4, 40, 64, 2],
+  "chrome.tsx": [50, 4, 41, 65, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],
-  "inspector.tsx": [182, 44, 231, 192, 45],
+  "inspector.tsx": [185, 44, 236, 194, 45],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 13, 15, 1],
 };

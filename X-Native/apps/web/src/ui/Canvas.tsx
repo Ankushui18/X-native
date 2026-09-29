@@ -30,6 +30,10 @@ import {
   smoothHandlesForPoint,
   fillNetworkRegionAtPoint,
   outlineVariableStroke,
+  outlineWalk,
+  walkAt,
+  walkNearest,
+  type OutlineWalk,
   widthProfileStations,
 } from "../engine/geometry";
 import { dashArray, dashOffset, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
@@ -180,6 +184,7 @@ type Drag =
         | "multiResize"
         | "multiRotate"
         | "autoPad"
+        | "pathStart"
         | "autoGap"
         | "smartGap"
         | "protoConnect"
@@ -1558,7 +1563,7 @@ export function Canvas({
         ctx.stroke();
         ctx.restore();
         if (n.kind === "text" && edit?.id !== n.id) {
-          paintText(ctx, fxNode, sx, sy, sw, sh, z);
+          paintText(ctx, fxNode, sx, sy, sw, sh, z, onPathGeometry(snap.pages[snap.page].root, fxNode));
         }
         if (n.kind === "frame" && n.overflow !== "visible") {
           round();
@@ -2058,7 +2063,7 @@ export function Canvas({
       }
       paintExtraStrokes(ctx, n, z, traceShape, { x: sx, y: sy, w: sw, h: sh });
       if (n.kind === "text" && edit?.id !== n.id) {
-        paintText(ctx, fxNode, sx, sy, sw, sh, z);
+        paintText(ctx, fxNode, sx, sy, sw, sh, z, onPathGeometry(snap.pages[snap.page].root, fxNode));
       }
       if (n.kind === "frame" && n.overflow !== "visible") {
         round();
@@ -3036,6 +3041,27 @@ export function Canvas({
         } else {
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
+        }
+      }
+      // Text-on-path start handle (360039956434): a diamond where the text
+      // begins along its path; dragging slides `pathStart`.
+      if (wp.node.onPath && !lockedSel) {
+        const pgeom = onPathGeometry(snap.pages[snap.page].root, wp.node);
+        if (pgeom) {
+          const p = walkAt(pgeom.walk, (wp.node.pathStart ?? 0) * pgeom.walk.len);
+          const hx = sx + (pgeom.dx + p.x) * z;
+          const hy = sy + (pgeom.dy + p.y) * z;
+          ctx.beginPath();
+          ctx.moveTo(hx, hy - 5);
+          ctx.lineTo(hx + 5, hy);
+          ctx.lineTo(hx, hy + 5);
+          ctx.lineTo(hx - 5, hy);
+          ctx.closePath();
+          ctx.fillStyle = INK;
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = 1.5;
+          ctx.fill();
+          ctx.stroke();
         }
       }
       const rotateHandle = frameRotationHandle(kind, sx, sy, sw);
@@ -4864,6 +4890,21 @@ export function Canvas({
             return;
           }
         }
+        // Text-on-path start handle (360039956434): drag it to slide where the
+        // text begins along its path.
+        if (wp.node.onPath && snap.selection.includes(wp.node.id)) {
+          const pgeom = onPathGeometry(snap.pages[snap.page].root, wp.node);
+          if (pgeom) {
+            const p = walkAt(pgeom.walk, (wp.node.pathStart ?? 0) * pgeom.walk.len);
+            const hx = sx + (pgeom.dx + p.x) * z;
+            const hy = sy + (pgeom.dy + p.y) * z;
+            if (Math.hypot(px - hx, py - hy) < 10) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "pathStart", id: wp.node.id, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, moved: true };
+              return;
+            }
+          }
+        }
         if (wp.node.layout) {
           const l = wp.node.layout;
           const [pl, pr, pt, pb] = l.padding;
@@ -5640,6 +5681,22 @@ export function Canvas({
           },
         });
       }
+    } else if (d.mode === "pathStart" && d.id) {
+      // Text-on-path start handle: sliding it moves where the text begins
+      // along the path (360039956434).
+      const root = snap.pages[snap.page].root;
+      const n = find(root, d.id);
+      const geom = n ? onPathGeometry(root, n) : null;
+      const tw = n ? worldPos(root, d.id) : null;
+      if (n && geom && tw) {
+        const wpt = toWorld(e.clientX, e.clientY);
+        const { at } = walkNearest(geom.walk, wpt.x - tw.x - geom.dx, wpt.y - tw.y - geom.dy);
+        engine.dispatch({
+          type: "patch",
+          id: d.id,
+          patch: { pathStart: geom.walk.len > 0 ? at / geom.walk.len : 0 },
+        });
+      }
     } else if (d.mode === "autoPad" && d.id && d.padEdge && d.origPad) {
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
@@ -5942,6 +5999,7 @@ export function Canvas({
       d.mode === "multiRotate" ||
       d.mode === "rotOrigin" ||
       d.mode === "autoPad" ||
+      d.mode === "pathStart" ||
       d.mode === "autoGap" ||
       d.mode === "smartGap" ||
       d.mode === "arc" ||
@@ -6170,6 +6228,46 @@ export function Canvas({
         nodeY = b.y;
         nodeW = b.w;
         nodeH = b.h;
+      }
+      // Text on a path (360039956434 §Add text to a path): clicking the text
+      // tool on a shape's outline attaches the new text to that path, and the
+      // path's fill and effects transfer to the text.
+      if (k === "text" && clicked) {
+        const target = nearOutline(root, a.x, a.y, 8);
+        const twalk = target ? outlineWalk(target) : null;
+        const tpos = target ? worldPos(root, target.id) : null;
+        if (target && twalk && tpos) {
+          const { at } = walkNearest(twalk, a.x - tpos.x, a.y - tpos.y);
+          engine.dispatch({
+            type: "add",
+            kind: "text",
+            x: nodeX,
+            y: nodeY,
+            w: nodeW,
+            h: nodeH,
+            parent: host?.id,
+            extra: {
+              text: "",
+              sizingW: "hug",
+              sizingH: "hug",
+              fontSize: 16,
+              name: "Text on path",
+              onPath: target.id,
+              pathStart: twalk.len > 0 ? at / twalk.len : 0,
+              pathSide: "left",
+              fill: target.fill,
+              fillOpacity: target.fillOpacity,
+              fillVisible: target.fillVisible,
+              fillType: target.fillType,
+              ...(target.gradientStops?.length ? { gradientStops: target.gradientStops.map((g) => ({ ...g })) } : {}),
+              ...(target.effects?.length ? { effects: target.effects.map((e) => ({ ...e })) } : {}),
+            },
+          });
+          const id = engine.snapshot().selection[0];
+          if (id) setEdit({ id, text: "" });
+          if (snap.tool !== "slice") engine.dispatch({ type: "setTool", tool: "select" });
+          return;
+        }
       }
       engine.dispatch({
         type: "add",
@@ -8615,6 +8713,94 @@ function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy
   ctx.restore();
 }
 
+/** Text on a path (360039956434 §Add text to a path): the spine geometry for
+ *  a text node's `onPath` target - the path's outline walk in the text node's
+ *  local space (callers paint at sx/sy + local*z). Null when the target is
+ *  gone or has no outline. */
+export function onPathGeometry(
+  root: XNode,
+  n: XNode,
+): { dx: number; dy: number; walk: OutlineWalk } | null {
+  if (!n.onPath) return null;
+  const pw = worldPos(root, n.onPath);
+  const tw = worldPos(root, n.id);
+  const pn = pw?.node;
+  if (!pw || !tw || !pn) return null;
+  const walk = outlineWalk(pn);
+  if (!walk) return null;
+  return { dx: pw.x - tw.x, dy: pw.y - tw.y, walk };
+}
+
+/** Nearest node whose outline passes within `r` of the world point - the text
+ *  tool's path snap. Text/image layers and locked or hidden ones are out. */
+function nearOutline(root: XNode, x: number, y: number, r: number): XNode | null {
+  let best: XNode | null = null;
+  let bestD = r;
+  const visit = (n: XNode) => {
+    if (n.visible !== false && !n.locked && n.kind !== "text") {
+      const w = outlineWalk(n);
+      const wp = worldPos(root, n.id);
+      if (w && wp) {
+        const { dist } = walkNearest(w, x - wp.x, y - wp.y);
+        if (dist < bestD) {
+          bestD = dist;
+          best = n;
+        }
+      }
+    }
+    for (const c of n.children) visit(c);
+  };
+  visit(root);
+  return best;
+}
+
+/** Lay the text along its path: each glyph is placed at its arc-length spot,
+ *  rotated to the tangent, baseline sitting on the path. `pathSide: "right"`
+ *  (Flip text orientation) turns the glyphs to the other side. Char-by-char
+ *  measure loses kerning across the join (recorded residual). */
+function paintOnPath(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  geom: { dx: number; dy: number; walk: OutlineWalk },
+  sx: number,
+  sy: number,
+  z: number,
+) {
+  const content = applyTextCase(n.text || "", n.textCase);
+  if (!content) return;
+  const flip = n.pathSide === "right";
+  const runs = resolvedTextSpans(n);
+  const styleAt = (i: number) => runs.find((r) => r.start <= i && r.end > i) ?? runs[0];
+  const start = Math.max(0, Math.min(1, n.pathStart ?? 0)) * geom.walk.len;
+  let adv = 0;
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+    const run = styleAt(i);
+    const size = Math.max(1, (run?.fontSize ?? n.fontSize) * z);
+    const ls = (n.letterSpacing || 0) * z;
+    if (ch === "\n") {
+      adv += size * 0.5 + ls;
+      continue;
+    }
+    ctx.font = canvasTextFont(n, size, run);
+    const cw = ctx.measureText(ch).width;
+    const d = start + adv + cw / 2;
+    const p = walkAt(geom.walk, d);
+    const paint = run?.fill && run.fill !== n.fill ? cssRgba(run.fill) : n.fill;
+    ctx.save();
+    ctx.translate(sx + (geom.dx + p.x) * z, sy + (geom.dy + p.y) * z);
+    // Flip text orientation: the glyphs turn over to the other side of the
+    // path, reading along it from there.
+    ctx.rotate(flip ? p.a + Math.PI : p.a);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    if (typeof paint === "string") ctx.fillStyle = paint;
+    ctx.fillText(ch, 0, 0);
+    ctx.restore();
+    adv += cw + ls;
+  }
+}
+
 function paintText(
   ctx: CanvasRenderingContext2D,
   n: XNode,
@@ -8623,7 +8809,12 @@ function paintText(
   sw: number,
   sh: number,
   z: number,
+  geom?: { dx: number; dy: number; walk: OutlineWalk } | null,
 ) {
+  if (n.onPath && geom) {
+    paintOnPath(ctx, n, geom, sx, sy, z);
+    return;
+  }
   if (hasMixedTextSpans(n)) {
     paintStyledText(ctx, n, sx, sy, sw, sh, z);
     return;

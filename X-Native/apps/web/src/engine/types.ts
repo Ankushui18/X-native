@@ -910,6 +910,14 @@ export interface XNode {
   fontFeatures?: Record<string, number>;
   /** Variable-font axes (5579502031511): `font-variation-settings` entries. */
   fontVariations?: Record<string, number>;
+  /** Text on a path (360039956434): id of the path node the text follows. */
+  onPath?: string;
+  /** Where along the path the text starts, as a fraction of its length. The
+   *  start handle slides this. */
+  pathStart?: number;
+  /** Which side of the path the baseline sits on; "right" is Flip text
+   *  orientation. */
+  pathSide?: "left" | "right";
   /** Line height unit: px value vs percent of the font size vs Auto. */
   lineHeightUnit?: LineHeightUnit;
   /** Links (360045942953): the whole text layer is a link. */

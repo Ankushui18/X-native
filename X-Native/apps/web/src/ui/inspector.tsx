@@ -4017,6 +4017,27 @@ function Design({
                   onChange={(v) => patchType({ underlineOffset: v })}
                 />
               </div>
+              {/* Text on a path (360039956434): the start handle slides along
+                  the path on canvas; Flip moves the text to its other side. */}
+              {n.onPath && (
+                <div className="dir-row">
+                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>On a path</span>
+                  <button
+                    className="mini"
+                    title="Flip text orientation - the text turns over to the other side of the path"
+                    onClick={() => patchType({ pathSide: n.pathSide === "right" ? "left" : "right" })}
+                  >
+                    Flip text
+                  </button>
+                  <button
+                    className="mini"
+                    title="Take the text off its path"
+                    onClick={() => patchType({ onPath: undefined, pathStart: undefined, pathSide: undefined })}
+                  >
+                    Detach
+                  </button>
+                </div>
+              )}
               {/* Links (360045942953): "Click Create link … Type or paste a URL
                   … Press Enter to apply the link." Underlined by default. */}
               <div className="dir-row" style={{ padding: "2px 0" }}>
