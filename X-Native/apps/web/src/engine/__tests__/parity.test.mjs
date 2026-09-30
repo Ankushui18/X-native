@@ -4106,6 +4106,9 @@ console.log("variable-width export + modifiers:");
   const pencil = N(e.snapshot().selection[0]);
   t("a pencil line is centre-stroked and round-capped",
     pencil.strokeAlign === "center" && pencil.strokeCap === "round");
+  // Figma's pencil default, from the same help article the cap rule comes
+  // from: "the pencil tool sketches with a round 3px stroke weight in black".
+  t("...at the pencil's documented 3px", pencil.strokeWidth === 3, pencil.strokeWidth);
   e.dispatch({ type: "setTool", tool: "brush" });
   e.dispatch({ type: "addPath", points: [{ x: 0, y: 100 }, { x: 100, y: 100 }], closed: false });
   const brush = N(e.snapshot().selection[0]);

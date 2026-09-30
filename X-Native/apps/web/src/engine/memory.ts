@@ -4074,7 +4074,7 @@ export class MemoryEngine implements Engine {
         // "inside" clips it to a region that is thin or (for a straight pen
         // segment) empty, and the stroke vanishes. Figma centre-strokes those,
         // and the canvas renderer reaches the same conclusion for lines and
-        // brushes (Canvas.tsx:2176); the stored default now agrees, so a fresh
+        // brushes (Canvas.tsx:2205); the stored default now agrees, so a fresh
         // open path never enters the clip branch. Vector networks are
         // round-capped by default; a closed shape's cap is never drawn, so it
         // keeps the shape default.
@@ -4087,7 +4087,11 @@ export class MemoryEngine implements Engine {
           fillVisible: cmd.closed,
           strokePaint: "#1e1e1e",
           strokeVisible: true,
-          strokeWidth: s.tool === "brush" ? 8 : cmd.closed ? 1 : 2,
+          // Weights: the brush's own 8, the pencil's documented default
+          // ("By default, the pencil tool sketches with a round 3px stroke
+          // weight in black" — Sketch on the canvas with the pencil tool), a
+          // closed shape's hairline 1, and the pen's 2.
+          strokeWidth: s.tool === "brush" ? 8 : s.tool === "pencil" ? 3 : cmd.closed ? 1 : 2,
           strokeAlign: open ? "center" : "inside",
           strokeCap: cap,
           strokeCapStart: cap,
