@@ -793,6 +793,10 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   border: 0;
   box-sizing: border-box;
   outline: 1.5px solid var(--blue);
+  /* The editing ring is a plain rectangle, as Figma's is: square corners, no
+     radius. `outline` follows `border-radius`, so the corner is pinned here
+     rather than left to a UA sheet or a future reset. */
+  border-radius: 0;
   /* Only the textarea is an input surface; the frame must never swallow the
      click that commits an edit. */
   pointer-events: none;
@@ -813,6 +817,8 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   box-sizing: border-box;
   /* The frame paints the ring; the textarea stays the click target. */
   outline: none;
+  /* Same rule as the frame it fills: a text box is a box. */
+  border-radius: 0;
   pointer-events: auto;
 }
 

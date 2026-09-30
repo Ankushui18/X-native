@@ -69,6 +69,14 @@ t("editor frame stays on the layer's world origin", frame?.style.left === `${ini
 t("editor frame remains the fitted Auto-width box", frame?.style.width === `${initial[2]}px` && frame?.style.height === `${initial[3]}px`);
 t("editor's border does not inset glyphs (pre-fix: 1.5px)", /border:\s*0;/.test(editCss) && parseFloat(getComputedStyle(overlay).borderLeftWidth) === 0 && parseFloat(getComputedStyle(overlay).borderTopWidth) === 0);
 t("focus ring is external to the text box", /outline:\s*1\.5px solid var\(--blue\)/.test(frameCss) && /pointer-events:\s*none;/.test(frameCss));
+// Figma's text editing box is a plain rectangle, so the ring that stands in
+// for it must be too. `outline` follows `border-radius`, so a radius on either
+// half of the pair would be visible in the ring the user sees.
+t("text box is square-cornered: no radius on the frame or the textarea",
+  /border-radius:\s*0;/.test(frameCss) && /border-radius:\s*0;/.test(editCss) &&
+  parseFloat(getComputedStyle(frame).borderTopLeftRadius) === 0 &&
+  parseFloat(getComputedStyle(overlay).borderTopLeftRadius) === 0,
+  `frame ${getComputedStyle(frame).borderTopLeftRadius} / textarea ${getComputedStyle(overlay).borderTopLeftRadius}`);
 // The jump: a textarea hangs its first row off the CSS line box, the painter
 // hangs it off the canvas "top" baseline. The overlay must carry the difference
 // (zoom is 1 in this harness, so screen px == world px). `paintedRow` is the y
