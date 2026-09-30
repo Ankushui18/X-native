@@ -4069,6 +4069,17 @@ export class MemoryEngine implements Engine {
           oy: p.oy,
         }));
         const keepTool = s.tool === "pen" || s.tool === "pencil" || s.tool === "brush";
+        // Stroke position, decided where the path is born. A closed shape
+        // strokes inside its own box — but an open path encloses nothing, so
+        // "inside" clips it to a region that is thin or (for a straight pen
+        // segment) empty, and the stroke vanishes. Figma centre-strokes those,
+        // and the canvas renderer reaches the same conclusion for lines and
+        // brushes (Canvas.tsx:2176); the stored default now agrees, so a fresh
+        // open path never enters the clip branch. Vector networks are
+        // round-capped by default; a closed shape's cap is never drawn, so it
+        // keeps the shape default.
+        const open = !cmd.closed;
+        const cap = open ? ("round" as const) : ("none" as const);
         const n = node("vector", "Vector", minX, minY, Math.max(1, maxX - minX), Math.max(1, maxY - minY), {
           path,
           closed: cmd.closed,
@@ -4077,6 +4088,10 @@ export class MemoryEngine implements Engine {
           strokePaint: "#1e1e1e",
           strokeVisible: true,
           strokeWidth: s.tool === "brush" ? 8 : cmd.closed ? 1 : 2,
+          strokeAlign: open ? "center" : "inside",
+          strokeCap: cap,
+          strokeCapStart: cap,
+          strokeCapEnd: cap,
           vectorNetwork: pathToVectorNetwork(path, cmd.closed),
           ...(s.tool === "brush" ? { brushStroke: true, strokeType: "brush" as const } : {}),
         });
