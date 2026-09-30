@@ -8535,7 +8535,10 @@ export function Canvas({
               font: "600 11px Inter, system-ui",
               padding: "2px 6px",
               border: "1px solid var(--accent)",
-              borderRadius: 4,
+              // Figma's inline rename field is a plain rectangle - the accent
+              // hairline, square corners, no radius. This one used to be 4px,
+              // which read as a chip rather than as a field in the document.
+              borderRadius: 0,
               background: "var(--elevated)",
               color: "var(--text)",
               minWidth: 80,

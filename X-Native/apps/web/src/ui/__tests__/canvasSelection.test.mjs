@@ -247,6 +247,12 @@ const paintedName = (name) => paints.some(([call, value]) => call === "fillText"
   t("showName=false remains respected", !paintedName(child.name));
   await ui.mouse("dblclick", 110, 90);
   t("visible frame label still opens rename", !!ui.host.querySelector(".frame-name-edit"));
+  // Figma's inline rename field sits in the document as a plain rectangle -
+  // the accent hairline with square corners - not as a rounded chip.
+  const renameField = ui.host.querySelector(".frame-name-edit input");
+  t("frame rename field is square-cornered (pre-fix: 4px radius)",
+    !!renameField && renameField.style.borderRadius === "0px" &&
+    parseFloat(getComputedStyle(renameField).borderTopLeftRadius) === 0);
   await ui.close();
 }
 // The detailed audit explicitly exempts selected children from label culling,
