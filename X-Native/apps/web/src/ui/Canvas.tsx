@@ -177,6 +177,31 @@ function worldGuides(root: XNode, guides: RulerGuide[]): { axis: "x" | "y"; at: 
   });
 }
 
+/** Fields that take `Space` as a character, so the canvas must not steal it.
+ *
+ *  The three prose surfaces in the app are the on-canvas text editor, the file
+ *  name, and a layer rename — all `textarea`/contenteditable/`input` with a
+ *  textual type. The Inspector's numeric scrub fields are the opposite case:
+ *  their value is a number (`x-num-input`, no `type`, so the DOM reports
+ *  "text"), Space can never be part of it, and while one of them held the caret
+ *  the canvas used to refuse the key outright — the pan died and the browser
+ *  re-activated whatever panel control was focused instead. */
+function keepsSpaceKey(el: HTMLElement | null): boolean {
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return true;
+  if (el.tagName !== "INPUT") return false;
+  if (el.classList?.contains("x-num-input")) return false;
+  const type = (el as HTMLInputElement).type;
+  return (
+    type === "text" ||
+    type === "search" ||
+    type === "email" ||
+    type === "url" ||
+    type === "password" ||
+    type === "tel"
+  );
+}
+
 function kindOf(t: Tool): NodeKind | null {
   if (t === "section") return "section";
   if (t === "slice") return "rect";
@@ -1022,7 +1047,10 @@ export function Canvas({
         targetEl?.tagName === "SELECT" ||
         targetEl?.isContentEditable ||
         !!targetEl?.closest?.("input, textarea, select, [contenteditable='true'], .x-field, .x-popover, .inspector");
-      if (isTyping && e.key !== "Escape") return;
+      // A field that takes Space as text keeps the key; every other focused
+      // control hands it to the canvas, so the pan below can rotate away.
+      const spaceIsText = keepsSpaceKey(targetEl);
+      if (isTyping && e.key !== "Escape" && !(e.code === "Space" && !spaceIsText)) return;
 
       // Present-mode key triggers: every matching interaction in the frame runs.
       if (e.type === "keydown" && snap.presentFrame && e.key !== "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -1059,10 +1087,14 @@ export function Canvas({
         setAltMeasure(e.type === "keydown");
       }
       if (e.code === "Space") {
+        // Space is the pan modifier, and it takes the caret off whatever panel
+        // control was clicked last: the browser would otherwise re-activate
+        // that button on the same keypress, and the canvas would be panning
+        // with the focus ring still sitting in the Inspector.
+        if (e.type === "keydown" && targetEl && targetEl !== document.body && !spaceIsText) targetEl.blur();
         space.current = e.type === "keydown";
         setSpaceHeld(e.type === "keydown");
-        if (e.type === "keydown" && !isTyping)
-          e.preventDefault();
+        if (e.type === "keydown") e.preventDefault();
       }
       if (e.type === "keydown" && (e.key === "Escape" || e.key === "Enter") && (draft.length >= 2 || penBranch.current)) {
         e.stopImmediatePropagation();
@@ -1410,9 +1442,19 @@ export function Canvas({
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("keyup", onKey, true);
+    // A Space keyup that lands in another window — or in none at all, after a
+    // tab switch — would otherwise leave the canvas stuck in pan mode.
+    const releaseSpace = () => {
+      space.current = false;
+      setSpaceHeld(false);
+    };
+    window.addEventListener("blur", releaseSpace);
+    document.addEventListener("visibilitychange", releaseSpace);
     return () => {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKey, true);
+      window.removeEventListener("blur", releaseSpace);
+      document.removeEventListener("visibilitychange", releaseSpace);
     };
   }, [snap, edit, draft, engine, vecEdit, vecSubTool, runInteraction, selectedConn, cropId, widthSel]);
 
@@ -7096,35 +7138,53 @@ export function Canvas({
     }
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
-      // Ctrl/⌘ + wheel and trackpad pinch both zoom at the cursor: a pinch
-      // stream tracks the fingers, a wheel notch is one fixed step, and line-
-      // and page-mode wheels are converted to pixels first.
-      const factor = wheelZoomFactor({ deltaY: e.deltaY, deltaMode: e.deltaMode, pinch: e.ctrlKey });
-      const next = clampZoom(snap.zoom * factor);
-      const box = wrap.current!.getBoundingClientRect();
-      const cx = e.clientX - box.left;
-      const cy = e.clientY - box.top;
-      const wx = (cx - snap.panX) / snap.zoom;
-      const wy = (cy - snap.panY) / snap.zoom;
-      engine.dispatch({ type: "setZoom", zoom: next });
-      engine.dispatch({ type: "setPan", x: cx - wx * next, y: cy - wy * next });
-    } else if (e.shiftKey) {
-      // ⇧ + wheel scrolls horizontally.
-      const d = normalizeWheelDelta(e.deltaY || e.deltaX, e.deltaMode);
-      engine.dispatch({ type: "pan", dx: -d, dy: 0 });
-    } else {
-      // Scrolling pans, and a line- or page-mode wheel pans as far as a pixel-
-      // mode one so the canvas feels the same in every browser.
-      engine.dispatch({
-        type: "pan",
-        dx: -normalizeWheelDelta(e.deltaX, e.deltaMode),
-        dy: -normalizeWheelDelta(e.deltaY, e.deltaMode),
-      });
-    }
-  };
+  /** Wheel gestures, on a listener registered by hand so it can be cancelled.
+   *
+   *  React attaches `wheel` passively at the root, so the `preventDefault()` a
+   *  JSX `onWheel` prop calls is discarded: Ctrl/⌘+wheel — and every trackpad
+   *  pinch, which arrives as one — zoomed the browser page *as well as* the
+   *  canvas, the two fighting each other on every gesture. Only a non-passive
+   *  native listener may keep the gesture for the canvas, which is what makes
+   *  the anchored zoom below actually hold the point under the cursor.
+   *
+   *  No React state is captured: the handler reads the live snapshot from the
+   *  engine, so it never zooms against a stale pan. */
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.cancelable) e.preventDefault();
+      const s = engine.snapshot();
+      if (e.ctrlKey || e.metaKey) {
+        // Ctrl/⌘ + wheel and trackpad pinch both zoom at the cursor: a pinch
+        // stream tracks the fingers, a wheel notch is one fixed step, and line-
+        // and page-mode wheels are converted to pixels first.
+        const factor = wheelZoomFactor({ deltaY: e.deltaY, deltaMode: e.deltaMode, pinch: e.ctrlKey });
+        const next = clampZoom(s.zoom * factor);
+        const box = el.getBoundingClientRect();
+        const cx = e.clientX - box.left;
+        const cy = e.clientY - box.top;
+        const wx = (cx - s.panX) / s.zoom;
+        const wy = (cy - s.panY) / s.zoom;
+        engine.dispatch({ type: "setZoom", zoom: next });
+        engine.dispatch({ type: "setPan", x: cx - wx * next, y: cy - wy * next });
+      } else if (e.shiftKey) {
+        // ⇧ + wheel scrolls horizontally.
+        const d = normalizeWheelDelta(e.deltaY || e.deltaX, e.deltaMode);
+        engine.dispatch({ type: "pan", dx: -d, dy: 0 });
+      } else {
+        // Scrolling pans, and a line- or page-mode wheel pans as far as a pixel-
+        // mode one so the canvas feels the same in every browser.
+        engine.dispatch({
+          type: "pan",
+          dx: -normalizeWheelDelta(e.deltaX, e.deltaMode),
+          dy: -normalizeWheelDelta(e.deltaY, e.deltaMode),
+        });
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [engine]);
 
   const onDbl = (e: React.MouseEvent) => {
     if ((snap.tool === "pen" || snap.tool === "pencil") && draft.length >= 2) {
@@ -8018,7 +8078,6 @@ export function Canvas({
       onMouseUp={onUp}
       onMouseLeave={onLeave}
       onDoubleClick={onDbl}
-      onWheel={onWheel}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";

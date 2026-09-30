@@ -698,6 +698,10 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   position: absolute;
   inset: 0;
   background: var(--canvas);
+  /* The canvas owns its gestures: without this the browser consumes a pinch or
+     a two-finger drag before the wheel listener sees it, the same page-zoom
+     the non-passive wheel handler exists to stop. */
+  touch-action: none;
 }
 .canvas-wrap canvas { width: 100%; height: 100%; display: block; }
 .proto-transition {
