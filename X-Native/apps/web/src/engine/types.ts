@@ -1382,6 +1382,11 @@ export interface Engine {
   snapshot(): Snapshot;
   subscribe(fn: () => void): () => void;
   dispatch(cmd: Command): void;
+  /** The whole document, in the shape `persist.saveDoc` writes and the file
+   *  store seeds a reopened file from — what File ▸ Save local copy serialises.
+   *  Spelled as the stored form so the two ways out of the app (a local copy, a
+   *  file in the store) cannot disagree about the document's shape. */
+  toDoc(): Omit<import("./persist").PersistedDoc, "version">;
 }
 
 export const TOOL_META: {

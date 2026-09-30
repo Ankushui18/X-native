@@ -29,7 +29,7 @@ import { RadialMenu } from "./ui/RadialMenu";
 import { toast as toastMsg } from "./ui/toast";
 import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
-import { DEMO_ID, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import { DEMO_ID, createFile, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
 import { initWasmBridge } from "./engine/wasmBridge";
 import { preloadGeo } from "./engine/geoBridge";
@@ -237,6 +237,18 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
     clearDoc(); // the legacy autosave slot and its IndexedDB row
     window.location.reload();
   }, [fileId]);
+  /** File ▸ Open local copy: a downloaded .x.json becomes a *new* file, the way
+   *  Figma's local copy does — the document you were editing is left alone.
+   *  The file store owns the bytes from here on, so autosave, the Dashboard and
+   *  this session all read one copy. */
+  const openLocalCopy = useCallback((name: string, doc: DocSeed) => {
+    // `createFile` cannot fail here: `writeDoc` keeps a document over
+    // localStorage's quota in IndexedDB instead of throwing (files.ts:142).
+    const meta = createFile({ name, template: "blank", doc });
+    toastMsg(`Opened ${meta.name} from a local copy`);
+    window.location.hash = `#/file/${encodeURIComponent(meta.id)}`;
+  }, []);
+
   const [figInspector, setFigInspector] = useState(false);
   const [toast, setToast] = useState("");
   const runnerRef = useRef<((ix: any, sourceId?: string) => void) | null>(null);
@@ -606,6 +618,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
         onMinimize={toggleMinUi}
         onActions={openActions}
         onHome={onHome}
+        onOpenLocalCopy={openLocalCopy}
       />
       <div
         className="split l"

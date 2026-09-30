@@ -535,6 +535,39 @@ input, textarea { user-select: text; }
 }
 .file-head input.name:hover { background: var(--hover); }
 .file-head input.name:focus { background: var(--field-focus); box-shadow: 0 0 0 1px var(--blue); }
+
+/* The main menu: the brand badge is the trigger, as Figma's logo is. */
+.file-menu {
+  position: relative;
+  flex: 0 0 auto;
+  margin-right: 6px;
+}
+.badge-menu {
+  display: flex;
+  align-items: center;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--accent-ink);
+  background: var(--sel);
+  border: 1px solid var(--accent-ring);
+  border-radius: 4px;
+  padding: 3px 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.badge-menu:hover { filter: brightness(1.06); }
+.badge-menu:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* The dropdown hangs under the badge; `.ctx` supplies the row styling, and
+   this rule's second class outranks its `position: fixed`. */
+.ctx.file-menu-pop {
+  position: absolute;
+  top: 42px;
+  left: 0;
+  z-index: 95;
+  min-width: 208px;
+}
 .icon-btn {
   width: 28px;
   height: 28px;

@@ -335,7 +335,8 @@ t(`and a close that was not Escape does the same (${document.activeElement?.id})
 
 const registers = {
   "../App.tsx": 5,
-  "chrome.tsx": 2,
+  // Three since P0-2: the File menu joins the two the chrome already owned.
+  "chrome.tsx": 3,
   "x-ui.tsx": 2,
   "DialogHost.tsx": 1,
   "ContextMenu.tsx": 1,

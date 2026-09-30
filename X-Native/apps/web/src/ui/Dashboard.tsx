@@ -11,6 +11,7 @@ import {
   duplicateFile,
   listFiles,
   previewFromDoc,
+  localCopyOf,
   readDoc,
   readDocSync,
   relTime,
@@ -25,6 +26,7 @@ import {
   type TemplateId,
 } from "../engine/files";
 import { hydrateDoc } from "../engine/assets";
+import { downloadJson, localCopyJson, localCopyName } from "./localCopy";
 import { importSvg, importSketch, importFig } from "../engine/wasmBridge";
 
 /**
@@ -172,19 +174,27 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
     toast(project ? `Moved to ${project}` : "Moved to Drafts");
   };
 
-  const exportMeta = (f: FileMeta) => {
-    const doc = readDocSync(f.id);
+  /** Write a portable copy of the stored document (the row menu's "Export a
+   *  copy"). Reads through `localCopyOf` and not `readDocSync`: a document with
+   *  images in it is exactly the one that overflowed localStorage, so the
+   *  synchronous read answered "nothing stored locally" for every file worth
+   *  backing up. Images are resolved back to bytes on the way out, so the file
+   *  opens somewhere this browser has never been. */
+  const exportMeta = async (f: FileMeta) => {
     setMenu(null);
-    if (!doc) {
-      toast("Nothing stored locally to export");
-      return;
+    setBusy("Preparing a local copy…");
+    try {
+      const doc = await localCopyOf(f.id);
+      if (!doc) {
+        toast("This file's contents could not be read — it may be from another browser");
+        return;
+      }
+      const name = localCopyName(doc.fileName || f.name);
+      downloadJson(name, localCopyJson(doc));
+      toast(`Local copy saved · ${name}`);
+    } finally {
+      setBusy("");
     }
-    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${f.name || "Untitled"}.x.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
 
   /* importing: drop a .fig / .sketch / .svg / .x.json anywhere on the dashboard */
