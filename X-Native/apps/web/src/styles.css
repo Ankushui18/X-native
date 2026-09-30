@@ -1421,6 +1421,8 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   padding: 0;
 }
 .seg button:hover { background: var(--hover); }
+.seg button:disabled { opacity: 0.4; cursor: default; }
+.seg button:disabled:hover { background: transparent; }
 .seg button.on { background: var(--elevated); box-shadow: 0 0 0 1px var(--line); }
 
 .nine {

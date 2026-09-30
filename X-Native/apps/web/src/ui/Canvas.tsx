@@ -1,6 +1,6 @@
 import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Effect, Engine, Interaction, ListStyle, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, XNode } from "../engine/types";
+import type { Effect, Engine, ImageFit, Interaction, ListStyle, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, VariableWidthPoint, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
 import { resolveAllForMode, resolveVariable } from "../engine/variables";
 import { evaluateExpression } from "../engine/expressions";
@@ -24,6 +24,8 @@ import {
   vertexDegree,
   insertPointOnPath,
   projectPointOnSegment,
+  splitPathAtPoint,
+  cutPathWithLine,
   computeConnectorNoodle,
   pathToVectorNetwork,
   balanceLines,
@@ -40,8 +42,24 @@ import {
   walkNearest,
   type OutlineWalk,
   widthProfileStations,
+  widthStationAt,
+  projectToPath,
 } from "../engine/geometry";
-import { dashArray, dashOffset, sampleVariableWidth, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "../engine/strokeModel";
+import {
+  MAX_WIDTH_MULTIPLIER,
+  brushStrokePasses,
+  dashArray,
+  dynamicWobble,
+  dashOffset,
+  normalizeWidthProfile,
+  sampleVariableWidth,
+  strokePaints,
+  sideCones,
+  sideWidths,
+  sidesSupported,
+  usesVariableWidth,
+  variableWidthBlockReason,
+} from "../engine/strokeModel";
 import { interpolateMatchingLayers, solveEasing, applyInterpolatedFrame } from "../engine/smartAnimate";
 import {
   roundBox,
@@ -54,7 +72,7 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { dropMaskNeeds, fillStyle, gradTarget, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, spreadApplies, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
+import { dropMaskNeeds, fillStyle, gradTarget, mixHex, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, spreadApplies, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
 import { patternSourceNode, setPatternLookup } from "../engine/pattern";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
@@ -194,8 +212,11 @@ type Drag =
         | "vec"
         | "vecResize"
         | "bend"
+        | "vecCut"
+        | "widthPt"
         | "grad"
         | "gradStop"
+        | "gradMid"
         | "multiResize"
         | "multiRotate"
         | "autoPad"
@@ -218,7 +239,7 @@ type Drag =
       zoom?: boolean;
       point?: number;
       segIndex?: number;
-      handle?: "in" | "out" | "start" | "g" | "h";
+      handle?: "in" | "out" | "start" | "g" | "h" | "f";
       /** Gradient-handle drag: which `fills` index the handles grabbed, -1 for the base fill. */
       gindex?: number;
       /** An authored intermediate stop on that ramp. Keeping it bounded by its
@@ -227,6 +248,9 @@ type Drag =
       gradStop?: number;
       gradStopMin?: number;
       gradStopMax?: number;
+      /** The stop-pair whose midpoint handle is being dragged: between stops
+       *  i and i+1 on the ramp. */
+      gradMid?: number;
       padEdge?: "top" | "right" | "bottom" | "left";
       forcedSide?: "right" | "bottom" | "left" | "top";
       /** ⌥ at the padding handle: the opposite side follows. ⌥⇧: all four. */
@@ -271,6 +295,11 @@ type Drag =
       bounds?: { x: number; y: number; w: number; h: number };
       origs?: MultiOrigin[];
       origPts?: PathPoint[];
+      /** Run 23 width-point drag: the profile at press (live patches derive
+       *  from it so every move is delta-from-start) and the selected indices
+       *  moved together. */
+      wOrig?: VariableWidthPoint[];
+      wSel?: number[];
       origNetwork?: VectorNetwork;
       networkIndices?: number[];
       startAngle?: number;
@@ -440,7 +469,26 @@ export function Canvas({
    *  per gesture), plus the pre-tool rect for Esc and a dirty flag. */
   const [cropId, setCropId] = useState<string | null>(null);
   const cropOrig = useRef<CropRect | undefined>(undefined);
+  const cropOrigFit = useRef<ImageFit | undefined>(undefined);
   const cropDirty = useRef(false);
+  /** The whole session — the mode switch, every drag, the apply — folds into
+   *  ONE undo entry (Figma's "click or Enter applies, one undo reverts the
+   *  crop"): a begin at entry, an end at every exit, refs so stale closures
+   *  and double exits cannot unbalance the engine's group stack. */
+  const cropSession = useRef(false);
+  const cropIdRef = useRef<string | null>(null);
+  const endCropSession = () => {
+    if (cropSession.current) {
+      cropSession.current = false;
+      engine.dispatch({ type: "end" });
+    }
+  };
+  /** Apply the crop: close the tool keeping the edits, ending the session. */
+  const applyCrop = () => {
+    cropIdRef.current = null;
+    setCropId(null);
+    endCropSession();
+  };
   /** Place-image queue: sources picked from the file dialog, placed one per
    *  click (a click on a shape fills it instead of adding a layer). */
   const [placing, setPlacing] = useState<{ srcs: { src: string; name: string }[]; i: number } | null>(null);
@@ -465,25 +513,45 @@ export function Canvas({
     return im && im.complete && im.naturalWidth ? im : undefined;
   };
   /** Enter the crop tool on an image layer: select it, switch its mode to
-   *  Crop, and remember the pre-tool rect for Esc. */
+   *  Crop, and remember the pre-tool rect (and fill mode) for Esc. The whole
+   *  session opens one history group so apply/cancel is a single undo step. */
   const enterCrop = (id: string) => {
     const now = engine.snapshot();
     const n = find(now.pages[now.page].root, id);
     if (!n || (!n.imageSrc && n.fillType !== "image")) return;
     if (n.fillType === "image" && !n.imageSrc) return;
+    if (cropSession.current) {
+      // Re-entering the same layer keeps the open session (and its snapshot);
+      // a different target applies the first before opening the second.
+      if (cropIdRef.current === id) return;
+      applyCrop();
+    }
     cropOrig.current = n.imageCrop ? { ...n.imageCrop } : undefined;
+    cropOrigFit.current = n.imageFit;
     cropDirty.current = false;
+    cropSession.current = true;
+    engine.dispatch({ type: "begin" });
     if (n.imageFit !== "crop") engine.dispatch({ type: "patch", id, patch: { imageFit: "crop" } });
     engine.dispatch({ type: "select", ids: [id] });
     if (n.imageSrc) imgOf(n.imageSrc);
+    cropIdRef.current = id;
     setCropId(id);
   };
-  /** Leave the crop tool, reverting to the pre-tool rect. */
+  /** Leave the crop tool, writing the pre-tool rect and fill mode back inside
+   *  the session — the revert folds into the group, so Esc leaves no entry. */
   const cancelCrop = () => {
-    if (cropDirty.current && cropId) {
-      engine.dispatch({ type: "patch", id: cropId, patch: { imageCrop: cropOrig.current } });
+    const id = cropIdRef.current;
+    if (id && cropDirty.current) {
+      engine.dispatch({ type: "patch", id, patch: { imageCrop: cropOrig.current } });
     }
-    setCropId(null);
+    if (id && cropOrigFit.current !== undefined) {
+      const now = engine.snapshot();
+      const cur = find(now.pages[now.page].root, id);
+      if (cur && cur.imageFit !== cropOrigFit.current) {
+        engine.dispatch({ type: "patch", id, patch: { imageFit: cropOrigFit.current } });
+      }
+    }
+    applyCrop();
   };
   useEffect(() => {
     const onCropEvent = (e: Event) => {
@@ -514,8 +582,15 @@ export function Canvas({
   };
   // A selection that leaves the cropped layer applies the crop.
   useEffect(() => {
-    if (cropId && !snap.selection.includes(cropId)) setCropId(null);
+    if (cropId && !snap.selection.includes(cropId)) applyCrop();
   }, [snap.selection]);
+  // Never leave the engine grouping on an unmount mid-session: the stack
+  // would swallow every later edit into one entry.
+  useEffect(() => {
+    return () => {
+      endCropSession();
+    };
+  }, [engine]);
   // Smart-selection handles: recompute the mid-gap badges whenever the
   // selection or the page geometry changes, so a nudged layer makes the run
   // stop matching and the handles disappear, exactly as the article's
@@ -560,7 +635,7 @@ export function Canvas({
       } else if (e.key === "Enter" && cropId) {
         e.preventDefault();
         e.stopPropagation();
-        setCropId(null);
+        applyCrop();
       }
     };
     window.addEventListener("keydown", key, true);
@@ -584,13 +659,52 @@ export function Canvas({
     },
     [engine],
   );
-  const [vecSubTool, setVecSubTool] = useState<"select" | "bend" | "paint" | "shapeBuilder" | "eraser" | "lasso">("select");
+  const [vecSubTool, setVecSubTool] = useState<"select" | "bend" | "paint" | "shapeBuilder" | "eraser" | "lasso" | "cut">("select");
+  /** Run 22 (vector cut): the blade preview line, world coords, while the
+   *  cut drags across the path. */
+  const [cutLine, setCutLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [draft, setDraft] = useState<PathPoint[]>([]);
   // LP-U4: the dismissal outlives the session (firstRun.ts), so the card is
   // shown once per visitor rather than once per mount.
   const [firstRun, setFirstRun] = useState(() => !emptyCanvasHintDismissed());
   const [ghost, setGhost] = useState<PathPoint | null>(null);
   const [hoverId, setHoverId] = useState("");
+  /** Run 23 — variable-width interaction: the pointer projected onto the
+   *  selected stroke (pink preview handle, ringed over an existing width
+   *  point), the selected width-point indices, and a press waiting to become
+   *  an add — validated on release so a drag still moves the layer. */
+  const [widthHover, setWidthHover] = useState<{
+    id: string;
+    t: number;
+    x: number;
+    y: number;
+    onPoint: number | null;
+  } | null>(null);
+  const [widthSel, setWidthSel] = useState<number[]>([]);
+  const pendingWidth = useRef<{ sx: number; sy: number; id: string; t: number; x: number; y: number } | null>(null);
+  /** Interactive width points are for plain single-path solid vectors: the
+   *  shared variableWidthBlockReason refuses dashes/branches/pattern/brush,
+   *  lines and arrows stay inspector-only (their whole box IS the stroke, so
+   *  a press along the centerline must keep dragging the layer), and locked,
+   *  rotated, or invisible strokes take no handles either. */
+  const widthEditOk = (n: XNode): boolean =>
+    n.kind === "vector" &&
+    n.path.length >= 2 &&
+    strokePaints(n) &&
+    !variableWidthBlockReason(n) &&
+    !n.rotation &&
+    !n.flipH &&
+    !n.flipV &&
+    !n.locked;
+  // Changing or clearing the selection drops the station selection with it.
+  useEffect(() => {
+    if (!widthSel.length && !widthHover) return;
+    const id = snap.selection.length === 1 ? snap.selection[0] : null;
+    if (!id) {
+      if (widthSel.length) setWidthSel([]);
+      if (widthHover) setWidthHover(null);
+    } else if (widthHover && widthHover.id !== id) setWidthHover(null);
+  }, [snap.selection, widthSel.length, widthHover]);
   const [panelHover, setPanelHover] = useState("");
   const [transition, setTransition] = useState<ProtoAnim | null>(null);
   const [animFrame, setAnimFrame] = useState<{
@@ -1043,7 +1157,7 @@ export function Canvas({
           }
         }
       }
-      if (e.type === "keydown" && e.key === "Enter" && !edit) {
+      if (e.type === "keydown" && e.key === "Enter" && !edit && !cropId) {
         const t = e.target as HTMLElement;
         if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
         const root = snap.pages[snap.page].root;
@@ -1112,7 +1226,34 @@ export function Canvas({
           setVecEdit(null);
         }
       }
+      // Run 22 (vector cut, audit P1 #10): bare X toggles the Cut subtool
+      // while a path is in point edit — ⇧X stays the fill/stroke swap and
+      // ⌘X the clipboard cut, so both modifiers are excluded here.
+      if (
+        e.type === "keydown" &&
+        vecEdit &&
+        !edit &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === "x"
+      ) {
+        const next = vecSubTool === "cut" ? "select" : "cut";
+        setVecSubTool(next);
+        toast(next === "cut" ? "Cut tool: click a point or segment, or drag across the path" : "Select mode");
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       if (e.type === "keydown" && e.key === "Escape" && vecEdit) {
+        // Escape leaves cut mode first, keeping the path in point edit —
+        // only the next Escape leaves point edit itself.
+        if (vecSubTool === "cut") {
+          setVecSubTool("select");
+          e.stopImmediatePropagation();
+          return;
+        }
         setVecEdit(null);
         e.stopImmediatePropagation();
       }
@@ -1162,6 +1303,30 @@ export function Canvas({
         toast("Connection deleted");
         e.stopImmediatePropagation();
         return;
+      }
+      // Run 23 — Delete/Backspace removes the selected width points of the
+      // stroke in one undo step (a group below two points clears the profile).
+      if (
+        e.type === "keydown" &&
+        (e.key === "Delete" || e.key === "Backspace") &&
+        widthSel.length &&
+        !edit &&
+        !vecEdit &&
+        snap.tool === "select" &&
+        snap.selection.length === 1
+      ) {
+        const wn = worldPos(snap.pages[snap.page].root, snap.selection[0]);
+        if (wn && widthEditOk(wn.node) && allowTopologyEdit(engine, wn.node.id)) {
+          const prof = normalizeWidthProfile(wn.node.strokeWidthProfile);
+          const next = prof.filter((_, i) => !widthSel.includes(i));
+          engine.dispatch({ type: "begin" });
+          engine.dispatch({ type: "patch", id: wn.node.id, patch: { strokeWidthProfile: next.length >= 2 ? next : undefined } });
+          engine.dispatch({ type: "end" });
+          setWidthSel([]);
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
       }
       if (e.type === "keydown" && (e.key === "Delete" || e.key === "Backspace") && vecEdit && !edit) {
         const n = worldPos(snap.pages[snap.page].root, vecEdit)?.node;
@@ -1249,7 +1414,7 @@ export function Canvas({
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("keyup", onKey, true);
     };
-  }, [snap, edit, draft, engine, vecEdit, runInteraction, selectedConn]);
+  }, [snap, edit, draft, engine, vecEdit, vecSubTool, runInteraction, selectedConn, cropId, widthSel]);
 
   // Radial menu ▸ Bend Tool (PM-U10). The radial is a separate component, so it
   // asks for the sub-tool over the window event bus — and until now *nothing
@@ -1904,23 +2069,51 @@ export function Canvas({
           ? patternStrokeStyle(ctx, n, sx, sy, z, imgOf) ?? "rgba(0,0,0,0)"
           : cssRgba(n.strokePaint);
         ctx.strokeStyle = strokeStyle;
-        ctx.lineCap = n.strokeCap === "round" ? "round" : n.strokeCap === "square" ? "square" : "butt";
-        ctx.lineJoin = n.strokeJoin === "round" ? "round" : n.strokeJoin === "bevel" ? "bevel" : "miter";
+        // Run 24 — the inspector's hover previews (cap/join/style) temporarily
+        // win over the stored values, exactly like the align preview below.
+        const pvStroke = snap.previewStroke;
+        const onPv = pvStroke && pvStroke.id === n.id ? pvStroke : null;
+        const capName = onPv?.cap ?? n.strokeCap;
+        ctx.lineCap = capName === "round" ? "round" : capName === "square" ? "square" : "butt";
+        const joinName = onPv?.join ?? n.strokeJoin;
+        ctx.lineJoin = joinName === "round" ? "round" : joinName === "bevel" ? "bevel" : "miter";
         ctx.miterLimit = strokeCanvasMiterLimit(n.strokeMiterAngle);
-        const dashes = dashArray(n.strokeDashPattern, n.strokeDash, n.strokeGap, z);
+        // Run 24 — brush and dynamic strokes are centre-only and never dashed;
+        // the style-row preview swaps in the hovered preset's dash values.
+        const brushStroke = n.strokeType === "brush";
+        const dynStroke = n.strokeType === "dynamic";
+        const dashView = onPv?.dash
+          ? {
+              pattern: onPv.dash.strokeDashPattern,
+              dash: onPv.dash.strokeDash,
+              gap: onPv.dash.strokeGap,
+              cap: onPv.dash.strokeDashCap,
+            }
+          : { pattern: n.strokeDashPattern, dash: n.strokeDash, gap: n.strokeGap, cap: n.strokeDashCap };
+        const dashes =
+          brushStroke || dynStroke ? [] : dashArray(dashView.pattern, dashView.dash, dashView.gap, z);
         // Dashes carry their own cap: a dotted line is a 1px dash
         // with round caps, and only the segments take the rounding.
         // Unset means butt — a dashed line with round end caps still
         // draws square dashes until the dash cap says otherwise.
-        ctx.lineCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? n.strokeDashCap ?? "butt" : ctx.lineCap;
+        const dashCap = dashView.cap;
+        ctx.lineCap =
+          dashView.pattern?.length || dashView.dash > 0
+            ? dashCap === "round"
+              ? "round"
+              : dashCap === "square"
+                ? "square"
+                : "butt"
+            : ctx.lineCap;
         if (dashes.length) ctx.setLineDash(dashes);
         else ctx.setLineDash([]);
         ctx.lineDashOffset = dashOffset(dashes);
         // Individual strokes: the outline is stroked once per side, each pass
         // clipped to a 45° cone from the centre, which is how CSS mitres a
         // border and keeps a rounded corner split evenly between its sides.
+        // Brush and dynamic strokes are centre-only, so they skip the split.
         const sides = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
-        const perSide = sidesSupported(n.kind) && (n.strokeSides ?? "all") !== "all";
+        const perSide = !brushStroke && !dynStroke && sidesSupported(n.kind) && (n.strokeSides ?? "all") !== "all";
         const pass = (lw: number) => {
           if (lw <= 0) return;
           const w = Math.max(0.5, lw * z);
@@ -1931,15 +2124,18 @@ export function Canvas({
           }
           // Lines are always centre-stroked: clipping an open two-point path
           // to "inside" would clip to a zero-area region and erase the shaft.
-          // A hover preview from the inspector temporarily wins over the
-          // stored position; lines never preview (no position control).
-          const preview = snap.previewStroke;
+          // Brush and dynamic strokes are centre-only the same way. A hover
+          // preview from the inspector temporarily wins over the stored
+          // position — but only a preview that actually carries an align
+          // (cap/join/style previews must not drag an inside stroke to centre).
           const align =
-            preview && preview.id === n.id
-              ? preview.align
-              : n.kind === "line" || n.kind === "arrow"
-                ? "center"
-                : n.strokeAlign;
+            brushStroke || dynStroke
+              ? "center"
+              : onPv && onPv.align
+                ? onPv.align
+                : n.kind === "line" || n.kind === "arrow"
+                  ? "center"
+                  : n.strokeAlign;
           if (align === "inside") {
             ctx.save();
             ctx.clip();
@@ -1988,6 +2184,37 @@ export function Canvas({
           tracePath(ctx, varOutline, snap.panX + x * z, snap.panY + y * z, z, true);
           ctx.fillStyle = strokeStyle;
           ctx.fill();
+        } else if (brushStroke) {
+          // Run 24 — three bristle passes. The translate happens BEFORE the
+          // trace: path points are transformed as they are built, so an
+          // offset pass has to move the CTM first.
+          for (const bp of brushStrokePasses(n.strokeBrushAngle)) {
+            ctx.save();
+            const ox = bp.dx * n.strokeWidth * z;
+            const oy = bp.dy * n.strokeWidth * z;
+            if (ox || oy) ctx.translate(ox, oy);
+            pass(sides[0] * bp.wMul);
+            ctx.restore();
+          }
+        } else if (dynStroke) {
+          // Run 24 — a wobbled polyline: the centreline displaced along its
+          // own normals by the frequency/wiggle/smooth controls.
+          const src = n.path.length >= 2 ? n.path : shapePoly(n);
+          if (src.length >= 2) {
+            const dev = src.map((p) => ({ x: snap.panX + x * z + p.x * z, y: snap.panY + y * z + p.y * z }));
+            const wob = dynamicWobble(
+              dev,
+              !!n.closed,
+              n.strokeDynFreq ?? 4,
+              (n.strokeDynWiggle ?? 6) * z,
+              n.strokeDynSmooth ?? 50,
+            );
+            ctx.beginPath();
+            wob.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+            if (n.closed) ctx.closePath();
+            ctx.lineWidth = Math.max(0.5, sides[0] * z);
+            ctx.stroke();
+          }
         } else if (perSide) {
           const cones = sideCones(sx, sy, sw, sh);
           for (let i = 0; i < 4; i++) {
@@ -3192,6 +3419,28 @@ export function Canvas({
         ctx.arc(bx, by, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
+        // Interpolation midpoints: a small square between every adjacent
+        // pair — where dragging splits the blend of those two stops.
+        for (let i = 0; i < gt.stops.length - 1; i++) {
+          const p0 = gt.stops[i].position;
+          const p1 = gt.stops[i + 1].position;
+          const span = p1 - p0;
+          if (span <= 1e-4) continue;
+          const m = Math.max(0, Math.min(1, gt.mids?.[i] ?? 0.5));
+          const x = ax + (bx - ax) * (p0 + span * m);
+          const y = ay + (by - ay) * (p0 + span * m);
+          ctx.fillStyle = INK;
+          ctx.fillRect(x - 2.5, y - 2.5, 5, 5);
+          ctx.strokeRect(x - 2.5, y - 2.5, 5, 5);
+        }
+        // Radial focal point: a hollow ring around the convergence of the
+        // first stop. It sits outside the filled centre dot (r6) so both
+        // stay grabbable even when the focal is still at the centre.
+        if (gt.type === "radial") {
+          ctx.beginPath();
+          ctx.arc(sx + gt.fx * sw, sy + gt.fy * sh, 11, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
       if (wp.node.kind === "star") {
         const cx = sx + sw / 2;
@@ -3548,17 +3797,21 @@ export function Canvas({
       }
     }
 
-    // Variable-width control points on the selected stroke. Display-only —
-    // the inspector's profile strip edits them — and hidden under rotation,
-    // where the translation-only page offset would misplace them.
-    if (snap.selection.length === 1 && !snap.presentFrame && !vecEdit) {
+    // Run 23 — variable-width control points on the selected stroke: the
+    // stations, a pink preview handle where the pointer projects onto the
+    // line (a ring over an existing point), and highlighted selections with
+    // their width in px. Hidden under rotation, where the translation-only
+    // page offset would misplace them.
+    if (snap.selection.length === 1 && !snap.presentFrame && !vecEdit && snap.tool === "select") {
       const sel = find(root, snap.selection[0]);
-      if (sel && usesVariableWidth(sel) && sel.path.length >= 2 && !sel.rotation && !sel.flipH && !sel.flipV) {
+      if (sel && widthEditOk(sel) && allowTopologyEdit(engine, sel.id)) {
         const wp = worldPos(root, sel.id);
         if (wp) {
-          const dots = widthProfileStations(sel.path, sel.closed, sel.strokeWidthProfile);
-          if (dots.length) {
+          const prof = normalizeWidthProfile(sel.strokeWidthProfile);
+          const dots = widthProfileStations(sel.path, sel.closed, prof);
+          if (dots.length || widthHover || widthSel.length) {
             ctx.save();
+            ctx.font = "11px sans-serif";
             for (const d of dots) {
               ctx.beginPath();
               ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 3.5, 0, Math.PI * 2);
@@ -3568,10 +3821,58 @@ export function Canvas({
               ctx.strokeStyle = SEL;
               ctx.stroke();
             }
+            // Selected points stand out and show the width they produce.
+            for (const i of widthSel) {
+              const d = dots[i];
+              if (!d) continue;
+              ctx.beginPath();
+              ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 6, 0, Math.PI * 2);
+              ctx.lineWidth = 2;
+              ctx.strokeStyle = SEL;
+              ctx.stroke();
+              ctx.fillStyle = INK;
+              ctx.fillText(
+                `${Math.round((sel.strokeWidth || 1) * (prof[i]?.widthMultiplier ?? 1))}px`,
+                snap.panX + (wp.x + d.x) * z + 9,
+                snap.panY + (wp.y + d.y) * z - 7,
+              );
+            }
+            // The pink preview follows the pointer along the stroke.
+            if (widthHover && widthHover.id === sel.id) {
+              const hx = snap.panX + (wp.x + widthHover.x) * z;
+              const hy = snap.panY + (wp.y + widthHover.y) * z;
+              ctx.beginPath();
+              ctx.arc(hx, hy, widthHover.onPoint != null ? 7 : 5, 0, Math.PI * 2);
+              if (widthHover.onPoint != null) {
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = GUIDE;
+                ctx.stroke();
+              } else {
+                ctx.fillStyle = GUIDE;
+                ctx.fill();
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = INK;
+                ctx.stroke();
+              }
+            }
             ctx.restore();
           }
         }
       }
+    }
+
+    // Run 22: the vector-cut preview — a dashed blade line from the press
+    // to the pointer while the cut drags.
+    if (cutLine) {
+      ctx.save();
+      ctx.strokeStyle = SEL;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(snap.panX + cutLine.x1 * z, snap.panY + cutLine.y1 * z);
+      ctx.lineTo(snap.panX + cutLine.x2 * z, snap.panY + cutLine.y2 * z);
+      ctx.stroke();
+      ctx.restore();
     }
 
     if (vecEdit) {
@@ -4001,7 +4302,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision, cutLine, widthSel, widthHover]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -4378,7 +4679,11 @@ export function Canvas({
       if (wp && cn && cn.visible && (cn.imageCrop || dims)) {
         const zc = snap.zoom;
         const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, cn);
-        const hs = cropHandleRects({ x: wp.x, y: wp.y, w: cn.w, h: cn.h }, 10 / zc);
+        // Handles are hit-tested in the layer's LOCAL space: `local` is
+        // rotation/unflip-corrected layer-local, so the rects must not carry
+        // the world offset (world rects never met local coords for a layer
+        // anywhere but the origin — every handle press fell through to a pan).
+        const hs = cropHandleRects({ x: 0, y: 0, w: cn.w, h: cn.h }, 10 / zc);
         const hitH = hs.find(
           (h) => local.x >= h.x && local.x <= h.x + 10 / zc && local.y >= h.y && local.y <= h.y + 10 / zc,
         );
@@ -4402,8 +4707,9 @@ export function Canvas({
           return;
         }
       }
-      // Outside the crop window: apply and let the click through.
-      setCropId(null);
+      // Outside the crop window: apply and let the click through — ending the
+      // session first so the click's own gesture cannot nest inside it.
+      applyCrop();
     }
     // Editing one text layer and pressing on another starts editing that one
     // instead: the blur still to come commits the old copy (re-hug
@@ -4546,6 +4852,63 @@ export function Canvas({
         }
       }
     }
+    // Run 23 — a press on a width point of the selected stroke claims the
+    // pointer (⇧ toggles the point instead of dragging); a press anywhere
+    // else along an eligible stroke — but only while the pink preview is
+    // showing — arms a width-point add that fires on a clean click, so a
+    // drag still moves the layer as before.
+    if (snap.tool === "select" && !vecEdit && e.button === 0 && snap.selection.length === 1) {
+      const wid = snap.selection[0];
+      const wn = worldPos(root, wid);
+      if (wn) {
+        const lx = wpt.x - wn.x;
+        const ly = wpt.y - wn.y;
+        const proj = projectToPath(wn.node.path, wn.node.closed, lx, ly);
+        const tol = Math.max(6, (wn.node.strokeWidth || 1) / 2 + 4) / snap.zoom;
+        if (proj && proj.dist <= tol) {
+          if (!(widthEditOk(wn.node) && allowTopologyEdit(engine, wid))) {
+            // Dashed, branched, patterned, brush… — say why, then carry on:
+            // the layer must still move under the press.
+            const reason = variableWidthBlockReason(wn.node);
+            if (reason) toast(reason);
+          } else {
+            const stations = widthProfileStations(wn.node.path, wn.node.closed, normalizeWidthProfile(wn.node.strokeWidthProfile));
+            let wi = -1;
+            let bd = 7 / snap.zoom;
+            for (let i = 0; i < stations.length; i++) {
+              const dd = Math.hypot(lx - stations[i].x, ly - stations[i].y);
+              if (dd < bd) {
+                bd = dd;
+                wi = i;
+              }
+            }
+            if (wi >= 0) {
+              if (e.shiftKey) {
+                setWidthSel((prev) => (prev.includes(wi) ? prev.filter((k) => k !== wi) : [...prev, wi]));
+              } else {
+                const wSelNow = widthSel.length > 1 && widthSel.includes(wi) ? [...widthSel] : [wi];
+                setWidthSel(wSelNow);
+                engine.dispatch({ type: "begin" });
+                drag.current = {
+                  mode: "widthPt",
+                  sx: e.clientX,
+                  sy: e.clientY,
+                  wx: wpt.x,
+                  wy: wpt.y,
+                  id: wid,
+                  wOrig: normalizeWidthProfile(wn.node.strokeWidthProfile),
+                  wSel: wSelNow,
+                };
+              }
+              return;
+            }
+            if (widthHover && widthHover.id === wid) {
+              pendingWidth.current = { sx: e.clientX, sy: e.clientY, id: wid, t: widthHover.t, x: widthHover.x, y: widthHover.y };
+            }
+          }
+        }
+      }
+    }
     if (snap.selection.length === 1) {
       const wp = worldPos(root, snap.selection[0]);
       if (wp) {
@@ -4656,6 +5019,33 @@ export function Canvas({
             engine.dispatch({ type: "begin" });
             drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "h", gindex: gt.index };
             return;
+          }
+          // Radial focal ring: checked after the endpoints, so the filled
+          // centre dot (r8) still wins while the two coincide — the ring's
+          // outer reach (13px) is what separates them on first contact.
+          if (gt.type === "radial") {
+            const fx = sx + gt.fx * wp.node.w * z;
+            const fy = sy + gt.fy * wp.node.h * z;
+            if (Math.hypot(px - fx, py - fy) <= 13) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "grad", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, handle: "f", gindex: gt.index };
+              return;
+            }
+          }
+          // Midpoint handles: the small squares between adjacent stops.
+          for (let i = 0; i < gt.stops.length - 1; i++) {
+            const p0 = gt.stops[i].position;
+            const p1 = gt.stops[i + 1].position;
+            const span = p1 - p0;
+            if (span <= 1e-4) continue;
+            const m = Math.max(0, Math.min(1, gt.mids?.[i] ?? 0.5));
+            const x = ax + (bx - ax) * (p0 + span * m);
+            const y = ay + (by - ay) * (p0 + span * m);
+            if (Math.hypot(px - x, py - y) < 6) {
+              engine.dispatch({ type: "begin" });
+              drag.current = { mode: "gradMid", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, gradMid: i, gindex: gt.index };
+              return;
+            }
           }
         }
         if (wp.node.kind === "star") {
@@ -4809,6 +5199,16 @@ export function Canvas({
         }
         if (vecEdit === wp.node.id) {
           const pts = wp.node.path.length ? wp.node.path : shapePoly(wp.node);
+          // Run 22: in cut mode every press on the edited path starts the
+          // blade — the release decides between a click split (point /
+          // segment) and a drag-across cut. Nothing else in the edit loop
+          // may claim the press first: the point handles and the segment
+          // insert are exactly what the cut replaces.
+          if (vecSubTool === "cut") {
+            setCutLine({ x1: wpt.x, y1: wpt.y, x2: wpt.x, y2: wpt.y });
+            drag.current = { mode: "vecCut", id: wp.node.id, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y };
+            return;
+          }
           for (let i = 0; i < pts.length; i++) {
             const p = pts[i];
             const vx = snap.panX + (wp.x + p.x) * z;
@@ -5193,6 +5593,28 @@ export function Canvas({
         : canvasClickTarget(snap.pages[snap.page].root, wpt.x, wpt.y, snap.selection);
       const id = hit && !snap.selection.includes(hit.id) ? hit.id : "";
       if (id !== hoverId) setHoverId(id);
+      // Run 23 — variable-width hover: project the pointer onto the selected
+      // stroke and show where a click would add a width point (a ring lands
+      // on an existing one). Re-projected every move so it tracks the line.
+      const selW = snap.selection.length === 1 ? worldPos(snap.pages[snap.page].root, snap.selection[0]) : null;
+      if (selW && widthEditOk(selW.node) && allowTopologyEdit(engine, selW.node.id)) {
+        const projW = projectToPath(selW.node.path, selW.node.closed, wpt.x - selW.x, wpt.y - selW.y);
+        const tolW = Math.max(6, (selW.node.strokeWidth || 1) / 2 + 4) / snap.zoom;
+        if (projW && projW.dist <= tolW) {
+          const stations = widthProfileStations(selW.node.path, selW.node.closed, normalizeWidthProfile(selW.node.strokeWidthProfile));
+          let wiW: number | null = null;
+          let bdW = 7 / snap.zoom;
+          for (let i = 0; i < stations.length; i++) {
+            const dd = Math.hypot(wpt.x - (selW.x + stations[i].x), wpt.y - (selW.y + stations[i].y));
+            if (dd < bdW) {
+              bdW = dd;
+              wiW = i;
+            }
+          }
+          if (!widthHover || widthHover.id !== selW.node.id || widthHover.t !== projW.t || widthHover.onPoint !== wiW)
+            setWidthHover({ id: selW.node.id, t: projW.t, x: projW.x, y: projW.y, onPoint: wiW });
+        } else if (widthHover) setWidthHover(null);
+      } else if (widthHover) setWidthHover(null);
       // Mirror the mousedown hit-test so the cursor advertises what a press
       // would actually do: resize on a handle, rotate on the rotation target,
       // move over the selection itself.
@@ -5254,8 +5676,23 @@ export function Canvas({
                 stop.position < 0.999 &&
                 Math.hypot(hx - (ax + (bx - ax) * stop.position), hy - (ay + (by - ay) * stop.position)) < 9,
               );
+              const onAxis =
+                Math.hypot(hx - ax, hy - ay) < 8 ||
+                Math.hypot(hx - bx, hy - by) < 8 ||
+                (gt.type === "radial" &&
+                  Math.hypot(hx - (sx0 + gt.fx * bb.node.w * z), hy - (sy0 + gt.fy * bb.node.h * z)) <= 13);
+              const onMid = gt.stops.some((stop, i) => {
+                const other = gt.stops[i + 1];
+                if (!other) return false;
+                const span = other.position - stop.position;
+                if (span <= 1e-4) return false;
+                const m = Math.max(0, Math.min(1, gt.mids?.[i] ?? 0.5));
+                const pos = stop.position + span * m;
+                return Math.hypot(hx - (ax + (bx - ax) * pos), hy - (ay + (by - ay) * pos)) < 6;
+              });
               if (onStop) next = "grab";
-              else if (Math.hypot(hx - ax, hy - ay) < 8 || Math.hypot(hx - bx, hy - by) < 8) next = "crosshair";
+              else if (onAxis) next = "crosshair";
+              else if (onMid) next = "grab";
             }
           }
           if (!next && bb?.node.layout) {
@@ -5535,7 +5972,10 @@ export function Canvas({
           id: d.id,
           patch: {
             imageCrop: dragCropHandle(start, d.cropHandle, u, v, {
-              lockAspect: !e.ctrlKey && !e.metaKey,
+              // Aspect is kept by default (Figma: "aspect ratio is maintained
+              // by default when cropping"); ⇧ forces the lock — even over
+              // ⌘/⌃ — and ⌘/⌃ alone frees it. ⌥ mirrors about the centre.
+              lockAspect: e.shiftKey || (!e.ctrlKey && !e.metaKey),
               symmetric: e.altKey,
             }),
           },
@@ -5631,7 +6071,7 @@ export function Canvas({
         // ⌘/Ctrl-drag resizes past the children's constraints.
         ignoreConstraints: e.metaKey || e.ctrlKey,
       });
-    } else if ((d.mode === "grad" || d.mode === "gradStop") && d.id) {
+    } else if ((d.mode === "grad" || d.mode === "gradStop" || d.mode === "gradMid") && d.id) {
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp) {
@@ -5647,7 +6087,29 @@ export function Canvas({
         // its geometry directly rather than accidentally editing a new top
         // paint.
         if (!gt || gt.index !== gi) return;
-        if (d.mode === "gradStop") {
+        if (d.mode === "gradMid") {
+          // The midpoint handle slides the 50/50 blend of its own stop pair
+          // along their span; the pair itself never moves.
+          const i = d.gradMid;
+          if (i == null) return;
+          const a = gt.stops[i];
+          const b = gt.stops[i + 1];
+          if (!a || !b) return;
+          const span = b.position - a.position;
+          if (span <= 1e-4) return;
+          const unclamped = gradientAxisPosition(raw, gt, wp.node, snap.zoom);
+          const m = Math.max(0.05, Math.min(0.95, (unclamped - a.position) / span));
+          const midpoints = Array.from({ length: gt.stops.length - 1 }, (_, k) => (k === i ? m : gt.mids?.[k] ?? 0.5));
+          if (gi < 0) {
+            engine.dispatch({ type: "patch", id: d.id, patch: { gradientMidpoints: midpoints } });
+          } else {
+            const fills = [...(wp.node.fills ?? [])];
+            const p = fills[gi];
+            if (!p) return;
+            fills[gi] = { ...p, midpoints };
+            engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
+          }
+        } else if (d.mode === "gradStop") {
           const index = d.gradStop;
           if (index == null || !gt.stops[index]) return;
           const unclamped = gradientAxisPosition(raw, gt, wp.node, snap.zoom);
@@ -5672,10 +6134,13 @@ export function Canvas({
             engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
           }
         } else {
+          // The focal ring (`f`) pivots around the centre, so an unsnapped
+          // shift-constrain rotates the ray centre → focal cleanly.
           const fixed = d.handle === "g" ? { x: gt.hx, y: gt.hy } : { x: gt.gx, y: gt.gy };
           const point = snappedGradientEndpoint(raw, fixed, wp.node, snap.zoom, e.shiftKey);
           if (gi < 0) {
             if (d.handle === "g") engine.dispatch({ type: "patch", id: d.id, patch: { fillGX: point.x, fillGY: point.y } });
+            else if (d.handle === "f") engine.dispatch({ type: "patch", id: d.id, patch: { fillFX: point.x, fillFY: point.y } });
             else engine.dispatch({ type: "patch", id: d.id, patch: { fillHX: point.x, fillHY: point.y } });
           } else {
             // The handles grabbed a stacked fill: write its own geometry. The
@@ -5687,7 +6152,9 @@ export function Canvas({
             fills[gi] =
               d.handle === "g"
                 ? { ...p, gx: point.x, gy: point.y, hx: p.hx ?? wp.node.fillHX ?? 0.5, hy: p.hy ?? wp.node.fillHY ?? 1 }
-                : { ...p, hx: point.x, hy: point.y, gx: p.gx ?? wp.node.fillGX ?? 0.5, gy: p.gy ?? wp.node.fillGY ?? 0 };
+                : d.handle === "f"
+                  ? { ...p, fx: point.x, fy: point.y, gx: p.gx ?? wp.node.fillGX ?? 0.5, gy: p.gy ?? wp.node.fillGY ?? 0 }
+                  : { ...p, hx: point.x, hy: point.y, gx: p.gx ?? wp.node.fillGX ?? 0.5, gy: p.gy ?? wp.node.fillGY ?? 0 };
             engine.dispatch({ type: "patch", id: d.id, patch: { fills } });
           }
         }
@@ -5698,6 +6165,28 @@ export function Canvas({
       engine.dispatch({ type: "patchVectorNetwork", id: d.id, preserveBounds: true,
         network: resizePointNetwork(root, d.id, d.origNetwork, d.networkIndices, d.bounds, d.corner,
           p.x - d.wx, p.y - d.wy, e.shiftKey, e.altKey) });
+    } else if (d.mode === "widthPt") {
+      // Run 23 — the pull maps onto each selected point's stroke normal:
+      // across the line thickens, along it slides. Positions never move.
+      const wpt = toWorld(e.clientX, e.clientY);
+      const wRoot = snap.pages[snap.page].root;
+      const wn = d.id ? worldPos(wRoot, d.id) : null;
+      if (wn && d.wOrig && d.wSel && widthEditOk(wn.node) && allowTopologyEdit(engine, d.id!)) {
+        const dx = wpt.x - d.wx;
+        const dy = wpt.y - d.wy;
+        const half = Math.max(1, (wn.node.strokeWidth || 1) / 2);
+        const next = d.wOrig.map((q) => ({ ...q }));
+        for (const i of d.wSel) {
+          const st = widthStationAt(wn.node.path, wn.node.closed, next[i].position);
+          if (!st) continue;
+          const dm = (-st.ty * dx + st.tx * dy) / half;
+          next[i].widthMultiplier = Math.min(MAX_WIDTH_MULTIPLIER, Math.max(0, next[i].widthMultiplier + dm));
+        }
+        engine.dispatch({ type: "patch", id: d.id, patch: { strokeWidthProfile: next } });
+      }
+    } else if (d.mode === "vecCut") {
+      const wpt = toWorld(e.clientX, e.clientY);
+      setCutLine({ x1: d.wx, y1: d.wy, x2: wpt.x, y2: wpt.y });
     } else if (d.mode === "vec" && d.id != null && d.point != null) {
       const wpt = toWorld(e.clientX, e.clientY);
       const loc = worldPos(snap.pages[snap.page].root, d.id);
@@ -6079,7 +6568,91 @@ export function Canvas({
     setBand(null);
     setGuides([]);
     setGapBadges([]);
+    // Run 23 — a clean click on the stroke (armed at press, pink preview
+    // showing) adds a width point where the pointer landed. Anything that
+    // moved drops it: the layer still drags from the line as before.
+    if (pendingWidth.current) {
+      const p = pendingWidth.current;
+      pendingWidth.current = null;
+      const moved = Math.hypot(e.clientX - p.sx, e.clientY - p.sy);
+      const pLoc = worldPos(snap.pages[snap.page].root, p.id);
+      if (
+        moved < 4 &&
+        snap.selection[0] === p.id &&
+        pLoc &&
+        widthEditOk(pLoc.node) &&
+        allowTopologyEdit(engine, p.id)
+      ) {
+        const prof = normalizeWidthProfile(pLoc.node.strokeWidthProfile);
+        const add = { position: p.t, widthMultiplier: sampleVariableWidth(prof, p.t) };
+        const next = normalizeWidthProfile([...prof, add]);
+        engine.dispatch({ type: "begin" });
+        engine.dispatch({ type: "patch", id: p.id, patch: { strokeWidthProfile: next } });
+        engine.dispatch({ type: "end" });
+        const ai = next.findIndex((q) => Math.abs(q.position - p.t) < 1e-9);
+        setWidthSel([ai >= 0 ? ai : next.length - 1]);
+        // With a move group still open the begin nests into it and the
+        // gesture's own `end` settles add+move as ONE undo entry.
+      }
+    }
     if (!d) return;
+    if (d.mode === "vecCut") {
+      setCutLine(null);
+      const cutRoot = snap.pages[snap.page].root;
+      const loc = d.id ? worldPos(cutRoot, d.id) : null;
+      if (!d.id || !loc || !allowTopologyEdit(engine, d.id)) return;
+      const n = loc.node;
+      const pts = n.path.length ? n.path : shapePoly(n);
+      if (pts.length < 2) return;
+      const closed = effClosed(n);
+      const ls = nodeLocalPoint(d.wx, d.wy, loc.x, loc.y, n);
+      const we = toWorld(e.clientX, e.clientY);
+      const le = nodeLocalPoint(we.x, we.y, loc.x, loc.y, n);
+      const isDrag = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) >= 4;
+      let runs: PathPoint[][] | null = null;
+      if (!isDrag) {
+        // Click: split at the pressed vertex, else insert an anchor on the
+        // pressed segment and split there — one point, two paths.
+        let vi = -1;
+        for (let i = 0; i < pts.length; i++) {
+          if (Math.hypot(ls.x - pts[i].x, ls.y - pts[i].y) < 8 / snap.zoom) {
+            vi = i;
+            break;
+          }
+        }
+        if (vi >= 0) {
+          runs = splitPathAtPoint(pts, closed, vi);
+        } else {
+          const res = insertPointOnPath(pts, ls.x, ls.y, closed, 10 / snap.zoom);
+          if (res) runs = splitPathAtPoint(res.newPath, closed, res.insertedIndex);
+        }
+      } else {
+        // Drag: the blade line severs every segment it crosses; the runs
+        // after the first each become their own vector object.
+        runs = cutPathWithLine(pts, closed, ls.x, ls.y, le.x, le.y);
+      }
+      if (!runs) {
+        toast("Nothing to cut");
+        return;
+      }
+      // One begin/end pair: the patches and the layers the cut spawns land as
+      // a single undo step.
+      engine.dispatch({ type: "begin" });
+      engine.dispatch({ type: "patchPath", id: n.id, path: runs[0], closed: false });
+      for (const extra of runs.slice(1)) {
+        engine.dispatch({
+          type: "addPath",
+          points: extra.map((p) => ({ ...p, x: p.x + loc.x, y: p.y + loc.y })),
+          closed: false,
+        });
+      }
+      // addPath re-selects the piece it just made; the edit session belongs
+      // to the original node, and a selection without the edited id would
+      // silently leave point edit — so selection returns to it.
+      engine.dispatch({ type: "select", ids: [n.id] });
+      engine.dispatch({ type: "end" });
+      return;
+    }
     if (d.mode === "protoConnect" && d.id) {
       if (protoDrag?.targetId) {
         const root = snap.pages[snap.page].root;
@@ -6168,6 +6741,7 @@ export function Canvas({
       d.mode === "vecResize" ||
       d.mode === "grad" ||
       d.mode === "gradStop" ||
+      d.mode === "gradMid" ||
       d.mode === "multiResize" ||
       d.mode === "multiRotate" ||
       d.mode === "rotOrigin" ||
@@ -6176,6 +6750,7 @@ export function Canvas({
       d.mode === "autoGap" ||
       d.mode === "smartGap" ||
       d.mode === "arc" ||
+      d.mode === "widthPt" ||
       d.mode === "crop" ||
       d.mode === "cropMove" ||
       (d.mode === "marquee" && d.id === "erase")
@@ -6569,6 +7144,64 @@ export function Canvas({
       return;
     }
     const wpt = toWorld(e.clientX, e.clientY);
+    /* On-canvas ramp insert: a double-click ON the gradient axis adds a stop
+     * there in the colour the ramp actually shows (the same OKLab mix the
+     * inspector's bar uses). It outranks the edge-sizing double-click the way
+     * the gradient press outranks resize handles in onDown. */
+    if (snap.tool === "select" && snap.selection.length === 1) {
+      const root0 = snap.pages[snap.page].root;
+      const gid = snap.selection[0];
+      const gp = worldPos(root0, gid);
+      const gtl = gp && !isEffectivelyLocked(root0, gid) ? gradTarget(gp.node) : null;
+      if (gp && gtl) {
+        const z = snap.zoom;
+        const nb = nodeVisualBounds(gp);
+        const sx0 = snap.panX + nb.x * z;
+        const sy0 = snap.panY + nb.y * z;
+        const ax = sx0 + gtl.gx * nb.w * z;
+        const ay = sy0 + gtl.gy * nb.h * z;
+        const bx = sx0 + gtl.hx * nb.w * z;
+        const by = sy0 + gtl.hy * nb.h * z;
+        const px = wpt.x * z + snap.panX;
+        const py = wpt.y * z + snap.panY;
+        const vx = bx - ax;
+        const vy = by - ay;
+        const len2 = vx * vx + vy * vy;
+        if (len2 > 4) {
+          let t = ((px - ax) * vx + (py - ay) * vy) / len2;
+          t = Math.max(0, Math.min(1, t));
+          const dist = Math.hypot(px - (ax + vx * t), py - (ay + vy * t));
+          const pos = t;
+          if (dist < 8 && pos > 0.001 && pos < 0.999 && !gtl.stops.some((s) => Math.abs(s.position - pos) < 0.012)) {
+            const stops0 = gtl.stops;
+            let after = stops0.findIndex((s) => s.position > pos);
+            if (after < 0) after = stops0.length;
+            const lo = stops0[Math.max(0, after - 1)];
+            const hi = stops0[Math.min(after, stops0.length - 1)];
+            const span = hi.position - lo.position;
+            const fresh = { color: mixHex(lo.color, hi.color, span > 0 ? (pos - lo.position) / span : 0), position: pos };
+            const sorted = [...stops0, fresh].sort((a, b) => a.position - b.position);
+            const patch: Partial<XNode> = {
+              gradientStops: sorted,
+              fill: sorted[0].color,
+              fillB: sorted[sorted.length - 1].color,
+            };
+            if (gtl.mids) {
+              // Splitting the pair the new stop lands inside keeps both
+              // halves even; pairs outside it — including a prepend or an
+              // append — keep their authored midpoints.
+              const mids0 = [...gtl.mids];
+              if (after <= 0) mids0.unshift(0.5);
+              else if (after >= stops0.length) mids0.push(0.5);
+              else mids0.splice(after - 1, 1, 0.5, 0.5);
+              patch.gradientMidpoints = mids0;
+            }
+            engine.dispatch({ type: "patch", id: gid, patch });
+            return;
+          }
+        }
+      }
+    }
     /* Double-clicking a bounding-box edge sets that axis's resizing, as the
      * guide's "From the canvas" table has it: hug contents on its own, or Fill
      * container with ⌥. This runs before the deep-select below, because the
@@ -7398,6 +8031,48 @@ export function Canvas({
       onContextMenu={(e) => {
         e.preventDefault();
         const wpt = toWorld(e.clientX, e.clientY);
+        /* Right-click on a visible stop dot deletes that stop (the ramp keeps
+         * at least two). The menu does not open — the click WAS the action. */
+        if (snap.tool === "select" && snap.selection.length === 1) {
+          const root0 = snap.pages[snap.page].root;
+          const gid = snap.selection[0];
+          const gp = worldPos(root0, gid);
+          const gtl = gp && !isEffectivelyLocked(root0, gid) ? gradTarget(gp.node) : null;
+          if (gp && gtl && gtl.stops.length > 2) {
+            const z = snap.zoom;
+            const nb = nodeVisualBounds(gp);
+            const sx0 = snap.panX + nb.x * z;
+            const sy0 = snap.panY + nb.y * z;
+            const ax = sx0 + gtl.gx * nb.w * z;
+            const ay = sy0 + gtl.gy * nb.h * z;
+            const bx = sx0 + gtl.hx * nb.w * z;
+            const by = sy0 + gtl.hy * nb.h * z;
+            const px = wpt.x * z + snap.panX;
+            const py = wpt.y * z + snap.panY;
+            let victim = -1;
+            for (let i = 0; i < gtl.stops.length; i++) {
+              const s = gtl.stops[i];
+              if (s.position <= 0.001 || s.position >= 0.999) continue;
+              const x = ax + (bx - ax) * s.position;
+              const y = ay + (by - ay) * s.position;
+              if (Math.hypot(px - x, py - y) < 9) {
+                victim = i;
+                break;
+              }
+            }
+            if (victim >= 0) {
+              const sorted = gtl.stops.filter((_, k) => k !== victim);
+              const patch: Partial<XNode> = {
+                gradientStops: sorted,
+                fill: sorted[0].color,
+                fillB: sorted[sorted.length - 1].color,
+              };
+              if (gtl.mids) patch.gradientMidpoints = gtl.mids.filter((_, k) => k !== victim);
+              engine.dispatch({ type: "patch", id: gid, patch });
+              return;
+            }
+          }
+        }
         const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y);
         if (hit && !snap.selection.includes(hit.id)) {
           engine.dispatch({ type: "select", ids: [hit.id] });
@@ -8077,6 +8752,18 @@ export function Canvas({
           >
             <Icon name="shape-builder" size={14} />
             <span>Shape Builder</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "cut" ? "on" : ""}`}
+            onClick={() => {
+              setVecSubTool((t) => (t === "cut" ? "select" : "cut"));
+              toast(vecSubTool === "cut" ? "Select mode" : "Cut tool active: click a point or segment, or drag across the path");
+            }}
+            title="Cut tool (X)"
+            aria-label="Cut tool"
+          >
+            <Icon name="scissors" size={14} />
+            <span>Cut</span>
           </button>
           <button
             className="tool-btn"

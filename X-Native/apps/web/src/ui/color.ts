@@ -1,4 +1,4 @@
-export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern";
+export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern" | "brush" | "dynamic";
 export type ColorModel = "hex" | "rgb" | "css" | "hsl" | "hsb";
 export type ImageFit = "fill" | "fit" | "crop" | "tile";
 
@@ -10,6 +10,10 @@ export const FILL_TYPES: { id: FillType; label: string }[] = [
   { id: "diamond", label: "Diamond" },
   { id: "image", label: "Image" },
   { id: "pattern", label: "Pattern" },
+  // Stroke-only types (the picker filters them out of fills): a bristled
+  // brush stroke and a procedural wiggle, both centre-only.
+  { id: "brush", label: "Brush" },
+  { id: "dynamic", label: "Dynamic" },
 ];
 
 export const COLOR_MODELS: { id: ColorModel; label: string }[] = [
