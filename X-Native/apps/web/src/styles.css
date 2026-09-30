@@ -781,21 +781,39 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   from { opacity: .92; }
   to { opacity: 0; }
 }
-.text-edit {
+/* The editor's frame: the layer's box, and the focus ring. The textarea inside
+   carries the row correction that keeps its glyphs on the line the Canvas
+   painter draws, so the ring has to be a separate, unmoved element. */
+.text-edit-frame {
   position: absolute;
   margin: 0;
   padding: 0;
   /* An inset border moved the glyph origin 1.5px when Canvas text was
      replaced by the editor. Draw the focus ring outside the content box. */
   border: 0;
-  background: transparent;
+  box-sizing: border-box;
   outline: 1.5px solid var(--blue);
+  /* Only the textarea is an input surface; the frame must never swallow the
+     click that commits an edit. */
+  pointer-events: none;
+}
+
+.text-edit {
+  position: absolute;
+  left: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   resize: none;
   overflow: hidden;
   caret-color: var(--blue);
   white-space: pre-wrap;
   word-break: break-word;
   box-sizing: border-box;
+  /* The frame paints the ring; the textarea stays the click target. */
+  outline: none;
+  pointer-events: auto;
 }
 
 /* RW-U1: the dock hangs inside `.canvas-col`, which is narrower than the window

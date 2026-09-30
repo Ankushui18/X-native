@@ -97,7 +97,7 @@ import {
   directionOf,
 } from "../engine/textInput";
 import { smartSymbolsEnabled } from "./smartSymbols";
-import { applyTextCase, canvasTextFont, effectiveLineHeight, fitLineCount, hugSize, indentOf, invalidateTextMeasureCache, listCounters, listGutter, listLayout, listLevelOf, measureCached, paraListStyle, paraWrapOf, textMetrics, valignApplies, wrapLines } from "./textLayout";
+import { applyTextCase, canvasTextFont, effectiveLineHeight, firstRowInset, fitLineCount, fontMetricRatios, hugHeight, hugSize, indentOf, invalidateTextMeasureCache, listCounters, listGutter, listLayout, listLevelOf, measureCached, overlayRowShift, paraListStyle, paraWrapOf, textMetrics, valignApplies, wrapLines } from "./textLayout";
 import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import type { ImportedNode } from "../engine/svgImport";
@@ -4434,7 +4434,7 @@ export function Canvas({
 
   const onDown = (e: React.MouseEvent) => {
     if (dropHint) setDropHint(null);
-    if (edit && (e.target as HTMLElement).closest(".text-edit")) return;
+    if (edit && (e.target as HTMLElement).closest(".text-edit, .text-edit-frame")) return;
     if (e.button === 2) return;
     // Frame quick-add badges, painted beside the hover outline. Left badge
     // places the new frame to the left, right badge to the right; ⌥ makes
@@ -7990,54 +7990,101 @@ export function Canvas({
     if (!edit) return null;
     const wp = worldPos(snap.pages[snap.page].root, edit.id);
     if (!wp) return null;
+    const node = wp.node;
     const measure = ref.current?.getContext("2d");
-    let textW = wp.node.w;
-    let textH = wp.node.h;
-    if (measure && (wp.node.sizingW === "hug" || wp.node.sizingH === "hug")) {
-      const m = textMetrics(measure, { ...wp.node, text: edit.text, textRuns: spansAfterTextEdit(wp.node, edit.text) }, edit.text);
-      textW = Math.max(wp.node.w, m.maxW + 4);
-      textH = Math.max(wp.node.h, m.lines * (wp.node.lineHeight || wp.node.fontSize * 1.2));
+    // The same leading the painter uses, floor included: a live editor whose
+    // rows advance differently would drift a little more with every line.
+    const lh = Math.max(1, effectiveLineHeight(node) * snap.zoom);
+    let textW = node.w;
+    let textH = node.h;
+    if (measure && (node.sizingW === "hug" || node.sizingH === "hug")) {
+      const m = textMetrics(measure, { ...node, text: edit.text, textRuns: spansAfterTextEdit(node, edit.text) }, edit.text);
+      // `hugHeight` is what the commit applies (`hugSize`), so the box does not
+      // resize on blur either.
+      textW = Math.max(node.w, Math.ceil(m.maxW + 4));
+      textH = Math.max(node.h, hugHeight(m.lines, m.gaps, effectiveLineHeight(node), node.paragraphSpacing || 0, m.extra ?? 0));
     }
-    const gutter = listGutter(measure ?? null, wp.node);
+    const gutter = listGutter(measure ?? null, node);
+    const boxW = textW * snap.zoom;
+    const boxH = textH * snap.zoom;
+    // A textarea hangs its first row off the CSS line box; the painter hangs it
+    // off the canvas "top" baseline, `firstRowInset` below the layer's top. The
+    // two anchors are genuinely different (Blink's "top" is the em box, not the
+    // line box's ascent), so the live text used to jump on entry and back on
+    // commit. Offset the text inside the frame by the measured difference; the
+    // frame itself stays on the layer's box.
+    let contentTop = 0;
+    if (measure) {
+      const ratios = fontMetricRatios(measure, node);
+      if (ratios) {
+        let inset = 0;
+        if (valignApplies(node) || node.verticalTrim) {
+          const m = textMetrics(measure, { ...node, text: edit.text, textRuns: spansAfterTextEdit(node, edit.text) }, edit.text);
+          const blockH = m.lines * lh + (m.gaps * (node.paragraphSpacing || 0) + m.extra) * snap.zoom;
+          inset = firstRowInset(node, boxH, blockH, node.fontSize, snap.zoom);
+        }
+        contentTop = overlayRowShift(ratios, node.fontSize * snap.zoom, lh, inset);
+      }
+    }
+    const boxLeft = snap.panX + wp.x * snap.zoom;
+    const boxTop = snap.panY + wp.y * snap.zoom;
     return {
-      left: snap.panX + wp.x * snap.zoom,
-      top: snap.panY + wp.y * snap.zoom,
-      width: textW * snap.zoom,
-      height: textH * snap.zoom,
-      fontSize: wp.node.fontSize * snap.zoom,
-      fontWeight: wp.node.fontWeight,
-      lineHeight: `${effectiveLineHeight(wp.node) * snap.zoom}px`,
-      letterSpacing: `${wp.node.letterSpacing * snap.zoom}px`,
-      textAlign: wp.node.textAlign === "justified" ? "left" : wp.node.textAlign,
-      color: wp.node.fill,
-      // Font fallback (360040449673): unsupported characters render in Noto.
-      fontFamily: fontFamilyStack(wp.node.fontFamily),
-      // Numbers (360039956634 §Numbers): the browser applies the same font
-      // features to the live editor that SVG export and Dev Mode emit.
-      fontVariantNumeric: [
-        wp.node.slashedZero ? "slashed-zero" : "",
-        wp.node.fractions ? "diagonal-fractions" : "",
-        wp.node.figureStyle === "proportional-oldstyle" ? "oldstyle-nums proportional-nums"
-          : wp.node.figureStyle === "monospace-lining" ? "lining-nums tabular-nums"
-          : wp.node.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
-          : wp.node.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
-      ].filter(Boolean).join(" ") || undefined,
-      // OpenType features & variable axes (4913951097367 / 5579502031511):
-      // the live editor uses the same font settings the exports emit.
-      fontFeatureSettings: wp.node.fontFeatures && Object.keys(wp.node.fontFeatures).length
-        ? Object.entries(wp.node.fontFeatures).map(([k, v]) => `"${k}" ${v}`).join(", ")
-        : undefined,
-      fontVariationSettings: wp.node.fontVariations && Object.keys(wp.node.fontVariations).length
-        ? Object.entries(wp.node.fontVariations).map(([k, v]) => `"${k}" ${v}`).join(", ")
-        : undefined,
-      transform: wp.node.rotation ? `rotate(${wp.node.rotation}deg)` : undefined,
-      transformOrigin: "center center",
-      // The overlay is a real textarea, so the wrap style is handed to the
-      // browser's own text-wrap - the standard editor rule.
-      ...((wp.node.textWrap === "balance" || wp.node.textWrap === "pretty") ? { textWrap: wp.node.textWrap } : {}),
-      ...(indentOf(wp.node) ? { textIndent: `${indentOf(wp.node) * snap.zoom}px` } : {}),
-      ...(gutter ? { paddingLeft: Math.round(gutter * snap.zoom) } : {}),
-    } as CSSProperties;
+      // Canvas-wrap coordinates for the popups that hang off the editor.
+      left: boxLeft,
+      top: boxTop,
+      frame: {
+        left: boxLeft,
+        top: boxTop,
+        width: boxW,
+        height: boxH,
+        // The frame turns as one piece: the row correction rides inside it, so a
+        // rotated layer keeps its text on the same painted baseline.
+        transform: node.rotation ? `rotate(${node.rotation}deg)` : undefined,
+        transformOrigin: "center center",
+      } as CSSProperties,
+      text: {
+        // The text box tracks the corrected row: the layer's box plus the
+        // shifted band, so no row is clipped and the wrap width is untouched.
+        // A downward correction rides on padding, which keeps the textarea
+        // covering the frame for clicks; an upward one moves the box itself.
+        top: Math.min(0, contentTop),
+        ...(contentTop > 0 ? { paddingTop: contentTop } : {}),
+        height: boxH + Math.abs(contentTop),
+        left: 0,
+        right: 0,
+        fontSize: node.fontSize * snap.zoom,
+        fontWeight: node.fontWeight,
+        lineHeight: `${lh}px`,
+        letterSpacing: `${node.letterSpacing * snap.zoom}px`,
+        textAlign: node.textAlign === "justified" ? "left" : node.textAlign,
+        color: node.fill,
+        // Font fallback (360040449673): unsupported characters render in Noto.
+        fontFamily: fontFamilyStack(node.fontFamily),
+        // Numbers (360039956634 §Numbers): the browser applies the same font
+        // features to the live editor that SVG export and Dev Mode emit.
+        fontVariantNumeric: [
+          node.slashedZero ? "slashed-zero" : "",
+          node.fractions ? "diagonal-fractions" : "",
+          node.figureStyle === "proportional-oldstyle" ? "oldstyle-nums proportional-nums"
+            : node.figureStyle === "monospace-lining" ? "lining-nums tabular-nums"
+            : node.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
+            : node.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
+        ].filter(Boolean).join(" ") || undefined,
+        // OpenType features & variable axes (4913951097367 / 5579502031511):
+        // the live editor uses the same font settings the exports emit.
+        fontFeatureSettings: node.fontFeatures && Object.keys(node.fontFeatures).length
+          ? Object.entries(node.fontFeatures).map(([k, v]) => `"${k}" ${v}`).join(", ")
+          : undefined,
+        fontVariationSettings: node.fontVariations && Object.keys(node.fontVariations).length
+          ? Object.entries(node.fontVariations).map(([k, v]) => `"${k}" ${v}`).join(", ")
+          : undefined,
+        // The overlay is a real textarea, so the wrap style is handed to the
+        // browser's own text-wrap - the standard editor rule.
+        ...((node.textWrap === "balance" || node.textWrap === "pretty") ? { textWrap: node.textWrap } : {}),
+        ...(indentOf(node) ? { textIndent: `${indentOf(node) * snap.zoom}px` } : {}),
+        ...(gutter ? { paddingLeft: Math.round(gutter * snap.zoom) } : {}),
+      } as CSSProperties,
+    };
   })();
 
   const docRoot = snap.pages[snap.page].root;
@@ -8217,10 +8264,14 @@ export function Canvas({
       )}
       {transition && <div className={`proto-transition ${transition}`} aria-hidden="true" />}
       {edit && editBox && (
+        // The frame is the layer's box (and its focus ring); the textarea inside
+        // carries the row correction that keeps the glyphs on the painted
+        // baseline. See `editBox` for the two anchors.
+        <div className="text-edit-frame" style={editBox.frame}>
         <textarea
           className="text-edit"
           ref={editRef}
-          style={editBox}
+          style={editBox.text}
           value={edit.text}
           autoFocus
           // RTL (4972283635863): "Figma automatically handles text direction
@@ -8269,8 +8320,10 @@ export function Canvas({
             setEmojiPick(
               q
                 ? {
-                    left: parseFloat(e.target.style.left) || 0,
-                    top: (parseFloat(e.target.style.top) || 0) + 26,
+                    // The picker hangs under the frame, not under the textarea's
+                    // shifted text box: those two tops differ by the row shift.
+                    left: editBox.left,
+                    top: editBox.top + 26,
                     start: q.start,
                     query: q.query,
                   }
@@ -8343,8 +8396,9 @@ export function Canvas({
               const en = el.selectionEnd ?? s;
               window.dispatchEvent(new CustomEvent("x-native:link-input", {
                 detail: {
-                  left: parseFloat(el.style.left) || 0,
-                  top: (parseFloat(el.style.top) || 0) - 40,
+                  // The frame's box, not the textarea's shifted text box.
+                  left: editBox.left,
+                  top: editBox.top - 40,
                   id: edit.id,
                   start: s,
                   end: en,
@@ -8458,6 +8512,7 @@ export function Canvas({
             e.stopPropagation();
           }}
         />
+        </div>
       )}
       {frameEdit && (
         <div className="frame-name-edit" style={{ left: frameEdit.x, top: frameEdit.y, position: "absolute" }}>
@@ -9649,14 +9704,9 @@ function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy
   const blockH =
     lines.reduce((h, r) => h + lh + (r.lastInPara ? gap + (r.itemGap ? listGap : 0) : 0), 0) -
     (lines.length && lines[lines.length - 1].lastInPara ? gap + (lines[lines.length - 1].itemGap ? listGap : 0) : 0);
-  let y = sy;
-  if (valignApplies(n)) {
-    if (n.textAlignVertical === "middle") y += (sh - blockH) / 2;
-    if (n.textAlignVertical === "bottom") y += sh - blockH;
-  }
-  // Vertical trim (360039956634): the box behaves like any other component -
-  // cap height to the baseline. Ratio approximation, as in paintText.
-  y += n.verticalTrim ? Math.max(1, n.fontSize * 0.242 * z) : 0;
+  // Vertical alignment and the vertical-trim shift, exactly as paintText does -
+  // one helper, so both painter paths agree with the editor overlay.
+  let y = sy + firstRowInset(n, sh, blockH, n.fontSize, z);
   ctx.textBaseline = "top";
   ctx.save();
   if (n.truncate) {
@@ -10018,19 +10068,13 @@ function paintText(
     (lines.length && lines[lines.length - 1].lastInPara
       ? paraGap + (lines[lines.length - 1].itemGap ? listGap : 0)
       : 0);
-  let y0 = sy;
   // Vertical trim (360039956634 §Vertical trim): "remove the extra space above
   // and below text" - the box hugs from the cap height to the baseline. The
   // trims approximate Inter's (ascent − cap) and descent ratios; recorded as
-  // an approximation pending font metrics.
-  const trim = n.verticalTrim ? Math.max(1, (uniform?.fontSize ?? n.fontSize) * 0.242 * z) : 0;
-  // Hug axes ignore vertical alignment: only a fixed box has spare room to
-  // distribute (and a hug box that exactly fits would centre on zero anyway).
-  if (valignApplies(n)) {
-    if (n.textAlignVertical === "middle") y0 = sy + (sh - blockH) / 2;
-    if (n.textAlignVertical === "bottom") y0 = sy + sh - blockH;
-  }
-  y0 += trim;
+  // an approximation pending font metrics. The same inset (vertical alignment
+  // included) is what the editor overlay hangs its text from, so the first row
+  // cannot move when edit starts.
+  let y0 = sy + firstRowInset(n, sh, blockH, uniform?.fontSize ?? n.fontSize, z);
   const drops = (n.effects ?? []).filter((e) => e.kind === "drop-shadow" && e.visible);
   const setDrop = (drop?: Effect) => {
     if (!drop) {
