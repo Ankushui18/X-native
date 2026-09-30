@@ -2,7 +2,7 @@ import type { GradientStop, PathPoint, XNode } from "./types";
 import { patternCells, patternPeriod, patternSettings, patternSourceNode } from "./pattern";
 import { shapePoly } from "./geometry";
 import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
-import { dashArray, dashOffset, miterLimitFromAngle, sideCones, sideWidths, sidesSupported } from "./strokeModel";
+import { dashArray, dashOffset, miterLimitFromAngle, paintedStrokeAlign, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
 /** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB).
  *  Exported so the gradient editor inserts new stops in the same colour the
@@ -1191,8 +1191,8 @@ export function paintExtraStrokes(
     const strokePass = (weight: number) => {
       const w = Math.max(0.5, weight * z);
       // Lines are always centre-stroked (see Canvas): "inside" on an open
-      // path would clip to nothing.
-      const align = n.kind === "line" || n.kind === "arrow" ? "center" : s.align;
+      // path would clip to nothing — and so is every other open path.
+      const align = paintedStrokeAlign(n, s.align);
       if (align === "inside") {
         ctx.save();
         ctx.clip();

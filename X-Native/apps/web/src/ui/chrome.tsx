@@ -2,6 +2,7 @@ import { allowTopologyEdit } from "./vectorCapabilities";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
+import type { DocSeed } from "../engine/files";
 import { coerceVariableValue, fallbackForType, isAlias, resolveVariable, wouldCycle } from "../engine/variables";
 import {
   bindBlockReason,
@@ -42,6 +43,7 @@ import { align, PRESET_GROUPS } from "./inspector";
 import { hugSize } from "./textLayout";
 import { stepZoom, viewportCentreWorld, zoomAboutCentre, zoomCenter, zoomTo, zoomToRect } from "./zoom";
 import { roundToPixel } from "./round";
+import { readLocalCopy, saveLocalCopy } from "./localCopy";
 
 import { clearDoc } from "../engine/persist";
 import { copyText, notePasteModifiers, pasteEventMissing } from "../engine/clipboard";
@@ -723,6 +725,159 @@ function LayerRowImpl({
   );
 }
 
+/**
+ * The main menu, top-left, where Figma keeps it: the brand badge opens it.
+ *
+ * Before this the editor had no File menu at all — a document could only reach
+ * the disk through the Dashboard, three clicks away from the file it belonged
+ * to. The rows are the two halves of a local copy (write one, open one) built
+ * on `ui/localCopy.ts`, so the editor and the Dashboard's "Export a copy"
+ * cannot disagree about the format.
+ *
+ * Keyboard follows the dock's flyouts: the trigger opens the menu, Arrow keys
+ * walk the rows, Escape closes it and hands the caret back to the trigger.
+ */
+/** File ▸ Export assets… (⇧⌘E). The dialog is App-owned and asked for by event
+ *  (App.tsx:536), so the File menu, the Export section's "All…" link, the
+ *  command palette row and the chord all open the same sheet. */
+export function openExportAssets(): void {
+  window.dispatchEvent(new CustomEvent("x-native-export-dialog"));
+}
+
+export function FileMenu({
+  engine,
+  snap,
+  onOpenLocalCopy,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onOpenLocalCopy?: (name: string, doc: DocSeed) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const close = (refocus = false) => {
+    setOpen(false);
+    if (refocus) trigger.current?.focus();
+  };
+  // Escape belongs to the top overlay, which is this menu while it is open.
+  useEscape(open ? "file-menu" : null, () => close(true));
+  // Click-away: a menu that only closes on its own trigger is a trap.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+  // The first row takes the caret so the arrow keys have somewhere to start.
+  useEffect(() => {
+    if (open) root.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [open]);
+
+  const arrowKeys = (e: ReactKeyboardEvent) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const rows = Array.from(root.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+    if (!rows.length) return;
+    const at = rows.indexOf(document.activeElement as HTMLElement);
+    const next =
+      e.key === "Home"
+        ? 0
+        : e.key === "End"
+          ? rows.length - 1
+          : e.key === "ArrowDown"
+            ? (at + 1) % rows.length
+            : (at <= 0 ? rows.length : at) - 1;
+    rows[next].focus();
+  };
+
+  /** A row's action: the menu is done the moment one is chosen. */
+  const run = (fn: () => void) => {
+    close(true);
+    fn();
+  };
+
+  const openPicked = async (file: File) => {
+    let text = "";
+    try {
+      text = await file.text();
+    } catch {
+      toast("That file could not be read");
+      return;
+    }
+    const read = await readLocalCopy(text, file.name);
+    if (!read.ok) {
+      toast(read.error);
+      return;
+    }
+    if (read.unresolved) {
+      toast(`${read.unresolved} image${read.unresolved > 1 ? "s" : ""} could not be loaded`);
+    }
+    onOpenLocalCopy?.(read.name, read.doc);
+  };
+
+  return (
+    <div className="file-menu" ref={root}>
+      <button
+        ref={trigger}
+        className="badge-menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="File menu"
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !open) {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        X-NATIVE
+      </button>
+      {open && (
+        <div className="ctx file-menu-pop" role="menu" aria-label="File" onKeyDown={arrowKeys}>
+          <button
+            role="menuitem"
+            onClick={() => run(() => saveLocalCopy(engine, snap.fileName))}
+          >
+            <Icon name="export" size={14} /> Save local copy
+            <span className="sc">⇧⌘S</span>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() =>
+              run(() => {
+                picker.current?.click();
+              })
+            }
+          >
+            <Icon name="import" size={14} /> Open local copy…
+          </button>
+          <button role="menuitem" onClick={() => run(openExportAssets)}>
+            <Icon name="image" size={14} /> Export assets…
+            <span className="sc">⇧⌘E</span>
+          </button>
+        </div>
+      )}
+      <input
+        ref={picker}
+        type="file"
+        accept=".json,application/json"
+        aria-label="Open a local copy"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) void openPicked(f);
+        }}
+      />
+    </div>
+  );
+}
+
 function LeftPanelImpl({
   engine,
   snap,
@@ -730,6 +885,7 @@ function LeftPanelImpl({
   onMinimize,
   onActions,
   onHome,
+  onOpenLocalCopy,
 }: {
   engine: Engine;
   snap: Snapshot;
@@ -737,6 +893,8 @@ function LeftPanelImpl({
   onMinimize: () => void;
   onActions?: () => void;
   onHome?: () => void;
+  /** Open a local copy as a new file (App owns routing, so it owns this). */
+  onOpenLocalCopy?: (name: string, doc: DocSeed) => void;
 }) {
   const [q, setQ] = useState("");
   const [pagesOpen, setPagesOpen] = useState(true);
@@ -801,23 +959,7 @@ function LeftPanelImpl({
             </button>
           </Tooltip>
         )}
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 800,
-            letterSpacing: "0.06em",
-            color: "var(--accent-ink)",
-            background: "var(--sel)",
-            border: "1px solid var(--accent-ring)",
-            padding: "2px 6px",
-            borderRadius: 4,
-            marginRight: 6,
-            userSelect: "none",
-            flexShrink: 0,
-          }}
-        >
-          X-NATIVE
-        </span>
+        <FileMenu engine={engine} snap={snap} onOpenLocalCopy={onOpenLocalCopy} />
         <input
           className="name"
           aria-label="File name"
@@ -1560,7 +1702,7 @@ export function Actions({
     { label: "Marking / Radial menu", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-radial-menu")) },
     { label: "Clean up vector (sketch to Bézier)", sc: "", run: () => { if (allowTopologyEdit(engine)) engine.dispatch({ type: "vectorCleanup" }); } },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
-    { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },
+    { label: "Export assets…", sc: "⇧⌘E", run: openExportAssets },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
     {
       label: "Annotate selection",
@@ -2822,7 +2964,14 @@ export function bindHotkeys(
     // ⇧⌘E — bulk-export command (File ▸ Export…).
     if (meta && e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
-      window.dispatchEvent(new CustomEvent("x-native-export-dialog"));
+      openExportAssets();
+      return;
+    }
+    // ⇧⌘S — File ▸ Save local copy, Figma's own chord for it. Handled here
+    // rather than in the menu so it also works with the panels minimized.
+    if (meta && e.shiftKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      saveLocalCopy(engine, engine.snapshot().fileName);
       return;
     }
     if (meta && e.shiftKey && e.key.toLowerCase() === "p") {

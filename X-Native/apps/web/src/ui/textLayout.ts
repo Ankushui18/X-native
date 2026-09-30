@@ -178,6 +178,99 @@ export function listGutter(ctx: CanvasRenderingContext2D | null, n: XNode): numb
 }
 
 /**
+ * Where a CSS line box puts its first baseline, from the top of the content box:
+ * half the leading sits above the font's own box, then the box's ascent (CSS 2.1
+ * §10.8.1). The editor overlay is a real textarea, so this - not the canvas
+ * "top" baseline - is where its first row hangs from.
+ */
+export function cssFirstBaseline(ascent: number, descent: number, lineHeight: number): number {
+  return (lineHeight - (ascent + descent)) / 2 + ascent;
+}
+
+/** The em size the font metrics are measured at - see `fontMetricRatios`. */
+const METRIC_PROBE_SIZE = 1000;
+
+/**
+ * The font anchors the editor overlay needs, as ratios of the em.
+ *
+ * `ascent`/`descent` are the font box a CSS line box lays its leading around,
+ * and `topOffset` is how far the canvas "top" baseline sits above the alphabetic
+ * baseline: `measureText` reports the font's bounding box relative to whichever
+ * baseline is set, so the distance between the two modes *is* the distance
+ * between the two baselines. Measuring beats assuming - Blink's "top" is the em
+ * box (sTypoAscent normalised to 1em: 0.80065em for Inter) while the line box
+ * uses the hhea ascent (0.96875em for Inter), and engines differ.
+ *
+ * Measured at `METRIC_PROBE_SIZE`: TextMetrics rounds to whole pixels, and at
+ * 1000px that rounding is a hundredth of a pixel once scaled to normal sizes.
+ * Null where the platform reports no font metrics: the overlay then keeps its
+ * placement instead of guessing an offset.
+ */
+export function fontMetricRatios(
+  ctx: CanvasRenderingContext2D,
+  n: XNode,
+  run?: StyledSpan,
+): { ascent: number; descent: number; topOffset: number } | null {
+  const priorFont = ctx.font;
+  const priorBaseline = ctx.textBaseline;
+  try {
+    ctx.font = canvasTextFont(n, METRIC_PROBE_SIZE, run);
+    ctx.textBaseline = "alphabetic";
+    const alpha = ctx.measureText("H");
+    const ascent = alpha.fontBoundingBoxAscent;
+    const descent = alpha.fontBoundingBoxDescent;
+    ctx.textBaseline = "top";
+    const topAscent = ctx.measureText("H").fontBoundingBoxAscent;
+    if (!Number.isFinite(ascent) || !Number.isFinite(descent) || !Number.isFinite(topAscent)) return null;
+    return {
+      ascent: ascent / METRIC_PROBE_SIZE,
+      descent: descent / METRIC_PROBE_SIZE,
+      topOffset: (ascent - topAscent) / METRIC_PROBE_SIZE,
+    };
+  } finally {
+    ctx.font = priorFont;
+    ctx.textBaseline = priorBaseline;
+  }
+}
+
+/**
+ * How far the editor overlay's first row sits below the top of its own box.
+ * The painter draws the row `inset` pixels below the layer's top and hangs it
+ * off the canvas "top" baseline; a textarea would hang it off the CSS line box.
+ * The difference is the correction, so entering or leaving edit cannot move the
+ * glyphs.
+ */
+export function overlayRowShift(
+  ratios: { ascent: number; descent: number; topOffset: number },
+  fontSize: number,
+  lineHeight: number,
+  inset = 0,
+): number {
+  const ascent = ratios.ascent * fontSize;
+  const descent = ratios.descent * fontSize;
+  return inset + ratios.topOffset * fontSize - cssFirstBaseline(ascent, descent, lineHeight);
+}
+
+/**
+ * Where the painter puts the first row inside the box: a Fixed-size layer's
+ * vertical alignment (a hug axis ignores it, like the renderer) plus the
+ * vertical-trim shift. Shared with the editor overlay, so the row cannot move
+ * when edit starts.
+ */
+export function firstRowInset(
+  n: XNode,
+  boxH: number,
+  blockH: number,
+  fontSize: number,
+  z: number,
+): number {
+  const align = valignApplies(n) ? n.textAlignVertical : "top";
+  const valign = align === "middle" ? (boxH - blockH) / 2 : align === "bottom" ? boxH - blockH : 0;
+  const trim = n.verticalTrim ? Math.max(1, fontSize * 0.242 * z) : 0;
+  return valign + trim;
+}
+
+/**
  * Vertical alignment only takes on a Fixed-size layer: auto-width and
  * auto-height layers ignore it, so the renderer centres nothing on a hug
  * axis. Fill counts as fixed - the box has a definite size.

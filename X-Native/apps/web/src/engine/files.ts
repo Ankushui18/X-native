@@ -11,6 +11,7 @@
  * it — there is no second document format.
  */
 import { blankPage, demoPage, node, uid } from "./memory";
+import { hydrateDoc } from "./assets";
 import type { Page, XNode } from "./types";
 import type { PersistedDoc } from "./persist";
 import type { ImportedNode, ImportResult } from "./svgImport";
@@ -164,6 +165,26 @@ export async function readDoc(id: string): Promise<DocSeed | null> {
   const local = readDocSync(id);
   if (local) return local;
   return (await idbGet(id)) ?? null;
+}
+
+/**
+ * The stored copy of a file as a *portable* document: read through the same
+ * path the editor uses — localStorage, then the IndexedDB overflow that holds
+ * any document big enough to have images in it — with `asset:` refs resolved
+ * back to bytes, so the copy opens on a machine that never wrote here.
+ *
+ * The synchronous read is deliberately not used on its own: the files worth
+ * backing up are exactly the ones that overflowed localStorage, and asking
+ * `readDocSync` about them answers "nothing stored locally".
+ */
+export async function localCopyOf(id: string): Promise<DocSeed | null> {
+  const stored = await readDoc(id);
+  if (!stored) return null;
+  // A private copy: hydration rewrites `imageSrc` in place, and the object the
+  // store handed back is the store's.
+  const doc = JSON.parse(JSON.stringify(stored)) as DocSeed;
+  await hydrateDoc(doc);
+  return doc;
 }
 
 /* -------------------------------------------------------------------------- */

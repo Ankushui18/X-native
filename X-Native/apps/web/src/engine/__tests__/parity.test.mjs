@@ -4086,6 +4086,46 @@ console.log("variable-width export + modifiers:");
   t("arrow defaults to centre strokeAlign", N(an).strokeAlign === "center");
   const rc = add("rect", 0, 0, 50, 50);
   t("rect keeps inside align + butt caps", N(rc).strokeAlign === "inside" && N(rc).strokeCap === "none");
+  // P0-3 (micro-parity gaps 2+3, open paths): a path the pen/pencil/brush has
+  // not closed is centre-stroked and round-capped at birth — inside-aligning an
+  // open path clips it to a region it does not enclose, and a *straight* pen
+  // segment encloses nothing, so its stroke used to disappear entirely.
+  // Canvas.tsx:2176 reaches the same conclusion for lines and brushes; this
+  // pins the stored default so a fresh path never enters the clip branch.
+  e.dispatch({ type: "setTool", tool: "pen" });
+  e.dispatch({ type: "addPath", points: [{ x: 0, y: 20 }, { x: 100, y: 20 }], closed: false });
+  const pen = N(e.snapshot().selection[0]);
+  t("a straight pen segment is centre-stroked", pen.strokeAlign === "center");
+  t("...and round-capped at both ends",
+    pen.strokeCap === "round" && pen.strokeCapStart === "round" && pen.strokeCapEnd === "round");
+  t("...at the pen's own weight (2), unfilled", pen.strokeWidth === 2 && pen.fillVisible === false);
+  t("...with no vector-network cap metadata to contradict it",
+    (pen.vectorNetwork?.vertices ?? []).every((v) => v.strokeCap === undefined));
+  e.dispatch({ type: "setTool", tool: "pencil" });
+  e.dispatch({ type: "addPath", points: [{ x: 0, y: 60 }, { x: 100, y: 60 }], closed: false });
+  const pencil = N(e.snapshot().selection[0]);
+  t("a pencil line is centre-stroked and round-capped",
+    pencil.strokeAlign === "center" && pencil.strokeCap === "round");
+  // Figma's pencil default, from the same help article the cap rule comes
+  // from: "the pencil tool sketches with a round 3px stroke weight in black".
+  t("...at the pencil's documented 3px", pencil.strokeWidth === 3, pencil.strokeWidth);
+  e.dispatch({ type: "setTool", tool: "brush" });
+  e.dispatch({ type: "addPath", points: [{ x: 0, y: 100 }, { x: 100, y: 100 }], closed: false });
+  const brush = N(e.snapshot().selection[0]);
+  t("a brush stroke is centre-stroked and round-capped",
+    brush.strokeAlign === "center" && brush.strokeCap === "round");
+  t("...and keeps its brush weight and type", brush.strokeWidth === 8 && brush.strokeType === "brush");
+  // The other half of the rule: closing the path keeps the shape's inside
+  // stroke — only open paths moved.
+  e.dispatch({ type: "setTool", tool: "pen" });
+  e.dispatch({
+    type: "addPath",
+    points: [{ x: 200, y: 0 }, { x: 260, y: 0 }, { x: 260, y: 60 }, { x: 200, y: 60 }],
+    closed: true,
+  });
+  const closedPen = N(e.snapshot().selection[0]);
+  t("a closed pen path keeps the inside stroke",
+    closedPen.strokeAlign === "inside" && closedPen.strokeWidth === 1 && closedPen.fillVisible === true);
   // Gap 4: hand-resizing a fill child fixes it at the dragged size.
   const fr = add("frame", 0, 0, 300, 200);
   e.dispatch({ type: "autoLayout", id: fr, layout: { direction: "vertical", gap: 0, padding: [0, 0, 0, 0], sizing: "fixed", cross: "fixed", wrap: false, align: "min", justify: "min" } });

@@ -21,7 +21,7 @@ import type { StrokeCap, XNode } from "./types";
 import { outlineStroke, outlineVariableStroke, shapePoly } from "./geometry";
 import { directionOf, fontFamilyStack } from "./textInput";
 import { applyTextCase, valignApplies } from "../ui/textLayout";
-import { miterLimitFromAngle, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
+import { miterLimitFromAngle, paintedStrokeAlign, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
 import { patternPeriod, patternSettings, patternSourceNode } from "./pattern";
 
@@ -270,8 +270,11 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = "", op
   const dashCap = n.strokeDashPattern?.length || n.strokeDash > 0 ? (n.strokeDashCap ?? caps) : caps;
   const common = `stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-linecap="${dashCap}" stroke-linejoin="${n.strokeJoin}" stroke-miterlimit="${Math.round(miterLimitFromAngle(n.strokeMiterAngle) * 1000) / 1000}" stroke-dasharray="${svgDash(n)}"`;
   const fillAttrs = `fill="${fill}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity * alphaOf(n.fill)))}" fill-rule="${fillRule(n)}"`;
+  // Lines, arrows and every open path are centre-stroked — see
+  // `paintedStrokeAlign`: an open path has no inside to clip a doubled band to,
+  // so an "inside" construction would write a stroke that paints nothing.
   const align =
-    n.kind === "line" || n.kind === "arrow" ? "center" : n.strokeVisible && n.strokeWidth > 0 ? (n.strokeAlign ?? "inside") : "inside";
+    n.strokeVisible && n.strokeWidth > 0 ? paintedStrokeAlign(n, n.strokeAlign) : "inside";
   const defs: string[] = [];
   // The fill and the stroke are separate elements: an outside stroke needs a
   // mask that hides everything inside the shape, and a mask on one element
@@ -789,7 +792,12 @@ export function exportClipSvg(nodes: XNode[]): string {
   const title = nodes.length === 1 ? `<title>${escXml(nodes[0].name)}</title>` : "";
   // svgNode(n) with top=false translates each root by its own x/y, so the
   // viewBox origin is what lines the group up inside the exported canvas.
-  const body = nodes.map((n) => svgNode(n)).join("");
+  // `simplifyStroke` is on for the same reason the file exporter turns it on:
+  // a non-centre stroke becomes a filled outline instead of a clip/mask pair,
+  // so the pasted SVG renders on its own. Without it an inside-stroked shape
+  // leaves the clipboard as `<clipPath>`-plus-stroke, which every renderer that
+  // ignores clip paths (and every reader of the markup) sees as a lost stroke.
+  const body = nodes.map((n) => svgNode(n, false, { simplifyStroke: true })).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${r(w)}" height="${r(h)}" viewBox="${r(minX)} ${r(minY)} ${r(w)} ${r(h)}">${title}${body}</svg>`;
 }
 
