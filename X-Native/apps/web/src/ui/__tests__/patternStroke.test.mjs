@@ -122,7 +122,16 @@ console.log("Stroke picker reuses the fill pattern controls:");
   const pop = () => document.body.querySelector(".fill-pop");
   await React.act(async () => pop().querySelector(".type-btn").click());
   const options = [...pop().querySelectorAll(".type-menu button")].map((b) => b.textContent.trim());
-  t("stroke offers Solid and Pattern, not unsupported paints", options.length === 2 && options.some((v) => v.includes("Pattern")));
+  // Run-24 (2026-09-30): the stroke picker gained the Brush and Dynamic
+  // stroke types. The intent of this pin — "no unsupported paints" — stands:
+  // exactly {Solid, Pattern, Brush, Dynamic} and still no gradients/images.
+  t(
+    "stroke offers exactly the supported types (Solid/Pattern/Brush/Dynamic), not unsupported paints",
+    options.length === 4 &&
+      ["Solid", "Pattern", "Brush", "Dynamic"].every((s) => options.some((v) => v.includes(s))) &&
+      !options.some((v) => /linear|radial|angular|diamond|image/i.test(v)),
+    JSON.stringify(options),
+  );
   await React.act(async () => [...pop().querySelectorAll(".type-menu button")].find((b) => b.textContent.includes("Pattern")).click());
   t("stroke has existing source, scale, spacing and alignment controls", ["Pattern source", "Pattern Scale", "Pattern X spacing", "Pattern alignment"].every((s) => pop().querySelector(`[aria-label="${s}"]`)));
   const select = pop().querySelector('select[aria-label="Pattern source"]');

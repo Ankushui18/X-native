@@ -16,6 +16,8 @@ import type {
   XNode,
   VectorNetwork,
   StrokeAlign,
+  StrokeCap,
+  StrokeJoin,
   BooleanOp,
   VariableItem,
   VariableCollection,
@@ -1256,8 +1258,15 @@ interface Internal {
   booleanPreview: BooleanOp | null;
   /** Selected ruler guide; mutually exclusive with the layer selection. */
   selectedGuide: string | null;
-  /** Hover preview of a stroke position (inspector → canvas). */
-  previewStroke: { id: string; align: StrokeAlign } | null;
+  /** Hover preview of stroke position/cap/join/style (inspector → canvas).
+   *  Render-only: no history entry, cleared on select. */
+  previewStroke: {
+    id: string;
+    align?: StrokeAlign;
+    cap?: StrokeCap;
+    join?: StrokeJoin;
+    dash?: { strokeDash: number; strokeGap: number; strokeDashPattern?: number[]; strokeDashCap?: StrokeCap };
+  } | null;
   previewEffect: { id: string; kind: EffectKind } | null;
 }
 
@@ -1404,6 +1413,13 @@ export class MemoryEngine implements Engine {
   private get grouping(): boolean {
     return this.groupStack.length > 0;
   }
+  /** Hist commands issued inside the outermost group, and whether any of them
+   *  actually wrote to the document. `end` needs the pair to tell two net-zero
+   *  gestures apart: one whose writes were later reverted (an Esc'd crop
+   *  session) drops its entry, while one whose commands were all refused
+   *  (a move against a node the undo removed) keeps it and branches redo. */
+  private groupHist = 0;
+  private groupApplied = false;
   private gesture = false;
   /** Last history-pushing command type and its timestamp, used to coalesce
    *  rapid repeats of the same command (e.g. holding an arrow key) into a
@@ -1747,6 +1763,11 @@ export class MemoryEngine implements Engine {
         if (this.undo.length > MAX_UNDO) this.undo.shift();
       }
       this.groupStack.push(this.undo[this.undo.length - 1] ?? null);
+      if (this.groupStack.length === 1) {
+        // Outermost gesture: reset the applied/refused tallies used by `end`.
+        this.groupHist = 0;
+        this.groupApplied = false;
+      }
       this.gesture = true;
       // A gesture is its own burst context: without this, a nudge after a
       // drag could coalesce with a nudge from before it and lose its step.
@@ -1765,10 +1786,27 @@ export class MemoryEngine implements Engine {
       // or redo mid-gesture (the top moved away): a compromised gesture
       // touches neither stack.
       if (saved && this.groupStack.length === 0 && this.undo[this.undo.length - 1] === saved) {
-        if (JSON.stringify(saved) === JSON.stringify(this.state)) {
-          // A no-op gesture (a click that never moved): the entry goes, and
-          // the redo chain survives — an abandoned drag is not a new branch.
-          this.undo.pop();
+        // Compare document content only: `treeRev` bumps on every command and
+        // layer selection is not a document edit, so a group that nets back to
+        // its starting document — an Esc'd crop session reverting its own
+        // patches — must still settle as a no-op even though both fields
+        // moved inside the group.
+        const docOf = (s: typeof saved) => {
+          const { treeRev: _t, selection: _sel, ...doc } = s;
+          return JSON.stringify(doc);
+        };
+        if (docOf(saved) === docOf(this.state)) {
+          // Net-zero group: one that issued no hist command (a click that
+          // never moved) or whose writes were all reverted (an Esc'd crop
+          // session) drops its entry — the redo chain survives, an abandoned
+          // drag is not a new branch. A group whose hist commands were all
+          // refused never touched the document at all, yet is still a user
+          // gesture: it keeps its entry and branches redo (history25).
+          if (this.groupHist === 0 || this.groupApplied) {
+            this.undo.pop();
+          } else {
+            this.redo = [];
+          }
         } else {
           this.redo = [];
         }
@@ -1842,6 +1880,9 @@ export class MemoryEngine implements Engine {
       // Effect-kind hover preview; render-only by design.
       "previewEffect",
     ].includes(cmd.type);
+    // Count the group's hist commands (begin/end return above, so they never
+    // reach here) so `end` can spot an all-refused gesture.
+    if (hist && this.grouping) this.groupHist++;
     let pushedEntry: Internal | null = null;
     let histKey = "";
     let histAt = 0;
@@ -2120,7 +2161,15 @@ export class MemoryEngine implements Engine {
         s.selectedGuide = cmd.id;
         break;
       case "previewStroke":
-        s.previewStroke = cmd.id && cmd.align ? { id: cmd.id, align: cmd.align } : null;
+        s.previewStroke = cmd.id
+          ? {
+              id: cmd.id,
+              ...(cmd.align !== undefined ? { align: cmd.align } : {}),
+              ...(cmd.cap !== undefined ? { cap: cmd.cap } : {}),
+              ...(cmd.join !== undefined ? { join: cmd.join } : {}),
+              ...(cmd.dash !== undefined ? { dash: cmd.dash } : {}),
+            }
+          : null;
         break;
       case "previewEffect":
         s.previewEffect = cmd.id && cmd.kind ? { id: cmd.id, kind: cmd.kind } : null;
@@ -2494,6 +2543,7 @@ export class MemoryEngine implements Engine {
               n.x = Math.round(n.x);
               n.y = Math.round(n.y);
             }
+            if (this.grouping) this.groupApplied = true;
             this.publishIfMasterEdit(id);
           }
         }
@@ -2912,6 +2962,7 @@ export class MemoryEngine implements Engine {
           }
           if (patch.aspectLocked === false) patch.aspectRatio = undefined;
           Object.assign(n, patch);
+          if (this.grouping) this.groupApplied = true;
           if (n.kind === "text") {
             const fm = resolveFontMetrics(n.fontFamily, n.fontSize, n.fontWeight);
             n.baseline = patch.baseline !== undefined ? patch.baseline : fm.ascent;
@@ -4027,6 +4078,7 @@ export class MemoryEngine implements Engine {
           strokeVisible: true,
           strokeWidth: s.tool === "brush" ? 8 : cmd.closed ? 1 : 2,
           vectorNetwork: pathToVectorNetwork(path, cmd.closed),
+          ...(s.tool === "brush" ? { brushStroke: true, strokeType: "brush" as const } : {}),
         });
         this.root().children.push(n);
         s.selection = [n.id];

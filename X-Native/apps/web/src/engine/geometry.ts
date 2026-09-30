@@ -1486,6 +1486,197 @@ export function insertPointOnPath(
   return { newPath, insertedIndex: bestIdx + 1 };
 }
 
+/** Run 22 (vector cut, audit P1 #10): how a straight cut line meets one
+ *  path segment. Straight segments solve the two-line intersection once; a
+ *  segment carrying Bézier handles is sampled into a short polyline first, so
+ *  the crossing lands on the curve rather than on its chord. Returns the
+ *  parameter along the SEGMENT (0-1) plus the point; the caller's u test has
+ *  already bounded the crossing to the drag line itself. */
+function cutLineSegmentCrossings(
+  p1: PathPoint,
+  p2: PathPoint,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): { t: number; x: number; y: number }[] {
+  const hit = (x1: number, y1: number, x2: number, y2: number) => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const ex = bx - ax;
+    const ey = by - ay;
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-12) return null;
+    const rx = ax - x1;
+    const ry = ay - y1;
+    const t = (rx * ey - ry * ex) / denom; // along the path segment
+    const u = (rx * dy - ry * dx) / denom; // along the drag line
+    if (t <= 1e-9 || t >= 1 - 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+    return { t, x: x1 + t * dx, y: y1 + t * dy };
+  };
+  const curved =
+    (p1.ox || 0) !== 0 || (p1.oy || 0) !== 0 || (p2.ix || 0) !== 0 || (p2.iy || 0) !== 0;
+  if (!curved) {
+    const one = hit(p1.x, p1.y, p2.x, p2.y);
+    return one ? [one] : [];
+  }
+  const K = 16;
+  const c1 = { x: p1.x + (p1.ox || 0), y: p1.y + (p1.oy || 0) };
+  const c2 = { x: p2.x + (p2.ix || 0), y: p2.y + (p2.iy || 0) };
+  const at = (t: number) => {
+    const mt = 1 - t;
+    return {
+      x: mt * mt * mt * p1.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p2.x,
+      y: mt * mt * mt * p1.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p2.y,
+    };
+  };
+  const out: { t: number; x: number; y: number }[] = [];
+  let prev = at(0);
+  for (let k = 0; k < K; k++) {
+    const next = at((k + 1) / K);
+    const local = hit(prev.x, prev.y, next.x, next.y);
+    if (local) out.push({ t: (k + local.t) / K, x: local.x, y: local.y });
+    prev = next;
+  }
+  return out;
+}
+
+/** Sever a linear chain at interior boundaries. Every run SHARES its boundary
+ *  anchor with the neighbour: the run that ENDS there keeps the incoming
+ *  handle, the run that STARTS there keeps the outgoing one, because each
+ *  side of a cut only owns the tangent it still draws. Bounds at the chain's
+ *  very ends separate nothing and are dropped. */
+function splitRunsAt(path: PathPoint[], bounds: number[]): PathPoint[][] | null {
+  const cuts = Array.from(new Set(bounds))
+    .sort((a, b) => a - b)
+    .filter((b) => b > 0 && b < path.length - 1);
+  if (!cuts.length) return null;
+  const runs: PathPoint[][] = [];
+  let from = 0;
+  for (const b of cuts) {
+    const run = path.slice(from, b + 1).map((p) => ({ ...p }));
+    if (run.length >= 2) {
+      if (from > 0) {
+        run[0].ix = undefined;
+        run[0].iy = undefined;
+      }
+      run[run.length - 1].ox = undefined;
+      run[run.length - 1].oy = undefined;
+      runs.push(run);
+    }
+    from = b;
+  }
+  const tail = path.slice(from).map((p) => ({ ...p }));
+  if (tail.length >= 2) {
+    if (from > 0) {
+      tail[0].ix = undefined;
+      tail[0].iy = undefined;
+    }
+    runs.push(tail);
+  }
+  return runs.length ? runs : null;
+}
+
+/**
+ * Run 22 (vector cut, audit P1 #10): click a vector point to split the path
+ * there. An open path separates into two runs that share the clicked anchor;
+ * a closed loop has only one cut point, which opens it — the run rotates to
+ * start at `i` and ends on a coincident copy of it so every segment survives.
+ * Returns null when nothing can separate (an open path's outer endpoints,
+ * an out-of-range index).
+ */
+export function splitPathAtPoint(
+  pts: PathPoint[],
+  closed: boolean,
+  i: number,
+): PathPoint[][] | null {
+  if (pts.length < 2 || i < 0 || i >= pts.length) return null;
+  const src = pts.map((p) => ({ ...p }));
+  if (closed) {
+    if (src.length < 3) return null;
+    const run: PathPoint[] = [];
+    for (let k = 0; k < src.length; k++) run.push({ ...src[(i + k) % src.length] });
+    run[0].ix = undefined;
+    run[0].iy = undefined;
+    run.push({ ...src[i], ox: undefined, oy: undefined });
+    return [run];
+  }
+  if (i === 0 || i === src.length - 1) return null;
+  return splitRunsAt(src, [i]);
+}
+
+/**
+ * Run 22 (vector cut, audit P1 #10): drag a line across a path. Every place
+ * the line crosses, a new anchor is inserted and the chain is severed there:
+ * an open path yields runs+1 pieces (the first stays on the node, every other
+ * one becomes its own layer); a closed loop opens at its first crossing and
+ * then separates at the rest. Returns null when the line misses the path.
+ */
+export function cutPathWithLine(
+  pts: PathPoint[],
+  closed: boolean,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): PathPoint[][] | null {
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  const count = closed ? n : n - 1;
+  // Crossings per segment, in path order (curved segments included).
+  const perSeg: { t: number; x: number; y: number }[][] = [];
+  for (let i = 0; i < count; i++) {
+    perSeg.push(cutLineSegmentCrossings(pts[i], pts[(i + 1) % n], ax, ay, bx, by));
+  }
+  if (!perSeg.some((c) => c.length)) return null;
+  // Insert crossing anchors, recording where the chain must sever. A crossing
+  // that lands ON an existing anchor severs at that anchor instead of adding
+  // a duplicate; boundaries that name a not-yet-pushed anchor are resolved
+  // through origAt once the walk is done.
+  const path: PathPoint[] = [];
+  const cutsNow: number[] = [];
+  const cutsOrig: number[] = [];
+  const origAt: number[] = [];
+  for (let i = 0; i < count; i++) {
+    origAt.push(path.length);
+    path.push({ ...pts[i] });
+    const here = perSeg[i].slice().sort((a, b) => a.t - b.t);
+    for (const c of here) {
+      const prev = pts[i];
+      const next = pts[(i + 1) % n];
+      if (Math.hypot(c.x - prev.x, c.y - prev.y) < 0.5) {
+        cutsNow.push(origAt[i]);
+      } else if (Math.hypot(c.x - next.x, c.y - next.y) < 0.5) {
+        cutsOrig.push((i + 1) % n);
+      } else {
+        path.push({ x: c.x, y: c.y });
+        cutsNow.push(path.length - 1);
+      }
+    }
+  }
+  if (!closed) {
+    origAt.push(path.length);
+    path.push({ ...pts[n - 1] });
+  }
+  const cuts = [...cutsNow, ...cutsOrig.map((j) => origAt[j])];
+  if (!cuts.length) return null;
+  if (!closed) return splitRunsAt(path, cuts);
+  // Closed: open at the first crossing (the chain rotates so that anchor
+  // becomes both ends), then sever the remaining crossings as on an open run.
+  const first = Array.from(new Set(cuts)).sort((a, b) => a - b)[0];
+  const opened: PathPoint[] = [];
+  for (let k = first; k < path.length; k++) opened.push({ ...path[k] });
+  for (let k = 0; k < first; k++) opened.push({ ...path[k] });
+  opened.push({ ...path[first], ox: undefined, oy: undefined });
+  opened[0] = { ...opened[0], ix: undefined, iy: undefined };
+  const rest = Array.from(new Set(cuts))
+    .sort((a, b) => a - b)
+    .filter((j) => j !== first)
+    .map((j) => (j > first ? j - first : j + (path.length - first)));
+  if (!rest.length) return [opened];
+  return splitRunsAt(opened, rest) ?? [opened];
+}
+
 /**
  * Auto handles for corner→smooth conversion (double-click a point): the
  * tangent follows the neighbouring anchors and the length is a third of the
@@ -2252,5 +2443,77 @@ export function widthProfileStations(
       widthMultiplier: q.widthMultiplier,
     };
   });
+}
+
+/** Run 23 — arc-length station on a path: the point at profile position `t`
+ *  plus its unit tangent, walking the polyline exactly like
+ *  widthProfileStations, so the canvas can map a width drag onto the stroke
+ *  normal without re-deriving the geometry. */
+export function widthStationAt(
+  path: PathPoint[],
+  closed: boolean,
+  t: number,
+): { x: number; y: number; tx: number; ty: number } | null {
+  const pts = samplePathPoints(path, closed);
+  if (pts.length < 2) return null;
+  const cum = new Array<number>(pts.length).fill(0);
+  for (let i = 1; i < pts.length; i++)
+    cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  let total = cum[pts.length - 1];
+  if (closed) total += Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
+  if (!(total > 1e-9)) return { x: pts[0].x, y: pts[0].y, tx: 1, ty: 0 };
+  const target = Math.min(total, Math.max(0, t * total));
+  let i = 0;
+  while (i < cum.length - 1 && cum[i + 1] < target) i++;
+  const a = pts[i];
+  const b = i + 1 < pts.length ? pts[i + 1] : closed ? pts[0] : pts[i];
+  const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+  const f = segLen > 1e-9 ? Math.min(1, Math.max(0, (target - cum[i]) / segLen)) : 0;
+  const x = a.x + (b.x - a.x) * f;
+  const y = a.y + (b.y - a.y) * f;
+  if (segLen > 1e-9) return { x, y, tx: (b.x - a.x) / segLen, ty: (b.y - a.y) / segLen };
+  for (let j = 0; j + 1 < pts.length; j++) {
+    const l = Math.hypot(pts[j + 1].x - pts[j].x, pts[j + 1].y - pts[j].y);
+    if (l > 1e-9) return { x, y, tx: (pts[j + 1].x - pts[j].x) / l, ty: (pts[j + 1].y - pts[j].y) / l };
+  }
+  return { x, y, tx: 1, ty: 0 };
+}
+
+/** Run 23 — nearest point on a path to (px, py): arc-length position `t`
+ *  (the same parameterization widthProfileStations uses), the projected
+ *  point, and the distance from (px, py) to it. */
+export function projectToPath(
+  path: PathPoint[],
+  closed: boolean,
+  px: number,
+  py: number,
+): { t: number; x: number; y: number; dist: number } | null {
+  const pts = samplePathPoints(path, closed);
+  if (pts.length < 2) return null;
+  const cum = new Array<number>(pts.length).fill(0);
+  for (let i = 1; i < pts.length; i++)
+    cum[i] = cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  let total = cum[pts.length - 1];
+  if (closed) total += Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
+  const segCount = closed ? pts.length : pts.length - 1;
+  let best: { t: number; x: number; y: number; dist: number } | null = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < segCount; i++) {
+    const a = pts[i];
+    const bq = pts[(i + 1) % pts.length];
+    const dx = bq.x - a.x;
+    const dy = bq.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    const f = lenSq > 1e-18 ? Math.min(1, Math.max(0, ((px - a.x) * dx + (py - a.y) * dy) / lenSq)) : 0;
+    const x = a.x + dx * f;
+    const y = a.y + dy * f;
+    const dist = Math.hypot(px - x, py - y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      const arc = cum[i] + f * Math.sqrt(lenSq);
+      best = { t: total > 1e-9 ? arc / total : 0, x, y, dist };
+    }
+  }
+  return best;
 }
 

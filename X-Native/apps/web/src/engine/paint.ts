@@ -94,6 +94,13 @@ export interface GradTarget {
   gy: number;
   hx: number;
   hy: number;
+  /** Radial focal point: the convergence of the first stop. Resolved to the
+   *  centre when unauthored, so consumers can use it unconditionally. */
+  fx: number;
+  fy: number;
+  /** Per-pair interpolation midpoints, `mids[i]` between stops i and i+1.
+   *  Undefined = even blends (0.5 everywhere). */
+  mids?: number[];
   /** Endpoint colours for the handle dots. */
   from: string;
   to: string;
@@ -131,6 +138,9 @@ export function gradTarget(n: XNode): GradTarget | null {
       gy: p.gy ?? n.fillGY ?? 0,
       hx: p.hx ?? n.fillHX ?? 0.5,
       hy: p.hy ?? n.fillHY ?? 1,
+      fx: p.fx ?? n.fillFX ?? (p.gx ?? n.fillGX ?? 0.5),
+      fy: p.fy ?? n.fillFY ?? (p.gy ?? n.fillGY ?? 0),
+      mids: p.midpoints,
       from: stops[0].color,
       to: stops[stops.length - 1].color,
       stops,
@@ -145,22 +155,49 @@ export function gradTarget(n: XNode): GradTarget | null {
     gy: n.fillGY ?? 0,
     hx: n.fillHX ?? 0.5,
     hy: n.fillHY ?? 1,
+    fx: n.fillFX ?? (n.fillGX ?? 0.5),
+    fy: n.fillFY ?? (n.fillGY ?? 0),
+    mids: n.gradientMidpoints,
     from: stops[0].color,
     to: stops[stops.length - 1].color,
     stops,
   };
 }
 
-function ramp(g: CanvasGradient, stops: GradientStop[]) {
+/** The ramp's per-pair interpolation midpoints, when authored. */
+function midsOf(n: XNode): number[] | undefined {
+  return n.gradientMidpoints;
+}
+
+/**
+ * Paint a ramp onto a canvas gradient.
+ *
+ * Each adjacent pair is subdivided and interpolated in OKLab, which keeps
+ * mid-tones from going grey the way canvas' native sRGB interpolation does.
+ * An authored midpoint for a pair (the canvas midpoint handle) moves where
+ * the two colours blend 50/50: the piecewise-linear ease through
+ * `(mid, 0.5)` samples the ramp at exactly that position, while the default
+ * 0.5 reproduces the even blend byte for byte.
+ */
+function ramp(g: CanvasGradient, stops: GradientStop[], mids?: number[]) {
   const per = 6;
   for (let i = 0; i < stops.length - 1; i++) {
     const a = stops[i];
     const b = stops[i + 1];
-    for (let k = 0; k <= per; k++) {
-      const t = k / per;
+    const mid = mids?.[i];
+    const ease =
+      mid != null && mid > 0 && mid < 1
+        ? (t: number) => (t <= mid ? 0.5 * (t / mid) : 0.5 + (0.5 * (t - mid)) / (1 - mid))
+        : (t: number) => t;
+    // Sample the pair uniformly plus the midpoint itself, so the 50/50
+    // colour lands exactly where the handle says it does.
+    const ts = [mid != null && mid > 0 && mid < 1 ? mid : -1, ...Array.from({ length: per + 1 }, (_, k) => k / per)]
+      .filter((t) => t >= 0)
+      .sort((x, y) => x - y);
+    for (const t of ts) {
       const pos = a.position + (b.position - a.position) * t;
       try {
-        g.addColorStop(Math.max(0, Math.min(1, pos)), mixHex(a.color, b.color, t));
+        g.addColorStop(Math.max(0, Math.min(1, pos)), mixHex(a.color, b.color, ease(t)));
       } catch {
         /* invalid stop */
       }
@@ -184,15 +221,17 @@ export function fillStyle(
   const hy = n.fillHY ?? 1;
   if (n.fillType === "linear") {
     const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
-    ramp(g, stops);
+    ramp(g, stops, midsOf(n));
     return g;
   }
   if (n.fillType === "radial") {
     const cx = sx + gx * sw;
     const cy = sy + gy * sh;
+    const fx = (n.fillFX ?? gx) * sw;
+    const fy = (n.fillFY ?? gy) * sh;
     const r = Math.hypot((hx - gx) * sw, (hy - gy) * sh) || Math.max(sw, sh) / 2;
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    ramp(g, stops);
+    const g = ctx.createRadialGradient(sx + fx, sy + fy, 0, cx, cy, r);
+    ramp(g, stops, midsOf(n));
     return g;
   }
   if (n.fillType === "angular" && typeof ctx.createConicGradient === "function") {
@@ -202,7 +241,7 @@ export function fillStyle(
     // first and last stops meet at the origin with Figma's authentic seam.
     const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw) + Math.PI / 2;
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    ramp(g, stops);
+    ramp(g, stops, midsOf(n));
     return g;
   }
   return cssRgba(a);
@@ -249,10 +288,13 @@ export function paintStack(
       fillType: p.type,
       fillOpacity: p.opacity,
       gradientStops: p.stops ?? [],
+      gradientMidpoints: p.midpoints,
       fillGX: p.gx ?? n.fillGX,
       fillGY: p.gy ?? n.fillGY,
       fillHX: p.hx ?? n.fillHX,
       fillHY: p.hy ?? n.fillHY,
+      fillFX: p.fx ?? n.fillFX,
+      fillFY: p.fy ?? n.fillFY,
       imageSrc: p.image ?? "",
       imageFit: p.imageFit ?? "fill",
       imageRot: p.imageRot ?? 0,
@@ -308,13 +350,18 @@ function paintOnePaint(
   if (n.fillType === "radial") {
     // Circular, like Figma: the handle sets centre and radius, never an
     // ellipse — a wide frame gets a clipped circle, not a stretched oval.
+    // The focal point (when authored) is where the first stop converges:
+    // the inner circle of the two-circle ramp, exactly like the CSS that
+    // reads `radial-gradient(at fx fy, …)`.
     ctx.save();
     ctx.clip();
     const cx = sx + gx * sw;
     const cy = sy + gy * sh;
+    const fx = (n.fillFX ?? gx) * sw;
+    const fy = (n.fillFY ?? gy) * sh;
     const r = Math.hypot((hx - gx) * sw, (hy - gy) * sh) || Math.max(sw, sh) / 2;
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    ramp(g, stops);
+    const g = ctx.createRadialGradient(sx + fx, sy + fy, 0, cx, cy, r);
+    ramp(g, stops, midsOf(n));
     ctx.fillStyle = g;
     ctx.fillRect(sx, sy, sw, sh);
     ctx.restore();
@@ -326,7 +373,7 @@ function paintOnePaint(
       : "nonzero";
   if (n.fillType === "linear") {
     const g = ctx.createLinearGradient(sx + gx * sw, sy + gy * sh, sx + hx * sw, sy + hy * sh);
-    ramp(g, stops);
+    ramp(g, stops, midsOf(n));
     ctx.fillStyle = g;
     ctx.fill(fillRule);
     return;
@@ -336,7 +383,7 @@ function paintOnePaint(
     // No mirroring — the seam where the ramp wraps is authentic Figma.
     const ang = Math.atan2((hy - gy) * sh, (hx - gx) * sw) + Math.PI / 2;
     const g = ctx.createConicGradient(ang, sx + gx * sw, sy + gy * sh);
-    ramp(g, stops);
+    ramp(g, stops, midsOf(n));
     ctx.fillStyle = g;
     ctx.fill(fillRule);
     return;
@@ -583,7 +630,7 @@ function paintDiamond(
     ctx.closePath();
     ctx.clip();
     const g = ctx.createLinearGradient(cx, cy, (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
-    ramp(g, stops);
+    ramp(g, stops, midsOf(n));
     ctx.fillStyle = g;
     ctx.fillRect(sx - rx, sy - ry, sw + rx * 2, sh + ry * 2);
     ctx.restore();

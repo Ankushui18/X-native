@@ -107,7 +107,7 @@ export interface VariableWidthProfile {
 export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
 export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
 export type RightTab = "design" | "prototype" | "inspect";
-export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern";
+export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern" | "brush" | "dynamic";
 /**
  * Figma's Pattern fill (help.figma.com 33025308147223): a *source layer*
  * repeated across the fill, with Tile type, Direction, Scale, X/Y spacing and
@@ -520,6 +520,11 @@ export interface Paint {
   gy?: number;
   hx?: number;
   hy?: number;
+  /** Radial focal point, normalised 0..1; absent = this paint's centre. */
+  fx?: number;
+  fy?: number;
+  /** Per-pair interpolation midpoints (fraction of the pair's span). */
+  midpoints?: number[];
   stops?: GradientStop[];
   /** Image fill: source plus its own fit/rotation/tile/adjustments, so a
    *  stacked image never inherits the base fill's image settings. */
@@ -747,7 +752,16 @@ export interface XNode {
   /** Legacy solid stroke colour; pattern strokes keep it as the fallback swatch. */
   strokePaint: string;
   /** Pattern stroke paint is distinct from the numeric dash `StrokeLayer.pattern`. */
-  strokeType?: "solid" | "pattern";
+  strokeType?: "solid" | "pattern" | "brush" | "dynamic";
+  /** Brush stroke: bristle direction in degrees (0 = +x). Brush strokes are
+   *  centre-aligned, undashed, and cannot take a width profile. */
+  strokeBrushAngle?: number;
+  /** Dynamic stroke: wiggle frequency in waves per 100px of path. */
+  strokeDynFreq?: number;
+  /** Dynamic stroke: wiggle amplitude in px. */
+  strokeDynWiggle?: number;
+  /** Dynamic stroke: smoothing 0..100 (0 = triangle wave, 100 = sine). */
+  strokeDynSmooth?: number;
   strokePattern?: PatternSpec;
   strokeOpacity: number;
   strokeVisible: boolean;
@@ -794,6 +808,9 @@ export interface XNode {
    * cannot dash a filled outline — and the extra `strokes` rows stay uniform.
    */
   strokeWidthProfile?: VariableWidthPoint[];
+  /** Drawn by the Brush tool: a fixed-width freehand stroke, so variable
+   *  width stays refused on it (see variableWidthBlockReason). */
+  brushStroke?: boolean;
   aspectLocked: boolean;
   /** The ratio the lock was taken at (height ÷ width), remembered so a size
    *  that clamps to a pixel on the way to a new one cannot leave a locked box
@@ -943,6 +960,14 @@ export interface XNode {
   fillGY: number;
   fillHX: number;
   fillHY: number;
+  /** Radial gradient focal point, normalised 0..1. Absent = the gradient
+   *  centre (`fillGX`/`fillGY`), which is exactly how it renders and hits. */
+  fillFX?: number;
+  fillFY?: number;
+  /** Per-pair ramp interpolation midpoints for `gradientStops`:
+   *  `gradientMidpoints[i]` is where stops i and i+1 blend 50/50, as a
+   *  fraction of their span (0.5 = even). Absent = even everywhere. */
+  gradientMidpoints?: number[];
   isMask: boolean;
   maskType: "alpha" | "vector" | "luminance";
   variant?: string;
@@ -1029,7 +1054,13 @@ export interface Snapshot {
   selection: string[];
   selectedGuide: string | null;
   /** Hover preview of a stroke position; render-only, never persisted. */
-  previewStroke: { id: string; align: StrokeAlign } | null;
+  previewStroke: {
+    id: string;
+    align?: StrokeAlign;
+    cap?: StrokeCap;
+    join?: StrokeJoin;
+    dash?: { strokeDash: number; strokeGap: number; strokeDashPattern?: number[]; strokeDashCap?: StrokeCap };
+  } | null;
   /** Hover preview of an effect kind from the type menu; render-only. */
   previewEffect: { id: string; kind: EffectKind } | null;
   /** Bumped on every dispatch except pure viewport moves (pan/zoom), so panels
@@ -1266,7 +1297,15 @@ export type Command =
   | { type: "moveGuide"; id: string; at: number }
   | { type: "setGuideFrame"; id: string; frameId: string | null }
   | { type: "selectGuide"; id: string | null }
-  | { type: "previewStroke"; id: string | null; align?: StrokeAlign }
+  | {
+      type: "previewStroke";
+      id: string | null;
+      align?: StrokeAlign;
+      /** Hover previews for the cap/join/style rows (render-only, like align). */
+      cap?: StrokeCap;
+      join?: StrokeJoin;
+      dash?: { strokeDash: number; strokeGap: number; strokeDashPattern?: number[]; strokeDashCap?: StrokeCap };
+    }
   | { type: "previewEffect"; id: string | null; kind?: EffectKind }
   | { type: "removeGuide"; id: string }
   | { type: "makeComponent" }

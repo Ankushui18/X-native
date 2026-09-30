@@ -62,9 +62,43 @@ export function sideCones(x: number, y: number, w: number, h: number): [number, 
   ];
 }
 
+/** An ellipse that has been carved into an arc or donut — the only state
+ *  where a join setting has anything to meet. Mirrors the canvas predicate
+ *  for the arc handles. */
+export function ellipseArced(n: XNode): boolean {
+  const a = n.arcData;
+  if (!a) return false;
+  return (
+    a.endingAngle < Math.PI * 2 - 0.001 ||
+    a.startingAngle > 0.001 ||
+    a.innerRadius > 0.001
+  );
+}
+
 /** Only allows individual strokes on rectangles, frames, components and instances. */
 export function sidesSupported(kind: XNode["kind"]): boolean {
   return kind === "rect" || kind === "frame" || kind === "component" || kind === "instance";
+}
+
+/** The stroke-style pills: one patch each, one undo each, and the hovered
+ *  preset is what the canvas hover preview draws. */
+export const STROKE_STYLES: {
+  id: "solid" | "dashed" | "dotted";
+  label: string;
+  patch: { strokeDash: number; strokeGap: number; strokeDashPattern: number[]; strokeDashCap?: "round" };
+}[] = [
+  { id: "solid", label: "Solid", patch: { strokeDash: 0, strokeGap: 0, strokeDashPattern: [] } },
+  { id: "dashed", label: "Dashed", patch: { strokeDash: 10, strokeGap: 10, strokeDashPattern: [] } },
+  { id: "dotted", label: "Dotted", patch: { strokeDash: 2, strokeGap: 8, strokeDashPattern: [], strokeDashCap: "round" } },
+];
+
+/** Which pill the node is currently on, for the seg's `on` state. */
+export function strokeStyleOf(n: XNode): "solid" | "dashed" | "dotted" | "custom" {
+  if (n.strokeDashPattern?.length) return "custom";
+  const d = n.strokeDash || 0;
+  const g = n.strokeGap || d;
+  const hit = STROKE_STYLES.find((s) => s.patch.strokeDash === d && s.patch.strokeGap === g);
+  return hit ? hit.id : d > 0 ? "custom" : "solid";
 }
 
 /**
@@ -205,16 +239,88 @@ export function isBranchingNetwork(net: VectorNetwork | undefined): boolean {
 }
 
 /** A shared restriction for the inspector and every variable-width renderer. */
+/** Brush strokes paint three bristle passes: a base plus two offset along the
+ *  bristle direction (degrees from +x), thinner. Offsets are in strokeWidth
+ *  units; the painter scales them by the weight. */
+export function brushStrokePasses(angleDeg: number | undefined): {
+  dx: number;
+  dy: number;
+  wMul: number;
+}[] {
+  const a = ((angleDeg ?? 0) * Math.PI) / 180;
+  const spread = 0.35;
+  return [
+    { dx: 0, dy: 0, wMul: 1 },
+    { dx: Math.cos(a) * spread, dy: Math.sin(a) * spread, wMul: 0.6 },
+    { dx: -Math.cos(a) * spread, dy: -Math.sin(a) * spread, wMul: 0.6 },
+  ];
+}
+
+/** Dynamic strokes: displace an already device-space polyline off its own
+ *  centerline — `freq` waves per 100px, `wiggle` amplitude in device px,
+ *  `smooth` 0..100 morphs triangle (0) to sine (100). Vertices are densified
+ *  to ≤3px first so a short path still shows whole waves. */
+export function dynamicWobble(
+  pts: readonly { x: number; y: number }[],
+  closed: boolean,
+  freq: number,
+  wiggle: number,
+  smooth: number,
+): { x: number; y: number }[] {
+  if (pts.length < 2 || !(wiggle > 0)) return pts.map((p) => ({ ...p }));
+  const chain = closed ? [...pts, pts[0]] : pts;
+  // Densify to ≤3px so the phase is sampled honestly between anchors.
+  const dense: { x: number; y: number }[] = [{ ...chain[0] }];
+  for (let i = 1; i < chain.length; i++) {
+    const a = chain[i - 1];
+    const b = chain[i];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    const steps = Math.max(1, Math.ceil(seg / 3));
+    for (let k = 1; k <= steps; k++)
+      dense.push({ x: a.x + ((b.x - a.x) * k) / steps, y: a.y + ((b.y - a.y) * k) / steps });
+  }
+  const s = Math.min(1, Math.max(0, (smooth ?? 50) / 100));
+  const tri = (t: number) => (2 / Math.PI) * Math.asin(Math.sin(t));
+  const wave = (dist: number) => {
+    const phase = (dist / 100) * (freq > 0 ? freq : 4) * Math.PI * 2;
+    return ((1 - s) * tri(phase) + s * Math.sin(phase)) * wiggle;
+  };
+  const out: { x: number; y: number }[] = [];
+  let dist = 0;
+  for (let i = 0; i < dense.length; i++) {
+    const p = dense[i];
+    const prev = dense[Math.max(0, i - 1)];
+    const next = dense[Math.min(dense.length - 1, i + 1)];
+    dist += i ? Math.hypot(p.x - prev.x, p.y - prev.y) : 0;
+    const tx = next.x - prev.x;
+    const ty = next.y - prev.y;
+    const len = Math.hypot(tx, ty) || 1;
+    const off = wave(dist);
+    out.push({ x: p.x + (-ty / len) * off, y: p.y + (tx / len) * off });
+  }
+  return out;
+}
+
 export function variableWidthBlockReason(n: XNode): string | null {
   if (isBranchingNetwork(n.vectorNetwork)) return "Split vector to use variable width";
   if (n.strokeDash > 0 || n.strokeDashPattern?.length) return "Remove dashes to use variable width";
+  if (n.strokeType === "pattern") return "Use a solid stroke to vary width";
+  if (n.strokeType === "brush" || n.brushStroke) return "Brush strokes use a fixed width";
+  if (n.strokeType === "dynamic") return "Dynamic strokes use a fixed width";
   return null;
+}
+
+/** Whether `n` has a stroke that paints anything at all: visible, nonzero,
+ *  and not the none-sentinel. The variable-width outline and the canvas
+ *  width-point handles share this gate. */
+export function strokePaints(n: XNode): boolean {
+  return !!(n.strokeVisible && n.strokeWidth > 0 && n.strokePaint && !isNonePaint(n.strokePaint));
 }
 
 /** Whether `n` paints its base stroke through the variable-width outline. */
 export function usesVariableWidth(n: XNode): boolean {
   if (n.kind !== "vector" && n.kind !== "line" && n.kind !== "arrow") return false;
-  if (!(n.strokeWidth > 0) || !n.strokeVisible || !n.strokePaint || isNonePaint(n.strokePaint)) return false;
+  if (!strokePaints(n)) return false;
   // A profiled outline follows one centerline; on a branching network it
   // would swallow the branches' strokes, so branching stays uniform.
   if (variableWidthBlockReason(n)) return false;

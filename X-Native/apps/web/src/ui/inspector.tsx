@@ -50,6 +50,9 @@ import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from 
 import { evalField, evalFieldMany, hasExpression } from "./fieldExpr";
 import {
   SIDES,
+  STROKE_STYLES,
+  ellipseArced,
+  strokeStyleOf,
   variableWidthBlockReason,
   normalizeWidthProfile,
   parseDashPattern,
@@ -3507,6 +3510,16 @@ function Design({
           ? "Rectangle"
           : n.kind[0].toUpperCase() + n.kind.slice(1);
   const patch = (p: Partial<XNode>) => engine.dispatch({ type: "patch", id: n.id, patch: p });
+  /** Run 24 — brush/dynamic strokes are centre-only and never dashed. */
+  const brushish = n.strokeType === "brush" || n.strokeType === "dynamic";
+  /** Run 24 — hover previews: render-only strokes that clear on leave/blur. */
+  const pvStroke = (fields: {
+    align?: "inside" | "center" | "outside";
+    cap?: import("../engine/types").StrokeCap;
+    join?: import("../engine/types").StrokeJoin;
+    dash?: { strokeDash: number; strokeGap: number; strokeDashPattern?: number[]; strokeDashCap?: import("../engine/types").StrokeCap };
+  }) => engine.dispatch({ type: "previewStroke", id: n.id, ...fields });
+  const pvStrokeClear = () => engine.dispatch({ type: "previewStroke", id: null });
   /* Re-fits a text layer the moment a resizing mode is chosen, and after
    * any type metric that changes how much room the copy needs. The flags and
    * the box have to travel in the same patch: sizing alone leaves a stale box
@@ -6510,9 +6523,25 @@ function Design({
                 : engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeType: "solid", strokeVisible: true } })
             }
             onValueChange={(v) => {
-              const stroke = { strokePaint: v.color, strokeType: v.type === "pattern" ? "pattern" as const : "solid" as const,
-                strokePattern: v.type === "pattern" ? v.pattern : undefined,
-                strokeOpacity: v.opacity / 100, strokeVisible: true };
+              const type =
+                v.type === "pattern" || v.type === "brush" || v.type === "dynamic" ? v.type : ("solid" as const);
+              const switching = type !== (n.strokeType ?? "solid");
+              const centreOnly = switching && (type === "brush" || type === "dynamic");
+              const stroke = {
+                strokePaint: v.color,
+                strokeType: type,
+                strokePattern: type === "pattern" ? v.pattern : undefined,
+                strokeOpacity: v.opacity / 100,
+                strokeVisible: true,
+                // Run 24 — becoming brush/dynamic lands centre-aligned and
+                // undashed in the SAME patch, so one undo leaves the old style.
+                ...(centreOnly
+                  ? { strokeAlign: "center" as const, strokeDash: 0, strokeGap: 0, strokeDashPattern: [] as number[] }
+                  : {}),
+                ...(switching && type === "dynamic"
+                  ? { strokeDynFreq: n.strokeDynFreq ?? 4, strokeDynWiggle: n.strokeDynWiggle ?? 6, strokeDynSmooth: n.strokeDynSmooth ?? 50 }
+                  : {}),
+              };
               if (multi) patchMany(stroke);
               else engine.dispatch({ type: "patch", id: n.id, patch: stroke });
             }}
@@ -6569,6 +6598,14 @@ function Design({
                 { value: "center", label: "Center" },
                 { value: "outside", label: "Outside" },
               ]}
+              disabled={brushish}
+              title={brushish ? "Brush and dynamic strokes are centre-only" : undefined}
+              onFocus={() => pvStroke({ align: n.strokeAlign })}
+              onBlur={pvStrokeClear}
+              onOptionPreview={(v) => {
+                if (!v) pvStrokeClear();
+                else if (v === "inside" || v === "center" || v === "outside") pvStroke({ align: v });
+              }}
               onChange={(value) => {
                 if (value !== "inside" && value !== "center" && value !== "outside") return;
                 if (multi) patchMany((m) => m.kind === "line" || m.kind === "arrow" ? {} : { strokeAlign: value });
@@ -6643,26 +6680,48 @@ function Design({
                             ? "Diamond tip"
                             : `Cap ${c}`
                 }
-                onClick={() => patch({ strokeCap: c, strokeCapEnd: c })}
+                onMouseEnter={() => pvStroke({ cap: c })}
+                onMouseLeave={pvStrokeClear}
+                onFocus={() => pvStroke({ cap: c })}
+                onBlur={pvStrokeClear}
+                onClick={() => {
+                  pvStrokeClear();
+                  patch({ strokeCap: c, strokeCapEnd: c });
+                }}
               >
                 <Icon name={c === "arrow" ? "arrow" : c === "triangle" ? "poly" : `cap-${c}`} size={14} />
               </button>
             ))}
           </div>
-          {(n.kind !== "line") && (
-          <div className="seg icons" title="Join">
+          <div
+            className="seg icons"
+            title={
+              n.kind === "line"
+                ? "Lines have no joins"
+                : n.kind === "ellipse" && !ellipseArced(n)
+                  ? "Ellipses have joins only once arced"
+                  : "Join"
+            }
+          >
             {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
               <button
                 key={j}
                 className={n.strokeJoin === j ? "on" : ""}
                 title={`Join ${j}`}
-                onClick={() => patch({ strokeJoin: j })}
+                disabled={n.kind === "line" || (n.kind === "ellipse" && !ellipseArced(n))}
+                onMouseEnter={() => pvStroke({ join: j })}
+                onMouseLeave={pvStrokeClear}
+                onFocus={() => pvStroke({ join: j })}
+                onBlur={pvStrokeClear}
+                onClick={() => {
+                  pvStrokeClear();
+                  patch({ strokeJoin: j });
+                }}
               >
                 <Icon name={`join-${j}`} size={14} />
               </button>
             ))}
           </div>
-          )}
           <button
             className={`icon-btn${strokeMore ? " on" : ""}`}
             title="Advanced stroke settings"
@@ -6673,6 +6732,83 @@ function Design({
             <Icon name="dash" size={14} />
           </button>
           </div>
+          <div className="seg stroke-style" role="group" aria-label="Stroke style">
+            {STROKE_STYLES.map((st) => (
+              <button
+                key={st.id}
+                className={strokeStyleOf(n) === st.id ? "on" : ""}
+                disabled={brushish}
+                title={brushish ? "Brush and dynamic strokes cannot be dashed" : st.label}
+                onMouseEnter={() =>
+                  pvStroke({
+                    dash: {
+                      strokeDash: st.patch.strokeDash,
+                      strokeGap: st.patch.strokeGap,
+                      strokeDashPattern: st.patch.strokeDashPattern,
+                      strokeDashCap: st.patch.strokeDashCap,
+                    },
+                  })
+                }
+                onMouseLeave={pvStrokeClear}
+                onFocus={() =>
+                  pvStroke({
+                    dash: {
+                      strokeDash: st.patch.strokeDash,
+                      strokeGap: st.patch.strokeGap,
+                      strokeDashPattern: st.patch.strokeDashPattern,
+                      strokeDashCap: st.patch.strokeDashCap,
+                    },
+                  })
+                }
+                onBlur={pvStrokeClear}
+                onClick={() => {
+                  pvStrokeClear();
+                  patch({
+                    strokeDash: st.patch.strokeDash,
+                    strokeGap: st.patch.strokeGap,
+                    strokeDashPattern: st.patch.strokeDashPattern,
+                    ...(st.patch.strokeDashCap ? { strokeDashCap: st.patch.strokeDashCap } : {}),
+                  });
+                }}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
+          {n.strokeType === "brush" && (
+            <Field
+              label="dir"
+              aria="Brush direction"
+              hint="Bristle direction, degrees"
+              value={n.strokeBrushAngle ?? 0}
+              onChange={(v) => patch({ strokeBrushAngle: ((Math.round(v) % 360) + 360) % 360 })}
+            />
+          )}
+          {n.strokeType === "dynamic" && (
+            <>
+              <Field
+                label="freq"
+                aria="Dynamic frequency"
+                hint="Waves per 100px"
+                value={n.strokeDynFreq ?? 4}
+                onChange={(v) => patch({ strokeDynFreq: Math.max(0, Math.min(50, v)) })}
+              />
+              <Field
+                label="wiggle"
+                aria="Dynamic wiggle"
+                hint="Amplitude in px"
+                value={n.strokeDynWiggle ?? 6}
+                onChange={(v) => patch({ strokeDynWiggle: Math.max(0, Math.min(100, v)) })}
+              />
+              <Field
+                label="smooth"
+                aria="Dynamic smooth"
+                hint="0 = triangle wave, 100 = sine"
+                value={n.strokeDynSmooth ?? 50}
+                onChange={(v) => patch({ strokeDynSmooth: Math.max(0, Math.min(100, Math.round(v))) })}
+              />
+            </>
+          )}
           {((n.kind === "line" || n.kind === "arrow" || n.kind === "vector") && !n.closed) && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 6, marginTop: 4, alignItems: "end" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -6746,17 +6882,27 @@ function Design({
           {(n.kind === "vector" || n.kind === "line" || n.kind === "arrow") &&
             n.strokeWidth > 0 && <WidthProfileEditor node={n} patch={patch} />}
           {strokeMore && (
-            <div className="adv-stroke">
+            <div className="adv-stroke" title={brushish ? "Brush and dynamic strokes cannot be dashed" : undefined}>
               <div className="grid2">
-                <Field label="–" value={n.strokeDash} onChange={(strokeDash) => patch({ strokeDash })} />
+                <Field
+                  label="–"
+                  value={n.strokeDash}
+                  disabled={brushish}
+                  disabledTitle="Brush and dynamic strokes cannot be dashed"
+                  onChange={(strokeDash) => patch({ strokeDash })}
+                />
                 <Field
                   label="gap"
                   value={n.strokeGap || n.strokeDash}
+                  disabled={brushish}
+                  disabledTitle="Brush and dynamic strokes cannot be dashed"
                   onChange={(strokeGap) => patch({ strokeGap })}
                 />
               </div>
               <DashPatternField
                 value={n.strokeDashPattern ?? []}
+                disabled={brushish}
+                disabledTitle="Brush and dynamic strokes cannot be dashed"
                 onCommit={(pattern) => patch({ strokeDashPattern: pattern })}
               />
               <div className="seg caps small">
@@ -6766,6 +6912,7 @@ function Design({
                     className={(n.strokeDashCap ?? "butt") === c ? "on" : ""}
                     title={`Dash cap ${c}`}
                     aria-label={`Dash cap ${c}`}
+                    disabled={brushish}
                     onClick={() => patch({ strokeDashCap: c })}
                   >
                     {c}
@@ -8219,9 +8366,13 @@ function WidthProfileEditor({
 function DashPatternField({
   value,
   onCommit,
+  disabled = false,
+  disabledTitle,
 }: {
   value: number[];
   onCommit: (pattern: number[]) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
 }) {
   const text = value.length ? value.join(", ") : "";
   const [draft, setDraft] = useState(text);
@@ -8243,11 +8394,13 @@ function DashPatternField({
   };
   return (
     <div className="field">
-      <label title="Custom dash pattern · dash, gap, dash, gap…">dashes</label>
+      <label title={disabled && disabledTitle ? disabledTitle : "Custom dash pattern · dash, gap, dash, gap…"}>dashes</label>
       <input
         aria-label="Dash pattern"
         value={draft}
         placeholder="10, 20, 80, 20"
+        disabled={disabled}
+        title={disabled ? disabledTitle : undefined}
         className={bad ? "bad" : ""}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}

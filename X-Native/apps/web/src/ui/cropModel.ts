@@ -58,13 +58,16 @@ export function cropHandleRects(
  * Drag an edge/corner handle; the pointer arrives in image-normalised
  * coordinates. Corners keep the region's pixel aspect equal to the image's
  * (square in normalised space) unless freed; ⌥ mirrors about the centre.
+ * `aspect` retargets the lock — the region's width/height in normalised
+ * space (1 = the original image, a selected ratio R in pixels arrives as
+ * R·ih/iw) — so a ratio picker shares the same math as the default lock.
  */
 export function dragCropHandle(
   rect: CropRect,
   handle: CropHandle,
   u: number,
   v: number,
-  opts?: { lockAspect?: boolean; symmetric?: boolean },
+  opts?: { lockAspect?: boolean; symmetric?: boolean; aspect?: number },
 ): CropRect {
   const sym = !!opts?.symmetric;
   const lock = !!opts?.lockAspect && handle.length === 2;
@@ -98,17 +101,25 @@ export function dragCropHandle(
     if (south) ny2 = v;
   }
   if (lock) {
-    const s = Math.max(0.01, nx2 - nx, ny2 - ny);
+    // One governed dimension: the region grows to cover the pointer's larger
+    // span, the other follows the target width/height ratio (1 = the square
+    // normalised region whose pixel aspect is the original image's). The
+    // opposite edges stay put — the anchor pixel does not move.
+    const a = opts?.aspect && opts.aspect > 0 ? opts.aspect : 1;
+    const spanW = nx2 - nx;
+    const spanH = ny2 - ny;
+    const s = Math.max(0.01, spanW / a, spanH);
+    const w2 = a * s;
     if (sym) {
       const cx = rect.x + rect.w / 2;
       const cy = rect.y + rect.h / 2;
-      nx = cx - s / 2;
-      nx2 = cx + s / 2;
+      nx = cx - w2 / 2;
+      nx2 = cx + w2 / 2;
       ny = cy - s / 2;
       ny2 = cy + s / 2;
     } else {
-      if (west) nx = nx2 - s;
-      else nx2 = nx + s;
+      if (west) nx = nx2 - w2;
+      else nx2 = nx + w2;
       if (north) ny = ny2 - s;
       else ny2 = ny + s;
     }

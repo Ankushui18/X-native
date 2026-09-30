@@ -299,6 +299,10 @@ export function XSelect({
   disabled = false,
   ariaLabel,
   style,
+  title,
+  onOptionPreview,
+  onFocus,
+  onBlur,
 }: {
   value: string;
   options: XSelectOption[];
@@ -306,6 +310,14 @@ export function XSelect({
   disabled?: boolean;
   ariaLabel?: string;
   style?: React.CSSProperties;
+  /** Why the control is disabled (hovered tooltip), like a native select. */
+  title?: string;
+  /** Run 24 — hover/focus preview: called with the option under the pointer,
+   *  and with null when the pointer or focus leaves. `option` mouse events do
+   *  bubble, so a native select can still drive a canvas preview. */
+  onOptionPreview?: (val: string | null) => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
 }) {
   return (
     <select
@@ -313,11 +325,19 @@ export function XSelect({
       value={value}
       disabled={disabled}
       aria-label={ariaLabel}
+      title={title}
       onChange={(e) => onChange(e.target.value)}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onMouseLeave={() => onOptionPreview?.(null)}
       style={style}
     >
       {options.map((opt) => (
-        <option key={opt.value} value={opt.value}>
+        <option
+          key={opt.value}
+          value={opt.value}
+          onMouseOver={() => onOptionPreview?.(opt.value)}
+        >
           {opt.label}
         </option>
       ))}
