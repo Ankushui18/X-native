@@ -737,6 +737,13 @@ function LayerRowImpl({
  * Keyboard follows the dock's flyouts: the trigger opens the menu, Arrow keys
  * walk the rows, Escape closes it and hands the caret back to the trigger.
  */
+/** File ▸ Export assets… (⇧⌘E). The dialog is App-owned and asked for by event
+ *  (App.tsx:536), so the File menu, the Export section's "All…" link, the
+ *  command palette row and the chord all open the same sheet. */
+export function openExportAssets(): void {
+  window.dispatchEvent(new CustomEvent("x-native-export-dialog"));
+}
+
 export function FileMenu({
   engine,
   snap,
@@ -848,6 +855,10 @@ export function FileMenu({
             }
           >
             <Icon name="import" size={14} /> Open local copy…
+          </button>
+          <button role="menuitem" onClick={() => run(openExportAssets)}>
+            <Icon name="image" size={14} /> Export assets…
+            <span className="sc">⇧⌘E</span>
           </button>
         </div>
       )}
@@ -1691,7 +1702,7 @@ export function Actions({
     { label: "Marking / Radial menu", sc: "", run: () => window.dispatchEvent(new CustomEvent("x-native-radial-menu")) },
     { label: "Clean up vector (sketch to Bézier)", sc: "", run: () => { if (allowTopologyEdit(engine)) engine.dispatch({ type: "vectorCleanup" }); } },
     { label: "Minimize UI", sc: "⇧⌘\\", run: () => onMinimize?.() },
-    { label: "Export assets…", sc: "⇧⌘E", run: () => window.dispatchEvent(new CustomEvent("x-native-export-dialog")) },
+    { label: "Export assets…", sc: "⇧⌘E", run: openExportAssets },
     { label: "Dev Mode", sc: "⇧D", run: () => engine.dispatch({ type: "setRightTab", tab: "inspect" }) },
     {
       label: "Annotate selection",
@@ -2953,7 +2964,7 @@ export function bindHotkeys(
     // ⇧⌘E — bulk-export command (File ▸ Export…).
     if (meta && e.shiftKey && e.key.toLowerCase() === "e") {
       e.preventDefault();
-      window.dispatchEvent(new CustomEvent("x-native-export-dialog"));
+      openExportAssets();
       return;
     }
     // ⇧⌘S — File ▸ Save local copy, Figma's own chord for it. Handled here

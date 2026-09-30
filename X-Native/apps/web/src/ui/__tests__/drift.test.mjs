@@ -88,8 +88,8 @@ const CEILING = {
   "announce.tsx": [0, 0, 0, 0, 0],
   // Raised 2026-09-30 for the File menu (P0-2): a trigger and two rows, the
   // chrome's first menu of its own — no title and no inline style, so only
-  // the button row moves.
-  "chrome.tsx": [49, 4, 41, 68, 2],
+  // the button row moves. One more row for Export assets… (P0-4).
+  "chrome.tsx": [49, 4, 41, 69, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],
   "inspector.tsx": [186, 44, 243, 198, 45],

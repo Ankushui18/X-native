@@ -126,6 +126,15 @@ console.log("S-E stroke spill:");
   t("extras count", strokeSpill(rect({ strokeAlign: "inside", strokes: [{ color: "#111", opacity: 1, visible: true, width: 6, align: "outside" }] })) === 6);
   t("hidden extras do not", strokeSpill(rect({ strokeAlign: "inside", strokes: [{ color: "#111", opacity: 1, visible: false, width: 6, align: "outside" }] })) === 0);
   t("lines force centre", strokeSpill({ ...rect(), kind: "line", strokeAlign: "outside" }) === 5);
+  // An open path is centre-stroked wherever it is painted (P0-4), so its
+  // clickable area spills by half the weight too — including in a document
+  // that still stores the pre-P0-3 "inside" on it. A closed shape stays put.
+  const open = { ...rect(), kind: "vector", closed: false, strokeAlign: "inside" };
+  t("open paths are centre even when the document says inside", strokeSpill(open) === 5);
+  t("...and spill the same as one stored centre", strokeSpill({ ...open, strokeAlign: "center" }) === 5);
+  t("a closed shape stored inside still never spills", strokeSpill({ ...open, closed: true }) === 0);
+  t("an open line-shaped path with an inside extra spills the extra's half",
+    strokeSpill({ ...open, strokes: [{ color: "#111", opacity: 1, visible: true, width: 6, align: "inside" }] }) === 5);
 }
 
 console.log("S-F spilled strokes stay clickable:");

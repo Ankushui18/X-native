@@ -52,6 +52,7 @@ import {
   dynamicWobble,
   dashOffset,
   normalizeWidthProfile,
+  paintedStrokeAlign,
   sampleVariableWidth,
   strokePaints,
   sideCones,
@@ -1743,12 +1744,12 @@ export function Canvas({
           const traceBooleanStroke = (append = false) => tracePath(
             ctx, n.path.length ? n.path : shapePoly(n), snap.panX + x * z, snap.panY + y * z, z, true, append,
           );
-          if (n.strokeAlign === "inside") {
+          if (paintedStrokeAlign(n, n.strokeAlign) === "inside") {
             traceBooleanStroke();
             ctx.clip();
             traceBooleanStroke();
             ctx.lineWidth *= 2;
-          } else if (n.strokeAlign === "outside") {
+          } else if (paintedStrokeAlign(n, n.strokeAlign) === "outside") {
             ctx.beginPath();
             ctx.rect(-1e6, -1e6, 2e6, 2e6);
             traceBooleanStroke(true);
@@ -2175,9 +2176,7 @@ export function Canvas({
               ? "center"
               : onPv && onPv.align
                 ? onPv.align
-                : n.kind === "line" || n.kind === "arrow"
-                  ? "center"
-                  : n.strokeAlign;
+                : paintedStrokeAlign(n, n.strokeAlign);
           if (align === "inside") {
             ctx.save();
             ctx.clip();

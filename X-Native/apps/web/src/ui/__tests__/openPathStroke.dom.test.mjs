@@ -58,18 +58,55 @@ const straightSegment = async () => {
   t("...with round caps", nodeOf(id).strokeCap === "round", nodeOf(id).strokeCap);
 }
 
-// 2. The control: the same geometry forced back to "inside" (the old default,
-//    still reachable from the inspector) is the doubled band — which is what
-//    makes the width above a real discriminator rather than a coin.
+// 2. Old documents: an open path stored with the pre-P0-3 default keeps
+//    painting. The paint guard (`paintedStrokeAlign`) overrides the stored
+//    flag, so the inside pick below is not honoured on an open path — which is
+//    the ratified decision, and the reason the width above is a real
+//    discriminator rather than a coin.
 {
   const id = snap().selection[0];
   const mark = ui.ctx.strokes.length;
   await ui.dispatch({ type: "patch", id, patch: { strokeAlign: "inside" } });
   const ink = inkSince(mark);
-  t("an inside stroke is still drawn as the doubled band", ink.length === 1 && ink[0].width === 4, widths(ink));
+  t("an open path stored inside still paints one band", ink.length === 1, widths(ink));
+  t("...at its own weight, not the doubled clip band", ink[0]?.width === 2, widths(ink));
 }
 
-// 3. The brush, which the renderer has always forced to centre, keeps painting
+// 3. An individual ("extra") stroke on the same open path is centre-stroked
+//    too: the pass that paints extras reaches the same conclusion, so an
+//    inside extra cannot quietly disappear behind the same zero-area clip.
+{
+  const id = snap().selection[0];
+  const mark = ui.ctx.strokes.length;
+  await ui.dispatch({
+    type: "patch",
+    id,
+    patch: { strokes: [{ color: "#ff0000", opacity: 1, visible: true, width: 6, align: "inside" }] },
+  });
+  const extra = since(mark).filter((s) => s.inDoc && s.color === "rgba(255,0,0,1)");
+  t("an inside extra stroke on an open path paints", extra.length > 0, widths(extra));
+  t("...at its own weight, not the doubled clip band", extra.some((s) => s.width === 6), widths(extra));
+  t("...and never at the doubled width", extra.every((s) => s.width !== 12), widths(extra));
+  await ui.dispatch({ type: "patch", id, patch: { strokes: [] } });
+}
+
+// 4. The control on a shape where "inside" means something: a closed rectangle
+//    keeps the doubled, clipped band. If this ever went to 2, the guard would
+//    have spread past open paths and broken inside strokes for real shapes.
+{
+  const mark = ui.ctx.strokes.length;
+  await ui.dispatch({ type: "add", kind: "rect", x: 600, y: 200, w: 120, h: 80 });
+  const id = snap().selection[0];
+  await ui.dispatch({
+    type: "patch",
+    id,
+    patch: { strokeVisible: true, strokePaint: "#1e1e1e", strokeWidth: 2, strokeAlign: "inside" },
+  });
+  const ink = inkSince(mark);
+  t("a closed shape's inside stroke is still the doubled band", ink.some((s) => s.width === 4), widths(ink));
+}
+
+// 5. The brush, which the renderer has always forced to centre, keeps painting
 //    at its own weight.
 {
   const mark = ui.ctx.strokes.length;

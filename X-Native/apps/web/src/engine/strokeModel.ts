@@ -1,4 +1,4 @@
-import type { StrokeSides, VariableWidthPoint, VariableWidthProfile, VectorNetwork, XNode } from "./types";
+import type { StrokeAlign, StrokeSides, VariableWidthPoint, VariableWidthProfile, VectorNetwork, XNode } from "./types";
 
 /**
  * The stroke and effect rules that need no canvas, kept apart from the painter
@@ -332,23 +332,44 @@ function isNonePaint(paint: string): boolean {
 }
 
 /**
+ * The alignment a stroke is actually painted with, as opposed to the one the
+ * document stores.
+ *
+ * Lines and arrows are centre by definition (Figma: "most shapes are set to
+ * inside by default, except for lines which are set to center"), and so is any
+ * path the user has not closed: an open path encloses no region, so the inside
+ * and outside constructions — a doubled band clipped to the path — paint
+ * nothing at all. Documents written before this rule still store "inside" on
+ * open paths, so the rule lives here, at paint and export time, rather than in
+ * a migration.
+ */
+export function paintedStrokeAlign(
+  n: Pick<XNode, "kind" | "closed">,
+  align: StrokeAlign | undefined,
+): StrokeAlign {
+  if (n.kind === "line" || n.kind === "arrow") return "center";
+  if (n.kind === "vector" && !n.closed) return "center";
+  return align ?? "inside";
+}
+
+/**
  * How far a node's visible strokes spill past its box: outside strokes by
  * their full weight, centre strokes by half — painted pixels stay clickable.
  * Inside strokes never leave the box. Variable-width centerlines spill by
  * their hottest point.
  */
 export function strokeSpill(n: XNode): number {
-  const spill = (w: number, align: string | undefined) =>
+  const spill = (w: number, align: StrokeAlign) =>
     align === "outside" ? Math.max(0, w) : align === "center" ? Math.max(0, w) / 2 : 0;
-  const forced = n.kind === "line" || n.kind === "arrow" ? "center" : undefined;
+  const alignOf = (a: StrokeAlign | undefined) => paintedStrokeAlign(n, a);
   let pad = 0;
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint && !isNonePaint(n.strokePaint)) {
     const w = usesVariableWidth(n) ? n.strokeWidth * maxWidthMultiplier(n.strokeWidthProfile) : n.strokeWidth;
-    pad = Math.max(pad, spill(w, forced ?? n.strokeAlign));
+    pad = Math.max(pad, spill(w, alignOf(n.strokeAlign)));
   }
   for (const s of n.strokes ?? []) {
     if (s.visible === false || !(s.width > 0) || !s.color || isNonePaint(s.color)) continue;
-    pad = Math.max(pad, spill(s.width, forced ?? s.align));
+    pad = Math.max(pad, spill(s.width, alignOf(s.align)));
   }
   return pad;
 }
