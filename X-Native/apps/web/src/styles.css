@@ -2361,10 +2361,18 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
 .help-pop {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.24);
   z-index: 80;
-  display: grid;
-  place-items: center;
+}
+/* Figma's shortcuts panel docks at the bottom without veiling the canvas. Keep
+   the viewport-sized placement layer transparent to pointer input so the user
+   can keep editing while the panel is open; only the card itself receives it. */
+.help-pop.shortcuts-dock {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 12px 12px;
+  background: transparent;
+  pointer-events: none;
 }
 .help-card {
   width: 280px;
@@ -2374,6 +2382,7 @@ body.eyedrop, body.eyedrop * { cursor: crosshair !important; }
   padding: 8px 0 12px;
 }
 .help-card.shortcuts-sheet {
+  pointer-events: auto;
   width: 600px;
   max-width: 92vw;
   max-height: 82vh;

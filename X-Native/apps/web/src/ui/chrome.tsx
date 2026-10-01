@@ -4581,7 +4581,9 @@ export function HelpBtn() {
   // PM-U3: the sheet joins the one Escape cascade. Its own bubble listener was
   // starved whenever an App overlay was open — with Find open and this sheet
   // opened on top of it, Escape closed Find and left the sheet up.
-  useEscape(open ? "shortcuts" : null, () => setOpen(false), true);
+  // Unlike dialogs, Figma's shortcuts panel stays available while the canvas is
+  // being used. It participates in Escape ordering but must not claim modality.
+  useEscape(open ? "shortcuts" : null, () => setOpen(false));
 
   // The dashboard's header has no editor to hang a sheet on, so it asks for
   // this one through an event instead of duplicating the modal.
@@ -4685,8 +4687,8 @@ export function HelpBtn() {
         <Icon name="help" size={14} />
       </button>
       {open && (
-        <div className="help-pop" onClick={() => setOpen(false)}>
-          <div className="help-card shortcuts-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="help-pop shortcuts-dock">
+          <div className="help-card shortcuts-sheet">
             <div className="shortcuts-head">
               <h3>Keyboard Shortcuts</h3>
               <button className="shortcuts-close" onClick={() => setOpen(false)} aria-label="Close">
