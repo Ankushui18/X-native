@@ -119,7 +119,7 @@ t("and the phone override that did is gone", !/\.dock::-webkit-scrollbar/.test(c
 /* ── PM-U6: the export sheet opens with the keyboard already inside it ───── */
 
 const sheet = await mountSurface("inspector", {
-  // A frame is the sheet's own export unit, so the list has a row to focus past.
+  // A configured frame gives the sheet a row to focus past.
   layer(engine) {
     engine.dispatch({
       type: "add",
@@ -130,7 +130,9 @@ const sheet = await mountSurface("inspector", {
       h: 852,
       extra: { name: "Home" },
     });
-    return engine.snapshot().selection[0];
+    const id = engine.snapshot().selection[0];
+    engine.dispatch({ type: "patch", id, patch: { exports: [{ format: "PNG", scale: 1, suffix: "" }] } });
+    return id;
   },
   props: { exportOpen: true, onCloseExport: () => {} },
 });

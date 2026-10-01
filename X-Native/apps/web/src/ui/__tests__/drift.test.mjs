@@ -67,16 +67,24 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  ink/geometry (not chrome); three native buttons provide aria-pressed layer
  *  selection/canvas semantics and form submission. Other controls use XButton;
  *  its title/colour debt starts at zero.
- *  Minimap.tsx and Rulers.tsx are at zero: they have no literals left to drift. */
+ *  Minimap.tsx and Rulers.tsx are at zero: they have no literals left to drift.
+ *  Raised 2026-10-01 for the Crop an image audit: its canvas crop toolbar adds
+ *  one colour literal, three action buttons, and one aspect-ratio select.
+ *  Raised 2026-10-01 for the Guide to fills audit: two inspector reorder
+ *  buttons and three tooltips for extra stroke paints. Raised for About color
+ *  models to replace the picker model button with a native select. Raised for
+ *  Manage color profiles: two File-menu profile actions, two export-profile
+  *  selectors, and the inline settings row that lays them out. Raised again
+  *  for Export static designs: one filename hover title on bulk-export thumbnails. */
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [11, 12, 12, 12, 0],
+  "Canvas.tsx": [11, 13, 12, 15, 1],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   "Dashboard.tsx": [1, 0, 11, 33, 1],
   "DialogHost.tsx": [0, 0, 1, 0, 0],
   "FigInspectorModal.tsx": [113, 10, 2, 8, 1],
-  "FillPicker.tsx": [12, 2, 15, 19, 1],
+  "FillPicker.tsx": [12, 2, 15, 18, 2],
   "Guides.tsx": [0, 0, 2, 0, 0],
   "Minimap.tsx": [0, 0, 0, 0, 0],
   "PresentationPlayer.tsx": [5, 0, 12, 9, 2],
@@ -89,10 +97,10 @@ const CEILING = {
   // Raised 2026-09-30 for the File menu (P0-2): a trigger and two rows, the
   // chrome's first menu of its own — no title and no inline style, so only
   // the button row moves. One more row for Export assets… (P0-4).
-  "chrome.tsx": [49, 4, 41, 69, 2],
+  "chrome.tsx": [49, 4, 41, 71, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],
-  "inspector.tsx": [186, 44, 243, 198, 45],
+  "inspector.tsx": [187, 44, 247, 200, 47],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };

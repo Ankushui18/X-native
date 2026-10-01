@@ -212,10 +212,11 @@ const panel = await mountLeftPanel({ props: { onOpenLocalCopy: (name, doc) => vo
   const rows = panel.all('[role="menuitem"]').map((b) => b.textContent?.trim() ?? "");
   t("the menu offers Save local copy", rows.some((r) => /Save local copy/.test(r)), JSON.stringify(rows));
   t("the menu offers Open local copy", rows.some((r) => /Open local copy/.test(r)), JSON.stringify(rows));
-  // The export row is P0-4's; its own suite presses it. Here it only has to be
-  // there, so this file's count of rows stays honest as the menu grows.
+  // Export and color profile management are part of the File menu.
   t("the menu offers Export assets", rows.some((r) => /Export assets/.test(r)), JSON.stringify(rows));
-  t("...and nothing else yet", rows.length === 3, JSON.stringify(rows));
+  t("the menu offers file color profile management", rows.some((r) => /File color profile/.test(r)), JSON.stringify(rows));
+  t("the menu offers a preferred profile for new files", rows.some((r) => /Preferred profile/.test(r)), JSON.stringify(rows));
+  t("all five file actions are present", rows.length === 5, JSON.stringify(rows));
   t("the keyboard starts on the first row", document.activeElement?.getAttribute("role") === "menuitem");
   t("the file picker exists and only accepts JSON", !!panel.one('input[type="file"]') && /json/.test(panel.one('input[type="file"]')?.getAttribute("accept") ?? ""), panel.one('input[type="file"]')?.getAttribute("accept"));
 

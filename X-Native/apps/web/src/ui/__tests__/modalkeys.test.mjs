@@ -300,7 +300,6 @@ const registrations = {
   "App.tsx": ["actions", "export", "fig-inspector", "nudge"],
   "x-ui.tsx": ["dialog"],
   "DialogHost.tsx": ["dialog"],
-  "chrome.tsx": ["shortcuts"],
   "inspector.tsx": ["export-sheet"],
 };
 for (const [file, ids] of Object.entries(registrations)) {
@@ -310,6 +309,8 @@ for (const [file, ids] of Object.entries(registrations)) {
   t(`${file.padEnd(16)} registers [${ids.join(", ")}] as modal (${named.join(", ") || "none"})`,
     named.join() === ids.join());
 }
+const shortcutsNonModal = /useEscape\(open \? "shortcuts" : null, \(\) => setOpen\(false\)\);/.test(read("chrome.tsx"));
+t("the keyboard-shortcuts panel registers for Escape but does not veil canvas input", shortcutsNonModal);
 const findBar = /useEscape\(findOpen \? "find" : null, \(\) => setFindOpen\(false\)\);/.test(app);
 t("and the find bar is deliberately not one — the editor works underneath it", findBar);
 

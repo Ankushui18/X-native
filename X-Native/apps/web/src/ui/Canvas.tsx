@@ -73,7 +73,7 @@ import {
   type GapBadge,
   type Guide,
 } from "../engine/snapping";
-import { dropMaskNeeds, fillStyle, gradTarget, mixHex, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, spreadApplies, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst } from "../engine/paint";
+import { dropMaskNeeds, fillStyle, gradTarget, mixHex, paintDropShadowsMasked, paintExtraStrokes, paintFill, paintImageFill, paintInnerShadows, paintStack, patternStrokeStyle, spreadApplies, strokeCanvasMiterLimit, paintsAnyFill, partitionMaskRuns, reduceMaskAlpha, sectionsFirst, processImage, rotatedImageSize } from "../engine/paint";
 import { withPreviewEffect } from "./effectModel";
 import { patternSourceNode, setPatternLookup } from "../engine/pattern";
 import { cropFullExtent, cropHandleRects, dragCropHandle, initialCropRect, layerToImage, moveCrop, type CropHandle, type CropRect } from "./cropModel";
@@ -98,7 +98,8 @@ import {
 } from "../engine/textInput";
 import { smartSymbolsEnabled } from "./smartSymbols";
 import { applyTextCase, canvasTextFont, effectiveLineHeight, firstRowInset, fitLineCount, fontMetricRatios, hugHeight, hugSize, indentOf, invalidateTextMeasureCache, listCounters, listGutter, listLayout, listLevelOf, measureCached, overlayRowShift, paraListStyle, paraWrapOf, textMetrics, valignApplies, wrapLines } from "./textLayout";
-import { canvasBlend, cssRgba, eyedropArmed, isNone, parseHex, readableLabel, takeEyedrop, toHex } from "./color";
+import { canvasBlend, cssRgba, eyedropArmed, getEyedropModel, isNone, parseHex, readableLabel, rgbToHsl, rgbToHsv, setRenderColorProfile, getCanvas2dContext, takeEyedrop, toHex, type EyedropModel } from "./color";
+import { eyedropSourceForNode } from "./eyedropper";
 import { ContextMenu, canvasMenu, isGroupNode, runMenu } from "./ContextMenu";
 import type { ImportedNode } from "../engine/svgImport";
 import { importSvg, importSketch, importFig } from "../engine/wasmBridge";
@@ -259,7 +260,9 @@ type Drag =
         | "arc"
         | "rotOrigin"
         | "crop"
-        | "cropMove";
+        | "cropMove"
+        | "cropRotate"
+        | "cropScale";
       /** Zoom-tool drag: the create block zooms to the rect instead of
        *  committing a node. */
       zoom?: boolean;
@@ -308,6 +311,7 @@ type Drag =
       /** Crop drag: the handle being pulled, and the pointer's last local
        *  point for the move (reposition) variant. */
       cropHandle?: CropHandle;
+      cropScaleEdge?: "n" | "e" | "s" | "w";
       cropLX?: number;
       cropLY?: number;
       /** Crop drag: the rect at drag start; every move recomputes from it. */
@@ -494,7 +498,12 @@ export function Canvas({
   /** Crop tool: the layer being cropped (its rect patches live, one undo
    *  per gesture), plus the pre-tool rect for Esc and a dirty flag. */
   const [cropId, setCropId] = useState<string | null>(null);
+  const [cropAspect, setCropAspect] = useState<"image" | "1:1" | "4:3" | "16:9" | "3:2" | "free">("image");
+  const [cropZoom, setCropZoom] = useState(100);
+  const cropZoomBase = useRef<CropRect | undefined>(undefined);
   const cropOrig = useRef<CropRect | undefined>(undefined);
+  const cropOrigSize = useRef<{ w: number; h: number } | undefined>(undefined);
+  const cropOrigRotation = useRef<number | undefined>(undefined);
   const cropOrigFit = useRef<ImageFit | undefined>(undefined);
   const cropDirty = useRef(false);
   /** The whole session — the mode switch, every drag, the apply — folds into
@@ -513,6 +522,11 @@ export function Canvas({
   const applyCrop = () => {
     cropIdRef.current = null;
     setCropId(null);
+    cropOrigSize.current = undefined;
+    cropOrigRotation.current = undefined;
+    cropZoomBase.current = undefined;
+    setCropZoom(100);
+    setCropAspect("image");
     endCropSession();
   };
   /** Place-image queue: sources picked from the file dialog, placed one per
@@ -553,6 +567,11 @@ export function Canvas({
       applyCrop();
     }
     cropOrig.current = n.imageCrop ? { ...n.imageCrop } : undefined;
+    cropOrigSize.current = { w: n.w, h: n.h };
+    cropOrigRotation.current = n.imageRot ?? 0;
+    cropZoomBase.current = n.imageCrop ? { ...n.imageCrop } : undefined;
+    setCropZoom(100);
+    setCropAspect("image");
     cropOrigFit.current = n.imageFit;
     cropDirty.current = false;
     cropSession.current = true;
@@ -568,7 +587,15 @@ export function Canvas({
   const cancelCrop = () => {
     const id = cropIdRef.current;
     if (id && cropDirty.current) {
-      engine.dispatch({ type: "patch", id, patch: { imageCrop: cropOrig.current } });
+      engine.dispatch({
+        type: "patch",
+        id,
+        patch: {
+          imageCrop: cropOrig.current,
+          ...(cropOrigSize.current ?? {}),
+          ...(cropOrigRotation.current != null ? { imageRot: cropOrigRotation.current } : {}),
+        },
+      });
     }
     if (id && cropOrigFit.current !== undefined) {
       const now = engine.snapshot();
@@ -602,9 +629,46 @@ export function Canvas({
   const cropImageDims = (cn: XNode) => {
     const im = cn.imageSrc ? imgs.current.get(cn.imageSrc) : undefined;
     if (!im || !im.complete || !im.naturalWidth) return null;
-    const rot = ((cn.imageRot % 360) + 360) % 360;
-    const swap = rot === 90 || rot === 270;
-    return { iw: swap ? im.naturalHeight : im.naturalWidth, ih: swap ? im.naturalWidth : im.naturalHeight };
+    const size = rotatedImageSize(im.naturalWidth, im.naturalHeight, cn.imageRot ?? 0);
+    return { iw: size.w, ih: size.h };
+  };
+  const resetCrop = () => {
+    if (!cropId) return;
+    const root = engine.snapshot().pages[engine.snapshot().page].root;
+    const cn = find(root, cropId);
+    const dims = cn && cropImageDims(cn);
+    if (!cn || !dims) return;
+    cropZoomBase.current = undefined;
+    setCropZoom(100);
+    cropDirty.current = true;
+    engine.dispatch({ type: "patch", id: cropId, patch: { imageCrop: undefined, w: dims.iw, h: dims.ih } });
+  };
+  const setCropZoomValue = (value: number) => {
+    if (!cropId) return;
+    const root = engine.snapshot().pages[engine.snapshot().page].root;
+    const cn = find(root, cropId);
+    const dims = cn && cropImageDims(cn);
+    if (!cn || !dims) return;
+    const current = cn.imageCrop ? normalizeCropRect(cn.imageCrop) : coverCrop(dims.iw, dims.ih, cn.w, cn.h);
+    const base = cropZoomBase.current ?? current;
+    cropZoomBase.current = { ...base };
+    const scale = 100 / Math.max(100, value);
+    const w = Math.min(1, base.w * scale);
+    const h = Math.min(1, base.h * scale);
+    const cx = base.x + base.w / 2;
+    const cy = base.y + base.h / 2;
+    const rect = normalizeCropRect({ x: cx - w / 2, y: cy - h / 2, w, h });
+    setCropZoom(Math.max(100, Math.min(400, value)));
+    cropDirty.current = true;
+    engine.dispatch({ type: "patch", id: cropId, patch: { imageCrop: rect } });
+  };
+  const normalizedCropAspect = (dims: { iw: number; ih: number }) => {
+    if (cropAspect === "image") return 1;
+    if (cropAspect === "free") return undefined;
+    const [w, h] = cropAspect.split(":").map(Number);
+    // Crop model geometry is image-normalized. Convert the requested pixel
+    // aspect ratio into normalized width/height for this source image.
+    return (w / h) * (dims.ih / dims.iw);
   };
   // A selection that leaves the cropped layer applies the crop.
   useEffect(() => {
@@ -669,6 +733,17 @@ export function Canvas({
   }, [cropId, placing]);
   const [band, setBand] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const cursorPosRef = useRef<{ x: number; y: number } | null>(null);
+  const eyedropPixel = useRef<{ x: number; y: number; hex: string } | null>(null);
+  const [eyedropModel, setEyedropModelState] = useState<EyedropModel>(getEyedropModel);
+  useEffect(() => {
+    const onModel = (event: Event) => {
+      const model = (event as CustomEvent<EyedropModel>).detail;
+      if (model) setEyedropModelState(model);
+    };
+    window.addEventListener("x-eyedrop-model", onModel);
+    return () => window.removeEventListener("x-eyedrop-model", onModel);
+  }, []);
   const [edit, setEdit] = useState<{ id: string; text: string; also?: string[] } | null>(null);
   /** A URL pasted in place becomes a linked range (360045942953), committed
    *  with the edit on blur so the runs keep their text offsets. */
@@ -1041,6 +1116,15 @@ export function Canvas({
       // not the point editor's digits, not its Delete. Escape is the modal's and
       // is consumed by bindHotkeys before this runs; see ui/escape.ts.
       if (modalOpen() && e.key !== "Escape") return;
+      if (
+        e.type === "keydown" && eyedropArmed() && e.shiftKey && (e.metaKey || e.ctrlKey) &&
+        (e.key === "Enter" || e.code === "Enter")
+      ) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (cursorPosRef.current) completeEyedrop(cursorPosRef.current.x, cursorPosRef.current.y, { shiftKey: true, create: true });
+        return;
+      }
       const targetEl = e.target as HTMLElement;
       const isTyping =
         targetEl?.tagName === "INPUT" ||
@@ -1573,12 +1657,14 @@ export function Canvas({
     const c = ref.current;
     const box = wrap.current;
     if (!c || !box) return;
+    const profile = snap.colorProfile ?? "srgb";
+    setRenderColorProfile(profile);
     const dpr = window.devicePixelRatio || 1;
     const w = box.clientWidth;
     const h = box.clientHeight;
     c.width = Math.max(1, Math.floor(w * dpr));
     c.height = Math.max(1, Math.floor(h * dpr));
-    const mainCtx = c.getContext("2d");
+    const mainCtx = getCanvas2dContext(c);
     if (!mainCtx) return;
     // Swap slot for the offscreen passes below: a mask run, an effects
     // composite and a source tile all re-enter paint() with ctx pointed at
@@ -2506,7 +2592,7 @@ export function Canvas({
           const c = document.createElement("canvas");
           c.width = tw;
           c.height = th;
-          const t = c.getContext("2d");
+          const t = getCanvas2dContext(c);
           if (t) t.setTransform(m.a, m.b, m.c, m.d, m.e - (ox * m.a + oy * m.c), m.f - (ox * m.b + oy * m.d));
           return t;
         };
@@ -2757,7 +2843,7 @@ export function Canvas({
         const bh = Math.max(1, Math.round(((cy1 - cy0) / z) * density));
         if (bw * bh > 16_000_000) continue;
         const tmp = pixelScratch(bw, bh);
-        const tctx = tmp.getContext("2d");
+        const tctx = getCanvas2dContext(tmp);
         if (!tctx) continue;
         tctx.setTransform(1, 0, 0, 1, 0, 0);
         tctx.imageSmoothingEnabled = true;
@@ -4208,8 +4294,10 @@ export function Canvas({
         ctx.restore();
       } else if (eyedropArmed()) {
         try {
-          const d = ctx.getImageData(cx, cy, 1, 1).data;
+          const dpr = window.devicePixelRatio || 1;
+          const d = ctx.getImageData(Math.floor(cx * dpr), Math.floor(cy * dpr), 1, 1).data;
           const hex = toHex(d[0], d[1], d[2]);
+          eyedropPixel.current = { x: cursorPos.x, y: cursorPos.y, hex };
           const loupeR = 34;
           const loupeX = cx;
           const loupeY = Math.max(loupeR + 10, cy - 50);
@@ -4236,9 +4324,20 @@ export function Canvas({
           ctx.lineTo(loupeX, loupeY + 8);
           ctx.stroke();
 
-          // HEX readout pill
+          // The active eyedropper color model drives the live value badge.
+          const rgb = parseHex(hex);
+          const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+          const hsb = rgbToHsv(rgb.r, rgb.g, rgb.b);
+          const readout = eyedropModel === "hex"
+            ? hex.toUpperCase()
+            : eyedropModel === "rgb"
+              ? `R ${rgb.r} G ${rgb.g} B ${rgb.b}`
+              : eyedropModel === "hsl"
+                ? `H ${Math.round(hsl.h)}° S ${Math.round(hsl.s * 100)}% L ${Math.round(hsl.l * 100)}%`
+                : `H ${Math.round(hsb.h)}° S ${Math.round(hsb.s * 100)}% B ${Math.round(hsb.v * 100)}%`;
           ctx.fillStyle = CHIP;
-          const tw = 60;
+          ctx.font = "bold 10px monospace";
+          const tw = Math.max(60, ctx.measureText(readout).width + 14);
           const th = 20;
           const bx = loupeX - tw / 2;
           const by = loupeY + loupeR + 6;
@@ -4250,10 +4349,9 @@ export function Canvas({
             ctx.fillRect(bx, by, tw, th);
           }
           ctx.fillStyle = INK;
-          ctx.font = "bold 10px monospace";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText(hex.toUpperCase(), loupeX, by + th / 2);
+          ctx.fillText(readout, loupeX, by + th / 2);
           ctx.restore();
         } catch {
           // ignore tainted canvas
@@ -4271,10 +4369,13 @@ export function Canvas({
         const bsy = snap.panY + wp.y * z;
         const bsw = cn.w * z;
         const bsh = cn.h * z;
-        const crot = ((cn.imageRot % 360) + 360) % 360;
-        const cswap = crot === 90 || crot === 270;
-        const ciw = cswap ? cim.naturalHeight : cim.naturalWidth;
-        const cih = cswap ? cim.naturalWidth : cim.naturalHeight;
+        const cropSource = processImage(cim, cn);
+        const ciw = typeof HTMLCanvasElement !== "undefined" && cropSource instanceof HTMLCanvasElement
+          ? cropSource.width
+          : cim.naturalWidth;
+        const cih = typeof HTMLCanvasElement !== "undefined" && cropSource instanceof HTMLCanvasElement
+          ? cropSource.height
+          : cim.naturalHeight;
         const crect = initialCropRect(cn.imageCrop, ciw, cih, cn.w, cn.h);
         const full = cropFullExtent({ x: bsx, y: bsy, w: bsw, h: bsh }, crect);
         const ccx = bsx + bsw / 2;
@@ -4296,16 +4397,45 @@ export function Canvas({
         ctx.fill("evenodd");
         ctx.save();
         ctx.globalAlpha = 0.5;
-        if (crot) {
+        const cropRotation = ((cn.imageRot % 360) + 360) % 360;
+        if (cropSource !== cim) {
+          // Real Canvas2D: use the exact rotated/adjusted raster the fill uses.
+          ctx.drawImage(cropSource, full.x, full.y, full.w, full.h);
+        } else if (cropRotation) {
+          // Lightweight test canvases may not provide an offscreen 2D context;
+          // preserve the visible crop geometry with a transformed source draw.
           ctx.translate(full.x + full.w / 2, full.y + full.h / 2);
-          ctx.rotate((crot * Math.PI) / 180);
-          const dw = cswap ? full.h : full.w;
-          const dh = cswap ? full.w : full.h;
-          ctx.drawImage(cim, -dw / 2, -dh / 2, dw, dh);
+          if (cropRotation === 90 || cropRotation === 270) {
+            ctx.rotate((cropRotation * Math.PI) / 180);
+            const dw = full.h;
+            const dh = full.w;
+            ctx.drawImage(cim, -dw / 2, -dh / 2, dw, dh);
+          } else {
+            // Match post-rotation scaling of the materialized raster.
+            ctx.scale(full.w / ciw, full.h / cih);
+            ctx.rotate((cropRotation * Math.PI) / 180);
+            ctx.drawImage(cim, -cim.naturalWidth / 2, -cim.naturalHeight / 2);
+          }
         } else {
           ctx.drawImage(cim, full.x, full.y, full.w, full.h);
         }
         ctx.restore();
+        const rotateGap = 14;
+        const rotatePoints: [number, number][] = [
+          [full.x - rotateGap, full.y - rotateGap],
+          [full.x + full.w + rotateGap, full.y - rotateGap],
+          [full.x + full.w + rotateGap, full.y + full.h + rotateGap],
+          [full.x - rotateGap, full.y + full.h + rotateGap],
+        ];
+        for (const [rx, ry] of rotatePoints) {
+          ctx.beginPath();
+          ctx.arc(rx, ry, 5, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+          ctx.strokeStyle = TARGET;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
         ctx.strokeStyle = TARGET;
         ctx.lineWidth = 1.5;
         ctx.strokeRect(bsx, bsy, bsw, bsh);
@@ -4343,7 +4473,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision, cutLine, widthSel, widthHover]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision, cutLine, widthSel, widthHover, eyedropModel]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -4351,6 +4481,41 @@ export function Canvas({
       x: (cx - r.left - snap.panX) / snap.zoom,
       y: (cy - r.top - snap.panY) / snap.zoom,
     };
+  };
+  const completeEyedrop = (clientX: number, clientY: number, modifiers: { shiftKey?: boolean; create?: boolean }) => {
+    const canvas = ref.current;
+    const rect = canvas?.getBoundingClientRect();
+    const cached = eyedropPixel.current;
+    const hasCachedPixel = !!cached && Math.hypot(cached.x - clientX, cached.y - clientY) <= 2;
+    let hasPixel = hasCachedPixel;
+    let hex = hasCachedPixel && cached ? cached.hex : "#000000";
+    if (canvas && rect && !hasCachedPixel) {
+      const dpr = window.devicePixelRatio || 1;
+      const px = Math.floor((clientX - rect.left) * dpr);
+      const py = Math.floor((clientY - rect.top) * dpr);
+      const ctx = getCanvas2dContext(canvas);
+      if (ctx) {
+        try {
+          const pixel = ctx.getImageData(px, py, 1, 1).data;
+          hex = toHex(pixel[0], pixel[1], pixel[2]);
+          hasPixel = true;
+        } catch {
+          // Fall through to the topmost layer's stored paint below.
+        }
+      }
+    }
+    const root = snap.pages[snap.page].root;
+    const world = toWorld(clientX, clientY);
+    const hit = hitTest(root, world.x, world.y, { deep: true });
+    if (!hasPixel && hit?.fill) {
+      const fallback = parseHex(hit.fill);
+      hex = toHex(fallback.r, fallback.g, fallback.b);
+    }
+    const source = eyedropSourceForNode(hit ?? null, snap, hex);
+    const callback = takeEyedrop();
+    eyedropPixel.current = null;
+    callback?.(hex, { shiftKey: !!modifiers.shiftKey, create: !!modifiers.create, source });
+    toast(`Sampled ${hex.toUpperCase()}`);
   };
 
   /**
@@ -4436,6 +4601,14 @@ export function Canvas({
     if (dropHint) setDropHint(null);
     if (edit && (e.target as HTMLElement).closest(".text-edit, .text-edit-frame")) return;
     if (e.button === 2) return;
+    if (eyedropArmed()) {
+      completeEyedrop(e.clientX, e.clientY, {
+        shiftKey: e.shiftKey,
+        create: e.shiftKey && (e.metaKey || e.ctrlKey),
+      });
+      e.preventDefault();
+      return;
+    }
     // Frame quick-add badges, painted beside the hover outline. Left badge
     // places the new frame to the left, right badge to the right; ⌥ makes
     // the new frame blank instead of a duplicate.
@@ -4479,36 +4652,6 @@ export function Canvas({
           }
         }
       }
-    }
-    if (eyedropArmed()) {
-      const c = ref.current;
-      if (c) {
-        const box = c.getBoundingClientRect();
-        const px = (e.clientX - box.left) * (window.devicePixelRatio || 1);
-        const py = (e.clientY - box.top) * (window.devicePixelRatio || 1);
-        const ctx = c.getContext("2d");
-        if (ctx) {
-          try {
-            const p = ctx.getImageData(px, py, 1, 1).data;
-            const hex = toHex(p[0], p[1], p[2]);
-            const dropFn = takeEyedrop();
-            if (dropFn) dropFn(hex);
-            toast(`Sampled ${hex}`);
-            e.preventDefault();
-            return;
-          } catch {
-            // fallback to layer hit
-          }
-        }
-      }
-      const wpt = toWorld(e.clientX, e.clientY);
-      const hit = hitTest(snap.pages[snap.page].root, wpt.x, wpt.y, { deep: true });
-      const hex = hit?.fill || "#000000";
-      const dropFn = takeEyedrop();
-      if (dropFn) dropFn(hex);
-      toast(`Sampled ${hex}`);
-      e.preventDefault();
-      return;
     }
     // Freeze the snap targets for this gesture: everything except the layers
     // being dragged (and their subtrees), so a node never snaps to itself.
@@ -4687,22 +4830,6 @@ export function Canvas({
       setDraft([wpt]);
       return;
     }
-    const drop = takeEyedrop();
-    if (drop) {
-      const c = ref.current;
-      const box = wrap.current!.getBoundingClientRect();
-      if (c) {
-        const dpr = window.devicePixelRatio || 1;
-        const px = Math.max(0, Math.floor((e.clientX - box.left) * dpr));
-        const py = Math.max(0, Math.floor((e.clientY - box.top) * dpr));
-        const ctx = c.getContext("2d");
-        if (ctx) {
-          const d = ctx.getImageData(px, py, 1, 1).data;
-          drop(toHex(d[0], d[1], d[2]));
-        }
-      }
-      return;
-    }
     if (e.button === 1 || snap.tool === "hand" || space.current) {
       drag.current = { mode: "pan", sx: e.clientX, sy: e.clientY, wx: 0, wy: 0 };
       return;
@@ -4731,7 +4858,43 @@ export function Canvas({
         const start = cn.imageCrop
           ? normalizeCropRect(cn.imageCrop)
           : coverCrop(dims!.iw, dims!.ih, cn.w, cn.h);
+        const full = cropFullExtent({ x: 0, y: 0, w: cn.w, h: cn.h }, start);
+        const rotateGap = 14 / zc;
+        const rotatePoints = [
+          [full.x - rotateGap, full.y - rotateGap],
+          [full.x + full.w + rotateGap, full.y - rotateGap],
+          [full.x + full.w + rotateGap, full.y + full.h + rotateGap],
+          [full.x - rotateGap, full.y + full.h + rotateGap],
+        ];
+        const rotatePoint = rotatePoints.find(([rx, ry]) => Math.hypot(local.x - rx, local.y - ry) <= 9 / zc);
+        if (rotatePoint) {
+          const cx = full.x + full.w / 2;
+          const cy = full.y + full.h / 2;
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "cropRotate", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+            id: cropId, origRotation: cn.imageRot ?? 0,
+            startAngle: Math.atan2(local.y - cy, local.x - cx), cx, cy,
+          };
+          return;
+        }
+        const edgeBand = 8 / zc;
+        let imageEdge: "n" | "e" | "s" | "w" | undefined;
+        if (full.x < -edgeBand && Math.abs(local.x - full.x) <= edgeBand && local.y >= full.y && local.y <= full.y + full.h) imageEdge = "w";
+        else if (full.x + full.w > cn.w + edgeBand && Math.abs(local.x - (full.x + full.w)) <= edgeBand && local.y >= full.y && local.y <= full.y + full.h) imageEdge = "e";
+        else if (full.y < -edgeBand && Math.abs(local.y - full.y) <= edgeBand && local.x >= full.x && local.x <= full.x + full.w) imageEdge = "n";
+        else if (full.y + full.h > cn.h + edgeBand && Math.abs(local.y - (full.y + full.h)) <= edgeBand && local.x >= full.x && local.x <= full.x + full.w) imageEdge = "s";
+        if (imageEdge) {
+          engine.dispatch({ type: "begin" });
+          drag.current = {
+            mode: "cropScale", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+            id: cropId, cropScaleEdge: imageEdge, cropStart: start, cropLX: local.x, cropLY: local.y,
+          };
+          return;
+        }
         if (hitH) {
+          cropZoomBase.current = { ...start };
+          setCropZoom(100);
           engine.dispatch({ type: "begin" });
           drag.current = {
             mode: "crop", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
@@ -4740,6 +4903,8 @@ export function Canvas({
           return;
         }
         if (local.x >= 0 && local.x <= cn.w && local.y >= 0 && local.y <= cn.h) {
+          cropZoomBase.current = { ...start };
+          setCropZoom(100);
           engine.dispatch({ type: "begin" });
           drag.current = {
             mode: "cropMove", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
@@ -5373,6 +5538,30 @@ export function Canvas({
             if (wp.node.kind === "text" && wp.node.sizingW === "hug" && wp.node.sizingH === "hug" && i % 2 === 0) return false;
             return Math.hypot(px - hx, py - hy) < 8;
           });
+        if (!vecEdit && snap.tool === "select" && (e.metaKey || e.ctrlKey) && (wp.node.imageSrc || wp.node.fillType === "image")) {
+          const cropCorner = hs.findIndex(([hx, hy], i) => i % 2 === 0 && Math.hypot(px - hx, py - hy) < 8);
+          if (cropCorner >= 0) {
+            const dims = cropImageDims(wp.node);
+            if (dims) {
+              if (isEffectivelyLocked(root, wp.node.id)) {
+                toast("Locked · ⇧⌘L to unlock");
+                return;
+              }
+              const start = wp.node.imageCrop
+                ? normalizeCropRect(wp.node.imageCrop)
+                : coverCrop(dims.iw, dims.ih, wp.node.w, wp.node.h);
+              const cropHandles: CropHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+              enterCrop(wp.node.id);
+              cropZoomBase.current = { ...start };
+              setCropZoom(100);
+              drag.current = {
+                mode: "crop", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+                id: wp.node.id, cropHandle: cropHandles[cropCorner], cropStart: start,
+              };
+              return;
+            }
+          }
+        }
         if (!vecEdit && !onResizeHandle && rotationHandleHit(wp.node.kind, px, py, sx, sy, nb.w * z, nb.h * z)) {
           if (isEffectivelyLocked(root, wp.node.id)) {
             toast("Locked · ⇧⌘L to unlock");
@@ -5576,8 +5765,10 @@ export function Canvas({
   const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
     if (eyedropArmed() || snap.tool === "eraser" || placing) {
-      setCursorPos({ x: e.clientX, y: e.clientY });
+      cursorPosRef.current = { x: e.clientX, y: e.clientY };
+      setCursorPos(cursorPosRef.current);
     } else if (cursorPos) {
+      cursorPosRef.current = null;
       setCursorPos(null);
     }
     if (snap.tool === "zoom") {
@@ -5991,6 +6182,41 @@ export function Canvas({
           patch: { rotation: wrapRotationDeg(Math.round(((o.rotation || 0) + ang * parentHandedness(rootNow, o.id)) * 10) / 10) },
         });
       }
+    } else if (d.mode === "cropScale" && d.id && d.cropStart && d.cropScaleEdge && d.cropLX != null && d.cropLY != null) {
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      const cn = wp?.node;
+      if (!wp || !cn) return;
+      const wpt = toWorld(e.clientX, e.clientY);
+      const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, cn);
+      const start = d.cropStart;
+      const edge = d.cropScaleEdge;
+      const full = cropFullExtent({ x: 0, y: 0, w: cn.w, h: cn.h }, start);
+      const delta = edge === "e" ? local.x - d.cropLX : edge === "w" ? d.cropLX - local.x : edge === "s" ? local.y - d.cropLY : d.cropLY - local.y;
+      const baseLength = edge === "e" || edge === "w" ? full.w : full.h;
+      const factor = Math.max(0.05, 1 + delta / Math.max(1, baseLength));
+      const w = start.w / factor;
+      const h = start.h / factor;
+      const cx = start.x + start.w / 2;
+      const cy = start.y + start.h / 2;
+      const x = e.altKey ? cx - w / 2 : edge === "w" ? start.x + start.w - w : start.x;
+      const y = e.altKey ? cy - h / 2 : edge === "n" ? start.y + start.h - h : start.y;
+      cropDirty.current = true;
+      engine.dispatch({ type: "patch", id: d.id, patch: { imageCrop: normalizeCropRect({ x, y, w, h }) } });
+    } else if (d.mode === "cropRotate" && d.id && d.startAngle != null && d.cx != null && d.cy != null) {
+      const wp = worldPos(snap.pages[snap.page].root, d.id);
+      const cn = wp?.node;
+      if (!wp || !cn) return;
+      const wpt = toWorld(e.clientX, e.clientY);
+      const local = nodeLocalPoint(wpt.x, wpt.y, wp.x, wp.y, cn);
+      let delta = Math.atan2(local.y - d.cy, local.x - d.cx) - d.startAngle;
+      if (delta > Math.PI) delta -= Math.PI * 2;
+      if (delta < -Math.PI) delta += Math.PI * 2;
+      let rotation = (d.origRotation ?? 0) + (delta * 180) / Math.PI;
+      if (e.shiftKey) rotation = Math.round(rotation / 15) * 15;
+      cropDirty.current = true;
+      cropZoomBase.current = undefined;
+      setCropZoom(100);
+      engine.dispatch({ type: "patch", id: d.id, patch: { imageRot: rotation } });
     } else if ((d.mode === "crop" || d.mode === "cropMove") && d.id && d.cropStart) {
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       const cn = wp?.node;
@@ -6013,10 +6239,11 @@ export function Canvas({
           id: d.id,
           patch: {
             imageCrop: dragCropHandle(start, d.cropHandle, u, v, {
-              // Aspect is kept by default (Figma: "aspect ratio is maintained
-              // by default when cropping"); ⇧ forces the lock — even over
-              // ⌘/⌃ — and ⌘/⌃ alone frees it. ⌥ mirrors about the centre.
-              lockAspect: e.shiftKey || (!e.ctrlKey && !e.metaKey),
+              // Image aspect is the default; chosen presets stay locked unless
+              // the user holds Control/Command to free the drag. Shift forces
+              // the selected ratio and Alt mirrors the edit about the centre.
+              lockAspect: e.shiftKey || (cropAspect !== "free" && !e.ctrlKey && !e.metaKey),
+              aspect: normalizedCropAspect(cropImageDims(cn) ?? { iw: 1, ih: 1 }),
               symmetric: e.altKey,
             }),
           },
@@ -6794,9 +7021,20 @@ export function Canvas({
       d.mode === "widthPt" ||
       d.mode === "crop" ||
       d.mode === "cropMove" ||
+      d.mode === "cropRotate" ||
+      d.mode === "cropScale" ||
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
+    if ((d.mode === "crop" || d.mode === "cropMove" || d.mode === "cropRotate" || d.mode === "cropScale") && d.id) {
+      const fresh = engine.snapshot();
+      const cn = find(fresh.pages[fresh.page].root, d.id);
+      const dims = cn && cropImageDims(cn);
+      if (cn && dims) {
+        cropZoomBase.current = cn.imageCrop ? { ...cn.imageCrop } : coverCrop(dims.iw, dims.ih, cn.w, cn.h);
+        setCropZoom(100);
+      }
+    }
     if (d.mode === "move") {
       if (dropHint) setDropHint(null);
       const fresh = engine.snapshot();
@@ -7451,6 +7689,7 @@ export function Canvas({
   const onLeave = (e: React.MouseEvent) => {
     onUp(e);
     hoverIx.current = "";
+    cursorPosRef.current = null;
     setCursorPos(null);
   };
 
@@ -8186,7 +8425,73 @@ export function Canvas({
         setMenu({ x: e.clientX, y: e.clientY, wx: wpt.x, wy: wpt.y });
       }}
     >
-      <canvas ref={ref} role="img" aria-label="Design canvas" />
+      <canvas key={snap.colorProfile} ref={ref} role="img" aria-label="Design canvas" />
+      {cropId && (() => {
+        const cropNode = find(snap.pages[snap.page].root, cropId);
+        if (!cropNode) return null;
+        const rotation = ((((cropNode.imageRot ?? 0) + 180) % 360) + 360) % 360 - 180;
+        return (
+          <div
+            className="crop-toolbar"
+            role="toolbar"
+            aria-label="Image crop controls"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            <label className="crop-control">
+              <span>Aspect</span>
+              <select aria-label="Crop aspect ratio" value={cropAspect} onChange={(e) => setCropAspect(e.target.value as typeof cropAspect)}>
+                <option value="image">Original</option>
+                <option value="1:1">1:1</option>
+                <option value="4:3">4:3</option>
+                <option value="16:9">16:9</option>
+                <option value="3:2">3:2</option>
+                <option value="free">Free</option>
+              </select>
+            </label>
+            <label className="crop-control crop-range">
+              <span>Zoom {cropZoom}%</span>
+              <input
+                aria-label="Crop zoom"
+                type="range"
+                min={100}
+                max={400}
+                step={5}
+                value={cropZoom}
+                onChange={(e) => setCropZoomValue(parseInt(e.target.value, 10))}
+              />
+            </label>
+            <button
+              type="button"
+              className="crop-action"
+              onClick={resetCrop}
+            >
+              Resize to fit
+            </button>
+            <label className="crop-control crop-range">
+              <span>Rotate {Math.round(rotation)}°</span>
+              <input
+                aria-label="Crop rotation"
+                type="range"
+                min={-180}
+                max={180}
+                step={1}
+                value={rotation}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value, 10);
+                  cropDirty.current = true;
+                  cropZoomBase.current = undefined;
+                  setCropZoom(100);
+                  engine.dispatch({ type: "patch", id: cropId, patch: { imageRot: value } });
+                }}
+              />
+            </label>
+            <button type="button" className="crop-action" onClick={cancelCrop}>Cancel</button>
+            <button type="button" className="crop-action primary" onClick={applyCrop}>Done</button>
+          </div>
+        );
+      })()}
       {(snap.showComments || snap.tool === "comment") && (
         <Comments
           threads={snap.pages[snap.page].comments}
@@ -9044,7 +9349,7 @@ function effectsTile(
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
-  const t = c.getContext("2d");
+  const t = getCanvas2dContext(c);
   if (!t) return null;
   t.setTransform(m.a, m.b, m.c, m.d, m.e - x0, m.f - y0);
   return { c, ctx: t, x: x0, y: y0, w, h };
@@ -10392,7 +10697,7 @@ function paintBoolean(
     const oc = document.createElement("canvas");
     oc.width = w;
     oc.height = h;
-    const o = oc.getContext("2d");
+    const o = getCanvas2dContext(oc);
     if (o) {
       rasterizeBoolean(o, n, kids, z, w, h);
       hit = { c: oc, bytes: w * h * 4 };
@@ -10415,7 +10720,7 @@ function paintBoolean(
   const oc = document.createElement("canvas");
   oc.width = w;
   oc.height = h;
-  const o = oc.getContext("2d");
+  const o = getCanvas2dContext(oc);
   if (!o) return;
   rasterizeBoolean(o, n, kids, z, w, h);
   ctx.drawImage(oc, snap.panX + px * z, snap.panY + py * z);

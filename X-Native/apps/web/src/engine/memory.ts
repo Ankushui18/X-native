@@ -4,6 +4,7 @@ import type {
   TextStyleProps,
   Command,
   ComponentMaster,
+  ColorProfile,
   Effect,
   EffectKind,
   Engine,
@@ -39,6 +40,7 @@ import { computeMasterHash } from "./codegen";
 import { exportClipSvg, exportSvg } from "./svgExport";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
+import { convertColorValue, convertNodeColors, getPreferredColorProfile } from "./colorProfile";
 import {
   autoSpacing,
   cellAlign,
@@ -1217,6 +1219,7 @@ export function blankPage(name = "Page 1"): Page {
 
 interface Internal {
   fileName: string;
+  colorProfile: ColorProfile;
   pages: Page[];
   page: number;
   selection: string[];
@@ -1361,6 +1364,7 @@ function clipBounds(nodes: XNode[]): { minX: number; minY: number; cx: number; c
 function publishClip(
   nodes: XNode[],
   fileName: string,
+  colorProfile: ColorProfile,
   world?: { x: number; y: number }[],
   root?: XNode,
 ): void {
@@ -1385,8 +1389,8 @@ function publishClip(
     // A lone copied slice pastes as its region's content, like the export's.
     svg =
       nodes.length === 1 && nodes[0].isSlice === true && root
-        ? exportSvg(nodes[0], { format: "SVG", scale: 1, suffix: "" }, { root })
-        : exportClipSvg(positioned);
+        ? exportSvg(nodes[0], { format: "SVG", scale: 1, suffix: "", colorProfile }, { root })
+        : exportClipSvg(positioned, colorProfile);
   } catch {
     /* The vector flavour is a convenience for other apps; our own payload still
      * carries the layers in full. */
@@ -1479,6 +1483,7 @@ export class MemoryEngine implements Engine {
     ];
     this.state = {
       fileName: doc?.fileName ?? "Untitled",
+      colorProfile: doc?.colorProfile ?? getPreferredColorProfile(),
       pages: doc?.pages ?? [demoPage()],
       page: doc?.page ?? 0,
       selection: [],
@@ -1533,6 +1538,7 @@ export class MemoryEngine implements Engine {
   toDoc(): Omit<PersistedDoc, "version"> {
     return {
       fileName: this.state.fileName,
+      colorProfile: this.state.colorProfile,
       pages: this.state.pages,
       components: this.state.components,
       styles: this.state.styles,
@@ -2087,6 +2093,7 @@ export class MemoryEngine implements Engine {
   private build(): Snapshot {
     return {
       fileName: this.state.fileName,
+      colorProfile: this.state.colorProfile,
       pages: this.state.pages,
       page: this.state.page,
       selection: this.state.selection,
@@ -2479,6 +2486,18 @@ export class MemoryEngine implements Engine {
       case "setFileName":
         s.fileName = cmd.name;
         break;
+      case "setColorProfile": {
+        const from = s.colorProfile;
+        if (cmd.mode === "convert" && from !== cmd.profile) {
+          for (const page of s.pages) {
+            convertNodeColors(page.root, from, cmd.profile);
+            page.pixelGridColor = convertColorValue(page.pixelGridColor, from, cmd.profile);
+          }
+          for (const master of s.components) convertNodeColors(master.node, from, cmd.profile);
+        }
+        s.colorProfile = cmd.profile;
+        break;
+      }
       case "setPage":
         s.page = Math.max(0, Math.min(s.pages.length - 1, cmd.index));
         s.selection = [];
@@ -3094,6 +3113,7 @@ export class MemoryEngine implements Engine {
         publishClip(
           this.clip,
           this.state.fileName,
+          this.state.colorProfile,
           items.map((w) => ({ x: w.x, y: w.y })),
           this.root(),
         );
