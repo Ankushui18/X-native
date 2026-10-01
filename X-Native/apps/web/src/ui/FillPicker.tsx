@@ -14,6 +14,7 @@ import {
   contrastTarget,
   eyedropArmed,
   FILL_TYPES,
+  getRenderColorProfile,
   handlesForFill,
   hslToRgb,
   hsvToRgb,
@@ -23,6 +24,8 @@ import {
   justEyedropped,
   nearestAccessible,
   nextColorModel,
+  nextEyedropModel,
+  setEyedropModel,
   parseCssColor,
   parseHex,
   rgbToHsl,
@@ -30,6 +33,7 @@ import {
   toCss,
   toHex,
   type ColorModel,
+  type EyedropSource,
   type FillType,
   type ImageFit,
 } from "./color";
@@ -95,6 +99,8 @@ export function FillPicker({
   patternSources,
   onChange,
   onClose,
+  onEyedropBinding,
+  onCreateEyedrop,
 }: {
   title: string;
   value: FillValue;
@@ -118,6 +124,10 @@ export function FillPicker({
   largeText?: boolean;
   onChange: (v: FillValue) => void;
   onClose: () => void;
+  /** Apply a sampled semantic style/variable to the target property on Shift-click. */
+  onEyedropBinding?: (source: EyedropSource) => boolean;
+  /** Create a variable or style from the sampled color and bind it to the target. */
+  onCreateEyedrop?: (hex: string) => void | Promise<void>;
 }) {
   useRestoreFocus();
   const { r, g, b } = parseHex(value.color);
@@ -157,16 +167,17 @@ export function FillPicker({
     const key = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       const typing = tag === "INPUT" || tag === "TEXTAREA";
-      if (e.key === "Tab" && !typing) {
+      if (e.key === "Tab" && !typing && tag !== "SELECT") {
         e.preventDefault();
-        setModel((m) => nextColorModel(m));
+        advanceModel();
       }
+      const isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
       const drop =
         (e.key.toLowerCase() === "i" && !e.metaKey && !e.ctrlKey && !typing) ||
-        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && !typing);
+        (isMac && e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "c" && !typing);
       if (drop) {
         e.preventDefault();
-        armEyedrop((c) => applyRgb(...hexToRgb(c)));
+        activateEyedrop();
       }
       // Delete (or Backspace) drops the selected gradient stop, like Figma —
       // but never while typing in a field, and never below two stops.
@@ -197,7 +208,7 @@ export function FillPicker({
       window.removeEventListener("mousedown", on);
       window.removeEventListener("keydown", key);
     };
-  }, [onClose, value, stopIdx]);
+  }, [onClose, value, stopIdx, onChange, model, onEyedropBinding, onCreateEyedrop]);
 
   const applyRgb = (rr: number, gg: number, bb: number, next?: Partial<FillValue>) => {
     const color = toHex(rr, gg, bb);
@@ -226,6 +237,30 @@ export function FillPicker({
       return;
     }
     onChange({ ...value, color, ...next });
+  };
+
+  const activateEyedrop = () => {
+    armEyedrop((color, sample) => {
+      if (sample?.create && onCreateEyedrop) {
+        onClose();
+        void onCreateEyedrop(color);
+        return;
+      }
+      if (sample?.shiftKey && sample.source && onEyedropBinding?.(sample.source)) {
+        onClose();
+        return;
+      }
+      applyRgb(...hexToRgb(color));
+    }, model === "css" ? "hex" : model);
+  };
+  const advanceModel = () => {
+    if (eyedropArmed()) {
+      const next = nextEyedropModel(model);
+      setModel(next);
+      setEyedropModel(next);
+      return;
+    }
+    setModel(nextColorModel(model));
   };
 
   const applyHsv = (h: number, s: number, v: number) => {
@@ -364,7 +399,7 @@ export function FillPicker({
           spellCheck={false}
           onChange={(e) => {
             setCss(e.target.value);
-            const p = parseCssColor(e.target.value);
+            const p = parseCssColor(e.target.value, getRenderColorProfile());
             if (p) applyRgb(p.r, p.g, p.b, { opacity: Math.round(p.a * 100) });
           }}
         />
@@ -472,8 +507,8 @@ export function FillPicker({
         )}
         <button
           className="icon-btn"
-          title="Eyedropper (I)"
-          onClick={() => armEyedrop((c) => applyRgb(...hexToRgb(c)))}
+          title="Eyedropper (I · Control+C on Mac)"
+          onClick={activateEyedrop}
         >
           <Icon name="eyedropper" size={14} />
         </button>
@@ -541,13 +576,17 @@ export function FillPicker({
       {!image && !pattern && (
         <div className="hex-row">
           <span className="swatch" style={{ background: toHex(rgb.r, rgb.g, rgb.b) }} />
-          <button
+          <select
             className="model"
-            title="Color model (Tab)"
-            onClick={() => setModel((m) => nextColorModel(m))}
+            aria-label="Color model"
+            title="Color model (Tab cycles models)"
+            value={model}
+            onChange={(e) => setModel(e.target.value as ColorModel)}
           >
-            {COLOR_MODELS.find((m) => m.id === model)?.label ?? "Hex"}
-          </button>
+            {COLOR_MODELS.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
           {modelFields()}
           <input
             className="op"

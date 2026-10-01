@@ -14,6 +14,7 @@ import {
   normalizeCropRect,
   paintFill,
   paintImageFill,
+  rotatedImageSize,
   partitionMaskRuns,
   reduceMaskAlpha,
 } from "../paint.ts";
@@ -93,6 +94,8 @@ console.log("I-B coverCrop:");
   const tall = coverCrop(100, 400, 100, 100);
   t("tall image crops top and bottom, centred", near(tall.y, 0.375) && near(tall.h, 0.25) && near(tall.x, 0) && near(tall.w, 1));
   t("degenerate sizes fall back to full", JSON.stringify(coverCrop(0, 100, 100, 100)) === JSON.stringify({ x: 0, y: 0, w: 1, h: 1 }));
+  t("90° rotation swaps image bounds without floating-point over-rounding", JSON.stringify(rotatedImageSize(800, 400, 90)) === JSON.stringify({ w: 400, h: 800 }));
+  t("free 45° rotation expands bounds to preserve all image corners", JSON.stringify(rotatedImageSize(800, 400, 45)) === JSON.stringify({ w: 849, h: 849 }));
 }
 
 console.log("I-C cropModel:");

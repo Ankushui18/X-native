@@ -1,5 +1,18 @@
+import type { ColorProfile } from "../engine/types";
+import { convertRgbProfile } from "../engine/colorProfile";
+
 export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern" | "brush" | "dynamic";
 export type ColorModel = "hex" | "rgb" | "css" | "hsl" | "hsb";
+export type EyedropModel = Exclude<ColorModel, "css">;
+export type EyedropSource =
+  | { kind: "variable"; id: string; name: string; value: string; prop: "fill" | "strokePaint" }
+  | { kind: "style"; id: string; name: string; value: string; prop: "fill" | "strokePaint" };
+export interface EyedropSampleContext {
+  shiftKey: boolean;
+  create: boolean;
+  source?: EyedropSource;
+}
+export type EyedropCallback = (hex: string, context?: EyedropSampleContext) => void;
 export type ImageFit = "fill" | "fit" | "crop" | "tile";
 
 export const FILL_TYPES: { id: FillType; label: string }[] = [
@@ -210,9 +223,95 @@ export function toCss(r: number, g: number, b: number, a = 1): string {
   return `rgba(${rr}, ${gg}, ${bb}, ${t})`;
 }
 
-export function parseCssColor(raw: string): { r: number; g: number; b: number; a: number } | null {
+/** CSS numeric components used by modern Color 4 notation. */
+function cssNumber(raw: string, percentScale = 1): number {
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n)) return Number.NaN;
+  return raw.endsWith("%") ? (n / 100) * percentScale : n;
+}
+
+function cssAlpha(raw?: string): number {
+  if (raw == null) return 1;
+  const value = cssNumber(raw);
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+}
+
+function encodeSrgb(value: number): number {
+  const magnitude = Math.abs(value);
+  const encoded = magnitude <= 0.0031308 ? 12.92 * magnitude : 1.055 * magnitude ** (1 / 2.4) - 0.055;
+  return Math.round(Math.max(0, Math.min(1, Math.sign(value) * encoded)) * 255);
+}
+
+function fromLinearSrgb(r: number, g: number, b: number, a: number) {
+  return { r: encodeSrgb(r), g: encodeSrgb(g), b: encodeSrgb(b), a };
+}
+
+function convertParsedColor(
+  color: { r: number; g: number; b: number; a: number },
+  from: ColorProfile,
+  to: ColorProfile,
+) {
+  if (from === to) return color;
+  return { ...convertRgbProfile(color, from, to), a: color.a };
+}
+
+function oklabToRgb(L: number, a: number, b: number, alpha: number) {
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+  const l = l_ ** 3;
+  const m = m_ ** 3;
+  const s = s_ ** 3;
+  return fromLinearSrgb(
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+    alpha,
+  );
+}
+
+export function parseCssColor(raw: string, targetProfile: ColorProfile = "srgb"): { r: number; g: number; b: number; a: number } | null {
   const s = raw.trim();
   if (!s) return null;
+  const number = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?%?";
+  const color4 = s.match(new RegExp(`^color\\(\\s*(srgb|display-p3)\\s+(${number})\\s+(${number})\\s+(${number})(?:\\s*\\/\\s*(${number}))?\\s*\\)$`, "i"));
+  if (color4) {
+    const [, space, rawR, rawG, rawB, rawAlpha] = color4;
+    const r = cssNumber(rawR);
+    const g = cssNumber(rawG);
+    const b = cssNumber(rawB);
+    const alpha = cssAlpha(rawAlpha);
+    if (![r, g, b].every(Number.isFinite)) return null;
+    const sourceProfile: ColorProfile = space.toLowerCase() === "display-p3" ? "display-p3" : "srgb";
+    const source = {
+      r: Math.round(Math.max(0, Math.min(1, r)) * 255),
+      g: Math.round(Math.max(0, Math.min(1, g)) * 255),
+      b: Math.round(Math.max(0, Math.min(1, b)) * 255),
+      a: alpha,
+    };
+    return convertParsedColor(source, sourceProfile, targetProfile);
+  }
+  const oklab = s.match(new RegExp(`^oklab\\(\\s*(${number})\\s+(${number})\\s+(${number})(?:\\s*\\/\\s*(${number}))?\\s*\\)$`, "i"));
+  if (oklab) {
+    const L = cssNumber(oklab[1]);
+    const a = cssNumber(oklab[2], 0.4);
+    const b = cssNumber(oklab[3], 0.4);
+    if (![L, a, b].every(Number.isFinite)) return null;
+    return convertParsedColor(oklabToRgb(L, a, b, cssAlpha(oklab[4])), "srgb", targetProfile);
+  }
+  const oklch = s.match(new RegExp(`^oklch\\(\\s*(${number})\\s+(${number})\\s+(${number}(?:deg|rad|turn|grad)?)(?:\\s*\\/\\s*(${number}))?\\s*\\)$`, "i"));
+  if (oklch) {
+    const L = cssNumber(oklch[1]);
+    const C = cssNumber(oklch[2], 0.4);
+    const hue = oklch[3].toLowerCase();
+    const angle = hue.endsWith("turn") ? parseFloat(hue) * 360
+      : hue.endsWith("rad") ? parseFloat(hue) * (180 / Math.PI)
+      : hue.endsWith("grad") ? parseFloat(hue) * 0.9
+      : parseFloat(hue);
+    if (![L, C, angle].every(Number.isFinite)) return null;
+    const radians = angle * (Math.PI / 180);
+    return convertParsedColor(oklabToRgb(L, C * Math.cos(radians), C * Math.sin(radians), cssAlpha(oklch[4])), "srgb", targetProfile);
+  }
   const hexBody = s.replace("#", "");
   if (s.startsWith("#") || /^[0-9a-fA-F]{3,8}$/.test(s)) {
     if (hexBody.length === 3 || hexBody.length === 4 || hexBody.length === 6 || hexBody.length === 8)
@@ -223,12 +322,12 @@ export function parseCssColor(raw: string): { r: number; g: number; b: number; a
   );
   if (rgb) {
     const a = rgb[4] == null ? 1 : rgb[4].endsWith("%") ? parseFloat(rgb[4]) / 100 : parseFloat(rgb[4]);
-    return {
+    return convertParsedColor({
       r: Math.max(0, Math.min(255, Math.round(parseFloat(rgb[1])))),
       g: Math.max(0, Math.min(255, Math.round(parseFloat(rgb[2])))),
       b: Math.max(0, Math.min(255, Math.round(parseFloat(rgb[3])))),
       a: Math.max(0, Math.min(1, Number.isNaN(a) ? 1 : a)),
-    };
+    }, "srgb", targetProfile);
   }
   const hsl = s.match(
     /^hsla?\(\s*([\d.]+)\s*[, ]\s*([\d.]+)%\s*[, ]\s*([\d.]+)%(?:\s*[,/]\s*([\d.%]+))?\s*\)$/i,
@@ -236,7 +335,7 @@ export function parseCssColor(raw: string): { r: number; g: number; b: number; a
   if (hsl) {
     const rgbv = hslToRgb(parseFloat(hsl[1]), parseFloat(hsl[2]) / 100, parseFloat(hsl[3]) / 100);
     const a = hsl[4] == null ? 1 : hsl[4].endsWith("%") ? parseFloat(hsl[4]) / 100 : parseFloat(hsl[4]);
-    return { ...rgbv, a: Math.max(0, Math.min(1, Number.isNaN(a) ? 1 : a)) };
+    return convertParsedColor({ ...rgbv, a: Math.max(0, Math.min(1, Number.isNaN(a) ? 1 : a)) }, "srgb", targetProfile);
   }
   return null;
 }
@@ -284,9 +383,35 @@ export function withAlpha(hex: string, a: number): string {
   return toHexA(r, g, b, a);
 }
 
-export function cssRgba(hex: string, opacity = 1): string {
+let renderColorProfile: ColorProfile = "srgb";
+export function setRenderColorProfile(profile: ColorProfile): void {
+  renderColorProfile = profile;
+}
+
+export function getRenderColorProfile(): ColorProfile {
+  return renderColorProfile;
+}
+
+/** Create rendering surfaces in the active document profile when supported. */
+export function getCanvas2dContext(
+  canvas: HTMLCanvasElement,
+  options: CanvasRenderingContext2DSettings = {},
+): CanvasRenderingContext2D | null {
+  const settings = { colorSpace: renderColorProfile, ...options };
+  try {
+    return canvas.getContext("2d", settings);
+  } catch {
+    return canvas.getContext("2d", options);
+  }
+}
+
+export function cssRgba(hex: string, opacity = 1, profile = renderColorProfile): string {
   const { r, g, b, a } = parseHex(hex);
-  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, a * opacity))})`;
+  const alpha = Math.max(0, Math.min(1, a * opacity));
+  if (profile === "display-p3") {
+    return `color(display-p3 ${r / 255} ${g / 255} ${b / 255} / ${alpha})`;
+  }
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 export function isNone(hex: string): boolean {
@@ -316,13 +441,27 @@ const PRESETS = [
 
 export const COLOR_PRESETS = PRESETS;
 
-let eyedrop: ((hex: string) => void) | null = null;
+let eyedrop: EyedropCallback | null = null;
 let lastDrop = 0;
-export function armEyedrop(fn: (hex: string) => void) {
+let eyedropModel: EyedropModel = "hex";
+export function setEyedropModel(model: EyedropModel) {
+  eyedropModel = model;
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("x-eyedrop-model", { detail: model }));
+}
+export function getEyedropModel(): EyedropModel {
+  return eyedropModel;
+}
+export function nextEyedropModel(model: ColorModel): EyedropModel {
+  const cycle: EyedropModel[] = ["hex", "rgb", "hsl", "hsb"];
+  const index = cycle.indexOf(model as EyedropModel);
+  return cycle[(index + 1 + cycle.length) % cycle.length];
+}
+export function armEyedrop(fn: EyedropCallback, model: EyedropModel = "hex") {
   eyedrop = fn;
+  setEyedropModel(model);
   document.body.classList.add("eyedrop");
 }
-export function takeEyedrop(): ((hex: string) => void) | null {
+export function takeEyedrop(): EyedropCallback | null {
   const fn = eyedrop;
   eyedrop = null;
   document.body.classList.remove("eyedrop");

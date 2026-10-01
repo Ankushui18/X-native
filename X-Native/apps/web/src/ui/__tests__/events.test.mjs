@@ -74,6 +74,7 @@ function census() {
 const BUS = {
   "x-collapse-all": { sent: ["ui/chrome.tsx"], heard: ["ui/chrome.tsx"], why: "Actions ▸ Collapse all; the layer tree folds" },
   "x-expand-subtree": { sent: ["ui/chrome.tsx"], heard: ["ui/chrome.tsx"], why: "Actions ▸ Expand subtree; the tree re-opens it" },
+  "x-eyedrop-model": { sent: ["ui/color.ts"], heard: ["ui/Canvas.tsx"], why: "the active eyedropper readout model updates the canvas loupe" },
   "x-native-annotate": { sent: ["ui/chrome.tsx"], heard: ["ui/inspector.tsx"], why: "⇧T and the Dev Mode button focus the note field" },
   "x-native-bend-tool": { sent: ["ui/RadialMenu.tsx"], heard: ["ui/Canvas.tsx"], why: "PM-U10: radial ▸ Bend Tool, answered by the canvas (was sent-and-forgotten)" },
   "x-native-copy-code": { sent: ["ui/ContextMenu.tsx", "ui/chrome.tsx"], heard: ["App.tsx"], why: "the copy-as-code commands; App writes the clipboard" },

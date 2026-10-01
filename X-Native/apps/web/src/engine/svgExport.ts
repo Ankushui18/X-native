@@ -17,7 +17,7 @@
  * the authority; see docs/ARCHITECTURE_BOUNDARY.md.
  */
 
-import type { StrokeCap, XNode } from "./types";
+import type { ColorProfile, StrokeCap, XNode } from "./types";
 import { outlineStroke, outlineVariableStroke, shapePoly } from "./geometry";
 import { directionOf, fontFamilyStack } from "./textInput";
 import { applyTextCase, valignApplies } from "../ui/textLayout";
@@ -39,9 +39,15 @@ const isNone = (hex: string | undefined): boolean => !hex || hex === "none" || h
 /** A colour as SVG wants it. Alpha is split out where the caller can pass it
  *  as `*-opacity`, because `rgba()` in a presentation attribute is not
  *  portable and `#rrggbbaa` is newer than the format. */
-export function svgColor(value: string) {
+export function svgColor(value: string, profile: ColorProfile = "srgb") {
   if (isNone(value) || value.length < 7) return "none";
   if (alphaOf(value) === 0) return "none";
+  if (profile === "display-p3") {
+    const r = parseInt(value.slice(1, 3), 16) / 255;
+    const g = parseInt(value.slice(3, 5), 16) / 255;
+    const b = parseInt(value.slice(5, 7), 16) / 255;
+    return `color(display-p3 ${r} ${g} ${b})`;
+  }
   return `#${value.slice(1, 7)}`;
 }
 
@@ -129,20 +135,20 @@ export function svgDash(n: XNode): string {
 
 /** A gradient's stops: the ramp when the layer has one, otherwise default
  *  legacy two-colour pair. A three-stop ramp used to export as two. */
-function stopsOf(n: XNode, fallbackB: string): { color: string; opacity: number; offset: number }[] {
+function stopsOf(n: XNode, fallbackB: string, profile: ColorProfile): { color: string; opacity: number; offset: number }[] {
   const ramp = n.gradientStops ?? [];
   if (ramp.length >= 2) {
-    return ramp.map((s) => ({ color: svgColor(s.color), opacity: alphaOf(s.color), offset: s.position }));
+    return ramp.map((s) => ({ color: svgColor(s.color, profile), opacity: alphaOf(s.color), offset: s.position }));
   }
   return [
-    { color: svgColor(n.fill), opacity: alphaOf(n.fill), offset: 0 },
-    { color: svgColor(fallbackB), opacity: alphaOf(fallbackB), offset: 1 },
+    { color: svgColor(n.fill, profile), opacity: alphaOf(n.fill), offset: 0 },
+    { color: svgColor(fallbackB, profile), opacity: alphaOf(fallbackB), offset: 1 },
   ];
 }
 
-function gradientDefs(n: XNode, id: string): { def: string; paint: string } | null {
+function gradientDefs(n: XNode, id: string, profile: ColorProfile): { def: string; paint: string } | null {
   if (n.fillType === "linear" || n.fillType === "radial") {
-    const stops = stopsOf(n, n.fillB)
+    const stops = stopsOf(n, n.fillB, profile)
       .map((s) => `<stop offset="${Math.round(s.offset * 1000) / 10}%" stop-color="${s.color}" stop-opacity="${Math.round(s.opacity * 1000) / 1000}"/>`)
       .join("");
     if (n.fillType === "linear") {
@@ -163,7 +169,7 @@ function gradientDefs(n: XNode, id: string): { def: string; paint: string } | nu
   if (n.fillType === "angular" || n.fillType === "diamond") {
     // SVG has no conic gradient; a linear ramp across the box is the closest
     // shape-compatible stand-in, and it keeps the colours in order.
-    const stops = stopsOf(n, n.fillB)
+    const stops = stopsOf(n, n.fillB, profile)
       .map((s) => `<stop offset="${Math.round(s.offset * 1000) / 10}%" stop-color="${s.color}" stop-opacity="${Math.round(s.opacity * 1000) / 1000}"/>`)
       .join("");
     return { def: `<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">${stops}</linearGradient>`, paint: `url(#${id})` };
@@ -174,7 +180,7 @@ function gradientDefs(n: XNode, id: string): { def: string; paint: string } | nu
 /** SVG filters for the effect stack. shadow radius is a CSS-style blur
  *  radius, so the Gaussian's standard deviation is half of it - the same
  *  relationship the canvas painter has. */
-function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[] } {
+function effectFilters(n: XNode, id: string, profile: ColorProfile): { defs: string[]; filters: string[] } {
   const defs: string[] = [];
   const filters: string[] = [];
   const fx = (n.effects ?? []).filter((e) => e.visible);
@@ -192,7 +198,7 @@ function effectFilters(n: XNode, id: string): { defs: string[]; filters: string[
   for (const e of fx) {
     const fid = `${id}_fx${i++}`;
     const base = e.color && !isNone(e.color) ? e.color : "#000000";
-    const color = svgColor(base);
+    const color = svgColor(base, profile);
     const alpha = (alphaOf(base) * 1).toFixed(3);
     const sigma = Math.max(0, e.blur / 2);
     if (e.kind === "drop-shadow") {
@@ -371,13 +377,13 @@ export function svgShape(n: XNode, fill: string, stroke = "none", extra = "", op
   const extras: string[] = [];
   for (const row of n.fills ?? []) {
     if (!row.visible || row.exportVisible === false) continue;
-    const c = svgColor(row.color);
+    const c = svgColor(row.color, opts.colorProfile ?? "srgb");
     const paint = row.type === "linear" || row.type === "radial" ? c : c;
     extras.push(`<path d="${path}" fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, row.opacity * alphaOf(row.color)))}" fill-rule="${fillRule(n)}"/>`);
   }
   const strokeRows = n.strokes ?? [];
   for (const row of strokeRows) {
-    const c = row.visible === false ? "none" : svgColor(row.color);
+    const c = row.visible === false ? "none" : svgColor(row.color, opts.colorProfile ?? "srgb");
     if (c === "none") continue;
     extras.push(`<path d="${path}" fill="none" stroke="${c}" stroke-width="${row.width}" stroke-opacity="${Math.max(0, Math.min(1, (row.opacity ?? 1) * alphaOf(row.color)))}" ${common}/>`);
   }
@@ -530,10 +536,11 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
   // contains one used to export the slice's own rectangle.
   if (n.isSlice === true) return "";
   const id = safeId("paint", n);
+  const profile = opts.colorProfile ?? "srgb";
   const fill =
-    n.fillVisible !== false && n.fillExportVisible !== false ? svgColor(n.fill) : "none";
+    n.fillVisible !== false && n.fillExportVisible !== false ? svgColor(n.fill, profile) : "none";
   const defs: string[] = [];
-  let stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint) : "none";
+  let stroke = n.strokeVisible && n.strokeWidth > 0 ? svgColor(n.strokePaint, profile) : "none";
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokeType === "pattern") {
     const pd = patternDef({ ...n, pattern: n.strokePattern }, `${id}-stroke`, opts);
     if (pd) defs.push(pd.def);
@@ -547,13 +554,13 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
     if (pd) defs.push(pd.def);
     paint = pd ? pd.paint : "none";
   } else if (fill !== "none" && !n.imageSrc) {
-    const g = gradientDefs(n, id);
+    const g = gradientDefs(n, id, profile);
     if (g) {
       defs.push(g.def);
       paint = g.paint;
     }
   }
-  const fx = effectFilters(n, id);
+  const fx = effectFilters(n, id, profile);
   defs.push(...fx.defs);
   const filter = fx.filters.length ? ` filter="${fx.filters.join(" ")}"` : "";
   // The layer turns about its own rotation origin, which ⌥-drag can
@@ -643,6 +650,7 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
 export interface SvgPreset {
   format: string;
   scale: number | string;
+  colorProfile?: ColorProfile;
   suffix: string;
   /** "Include id attribute": writes an id from the layer's name so a
    *  stylesheet or a script can reach the element. */
@@ -668,6 +676,7 @@ export interface SvgScope {
 export interface SvgOpts {
   outlineText?: boolean;
   simplifyStroke?: boolean;
+  colorProfile?: ColorProfile;
 }
 
 /**
@@ -740,6 +749,7 @@ export function exportSvg(n: XNode, p: SvgPreset, scope?: SvgScope) {
   const opts: SvgOpts = {
     outlineText: p.outlineText ?? p.format === "SVG",
     simplifyStroke: p.simplifyStroke ?? p.format === "SVG",
+    colorProfile: p.colorProfile ?? "srgb",
   };
   const id = p.includeId ? ` id="${escXml(svgId(n.name))}"` : "";
   const open = (width: number, height: number, vb: string) =>
@@ -780,7 +790,7 @@ export function exportSvg(n: XNode, p: SvgPreset, scope?: SvgScope) {
  * them instead — each root keeps its offset and the viewBox starts at the
  * top-left of the group.
  */
-export function exportClipSvg(nodes: XNode[]): string {
+export function exportClipSvg(nodes: XNode[], colorProfile: ColorProfile = "srgb"): string {
   if (!nodes.length) return "";
   const r = round;
   const minX = Math.min(...nodes.map((n) => n.x));
@@ -797,7 +807,7 @@ export function exportClipSvg(nodes: XNode[]): string {
   // so the pasted SVG renders on its own. Without it an inside-stroked shape
   // leaves the clipboard as `<clipPath>`-plus-stroke, which every renderer that
   // ignores clip paths (and every reader of the markup) sees as a lost stroke.
-  const body = nodes.map((n) => svgNode(n, false, { simplifyStroke: true })).join("");
+  const body = nodes.map((n) => svgNode(n, false, { simplifyStroke: true, colorProfile })).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${r(w)}" height="${r(h)}" viewBox="${r(minX)} ${r(minY)} ${r(w)} ${r(h)}">${title}${body}</svg>`;
 }
 

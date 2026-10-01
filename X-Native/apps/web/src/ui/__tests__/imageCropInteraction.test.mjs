@@ -401,12 +401,11 @@ console.log("5 · rotation: the chrome expands to the rotated bounds");
   await ui.cropEvent(img.id);
   const tail = ui.tail(m0);
   const eof = tail.map((c) => c[0] === "fill" && c[1] === "evenodd").lastIndexOf(true);
-  const rot = eof >= 0 && tail.slice(eof).find((c) => c[0] === "rotate" && near(c[1], Math.PI / 2, 1e-9));
   const faded = eof >= 0 && tail.slice(eof).find(
-    (c) => c[0] === "drawImage" && c.length === 6 && near(c[2], -400) && near(c[3], -200) && near(c[4], 800) && near(c[5], 400),
+    (c) => c[0] === "drawImage" && c.length === 6 && c[1]?.width === 400 && c[1]?.height === 800 && near(c[4], 400) && near(c[5], 800),
   );
-  t("5-rotation: the faded crop extent matches the rotated picture's bounds (800×400 → 400×800)",
-    !!rot && !!faded, JSON.stringify({ eof, rot: !!rot, faded: !!faded }));
+  t("5-rotation: the faded crop draws the expanded rotated raster (800×400 → 400×800)",
+    !!faded, JSON.stringify({ eof, faded: !!faded, source: faded && [faded[1].width, faded[1].height] }));
   t("5-rotation: 8 handles still appear for the rotated fill",
     cropHandleFills(tail).length === 8);
   // South-edge drag: the start rect is the cover of the SWAPPED dims
@@ -529,6 +528,115 @@ console.log("7 · commit: Enter applies, one undo step for the whole session");
   await ui.dispatch({ type: "undo" });
   t("7-undo: Esc consumed no history — the undo takes the pre-crop move",
     near(ui.node(rect.id).x, 400), JSON.stringify(ui.node(rect.id).x));
+  await ui.close();
+}
+
+// ─────────────────── 8 · ratio, zoom, resize-to-fit controls ───────────────────
+{
+  const img = IMG();
+  const ui = await mount([img], []);
+  await ui.cropEvent(img.id);
+  const toolbar = ui.host.querySelector('[aria-label="Image crop controls"]');
+  const aspect = toolbar?.querySelector('[aria-label="Crop aspect ratio"]');
+  const zoom = toolbar?.querySelector('[aria-label="Crop zoom"]');
+  const rotation = toolbar?.querySelector('[aria-label="Crop rotation"]');
+  const fit = [...(toolbar?.querySelectorAll("button") ?? [])].find((b) => b.textContent.includes("Resize to fit"));
+  t("8-controls: crop toolbar exposes aspect, zoom, rotation, and resize-to-fit controls", !!aspect && !!zoom && !!rotation && !!fit);
+  if (aspect && zoom && rotation && fit) {
+    await act(async () => {
+      aspect.value = "16:9";
+      aspect.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    t("8-aspect: selecting 16:9 updates the active crop ratio preset", aspect.value === "16:9");
+    await ui.drag(300, 300, 290, 280);
+    const ratioCrop = { ...ui.node(img.id).imageCrop };
+    t("8-aspect: handle resize applies 16:9 in source-pixel space",
+      near(ratioCrop.w / ratioCrop.h, (16 / 9) * (300 / 400), 0.02), JSON.stringify(ratioCrop));
+    const beforeZoom = { ...ui.node(img.id).imageCrop };
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(zoom, "200");
+      zoom.dispatchEvent(new window.Event("input", { bubbles: true }));
+      zoom.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    const afterZoom = { ...ui.node(img.id).imageCrop };
+    t("8-zoom: 200% zoom narrows the crop around its centre", near(afterZoom.w, beforeZoom.w / 2, 0.02) && near(afterZoom.h, beforeZoom.h / 2, 0.02), JSON.stringify({ beforeZoom, afterZoom }));
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(rotation, "45");
+      rotation.dispatchEvent(new window.Event("input", { bubbles: true }));
+      rotation.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    t("8-rotation: free-rotation slider patches the image fill angle", ui.node(img.id).imageRot === 45, String(ui.node(img.id).imageRot));
+    await act(async () => fit.click());
+    t("8-fit: Resize to fit uses the rotated image bounds and clears crop data",
+      ui.node(img.id).w === 495 && ui.node(img.id).h === 495 && ui.node(img.id).imageCrop === undefined,
+      JSON.stringify({ w: ui.node(img.id).w, h: ui.node(img.id).h, crop: ui.node(img.id).imageCrop }));
+    await ui.key("Escape");
+    t("8-cancel: Escape restores crop, frame size, rotation, and prior fill mode",
+      rectIs(ui.node(img.id).imageCrop, 0.2, 0.15, 0.4, 0.5) && ui.node(img.id).w === 200 && ui.node(img.id).h === 200 && ui.node(img.id).imageRot === 0 && ui.node(img.id).imageFit === "fill",
+      JSON.stringify({ crop: ui.node(img.id).imageCrop, w: ui.node(img.id).w, h: ui.node(img.id).h, rotation: ui.node(img.id).imageRot, fit: ui.node(img.id).imageFit }));
+  }
+  await ui.close();
+}
+
+// ─────────────────── 9 · quick crop, edge-resize, and free-rotation gestures ───────────────────
+{
+  const img = IMG({ imageCrop: undefined });
+  const ui = await mount([img], []);
+  await ui.cropEvent(img.id);
+  const before = { x: 0.125, y: 0, w: 0.75, h: 1 }; // 400×300 cover crop into a 200×200 layer
+  await ui.drag(333.33, 200, 363.33, 200);
+  const after = { ...ui.node(img.id).imageCrop };
+  t("9-edge-resize: dragging the faded image edge zooms the image inside a stable layer box",
+    after.w < before.w && after.h < before.h && ui.node(img.id).w === 200 && ui.node(img.id).h === 200,
+    JSON.stringify({ before, after, frame: [ui.node(img.id).w, ui.node(img.id).h] }));
+  await ui.close();
+}
+{
+
+  const img = IMG({ imageCrop: undefined });
+  const ui = await mount([img], [img.id]);
+  await ui.drag(300, 300, 280, 280, { ctrlKey: true });
+  t("9-quick-crop: Control-dragging a selected image corner enters and edits Crop",
+    ui.node(img.id).imageFit === "crop" && !!ui.node(img.id).imageCrop,
+    JSON.stringify({ fit: ui.node(img.id).imageFit, crop: ui.node(img.id).imageCrop }));
+  await ui.key("Enter");
+  t("9-quick-crop: Enter commits the quick-crop session", cropHandleFills(ui.tail(ui.marker())).length === 0 && ui.node(img.id).imageFit === "crop");
+  await ui.close();
+}
+{
+  const img = IMG({ imageCrop: undefined });
+  const ui = await mount([img], []);
+  await ui.cropEvent(img.id);
+  const center = { x: 200, y: 200 };
+  const start = { x: 347.33, y: 85.67 };
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const radius = Math.hypot(start.x - center.x, start.y - center.y);
+  const delta = Math.PI / 6;
+  const finish = {
+    x: center.x + Math.cos(startAngle + delta) * radius,
+    y: center.y + Math.sin(startAngle + delta) * radius,
+  };
+  await ui.drag(start.x, start.y, finish.x, finish.y);
+  t("9-rotate: dragging an outside image corner freely rotates the fill", near(ui.node(img.id).imageRot, 30, 1), JSON.stringify({ rotation: ui.node(img.id).imageRot, finish }));
+  await ui.key("Escape");
+  t("9-rotate: Escape restores the source orientation", ui.node(img.id).imageRot === 0);
+  await ui.close();
+}
+{
+  const img = IMG({ imageCrop: undefined });
+  const ui = await mount([img], []);
+  await ui.cropEvent(img.id);
+  const center = { x: 200, y: 200 };
+  const start = { x: 347.33, y: 85.67 };
+  const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+  const radius = Math.hypot(start.x - center.x, start.y - center.y);
+  const delta = (22 * Math.PI) / 180;
+  const finish = {
+    x: center.x + Math.cos(startAngle + delta) * radius,
+    y: center.y + Math.sin(startAngle + delta) * radius,
+  };
+  await ui.drag(start.x, start.y, finish.x, finish.y, { shiftKey: true });
+  t("9-rotate: Shift snaps arbitrary rotation to 15° increments", near(ui.node(img.id).imageRot, 15, 1), JSON.stringify({ rotation: ui.node(img.id).imageRot }));
   await ui.close();
 }
 

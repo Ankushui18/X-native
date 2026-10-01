@@ -3,6 +3,8 @@
  * designer chrome. WASM `x-editor` can implement the same command API later.
  */
 
+export type ColorProfile = "srgb" | "display-p3";
+
 export type NodeKind =
   | "frame"
   | "section"
@@ -430,6 +432,8 @@ export interface CodeMapping {
 
 export interface ExportPreset {
   format: ExportFormat;
+  /** Output colour profile; absent means the document profile. */
+  colorProfile?: ColorProfile;
   /** Scale field: a multiplier, or a size with a unit. A number is
    *  read as a multiplier, the strings "500w" and "300h" as a fixed width or
    *  height with the other side following the aspect ratio. */
@@ -1049,6 +1053,7 @@ export interface Page {
 
 export interface Snapshot {
   fileName: string;
+  colorProfile: ColorProfile;
   pages: Page[];
   page: number;
   selection: string[];
@@ -1169,6 +1174,7 @@ export type Command =
   | { type: "openComment"; id: string }
   | { type: "setPage"; index: number }
   | { type: "setFileName"; name: string }
+  | { type: "setColorProfile"; profile: ColorProfile; mode: "assign" | "convert" }
   | { type: "addPage" }
   | {
       type: "add";

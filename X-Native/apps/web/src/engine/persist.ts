@@ -1,11 +1,13 @@
 import type {
   AnnotationItem,
+  ColorProfile,
   ComponentMaster,
   Page,
   SharedStyle,
   VariableCollection,
   VariableItem,
 } from "./types";
+import { getPreferredColorProfile } from "./colorProfile";
 
 /** Bump when the persisted shape changes incompatibly. A mismatch is discarded
  *  rather than migrated blindly, so a stale document can never half-load. */
@@ -19,6 +21,8 @@ const KEY = "x-native-document";
 export interface PersistedDoc {
   version: number;
   fileName: string;
+  /** sRGB is the default; absent on old documents, which follow the preferred profile. */
+  colorProfile?: ColorProfile;
   pages: Page[];
   components: ComponentMaster[];
   styles: SharedStyle[];
@@ -81,6 +85,7 @@ function validate(v: unknown): PersistedDoc | null {
   return {
     version: VERSION,
     fileName: v.fileName,
+    colorProfile: v.colorProfile === "display-p3" ? "display-p3" : v.colorProfile === "srgb" ? "srgb" : getPreferredColorProfile(),
     pages,
     components: v.components as ComponentMaster[],
     styles: v.styles as SharedStyle[],

@@ -1,7 +1,7 @@
 import type { GradientStop, PathPoint, XNode } from "./types";
 import { patternCells, patternPeriod, patternSettings, patternSourceNode } from "./pattern";
 import { shapePoly } from "./geometry";
-import { canvasBlend, cssRgba, isNone, parseHex, toHexA } from "../ui/color";
+import { canvasBlend, cssRgba, getCanvas2dContext, isNone, parseHex, toHexA } from "../ui/color";
 import { dashArray, dashOffset, miterLimitFromAngle, paintedStrokeAlign, sideCones, sideWidths, sidesSupported } from "./strokeModel";
 
 /** Linear sRGB → OKLab mix so ramps are smoother than canvas sRGB (and scalar sRGB).
@@ -490,7 +490,7 @@ function patternTile(src: XNode, k: number, imgOf?: (src: string) => HTMLImageEl
   const c = document.createElement("canvas");
   c.width = tw;
   c.height = th;
-  const tctx = c.getContext("2d");
+  const tctx = getCanvas2dContext(c);
   if (!tctx) return null;
   drawSourceTree(tctx, src, 0, 0, k, imgOf);
   tileCache.set(key, c);
@@ -527,7 +527,7 @@ export function patternStrokeStyle(
     const cell = document.createElement("canvas");
     cell.width = Math.max(1, Math.ceil(pw));
     cell.height = Math.max(1, Math.ceil(ph));
-    const tctx = cell.getContext("2d");
+    const tctx = getCanvas2dContext(cell);
     if (!tctx) return null;
     // Render at the cell's native pixel scale, then setTransform makes its
     // possibly fractional period exact. Copies that cross an edge wrap into
@@ -640,6 +640,18 @@ function paintDiamond(
 
 const imgCache = new Map<string, HTMLCanvasElement>();
 
+/** Pixel bounds of an image raster after rotating it around its centre. */
+export function rotatedImageSize(iw: number, ih: number, rotation: number): { w: number; h: number } {
+  const radians = (((rotation % 360) + 360) % 360) * Math.PI / 180;
+  const snap = (v: number) => Math.abs(v) < 1e-10 ? 0 : Math.abs(1 - v) < 1e-10 ? 1 : Math.abs(v);
+  const c = snap(Math.cos(radians));
+  const s = snap(Math.sin(radians));
+  return {
+    w: Math.max(1, Math.ceil(iw * c + ih * s)),
+    h: Math.max(1, Math.ceil(iw * s + ih * c)),
+  };
+}
+
 function clampByte(n: number) {
   return n < 0 ? 0 : n > 255 ? 255 : n;
 }
@@ -647,7 +659,7 @@ function clampByte(n: number) {
 function adjKey(n: XNode) {
   return [
     n.imageSrc,
-    n.imageRot | 0,
+    n.imageRot || 0,
     n.imageExposure || 0,
     n.imageContrast || 0,
     n.imageSaturation || 0,
@@ -671,7 +683,7 @@ function hasAdj(n: XNode) {
   );
 }
 
-function processImage(im: HTMLImageElement, n: XNode): CanvasImageSource {
+export function processImage(im: HTMLImageElement, n: XNode): CanvasImageSource {
   if (!hasAdj(n)) return im;
   const key = adjKey(n);
   const hit = imgCache.get(key);
@@ -679,15 +691,19 @@ function processImage(im: HTMLImageElement, n: XNode): CanvasImageSource {
   const rot = ((n.imageRot % 360) + 360) % 360;
   const iw = im.naturalWidth;
   const ih = im.naturalHeight;
-  const swap = rot === 90 || rot === 270;
+  const radians = (rot * Math.PI) / 180;
+  // Expand the intermediate raster to the rotated image's full bounds. Keeping
+  // the original dimensions clipped diagonal corners for free-rotation values
+  // and made Crop mode's faded source disagree with the final fill.
+  const rotated = rotatedImageSize(iw, ih, rot);
   const c = document.createElement("canvas");
-  c.width = swap ? ih : iw;
-  c.height = swap ? iw : ih;
-  const x = c.getContext("2d");
+  c.width = rotated.w;
+  c.height = rotated.h;
+  const x = getCanvas2dContext(c);
   if (!x) return im;
   x.save();
   x.translate(c.width / 2, c.height / 2);
-  x.rotate((rot * Math.PI) / 180);
+  x.rotate(radians);
   x.drawImage(im, -iw / 2, -ih / 2);
   x.restore();
   const exp = n.imageExposure || 0;
@@ -705,8 +721,8 @@ function processImage(im: HTMLImageElement, n: XNode): CanvasImageSource {
     const satM = 1 + sat / 100;
     const tR = (temp / 100) * 40;
     const tB = -(temp / 100) * 40;
-    const tiG = (tint / 100) * 40;
-    const tiRB = -(tint / 100) * 20;
+    const tiG = -(tint / 100) * 40;
+    const tiRB = (tint / 100) * 20;
     for (let i = 0; i < d.length; i += 4) {
       let r = d[i] * expM;
       let g = d[i + 1] * expM;
@@ -740,6 +756,10 @@ function processImage(im: HTMLImageElement, n: XNode): CanvasImageSource {
     x.putImageData(img, 0, 0);
   }
   if (imgCache.size > 24) imgCache.clear();
+  // Free rotation can produce a fresh angle on every pointer move. Keep this
+  // derived-raster cache bounded so a long rotation session cannot retain an
+  // unbounded number of full-resolution canvases.
+  if (imgCache.size >= 128) imgCache.delete(imgCache.keys().next().value!);
   imgCache.set(key, c);
   return c;
 }

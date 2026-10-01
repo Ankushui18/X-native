@@ -4,8 +4,9 @@
  * The export panel offers PDF, but the browser has no PDF encoder, so the old
  * code downloaded an SVG with the extension rewritten — the user asked for a
  * PDF and silently got a different file type. This produces a real PDF: a
- * single page holding the rendered artwork as a lossless Flate-compressed
- * image, with a soft mask so transparency survives.
+ * single page holding the rendered artwork as a JPEG-compressed image, with
+ * a lossless soft mask so transparency survives. RGB quality is supplied by
+ * the export settings; callers that do not supply a JPEG retain lossless Flate.
  *
  * It is raster-backed rather than vector, so export at 2x/3x for print. A
  * vector writer (real paths and embedded font subsets) is the natural next
@@ -71,20 +72,27 @@ export async function buildPdf(
   ptW: number,
   ptH: number,
   title = "",
+  jpegRgb?: Uint8Array<ArrayBuffer>,
 ): Promise<Blob> {
   const count = wPx * hPx;
-  const rgb = new Uint8Array(new ArrayBuffer(count * 3));
+  // RGB samples are only needed for the lossless fallback. A caller-supplied
+  // JPEG already contains them; avoiding a second full-frame buffer matters on
+  // large exports.
+  const rgb = jpegRgb ? null : new Uint8Array(new ArrayBuffer(count * 3));
   const alpha = new Uint8Array(new ArrayBuffer(count));
   let opaque = true;
   for (let i = 0; i < count; i++) {
-    rgb[i * 3] = rgba[i * 4];
-    rgb[i * 3 + 1] = rgba[i * 4 + 1];
-    rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    if (rgb) {
+      rgb[i * 3] = rgba[i * 4];
+      rgb[i * 3 + 1] = rgba[i * 4 + 1];
+      rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    }
     const a = rgba[i * 4 + 3];
     alpha[i] = a;
     if (a !== 255) opaque = false;
   }
-  const rgbZ = await deflate(rgb);
+  const rgbData = jpegRgb ?? await deflate(rgb!);
+  const rgbFilter = jpegRgb ? "DCTDecode" : "FlateDecode";
   const alphaZ = opaque ? null : await deflate(alpha);
 
   // Objects are emitted in order; `offsets` records each one's byte position
@@ -108,7 +116,7 @@ export async function buildPdf(
     push("endobj\n");
   };
 
-  push("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+  push("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
 
   const smaskId = 6;
   obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
@@ -121,9 +129,9 @@ export async function buildPdf(
   obj(
     4,
     `<< /Type /XObject /Subtype /Image /Width ${wPx} /Height ${hPx} ` +
-      `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode ` +
-      `/Length ${rgbZ.length}${alphaZ ? ` /SMask ${smaskId} 0 R` : ""} >>`,
-    rgbZ,
+      `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /${rgbFilter} ` +
+      `/Length ${rgbData.length}${alphaZ ? ` /SMask ${smaskId} 0 R` : ""} >>`,
+    rgbData,
   );
   // Place the image to cover the page; PDF's origin is bottom-left.
   const content = enc.encode(`q\n${ptW.toFixed(2)} 0 0 ${ptH.toFixed(2)} 0 0 cm\n/Im0 Do\nQ\n`);

@@ -14,6 +14,7 @@ import { blankPage, demoPage, node, uid } from "./memory";
 import { hydrateDoc } from "./assets";
 import type { Page, XNode } from "./types";
 import type { PersistedDoc } from "./persist";
+import { getPreferredColorProfile } from "./colorProfile";
 import type { ImportedNode, ImportResult } from "./svgImport";
 
 export type DocSeed = Omit<PersistedDoc, "version">;
@@ -309,7 +310,8 @@ export function createFile(
 ): FileMeta {
   const template = opts.template ?? "blank";
   const now = Date.now();
-  const doc = opts.doc ?? docFromTemplate(template);
+  const baseDoc = opts.doc ?? docFromTemplate(template);
+  const doc = { ...baseDoc, colorProfile: baseDoc.colorProfile ?? getPreferredColorProfile() };
   const meta: FileMeta = {
     id: opts.id ?? uid("file"),
     demo: !!opts.demo,

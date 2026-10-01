@@ -1,7 +1,7 @@
 import { allowTopologyEdit } from "./vectorCapabilities";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
+import type { ColorProfile, Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
 import type { DocSeed } from "../engine/files";
 import { coerceVariableValue, fallbackForType, isAlias, resolveVariable, wouldCycle } from "../engine/variables";
 import {
@@ -48,6 +48,8 @@ import { readLocalCopy, saveLocalCopy } from "./localCopy";
 import { clearDoc } from "../engine/persist";
 import { copyText, notePasteModifiers, pasteEventMissing } from "../engine/clipboard";
 import { armEyedrop, isNone } from "./color";
+import { getPreferredColorProfile, setPreferredColorProfile } from "../engine/colorProfile";
+import { applyEyedropSource, eyedropClipboardText, promptCreateEyedropToken } from "./eyedropper";
 import { getEngineInfo } from "../engine/wasmBridge";
 import { XDialog, XSegmentedControl } from "./x-ui";
 
@@ -800,6 +802,44 @@ export function FileMenu({
     fn();
   };
 
+  const chooseFileColorProfile = async () => {
+    const profile = (await askChoice({
+      title: "File color profile",
+      body: "Choose the working RGB profile for this file.",
+      options: [
+        { label: "sRGB", value: "srgb", primary: snap.colorProfile === "srgb" },
+        { label: "Display P3", value: "display-p3", primary: snap.colorProfile === "display-p3" },
+      ],
+    })) as ColorProfile | null;
+    if (profile === null || profile === snap.colorProfile) return;
+    const mode = await askChoice({
+      title: "Apply the new profile",
+      body: "Assign keeps stored color values and may change how they look. Convert changes stored values to preserve their appearance where possible; colors outside the destination gamut are clipped.",
+      options: [
+        { label: "Assign profile", value: "assign", primary: true },
+        { label: "Convert colors", value: "convert" },
+      ],
+    });
+    if (mode === null) return;
+    engine.dispatch({ type: "setColorProfile", profile, mode: mode as "assign" | "convert" });
+    toast(mode === "assign" ? `Assigned ${profile === "srgb" ? "sRGB" : "Display P3"}` : `Converted to ${profile === "srgb" ? "sRGB" : "Display P3"}`);
+  };
+
+  const choosePreferredColorProfile = async () => {
+    const current = getPreferredColorProfile();
+    const profile = (await askChoice({
+      title: "Preferred color profile",
+      body: "New files use this profile. Existing files are not changed.",
+      options: [
+        { label: "sRGB", value: "srgb", primary: current === "srgb" },
+        { label: "Display P3", value: "display-p3", primary: current === "display-p3" },
+      ],
+    })) as ColorProfile | null;
+    if (profile === null) return;
+    setPreferredColorProfile(profile);
+    toast(`Preferred profile set to ${profile === "srgb" ? "sRGB" : "Display P3"}`);
+  };
+
   const openPicked = async (file: File) => {
     let text = "";
     try {
@@ -855,6 +895,13 @@ export function FileMenu({
             }
           >
             <Icon name="import" size={14} /> Open local copy…
+          </button>
+          <button role="menuitem" onClick={() => run(() => void chooseFileColorProfile())}>
+            <Icon name="paint" size={14} /> File color profile…
+            <span className="sc">{snap.colorProfile === "display-p3" ? "Display P3" : "sRGB"}</span>
+          </button>
+          <button role="menuitem" onClick={() => run(() => void choosePreferredColorProfile())}>
+            <Icon name="paint" size={14} /> Preferred profile for new files…
           </button>
           <button role="menuitem" onClick={() => run(openExportAssets)}>
             <Icon name="image" size={14} /> Export assets…
@@ -2010,8 +2057,44 @@ export function bindHotkeys(
   let lastDigit = 0;
   let lastDigitAt = 0;
   let lastDigitRev = -1;
+  const armGlobalEyedrop = () => {
+    armEyedrop((color, sample) => {
+      const ids = engine.snapshot().selection;
+      if (sample?.create && ids.length) {
+        void promptCreateEyedropToken(engine, ids, "fill", color);
+        return;
+      }
+      if (sample?.shiftKey && sample.source && ids.length) {
+        applyEyedropSource(engine, ids, "fill", sample.source);
+        toast(`Applied ${sample.source.name}`);
+        return;
+      }
+      if (!ids.length) {
+        const text = eyedropClipboardText(color, sample?.source, sample?.shiftKey);
+        void copyText(text);
+        toast(`Copied ${text}`);
+        return;
+      }
+      engine.dispatch({ type: "begin" });
+      try {
+        for (const id of ids) engine.dispatch({ type: "patch", id, patch: { fill: color, fillVisible: true } });
+      } finally {
+        engine.dispatch({ type: "end" });
+      }
+    });
+  };
   const onKey = (e: KeyboardEvent) => {
     const t = e.target as HTMLElement;
+    // macOS Control+C is Figma's eyedropper chord while a color picker is open;
+    // let the picker consume it before this capture handler's normal Cmd/Ctrl+C.
+    const macControlEyedrop = /Mac|iPhone|iPad/.test(navigator.platform || "") && e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "c";
+    const inputTarget = t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable;
+    if (macControlEyedrop && document.querySelector(".fill-pop") && !inputTarget) return;
+    if (macControlEyedrop && !inputTarget && !document.querySelector(".fill-pop") && engine.snapshot().selection.length) {
+      e.preventDefault();
+      armGlobalEyedrop();
+      return;
+    }
     const typing =
       t.tagName === "INPUT" ||
       t.tagName === "TEXTAREA" ||
@@ -2297,16 +2380,11 @@ export function bindHotkeys(
       engine.dispatch({ type: "toggleOutlines" });
       return;
     }
-    // §26 KB-015: the eyedropper is bare I (Figma). A second disjunct once
-    // offered Ctrl+C, but `meta` already includes Ctrl, so `e.ctrlKey &&
-    // !meta` could never hold — dead code, removed. (Ctrl+C stays Copy.)
+    // Figma: `I` cross-platform, plus macOS Control+C for the fill property.
     const isEyedrop = !meta && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "i";
     if (isEyedrop) {
       e.preventDefault();
-      armEyedrop((c) => {
-        const id0 = engine.snapshot().selection[0];
-        if (id0) engine.dispatch({ type: "patch", id: id0, patch: { fill: c } });
-      });
+      armGlobalEyedrop();
       return;
     }
     // ⇧X swaps fill and stroke

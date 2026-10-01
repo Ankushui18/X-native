@@ -110,6 +110,7 @@ import { Tooltip } from "./Tooltip";
 import { copyText } from "../engine/clipboard";
 import { askChoice, askPrompt } from "./dialog";
 import { buildPdf } from "../engine/pdf";
+import { setRasterExportDpi } from "../engine/rasterMetadata";
 import { contentBox, exportClipSvg, exportSvg } from "../engine/svgExport";
 import { plural, toast } from "./toast";
 import { useEscape, useFocusTrap } from "./escape";
@@ -135,8 +136,10 @@ function isFractional(n: XNode) {
   return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
 }
 import { FillPicker, type FillValue, type PatternSourceOption } from "./FillPicker";
+import type { EyedropSource } from "./color";
+import { applyEyedropSource, promptCreateEyedropToken, type EyedropTargetProperty } from "./eyedropper";
 import { containsId } from "../engine/pattern";
-import { BLENDS, handlesForFill, isNone, parseHex, withAlpha } from "./color";
+import { BLENDS, getCanvas2dContext, getRenderColorProfile, handlesForFill, isNone, parseHex, withAlpha } from "./color";
 import { ContextMenu, runMenu } from "./ContextMenu";
 import {
   DEV_LANGS,
@@ -260,10 +263,10 @@ export function RightPanel({
 }
 
 /**
- * File ▸ Export… (⌘⇧E): one sheet listing
- * everything on the page that can be exported, each row with its own format and
- * scale, checkboxes to pick which ones to write. Thumbnails focus the layer so
- * a long list stays navigable.
+ * File ▸ Export… (⌘⇧E): one sheet listing every visible layer on the page
+ * with an export configuration. Each row shows its format and scale, and its
+ * checkbox decides whether it is included. Thumbnails focus the layer so a long
+ * list stays navigable.
  */
 function ExportAssetsDialog({
   engine,
@@ -276,36 +279,26 @@ function ExportAssetsDialog({
   onPresent?: () => void;
 }) {
   const root = snap.pages[snap.page].root;
-  const selected = new Set(snap.selection);
   const candidates = useMemo(() => {
     const out: XNode[] = [];
     const walk = (n: XNode) => {
       for (const ch of n.children) {
         if (ch.visible === false) continue;
-        // Frames and slices are the export units; anything else shows up when
-        // the layer already carries its own export settings or is selected,
-        // so a selected slice or vector is never missing from the list.
-        if (ch.kind === "frame" || ch.isSlice === true || (ch.exports?.length ?? 0) > 0 || selected.has(ch.id)) out.push(ch);
-        else walk(ch);
+        // The File ▸ Export sheet is specifically a bulk exporter for saved
+        // export configurations. Walk through frames and groups too so a
+        // configured descendant is not hidden by its unconfigured parent.
+        if ((ch.exports?.length ?? 0) > 0) out.push(ch);
+        walk(ch);
       }
     };
     walk(root);
     return out;
   }, [root]);
-  const withConfig = (n: XNode) => (n.exports?.length ?? 0) > 0;
   const presetFor = (n: XNode): ExportPreset =>
     n.exports?.[0] ?? { format: "PNG", scale: 1, suffix: "" };
-  const [checked, setChecked] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    for (const n of candidates) if (withConfig(n) || selected.has(n.id)) init[n.id] = true;
-    // Opened with nothing configured and nothing selected, the useful default is
-    // the top level of the page — that is what "export the design" means.
-    if (!Object.keys(init).length) {
-      const top = new Set(root.children.map((c) => c.id));
-      for (const n of candidates) if (top.has(n.id)) init[n.id] = true;
-    }
-    return init;
-  });
+  const [checked, setChecked] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(candidates.map((n) => [n.id, true])),
+  );
   const [configs, setConfigs] = useState<Record<string, ExportPreset>>(() => {
     const init: Record<string, ExportPreset> = {};
     for (const n of candidates) init[n.id] = presetFor(n);
@@ -317,7 +310,7 @@ function ExportAssetsDialog({
   // the sheet is being filtered or ticked; it follows the document instead.
   const thumbs = useMemo(() => {
     const out: Record<string, string> = {};
-    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "" }, { root });
+    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "", colorProfile: snap.colorProfile }, { root });
     return out;
   }, [candidates]);
   const chosen = candidates.filter((n) => checked[n.id]);
@@ -338,7 +331,7 @@ function ExportAssetsDialog({
     const jobs: { n: XNode; p: ExportPreset }[] = [];
     for (const n of chosen) for (const p of filesFor(n)) jobs.push({ n, p });
     jobs.forEach(({ n, p }, i) => {
-      window.setTimeout(() => runExport(n, p, { root }), i * 220);
+      window.setTimeout(() => runExport(n, { ...p, colorProfile: p.colorProfile ?? snap.colorProfile }, { root }), i * 220);
     });
     toast(`Exporting ${plural(jobs.length, "asset")} from "${snap.pages[snap.page].name}"`);
     onClose();
@@ -386,7 +379,7 @@ function ExportAssetsDialog({
           </button>
         </div>
         <div className="xmodal-body">
-          {!rows.length && <p className="empty">Nothing on this page can be exported.</p>}
+          {!rows.length && <p className="empty">No export configurations on this page.</p>}
           {rows.map((n) => {
             const p = configs[n.id] ?? presetFor(n);
             const set = (patch: Partial<ExportPreset>) =>
@@ -405,6 +398,7 @@ function ExportAssetsDialog({
                   className="xrow-thumb"
                   src={thumbs[n.id]}
                   alt=""
+                  title={`${n.name}${p.suffix}.${p.format.toLowerCase()}`}
                   onClick={(e) => {
                     // The thumbnail is a shortcut to the layer itself.
                     e.preventDefault();
@@ -428,6 +422,11 @@ function ExportAssetsDialog({
                       {f}
                     </option>
                   ))}
+                </select>
+                <select aria-label="Export color profile" value={p.colorProfile ?? "file"} onChange={(e) => set({ colorProfile: e.target.value === "file" ? undefined : e.target.value as "srgb" | "display-p3" })}>
+                  <option value="file">File profile</option>
+                  <option value="srgb">sRGB</option>
+                  <option value="display-p3">Display P3</option>
                 </select>
                 <select aria-label="Export scale" value={String(p.scale)} disabled={FORMAT_CAPS[p.format].oneToOne} title={FORMAT_CAPS[p.format].oneToOne ? "Vector formats export at 1x" : "Export scale"} onChange={(e) => set({ scale: Number(e.target.value) })}>
                   {SCALES.map((x) => (
@@ -1717,7 +1716,7 @@ function generateFlutter(n: XNode): string {
  *  gradients, effects, text and rotation survive the trip. This used to be a
  *  lossy single-path emitter that dropped everything but the outline. */
 function generateSvg(n: XNode): string {
-  return exportSvg(n, { format: "SVG", scale: 1, suffix: "" });
+  return exportSvg(n, { format: "SVG", scale: 1, suffix: "", colorProfile: getRenderColorProfile() });
 }
 
 function generateLayerJson(n: XNode): string {
@@ -2263,7 +2262,7 @@ const TREE_FORMATS: Partial<Record<DevFormat, TreeFormat>> = {
 function renderDevCodeScoped(n: XNode, format: DevFormat, unit: DevUnit, scope: DevScope, snap: Snapshot): string {
   // A slice's SVG is its region's content, like the export's.
   if (format === "svg" && n.isSlice === true)
-    return exportSvg(n, { format: "SVG", scale: 1, suffix: "" }, { root: snap.pages[snap.page].root });
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "", colorProfile: snap.colorProfile }, { root: snap.pages[snap.page].root });
   const tree = TREE_FORMATS[format];
   if (!tree) return renderDevCode(n, format, unit);
   if (scope === "subtree" && n.children?.length) {
@@ -3168,6 +3167,8 @@ function Design({
   }, []);
   const [fillDrag, setFillDrag] = useState<number | null>(null);
   const [fillOver, setFillOver] = useState<number | null>(null);
+  const [strokeDrag, setStrokeDrag] = useState<number | null>(null);
+  const [strokeOver, setStrokeOver] = useState<number | null>(null);
   const [padOpen, setPadOpen] = useState(false);
   const [conOpen, setConOpen] = useState(false);
   const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
@@ -3370,6 +3371,13 @@ function Design({
   const selNodes = snap.selection
     .map((id) => find(dRoot, id))
     .filter((m): m is XNode => !!m);
+  const applySampledEyedropBinding = (source: EyedropSource, target: EyedropTargetProperty) => {
+    const applied = applyEyedropSource(engine, snap.selection, target, source);
+    if (applied) toast(`Applied ${source.name}`);
+    return applied;
+  };
+  const createSampledEyedropToken = (hex: string, target: EyedropTargetProperty) =>
+    promptCreateEyedropToken(engine, snap.selection, target, hex);
   const movers =
     selNodes.length > 1
       ? selNodes.filter((m) => !isEffectivelyLocked(dRoot, m.id) && !isInstanceMember(dRoot, m.id))
@@ -3543,6 +3551,16 @@ function Design({
     if (!item) return;
     list.splice(Math.max(0, Math.min(list.length, to)), 0, item);
     patch({ fills: list });
+  };
+  /** Move an extra stroke in the model's bottom-to-top array. The scalar base
+   *  stroke is always the bottom row; these controls reorder extra rows above it. */
+  const moveStroke = (from: number, to: number) => {
+    const list = [...(n.strokes ?? [])];
+    if (from === to || from < 0 || from >= list.length) return;
+    const [item] = list.splice(from, 1);
+    if (!item) return;
+    list.splice(Math.max(0, Math.min(list.length, to)), 0, item);
+    patch({ strokes: list });
   };
   /* A min or max is a limit the hugging axes have to be measured against: each
    * keystroke clamps the box, and without a re-fit a limit typed as "200" would
@@ -6433,6 +6451,8 @@ function Design({
             recents={collectColors(snap.pages[snap.page].root)}
             background={fillBackground(snap.pages[snap.page].root, n)}
             largeText={isLargeText(n)}
+            onEyedropBinding={(source) => applySampledEyedropBinding(source, "fill")}
+            onCreateEyedrop={(hex) => createSampledEyedropToken(hex, "fill")}
             onChange={(fill) =>
               multi
                 ? patchMany({ fill, fillVisible: true })
@@ -6517,6 +6537,8 @@ function Design({
             recents={collectColors(snap.pages[snap.page].root)}
             background={fillBackground(snap.pages[snap.page].root, n)}
             largeText={isLargeText(n)}
+            onEyedropBinding={(source) => applySampledEyedropBinding(source, "strokePaint")}
+            onCreateEyedrop={(hex) => createSampledEyedropToken(hex, "strokePaint")}
             onChange={(strokePaint) =>
               multi
                 ? patchMany({ strokePaint, strokeType: "solid", strokeVisible: true })
@@ -6937,7 +6959,57 @@ function Design({
             patch: { strokes: (n.strokes ?? []).map((q, j) => (j === i ? { ...q, ...p } : q)) },
           });
         return (
-          <div className="insp-pad" key={i} style={{ display: "grid", gap: 4 }}>
+          <div
+            className={`insp-pad paint-row stroke-paint-row${strokeDrag === i ? " dragging" : ""}${strokeOver === i ? " drop" : ""}`}
+            key={i}
+            style={{ display: "grid", gap: 4 }}
+            onDragOver={(e) => {
+              if (strokeDrag === null) return;
+              e.preventDefault();
+              setStrokeOver(i);
+            }}
+            onDragLeave={() => setStrokeOver((v) => (v === i ? null : v))}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (strokeDrag !== null) moveStroke(strokeDrag, i);
+              setStrokeDrag(null);
+              setStrokeOver(null);
+            }}
+          >
+            <div className="paint-tools">
+              <span
+                className="grip"
+                draggable
+                title={`Drag to reorder stroke ${i + 2}`}
+                aria-label={`Drag to reorder stroke ${i + 2}`}
+                onDragStart={(e) => {
+                  setStrokeDrag(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  setStrokeDrag(null);
+                  setStrokeOver(null);
+                }}
+              />
+              <button
+                className="mini"
+                title={`Bring stroke ${i + 2} forward`}
+                aria-label={`Bring stroke ${i + 2} forward`}
+                disabled={i === (n.strokes?.length ?? 0) - 1}
+                onClick={() => moveStroke(i, i + 1)}
+              >
+                <Icon name="chevron-up" size={caretSize()} />
+              </button>
+              <button
+                className="mini"
+                title={`Send stroke ${i + 2} backward`}
+                aria-label={`Send stroke ${i + 2} backward`}
+                disabled={i === 0}
+                onClick={() => moveStroke(i, i - 1)}
+              >
+                <Icon name="chevron-down" size={caretSize()} />
+              </button>
+            </div>
             <ColorRow
               title="Stroke"
               stroke
@@ -8792,24 +8864,19 @@ const SCALES = SCALE_PRESETS;
    out per format - so a control cannot appear for something the exporter does
    not do. */
 function hasSettings(format: ExportFormat): boolean {
-  const c = FORMAT_CAPS[format];
-  return (
-    c.ignoreOverlap ||
-    c.boundingBox ||
-    c.includeId ||
-    c.outlineText ||
-    c.simplifyStroke ||
-    c.quality ||
-    c.resampling
-  );
+  // Every format supports an output color profile, even when it has no other
+  // format-specific options.
+  return Object.prototype.hasOwnProperty.call(FORMAT_CAPS, format);
 }
 
 /** Export format settings for the current row format. */
 function ExportSettings({
   preset,
+  textLayer,
   onChange,
 }: {
   preset: ExportPreset;
+  textLayer: boolean;
   onChange: (next: ExportPreset) => void;
 }) {
   const caps = FORMAT_CAPS[preset.format];
@@ -8824,13 +8891,25 @@ function ExportSettings({
   };
   return (
     <div className="export-settings insp-pad">
+      <label className="export-color-profile" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <span>Color profile</span>
+        <select
+          aria-label="Export color profile"
+          value={preset.colorProfile ?? "file"}
+          onChange={(e) => onChange({ ...preset, colorProfile: e.target.value === "file" ? undefined : e.target.value as "srgb" | "display-p3" })}
+        >
+          <option value="file">File profile</option>
+          <option value="srgb">sRGB</option>
+          <option value="display-p3">Display P3</option>
+        </select>
+      </label>
       {caps.ignoreOverlap && (
         <label className="check" title="Export the selected layers only, ignoring anything overlapping them">
           <input type="checkbox" checked={settings.ignoreOverlap} onChange={() => flip("ignoreOverlap")} />
           Ignore overlapping layers
         </label>
       )}
-      {caps.boundingBox && (
+      {caps.boundingBox && textLayer && (
         <label className="check" title="Text layers only: keep the layer's bounding box, empty space and all">
           <input type="checkbox" checked={settings.boundingBox} onChange={() => flip("boundingBox")} />
           Include bounding box
@@ -9045,6 +9124,7 @@ function ExportBlock({
                     format,
                     suffix: p.suffix,
                     scale: keep.oneToOne ? 1 : p.scale,
+                    colorProfile: p.colorProfile,
                     includeId: keep.includeId ? p.includeId : undefined,
                     outlineText: keep.outlineText ? p.outlineText : undefined,
                     simplifyStroke: keep.simplifyStroke ? p.simplifyStroke : undefined,
@@ -9085,7 +9165,7 @@ function ExportBlock({
                 <Icon name="minus" size={14} />
               </button>
             </div>
-            {settingsOpen === i && <ExportSettings preset={p} onChange={(next) => set(i, next)} />}
+            {settingsOpen === i && <ExportSettings preset={p} textLayer={n.kind === "text"} onChange={(next) => set(i, next)} />}
             {!multi && preview[i] && (
               <div className="export-checker">
                 <img src={previewUrl(n, p, scope)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
@@ -9130,7 +9210,8 @@ function ExportBlock({
 
 /** A data URL of the exact SVG this preset would write, used by the preview. */
 function previewUrl(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, p, scope))}`;
+  const colorProfile = p.colorProfile ?? getRenderColorProfile();
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, { ...p, colorProfile }, scope))}`;
 }
 
 function downloadBlob(blob: Blob, name: string) {
@@ -9146,10 +9227,11 @@ function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boo
   const box = scope?.page ? contentBox(n) : null;
   const { width, height } = exportSize(box ?? n, p);
   const settings = resolveSettings(p);
+  const colorProfile = p.colorProfile ?? getRenderColorProfile();
   // The suffix is appended straight onto the layer's name, with no separator:
   // the article's own example is "HomePage" + "draft" -> "HomePagedraft.png".
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
-  const svg = exportSvg(n, p, scope);
+  const svg = exportSvg(n, { ...p, colorProfile }, scope);
   if (p.format === "SVG") {
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
@@ -9159,7 +9241,7 @@ function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boo
     const c = document.createElement("canvas");
     c.width = width;
     c.height = height;
-    const ctx = c.getContext("2d");
+    const ctx = getCanvas2dContext(c, { colorSpace: colorProfile });
     if (!ctx) return;
     // "Image resampling": Detailed is a weighted average of the surrounding
     // pixels (what the browser does by default, at high quality); Basic is
@@ -9178,16 +9260,51 @@ function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boo
     }
     ctx.drawImage(image, 0, 0, width, height);
     if (p.format === "PDF") {
-      const px = ctx.getImageData(0, 0, width, height).data;
-      // Page size is the design size in points; a larger bitmap raises the
-      // effective resolution of the page without changing its size.
-      void buildPdf(new Uint8Array(px.buffer.slice(0)), width, height, Math.max(1, n.w), Math.max(1, n.h), n.name)
-        .then((blob) => downloadBlob(blob, name))
-        .catch(() => toast("Could not build the PDF"));
+      const rgba = new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer.slice(0));
+      const jpegCanvas = document.createElement("canvas");
+      jpegCanvas.width = width;
+      jpegCanvas.height = height;
+      const jpegCtx = getCanvas2dContext(jpegCanvas, { colorSpace: colorProfile });
+      if (!jpegCtx) return;
+      // JPEG has no alpha channel. Encode the RGB samples at the selected PDF
+      // quality, then pass the original alpha to the PDF writer as a lossless
+      // soft mask so transparent designs remain transparent.
+      const rgb = jpegCtx.createImageData(width, height);
+      const source = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      for (let i = 0; i < source.length; i += 4) {
+        rgb.data[i] = source[i];
+        rgb.data[i + 1] = source[i + 1];
+        rgb.data[i + 2] = source[i + 2];
+        rgb.data[i + 3] = 255;
+      }
+      jpegCtx.putImageData(rgb, 0, 0);
+      jpegCanvas.toBlob((blob) => {
+        if (!blob) {
+          toast("Could not encode the PDF image");
+          return;
+        }
+        void blob.arrayBuffer()
+          .then((bytes) => buildPdf(
+            rgba,
+            width,
+            height,
+            Math.max(1, box?.w ?? n.w),
+            Math.max(1, box?.h ?? n.h),
+            n.name,
+            new Uint8Array(bytes),
+          ))
+          .then((pdf) => downloadBlob(pdf, name))
+          .catch(() => toast("Could not build the PDF"));
+      }, "image/jpeg", qualityValue(settings.quality));
       return;
     }
     c.toBlob(
-      (blob) => blob && downloadBlob(blob, name),
+      (blob) => {
+        if (!blob) return;
+        void setRasterExportDpi(blob, p.format as "PNG" | "JPG", width / Math.max(1, box?.w ?? n.w))
+          .then((tagged) => downloadBlob(tagged, name))
+          .catch(() => toast("Could not prepare the raster export"));
+      },
       p.format === "JPG" ? "image/jpeg" : "image/png",
       qualityValue(settings.quality),
     );
@@ -9204,7 +9321,7 @@ export function layerCode(n: XNode, format?: DevFormat, snap?: Snapshot): string
   const scope = prefs.scope ?? "layer";
   // Copy-as-SVG of a slice renders the region's content, like the export does.
   if (fmt === "svg" && n.isSlice === true && snap)
-    return exportSvg(n, { format: "SVG", scale: 1, suffix: "" }, { root: snap.pages[snap.page].root });
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "", colorProfile: snap.colorProfile }, { root: snap.pages[snap.page].root });
   return snap
     ? renderDevCodeScoped(n, fmt, fmt === "css" || scope === "subtree" ? prefs.unit : "px", scope, snap)
     : renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
@@ -9224,12 +9341,13 @@ export function copyLayerCode(n: XNode, format?: DevFormat, snap?: Snapshot): vo
  *  will not take images (older Safari, denied permission) still gets the user
  *  the pixels, just as a file. Shared by single- and multi-layer copy. */
 function rasterizeSvgToClipboard(svg: string, width: number, height: number, label: string) {
+  const colorProfile = getRenderColorProfile();
   const image = new Image();
   image.onload = () => {
     const c = document.createElement("canvas");
     c.width = width;
     c.height = height;
-    const ctx = c.getContext("2d");
+    const ctx = getCanvas2dContext(c, { colorSpace: colorProfile });
     if (!ctx) {
       toast("Could not render this layer");
       return;
@@ -9256,7 +9374,7 @@ function rasterizeSvgToClipboard(svg: string, width: number, height: number, lab
 /** Put a PNG of the layer on the clipboard. It reuses the export renderer, so
  *  what lands in Slack is what the downloaded file would have contained. */
 export function copyPng(n: XNode, root?: XNode) {
-  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "" };
+  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "", colorProfile: getRenderColorProfile() };
   const { width, height } = exportSize(n, preset);
   rasterizeSvgToClipboard(
     exportSvg(n, preset, root ? { root } : undefined),
@@ -9280,7 +9398,7 @@ export function copyPngNodes(nodes: XNode[]) {
   const w = Math.max(1, Math.max(...nodes.map((n) => n.x + Math.max(1, n.w))) - minX);
   const h = Math.max(1, Math.max(...nodes.map((n) => n.y + Math.max(1, n.h))) - minY);
   rasterizeSvgToClipboard(
-    exportClipSvg(nodes),
+    exportClipSvg(nodes, getRenderColorProfile()),
     Math.max(1, Math.round(w * 2)),
     Math.max(1, Math.round(h * 2)),
     `${nodes.length} layers`,
@@ -9703,6 +9821,8 @@ function ColorRow({
   onValueChange,
   onCrop,
   bind,
+  onEyedropBinding,
+  onCreateEyedrop,
 }: {
   title?: string;
   value: string;
@@ -9730,6 +9850,8 @@ function ColorRow({
   onCrop?: () => void;
   /** Property-first binding affordance (BindControl) after the row buttons. */
   bind?: ReactNode;
+  onEyedropBinding?: (source: EyedropSource) => boolean;
+  onCreateEyedrop?: (hex: string) => void | Promise<void>;
   gx?: number;
   gy?: number;
   hx?: number;
@@ -9895,6 +10017,8 @@ function ColorRow({
             onMeta?.(fillValuePatch(v));
           }}
           onClose={() => setOpen(false)}
+          onEyedropBinding={onEyedropBinding}
+          onCreateEyedrop={onCreateEyedrop}
         />
       )}
     </div>
