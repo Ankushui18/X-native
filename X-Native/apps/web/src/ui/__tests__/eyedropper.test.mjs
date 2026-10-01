@@ -118,7 +118,11 @@ t("Windows Control+C remains ordinary copy; I is the eyedropper shortcut there",
   const event = new ui.window.KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true, cancelable: true });
   ui.window.dispatchEvent(event);
   t("macOS Control+C activates the global eyedropper for a selected layer", eyedropArmed() && event.defaultPrevented);
-  if (eyedropArmed()) takeEyedrop();
+  const sampled = takeEyedrop();
+  sampled?.("#a1b2c3", {});
+  const selected = ui.engine.snapshot().selection[0];
+  const recolored = ui.engine.snapshot().pages[0].root.children.find((n) => n.id === selected);
+  t("the global sampled value is applied to the selected fill", recolored?.fill === "#a1b2c3" && recolored.fillVisible === true, JSON.stringify(recolored?.fill));
   unbind();
   await ui.unmount();
 }

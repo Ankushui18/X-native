@@ -36,12 +36,12 @@ Semantic source detection and binding/create actions are currently implemented f
 - `X-Native/apps/web/src/ui/FillPicker.tsx` — picker action, picker-local shortcuts, color-model controls, and active-property updates.
 - `X-Native/apps/web/src/ui/chrome.tsx` — global `I` and macOS `Control+C` shortcuts.
 - `X-Native/apps/web/src/ui/eyedropper.ts` — source identity, binding/create helpers, and clipboard formatting.
-- `X-Native/apps/web/src/ui/__tests__/eyedropper.test.mjs` — 20 focused regression checks, including rendered sampling and global/picker platform shortcut behavior.
+- `X-Native/apps/web/src/ui/__tests__/eyedropper.test.mjs` — 21 focused regression checks, including rendered sampling, application of a sampled global fill, and global/picker platform shortcut behavior.
 
 ## Verification
 
 - `npx tsc -b` — passed.
-- `npx vite-node src/ui/__tests__/eyedropper.test.mjs` — 20 passed, 0 failed.
+- `npx vite-node src/ui/__tests__/eyedropper.test.mjs` — 21 passed, 0 failed.
 - `npx vite-node src/ui/__tests__/events.test.mjs` — 44 passed, 0 failed; registered the new readout-model event in the event census.
 - `npm test` — passed the complete web test suite, including the direct global macOS shortcut regression test.
 - A browser pixel-diff of the article's embedded video/screenshots was not performed; verification is behavioral and test-based.
