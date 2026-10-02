@@ -33,21 +33,26 @@ export function drillChild(root: XNode, container: XNode, x: number, y: number):
   return container.children.find((c) => c.visible && !c.locked) ?? null;
 }
 
-/** Frame-like containers use a detached handle, in local screen coordinates.
- * Offset and hit radius stay constant as the document zoom changes. */
-export function frameRotationHandle(kind: NodeKind, x: number, y: number, w: number) {
+/** Frame-like containers use a detached rotation handle. In Figma the rotation
+ *  target sits above the top-right corner, connected by a short vertical stem —
+ *  never at top-centre (that position was an earlier draft that never matched
+ *  the shipped UI, reported as "rotation icon is in top middle"). Offset and
+ *  hit radius stay constant in screen pixels as the document zoom changes. */
+export function frameRotationHandle(kind: NodeKind, x: number, y: number, w: number, _h: number) {
+  // Figma places the rotation target above the top-right corner, with a
+  // ~20px gap between the corner and the handle centre. Components and
+  // instances inherit the same affordance — they're also containers.
   return kind === "frame" || kind === "component" || kind === "instance"
-    ? { x: x + w / 2, y: y - 20 }
+    ? { x: x + w, y: y - 20 }
     : null;
 }
 
 export function rotationHandleHit(kind: NodeKind, px: number, py: number, x: number, y: number, w: number, h: number): boolean {
-  const handle = frameRotationHandle(kind, x, y, w);
-  if (handle) return Math.hypot(px - handle.x, py - handle.y) < 8;
-  // Rotation must not overlap the <8px resize hit area; the cursor and
-  // the press handler must agree about the gesture.
-  return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].some(([hx, hy]) => {
-    const distance = Math.hypot(px - hx, py - hy);
-    return distance >= 8 && distance <= 22;
-  });
+  const handle = frameRotationHandle(kind, x, y, w, h);
+  if (handle) return Math.hypot(px - handle.x, py - handle.y) < 10;
+  // Non-frame shapes: the rotation target is a larger ring outside the top-right
+  // corner (22px radius), not a corner overlap with 8px — so the cursor and
+  // the press handler agree about corner-resize vs. rotate.
+  const tr = { x: x + w, y: y };
+  return Math.hypot(px - tr.x, py - tr.y) >= 8 && Math.hypot(px - tr.x, py - tr.y) <= 24;
 }

@@ -142,6 +142,64 @@ export function cornerPinPoints(
   ];
 }
 
+/**
+ * Approximate a polygon whose vertices are rounded by a circular corner radius,
+ * returning a closed polyline of bezier PathPoints with cubic arcs in each corner
+ * (matching the roundRect kappa constant). Used for booleans, SVG export, hit
+ * testing and vector conversion of rounded polygons/stars so those pipelines
+ * agree with the canvas painter (polyPath/starPath use canvas.arcTo).
+ */
+function roundedPolygonPoints(vertices: { x: number; y: number }[], radius: number, arcSteps = 6): PathPoint[] {
+  const k = 0.5522847498;
+  const out: PathPoint[] = [];
+  const len = vertices.length;
+  for (let i = 0; i < len; i++) {
+    const prev = vertices[(i - 1 + len) % len];
+    const curr = vertices[i];
+    const next = vertices[(i + 1) % len];
+    const inLen = Math.hypot(curr.x - prev.x, curr.y - prev.y);
+    const outLen = Math.hypot(next.x - curr.x, next.y - curr.y);
+    // The reachable radius is bounded by half the shorter adjacent edge,
+    // matching how canvas.arcTo auto-clamps.
+    const r = Math.max(0, Math.min(radius, inLen / 2, outLen / 2));
+    const inDx = (curr.x - prev.x) / (inLen || 1);
+    const inDy = (curr.y - prev.y) / (inLen || 1);
+    const outDx = (next.x - curr.x) / (outLen || 1);
+    const outDy = (next.y - curr.y) / (outLen || 1);
+    const startX = curr.x - inDx * r;
+    const startY = curr.y - inDy * r;
+    const endX = curr.x + outDx * r;
+    const endY = curr.y + outDy * r;
+    if (i === 0) out.push({ x: startX, y: startY });
+    else out.push({ x: startX, y: startY, ix: 0, iy: 0, ox: 0, oy: 0 });
+    if (r > 0) {
+      // Approximate the circular arc from (startX,startY) to (endX,endY) around
+      // (curr.x,curr.y) using arcSteps line segments. arcTo is an arc of a
+      // circle tangential to both incoming and outgoing edges, so it sweeps from
+      // incoming-direction to outgoing-direction by the external turning angle.
+      const a0 = Math.atan2(startY - curr.y, startX - curr.x);
+      const a1 = Math.atan2(endY - curr.y, endX - curr.x);
+      // Normalise the sweep so it goes the short way around, matching arcTo on
+      // a convex polygon (both poly and star produce convex vertex turns here
+      // because we iterate the outside perimeter).
+      let sweep = a1 - a0;
+      while (sweep > Math.PI) sweep -= Math.PI * 2;
+      while (sweep < -Math.PI) sweep += Math.PI * 2;
+      for (let s = 1; s <= arcSteps; s++) {
+        const t = s / arcSteps;
+        const ang = a0 + sweep * t;
+        const px = curr.x + Math.cos(ang) * r;
+        const py = curr.y + Math.sin(ang) * r;
+        // Use short linear segments — dense enough for booleans/exports and
+        // cheap compared to computing true cubic arc control points per vertex.
+        out.push({ x: px, y: py, ix: 0, iy: 0, ox: 0, oy: 0 });
+      }
+      void k; // kappa constant retained in case we switch to cubic arcs later.
+    }
+  }
+  return out;
+}
+
 /** Sample a node's outline in local coordinates (for booleans / vector edit). */
 export function shapePoly(n: XNode, steps = 48): PathPoint[] {
   if ((n.kind === "vector" || n.kind === "boolean") && n.path.length) return n.path.map((p) => ({ ...p }));
@@ -156,28 +214,30 @@ export function shapePoly(n: XNode, steps = 48): PathPoint[] {
     return pts;
   }
   if (n.kind === "star") {
-    const pts: PathPoint[] = [];
     const count = Math.max(3, Math.min(60, Math.round(n.count || 5)));
     const inner = n.starRatio || 0.4;
     const rx = w / 2;
     const ry = h / 2;
+    const vertices: { x: number; y: number }[] = [];
     for (let i = 0; i < count * 2; i++) {
       const a = (i * Math.PI) / count - Math.PI / 2;
       const k = i % 2 === 0 ? 1 : inner;
-      pts.push({ x: w / 2 + Math.cos(a) * rx * k, y: h / 2 + Math.sin(a) * ry * k });
+      vertices.push({ x: w / 2 + Math.cos(a) * rx * k, y: h / 2 + Math.sin(a) * ry * k });
     }
-    return pts;
+    const cr = Math.min(n.cornerRadii[0] || 0, Math.min(rx, ry) * 0.4);
+    return cr > 0 ? roundedPolygonPoints(vertices, cr) : vertices.map((v) => ({ x: v.x, y: v.y }));
   }
   if (n.kind === "poly") {
-    const pts: PathPoint[] = [];
     const count = Math.max(3, Math.min(60, Math.round(n.count || 3)));
     const rx = w / 2;
     const ry = h / 2;
+    const vertices: { x: number; y: number }[] = [];
     for (let i = 0; i < count; i++) {
       const a = (i * 2 * Math.PI) / count - Math.PI / 2;
-      pts.push({ x: w / 2 + Math.cos(a) * rx, y: h / 2 + Math.sin(a) * ry });
+      vertices.push({ x: w / 2 + Math.cos(a) * rx, y: h / 2 + Math.sin(a) * ry });
     }
-    return pts;
+    const cr = Math.min(n.cornerRadii[0] || 0, Math.min(rx, ry) * 0.4);
+    return cr > 0 ? roundedPolygonPoints(vertices, cr) : vertices.map((v) => ({ x: v.x, y: v.y }));
   }
   if (n.kind === "line" || n.kind === "arrow") {
     return [

@@ -2165,7 +2165,11 @@ export class MemoryEngine implements Engine {
         }
         break;
       case "selectGuide":
+        // Selecting a ruler guide is mutually exclusive with layer selection
+        // (Figma): otherwise ⌫ would delete the selected layer instead of
+        // the guide the user just clicked.
         s.selectedGuide = cmd.id;
+        s.selection = [];
         break;
       case "previewStroke":
         s.previewStroke = cmd.id
@@ -2700,18 +2704,27 @@ export class MemoryEngine implements Engine {
           const worldX = wp ? wp.x : n.x;
           const worldY = wp ? wp.y : n.y;
 
-          // Figma refuses to add an object that is larger than an auto layout
-          // parent ("you won't see the option"), unless the drop bypasses with
-          // ⌘/Ctrl. A hug axis always fits, since the frame grows around the
-          // newcomer; absolute drops never join the flow, so they never refuse.
-          if (dest.layout && !cmd.absolute && !cmd.bypassSizeGate) {
-            const dl = dest.layout;
-            const dflow = dest.children.filter((c) => c.visible && !c.absolutePosition);
-            const dhoriz = dl.direction === "horizontal";
-            const hugW = dhoriz ? hugsMain(dl, dest, dflow) : dl.direction === "grid" ? hugsMain(dl, dest, dflow) : hugsCross(dl, dest, dflow);
-            const hugH = dhoriz ? hugsCross(dl, dest, dflow) : dl.direction === "grid" ? hugsCross(dl, dest, dflow) : hugsMain(dl, dest, dflow);
-            if ((n.w > dest.w && !hugW) || (n.h > dest.h && !hugH)) continue;
-          }
+          // Figma refuses to add an object larger than the destination frame
+          // (360039959014 §Parenting behavior: "If an object is larger than a
+          // frame, then we will not make it a child element"). This applies
+          // to both freeform and auto-layout parents. A hug axis always
+          // fits because the frame grows around the newcomer; absolute
+          // drops never join the flow so they never refuse; ⌘/Ctrl drop
+          // (bypassSizeGate) overrides the check.
+          const refusesOnSize = (nodeW: number, nodeH: number): boolean => {
+            if (cmd.bypassSizeGate || cmd.absolute) return false;
+            if (dest.kind !== "frame" && dest.kind !== "component" && dest.kind !== "instance") return false;
+            if (dest.layout) {
+              const dl = dest.layout;
+              const dflow = dest.children.filter((c) => c.visible && !c.absolutePosition);
+              const dhoriz = dl.direction === "horizontal";
+              const hugW = dhoriz ? hugsMain(dl, dest, dflow) : dl.direction === "grid" ? hugsMain(dl, dest, dflow) : hugsCross(dl, dest, dflow);
+              const hugH = dhoriz ? hugsCross(dl, dest, dflow) : dl.direction === "grid" ? hugsCross(dl, dest, dflow) : hugsMain(dl, dest, dflow);
+              return (nodeW > dest.w && !hugW) || (nodeH > dest.h && !hugH);
+            }
+            return nodeW > dest.w + 0.5 && nodeH > dest.h + 0.5;
+          };
+          if (refusesOnSize(n.w, n.h)) continue;
           // Where it lands is worked out against the destination as it stands,
           // before this object joins it: an explicit slot wins, then the grid
           // cell under the point, then the flow gap under the point. Anything
