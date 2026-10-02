@@ -56,7 +56,7 @@ t(`the pane says what it holds (${intro.slice(0, 44)}…)`,
   !!intro && !/plugin/i.test(intro) && /chord|palette/i.test(intro));
 t("and promises no plugins anywhere in the pane", !/plugin/i.test(tools.container.textContent || ""));
 
-const SEVEN = ["Place image", "Duplicate", "Group", "Undo", "Redo", "Zoom to 100%", "All actions…"];
+const SEVEN = ["Place image…", "Duplicate", "Group", "Undo", "Redo", "Zoom to 100%", "All actions…"];
 t(`every command is a row (${rows().length})`,
   rows().length === SEVEN.length && SEVEN.every((l) => rows().some((r) => r.label === l)));
 t("and every row wears its chord", rows().every((r) => r.sc.length > 0));
@@ -84,7 +84,7 @@ t("with nothing selected, Duplicate and Group are disabled",
 t("and with no history, Undo and Redo are disabled",
   byLabel("Undo").disabled && byLabel("Redo").disabled);
 t("while the commands that always work stay live",
-  !byLabel("Place image").disabled && !byLabel("Zoom to 100%").disabled && !byLabel("All actions…").disabled);
+  !byLabel("Place image…").disabled && !byLabel("Zoom to 100%").disabled && !byLabel("All actions…").disabled);
 t(`and the pane says why, in words (${blockedLine()})`,
   /Duplicate needs a selection/.test(blockedLine()) && /Nothing to undo yet/.test(blockedLine()));
 t("a disabled row carries no tooltip attribute to explain itself",
