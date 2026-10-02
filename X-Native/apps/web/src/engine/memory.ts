@@ -73,6 +73,8 @@ import {
   shapePoly,
   transformedPoly,
   addVectorBranch,
+  removeVectorSegment,
+  joinVectorVertices,
   pathToVectorNetwork,
   patchNetworkPath,
   hasExtraNetworkGeometry,
@@ -4218,6 +4220,50 @@ export class MemoryEngine implements Engine {
           n.w = Math.max(1, Math.max(...wxs) - Math.min(0, ...wxs));
           n.h = Math.max(1, Math.max(...wys) - Math.min(0, ...wys));
         }
+        break;
+      }
+      case "removeVectorSegment": {
+        const n = find(this.root(), cmd.id);
+        if (!n || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
+        const src = n.path.length >= 2 ? n.path : shapePoly(n);
+        if (src.length < 2) break;
+        const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+        const vn = n.vectorNetwork ?? pathToVectorNetwork(src, effClosed);
+        const updated = removeVectorSegment(vn, cmd.segmentIndex);
+        if (!updated) break;
+        n.kind = "vector";
+        n.vectorNetwork = updated;
+        const res = vectorNetworkToPath(updated);
+        n.path = res.path;
+        if (res.closed) n.closed = true;
+        if (!hasExtraNetworkGeometry(updated) && this.snapshot().vecEdit !== n.id) {
+          const pb = pathBounds(n.path, n.closed);
+          n.w = pb.w;
+          n.h = pb.h;
+        }
+        this.publishIfMasterEdit(cmd.id);
+        break;
+      }
+      case "joinVectorVertices": {
+        const n = find(this.root(), cmd.id);
+        if (!n || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
+        const src = n.path.length >= 2 ? n.path : shapePoly(n);
+        if (src.length < 2) break;
+        const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+        const vn = n.vectorNetwork ?? pathToVectorNetwork(src, effClosed);
+        const updated = joinVectorVertices(vn, cmd.aIndex, cmd.bIndex);
+        if (!updated) break;
+        n.kind = "vector";
+        n.vectorNetwork = updated;
+        const res = vectorNetworkToPath(updated);
+        n.path = res.path;
+        if (res.closed) n.closed = true;
+        if (!hasExtraNetworkGeometry(updated) && this.snapshot().vecEdit !== n.id) {
+          const pb = pathBounds(n.path, n.closed);
+          n.w = pb.w;
+          n.h = pb.h;
+        }
+        this.publishIfMasterEdit(cmd.id);
         break;
       }
       case "bendSegment": {

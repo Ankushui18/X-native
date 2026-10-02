@@ -44,18 +44,30 @@ window.HTMLElement.prototype.getBoundingClientRect = () => ({ left: 50, top: 30,
 async function mount(engine) {
   const wrap = document.createElement("div");
   document.body.appendChild(wrap);
-  let setSnapExt;
   const root = createRoot(wrap);
+  const { bindHotkeys } = await import("../chrome.tsx");
+  // Canvas takes a required `snap` prop and drives re-renders through the
+  // engine subscription — same Host pattern as the other DOM suites. The
+  // align chords (Alt+A/V…) and nudges (arrows) live in App's global
+  // bindHotkeys handler, so mount that too — exactly what ships.
+  function Host() {
+    const snap = React.useSyncExternalStore(
+      (cb) => engine.subscribe(cb),
+      () => engine.snapshot()
+    );
+    window._s = snap;
+    React.useEffect(() => {
+      const off = bindHotkeys(engine, {
+        onActions: () => {}, onHide: () => {}, onMinimize: () => {},
+      });
+      return off;
+    }, []);
+    return React.createElement(ThemeProvider, null,
+      React.createElement(Canvas, { engine, snap }));
+  }
   await new Promise((res) => {
     act(() => {
-      root.render(
-        React.createElement(ThemeProvider, null,
-          React.createElement(Canvas, {
-            engine,
-            onSnap: (s) => { if (setSnapExt) setSnapExt(s); else window._s = s; },
-          })
-        )
-      );
+      root.render(React.createElement(Host));
       res();
     });
   });
@@ -64,9 +76,12 @@ async function mount(engine) {
   return { wrap, getSnap, unmount: () => act(() => root.unmount()) };
 }
 
-function dispatchKey(wrap, code, opts = {}) {
+// Keys are dispatched on window inside act(): both the Canvas capture
+// listener and chrome's bindHotkeys listen there, and React state updates
+// (e.g. the crop/selection effects) need act() to flush before assertions.
+function dispatchKey(code, opts = {}) {
   const e = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, code, key: opts.key ?? "", ...opts });
-  wrap.dispatchEvent(e);
+  act(() => { window.dispatchEvent(e); });
 }
 
 // 1. Alt+A aligns a single child to parent's left (x=0).
@@ -79,7 +94,7 @@ function dispatchKey(wrap, code, opts = {}) {
   root.children.push(parent);
   engine.dispatch({ type: "select", ids: [parent.children[0].id] });
   const { getSnap, unmount } = await mount(engine);
-  dispatchKey(window, "KeyA", { key: "a", altKey: true });
+  dispatchKey("KeyA", { key: "a", altKey: true });
   const n = find(getSnap().pages[0].root, parent.children[0].id);
   t("Alt+A aligns single child to parent left (x=0)", Math.abs(n.x - 0) < 0.01);
   t("Alt+A leaves y untouched", Math.abs(n.y - 50) < 0.01);
@@ -95,7 +110,7 @@ function dispatchKey(wrap, code, opts = {}) {
   root.children.push(parent);
   engine.dispatch({ type: "select", ids: [child.id] });
   const { unmount } = await mount(engine);
-  dispatchKey(window, "KeyV", { key: "v", altKey: true });
+  dispatchKey("KeyV", { key: "v", altKey: true });
   const n = find(engine.snapshot().pages[0].root, child.id);
   t("Alt+V centers child vertically (y = (300-80)/2 = 110)", Math.abs(n.y - 110) < 0.01);
   unmount();
@@ -112,11 +127,11 @@ function dispatchKey(wrap, code, opts = {}) {
   root.children.push(parent);
   engine.dispatch({ type: "select", ids: [a.id] });
   const { getSnap, unmount } = await mount(engine);
-  dispatchKey(window, "Tab", { key: "Tab" });
+  dispatchKey("Tab", { key: "Tab" });
   t("Tab selects next sibling", getSnap().selection[0] === b.id);
-  dispatchKey(window, "Tab", { key: "Tab" });
+  dispatchKey("Tab", { key: "Tab" });
   t("Tab again selects next sibling", getSnap().selection[0] === c.id);
-  dispatchKey(window, "Tab", { key: "Tab", shiftKey: true });
+  dispatchKey("Tab", { key: "Tab", shiftKey: true });
   t("Shift+Tab selects previous sibling", getSnap().selection[0] === b.id);
   unmount();
 }
@@ -130,9 +145,9 @@ function dispatchKey(wrap, code, opts = {}) {
   root.children.push(comp);
   engine.dispatch({ type: "select", ids: [comp.id] });
   const { getSnap, unmount } = await mount(engine);
-  dispatchKey(window, "Enter", { key: "Enter" });
+  dispatchKey("Enter", { key: "Enter" });
   t("Enter drills into component (first child selected)", getSnap().selection[0] === inner.id);
-  dispatchKey(window, "Enter", { key: "Enter", shiftKey: true });
+  dispatchKey("Enter", { key: "Enter", shiftKey: true });
   t("Shift+Enter selects parent component", getSnap().selection[0] === comp.id);
   unmount();
 }
@@ -145,10 +160,10 @@ function dispatchKey(wrap, code, opts = {}) {
   root.children.push(r);
   engine.dispatch({ type: "select", ids: [r.id] });
   const { unmount } = await mount(engine);
-  dispatchKey(window, "ArrowRight", { key: "ArrowRight" });
+  dispatchKey("ArrowRight", { key: "ArrowRight" });
   const n = find(engine.snapshot().pages[0].root, r.id);
   t("→ nudges +1 in x", Math.abs(n.x - 101) < 0.01);
-  dispatchKey(window, "ArrowDown", { key: "ArrowDown", shiftKey: true });
+  dispatchKey("ArrowDown", { key: "ArrowDown", shiftKey: true });
   const n2 = find(engine.snapshot().pages[0].root, r.id);
   t("Shift+↓ nudges +big (default 10) in y", Math.abs(n2.y - 110) < 0.01);
   unmount();

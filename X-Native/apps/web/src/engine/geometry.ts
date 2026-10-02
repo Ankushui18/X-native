@@ -1331,6 +1331,99 @@ export function addVectorBranch(
 }
 
 /**
+ * Removes one segment (the line/curve between two anchors) from the network —
+ * Figma's "Remove segment" (⌘⌫ in edit mode). Endpoints stay unless they become
+ * fully disconnected and `pruneIsolated` is set. Regions whose loops referenced
+ * the removed edge are dropped (their paint can no longer be traced correctly),
+ * matching Figma opening the affected face.
+ */
+export function removeVectorSegment(
+  vn: VectorNetwork,
+  segmentIndex: number,
+  pruneIsolated = false,
+): VectorNetwork | null {
+  const seg = vn.segments[segmentIndex];
+  if (!seg) return null;
+  const segments = vn.segments.filter((_, i) => i !== segmentIndex);
+  let vertices = vn.vertices.map((v) => ({ ...v }));
+  // A region whose boundary used the removed edge becomes an open face — its
+  // paint is dropped, matching Figma opening the affected area.
+  const touchedRegion = (vn.regions ?? []).some((r) =>
+    r.loops.some((loop) => loop.some((vi, k) => {
+      const next = loop[(k + 1) % loop.length];
+      return (seg.start === vi && seg.end === next) || (seg.start === next && seg.end === vi);
+    })),
+  );
+  const regions = touchedRegion ? undefined : vn.regions;
+  if (pruneIsolated) {
+    const connected = new Set<number>();
+    for (const s of segments) { connected.add(s.start); connected.add(s.end); }
+    const keep: number[] = [];
+    vertices.forEach((_, i) => { if (connected.has(i)) keep.push(i); });
+    const remap = new Map<number, number>();
+    keep.forEach((old, ni) => remap.set(old, ni));
+    vertices = keep.map((i) => vertices[i]);
+    const remappedSegments = segments
+      .filter((s) => remap.has(s.start) && remap.has(s.end))
+      .map((s) => ({ ...s, start: remap.get(s.start)!, end: remap.get(s.end)! }));
+    return { vertices, segments: remappedSegments, regions: undefined };
+  }
+  // Re-index nothing: vertex order is stable so surviving tangents stay valid.
+  return { vertices, segments, regions };
+}
+
+/**
+ * Joins two selected vertices into one — Figma's "Join selected points".
+ * The survivor keeps vertex A's position/handles metadata; segments that
+ * became zero-length self-loops are removed. Returns null when the pair is
+ * not joinable (same index, or either index out of range).
+ */
+export function joinVectorVertices(
+  vn: VectorNetwork,
+  aIndex: number,
+  bIndex: number,
+): VectorNetwork | null {
+  if (aIndex === bIndex) return null;
+  const a = vn.vertices[aIndex], b = vn.vertices[bIndex];
+  if (!a || !b) return null;
+  const vertices = vn.vertices.map((v, i) => (i === bIndex ? null as any : v));
+  const segments = vn.segments
+    .map((s) => ({
+      ...s,
+      start: s.start === bIndex ? aIndex : s.start,
+      end: s.end === bIndex ? aIndex : s.end,
+    }))
+    .filter((s) => s.start !== s.end);
+  const compact: VectorVertex[] = [];
+  const remap = new Map<number, number>();
+  vertices.forEach((v, i) => {
+    if (v == null) return;
+    remap.set(i, compact.length);
+    compact.push(i === aIndex ? { ...a, x: a.x, y: a.y } : v);
+  });
+  const remapped = segments
+    .filter((s) => remap.has(s.start) && remap.has(s.end))
+    .map((s) => ({ ...s, start: remap.get(s.start)!, end: remap.get(s.end)! }));
+  // Loops referencing the eaten vertex collapse onto the survivor; drop
+  // degenerate (<3 distinct) faces since their paint is ambiguous.
+  const regions = vn.regions
+    ?.map((r) => ({
+      ...r,
+      loops: r.loops.map((loop) => {
+        const seen = new Set<number>();
+        const out: number[] = [];
+        for (const vi of loop) {
+          const nv = vi === bIndex ? aIndex : vi;
+          if (!seen.has(nv)) { seen.add(nv); out.push(nv); }
+        }
+        return out;
+      }).filter((l) => l.length >= 3),
+    }))
+    .filter((r) => r.loops.length > 0);
+  return { vertices: compact, segments: remapped, regions: regions && regions.length ? regions : undefined };
+}
+
+/**
  * Converts a `VectorNetwork` into a standard SVG path definition string (`d="..."`).
  */
 export function vectorNetworkToSvgPath(vn: VectorNetwork): string {

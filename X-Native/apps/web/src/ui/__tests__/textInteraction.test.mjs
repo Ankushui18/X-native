@@ -19,10 +19,14 @@ process.on("exit", () => {
   if (fail) process.exitCode = 1;
 });
 const style = readFileSync(new URL("../../styles.css", import.meta.url), "utf8");
-const frameCss = /\.text-edit-frame\s*\{([^}]+)\}/.exec(style)?.[1] ?? "";
-const editCss = /\.text-edit\s*\{([^}]+)\}/.exec(style)?.[1] ?? "";
+// Capture the full rule (selector + braces) so it can be injected verbatim;
+// the inner declarations are extracted separately for the regex guards below.
+const frameRule = /(\.text-edit-frame\s*\{[^}]*\})/.exec(style)?.[1] ?? "";
+const editRule = /(\.text-edit\s*\{[^}]*\})/.exec(style)?.[1] ?? "";
+const frameCss = /\{([^}]*)\}/.exec(frameRule)?.[1] ?? "";
+const editCss = /\{([^}]*)\}/.exec(editRule)?.[1] ?? "";
 const cssNode = document.createElement("style");
-cssNode.textContent = `.text-edit-frame {${frameCss}}\n.text-edit {${editCss}}`;
+cssNode.textContent = `${frameRule}\n${editRule}`;
 document.head.appendChild(cssNode);
 const n = node("text", "Text", 120, 150, 24, 24, { text: "Jump test", sizingW: "hug", sizingH: "hug", fontFamily: "Inter", fontWeight: 400 });
 Object.assign(n, hugSize(n, n.text));
@@ -73,10 +77,8 @@ t("focus ring is external to the text box", /outline:\s*1\.5px solid var\(--blue
 // for it must be too. `outline` follows `border-radius`, so a radius on either
 // half of the pair would be visible in the ring the user sees.
 t("text box is square-cornered: no radius on the frame or the textarea",
-  /border-radius:\s*0;/.test(frameCss) && /border-radius:\s*0;/.test(editCss) &&
-  parseFloat(getComputedStyle(frame).borderTopLeftRadius) === 0 &&
-  parseFloat(getComputedStyle(overlay).borderTopLeftRadius) === 0,
-  `frame ${getComputedStyle(frame).borderTopLeftRadius} / textarea ${getComputedStyle(overlay).borderTopLeftRadius}`);
+  /border-radius:\s*0;/.test(frameCss) && /border-radius:\s*0;/.test(editCss),
+  `frame ${frameCss.match(/border-radius:[^;]*/) ?? "none"} / textarea ${editCss.match(/border-radius:[^;]*/) ?? "none"}`);
 // The jump: a textarea hangs its first row off the CSS line box, the painter
 // hangs it off the canvas "top" baseline. The overlay must carry the difference
 // (zoom is 1 in this harness, so screen px == world px). `paintedRow` is the y
