@@ -60,6 +60,11 @@ console.log("Fix 1: Native Batch Patching");
     page: 0,
   });
 
+  // Warm the JIT first (one throwaway dispatch+undo) so the measured run
+  // reflects steady-state throughput, not first-call compilation cost.
+  engine.dispatch({ type: "patch", ids, patch: { fill: "#ff0000", strokePaint: "#0000ff", opacity: 1.0 } });
+  engine.dispatch({ type: "undo" });
+
   const t0 = performance.now();
   engine.dispatch({ type: "patch", ids, patch: { fill: "#00ff00", strokePaint: "#0000ff", opacity: 0.5 } });
   const t1 = performance.now();

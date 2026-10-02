@@ -32,6 +32,7 @@
  *   await dock.click(dock.one('.tool[data-group="bool"] .hit'));
  */
 import { JSDOM } from "jsdom";
+import * as jsdomPkg from "jsdom";
 
 let installed = false;
 let mods = null;
@@ -40,9 +41,28 @@ let mods = null;
  *  Idempotent: a suite that mounts twice installs once. */
 export function installDom() {
   if (installed) return globalThis.window;
+  // jsdom has no canvas backend and emits "Not implemented" on its default
+  // virtual console (which forwards straight to `console.error`) whenever code
+  // calls getContext. The engine measures text on a canvas in browsers
+  // (layout.ts resolveFontMetrics) and falls back to font-metric ratios when
+  // the context is null — exactly what happens under jsdom — but the noise
+  // made sweep scripts misclassify clean suites as failures. Install our own
+  // console first so we choose what gets printed: silence only that one
+  // message; every other jsdom error still surfaces via console.error.
+  const { VirtualConsole } = jsdomPkg;
+  let vcOptions = {};
+  if (VirtualConsole) {
+    const vc = new VirtualConsole();
+    vc.on("jsdomError", (err) => {
+      if (/HTMLCanvasElement\.prototype\.getContext/.test(String(err && err.message))) return;
+      console.error(err);
+    });
+    vcOptions = { virtualConsole: vc };
+  }
   const dom = new JSDOM(`<!doctype html><html><body></body></html>`, {
     url: "http://localhost/",
     pretendToBeVisual: true,
+    ...vcOptions,
   });
   const { window } = dom;
   const set = (name, value) =>

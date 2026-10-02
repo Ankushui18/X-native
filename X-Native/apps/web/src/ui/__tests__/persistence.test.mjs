@@ -26,6 +26,16 @@ const t = (name, ok, detail = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${ok || !detail ? "" : ` — ${detail}`}`);
 };
 const tick = () => new Promise((r) => setTimeout(r, 0));
+// Async hydration (file read -> IndexedDB image resolve -> callback) can take
+// more than two macrotasks in jsdom; poll instead of assuming a fixed count.
+const waitFor = async (pred, ms = 2000) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (pred()) return true;
+    await tick();
+  }
+  return pred();
+};
 
 const window = installDom();
 const { document } = window;
@@ -275,8 +285,7 @@ const panel = await mountLeftPanel({ props: { onOpenLocalCopy: (name, doc) => vo
   const file = new window.File([saved], "photo-study.x.json", { type: "application/json" });
   Object.defineProperty(picker, "files", { configurable: true, value: [file] });
   await act(() => picker.dispatchEvent(new window.Event("change", { bubbles: true })));
-  await tick();
-  await tick();
+  await waitFor(() => !!opened);
   t("picking a local copy hands the document to the editor", !!opened && opened.name === "Photo study", JSON.stringify(opened?.name));
   t("...with its image resolved", opened?.doc?.pages?.[0]?.root?.children?.[0]?.imageSrc === IMAGE);
 
@@ -286,7 +295,7 @@ const panel = await mountLeftPanel({ props: { onOpenLocalCopy: (name, doc) => vo
   Object.defineProperty(picker, "files", { configurable: true, value: [junk] });
   const before = toasts.length;
   await act(() => picker.dispatchEvent(new window.Event("change", { bubbles: true })));
-  await tick();
+  await waitFor(() => toasts.length > before);
   t("a JSON file that is not a document is refused", opened === null);
   t("...and says why", toasts.length > before && /not an X document/.test(toasts[toasts.length - 1]), JSON.stringify(toasts.slice(before)));
 

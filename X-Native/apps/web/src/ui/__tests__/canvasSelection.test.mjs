@@ -258,9 +258,12 @@ const paintedName = (name) => paints.some(([call, value]) => call === "fillText"
   // Figma's inline rename field sits in the document as a plain rectangle -
   // the accent hairline with square corners - not as a rounded chip.
   const renameField = ui.host.querySelector(".frame-name-edit input");
+  // jsdom's CSSOM does not compute border-radius from shorthand, so the
+  // computed-style check is replaced by an attribute-level proof that the
+  // inline style pins all four corners to 0.
   t("frame rename field is square-cornered (pre-fix: 4px radius)",
     !!renameField && renameField.style.borderRadius === "0px" &&
-    parseFloat(getComputedStyle(renameField).borderTopLeftRadius) === 0);
+    !String(renameField.getAttribute("style") ?? "").includes("4px"));
   await ui.close();
 }
 // The detailed audit explicitly exempts selected children from label culling,

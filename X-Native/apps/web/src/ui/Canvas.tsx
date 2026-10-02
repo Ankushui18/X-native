@@ -8980,7 +8980,10 @@ export function Canvas({
               // Figma's inline rename field is a plain rectangle - the accent
               // hairline, square corners, no radius. This one used to be 4px,
               // which read as a chip rather than as a field in the document.
-              borderRadius: 0,
+              // The string form survives serialization verbatim (jsdom keeps
+              // the number form as "0", not "0px"), so the guard test can
+              // read it back exactly.
+              borderRadius: "0px",
               background: "var(--elevated)",
               color: "var(--text)",
               minWidth: 80,

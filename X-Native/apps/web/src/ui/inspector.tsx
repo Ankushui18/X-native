@@ -7251,7 +7251,7 @@ function SelectionColors({
                 <button
                   className="scolor-sw"
                   style={{ background: u.hex }}
-                  title={`Change every ${u.bucket.toLowerCase()} ${u.hex.toUpperCase()} on this page`}
+                  title={`Change the selected ${u.bucket.toLowerCase()}s ${u.hex.toUpperCase()}`}
                   aria-label={`Change ${u.hex}`}
                   onClick={(e) =>
                     setPicking({ key, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() })

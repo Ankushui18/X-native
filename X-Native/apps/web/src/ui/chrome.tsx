@@ -840,15 +840,31 @@ export function FileMenu({
     toast(`Preferred profile set to ${profile === "srgb" ? "sRGB" : "Display P3"}`);
   };
 
-  const openPicked = async (file: File) => {
+  // Read the picked file with FileReader, the same way Canvas.tsx reads SVG
+  // drops and image placements. Blob.text() is not available on every engine
+  // we support (it is absent from jsdom outright), and relying on it surfaced
+  // as "That file could not be read" for perfectly good documents.
+  const readFileText = (f: { name: string }) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new window.FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+      reader.readAsText(f as unknown as Blob);
+    });
+
+  const openPicked = async (source: { name: string }) => {
     let text = "";
     try {
-      text = await file.text();
+      text = await readFileText(source);
     } catch {
       toast("That file could not be read");
       return;
     }
-    const read = await readLocalCopy(text, file.name);
+    if (!text) {
+      toast("That file could not be read");
+      return;
+    }
+    const read = await readLocalCopy(text, source.name);
     if (!read.ok) {
       toast(read.error);
       return;
@@ -917,8 +933,12 @@ export function FileMenu({
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0];
+          // Snapshot the File before clearing the input: emptying a file
+          // input detaches its File in some engines. The read itself goes
+          // through FileReader (see openPicked).
+          const picked = f ? { name: f.name, blob: f } : null;
           e.target.value = "";
-          if (f) void openPicked(f);
+          if (picked) void openPicked(picked.blob ?? picked);
         }}
       />
     </div>

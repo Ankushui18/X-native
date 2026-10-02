@@ -1321,6 +1321,10 @@ export type Command =
   | { type: "patchPath"; id: string; path: PathPoint[]; closed?: boolean }
   | { type: "patchVectorNetwork"; id: string; network: VectorNetwork; preserveBounds?: boolean }
   | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
+  /** Figma "Remove segment" (⌘⌫ on a selected edge in edit mode). */
+  | { type: "removeVectorSegment"; id: string; segmentIndex: number }
+  /** Figma "Join selected points" — merges two vertices of one network. */
+  | { type: "joinVectorVertices"; id: string; aIndex: number; bIndex: number }
   | { type: "bendSegment"; id: string; segIndex: number; dragX: number; dragY: number }
   | { type: "insertPointOnPath"; id: string; x: number; y: number; maxDist?: number }
   | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
