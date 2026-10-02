@@ -41,7 +41,7 @@ import { THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align, PRESET_GROUPS } from "./inspector";
 import { hugSize } from "./textLayout";
-import { stepZoom, viewportCentreWorld, zoomAboutCentre, zoomCenter, zoomTo, zoomToRect } from "./zoom";
+import { stepZoom, viewportCentreWorld, zoomAboutCentre, zoomTo, zoomToRect } from "./zoom";
 import { roundToPixel } from "./round";
 import { readLocalCopy, saveLocalCopy } from "./localCopy";
 
@@ -1703,7 +1703,7 @@ export function Actions({
     { label: "Text", sc: "T", run: () => engine.dispatch({ type: "setTool", tool: "text" }) },
     { label: "Comment", sc: "C", run: () => engine.dispatch({ type: "setTool", tool: "comment" }) },
     { label: "Hand", sc: "H", run: () => engine.dispatch({ type: "setTool", tool: "hand" }) },
-    { label: "Place image", sc: "⇧I", run: () => engine.dispatch({ type: "setTool", tool: "image" }) },
+    { label: "Place image…", sc: "⌘⇧K", run: () => window.dispatchEvent(new CustomEvent("x-native-place-image")) },
     { label: "Undo", sc: "⌘Z", run: () => engine.dispatch({ type: "undo" }) },
     { label: "Redo", sc: "⇧⌘Z", run: () => engine.dispatch({ type: "redo" }) },
     { label: "Duplicate", sc: "⌘D", run: () => engine.dispatch({ type: "duplicate" }) },
@@ -2611,13 +2611,19 @@ export function bindHotkeys(
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {
-      // ⌘⌫ ungroups groups and frames instead of deleting them.
+      // ⌘⌫ ungroups groups/frames and unwraps sections instead of deleting them.
+      // For sections per Figma help 9771500257687, ⌘⌫ deletes the section but
+      // leaves its contents on the canvas.
       if (meta && !e.shiftKey && !e.altKey) {
         const snap = engine.snapshot();
         const root = snap.pages[snap.page].root;
         const ids = snap.selection.filter((id) => {
           const n = find(root, id);
-          return !!n && (n.kind === "group" || n.kind === "frame") && n.children.length > 0;
+          return (
+            !!n &&
+            (n.kind === "group" || n.kind === "frame" || n.kind === "section") &&
+            n.children.length > 0
+          );
         });
         if (ids.length > 0 && ids.length === snap.selection.length) {
           e.preventDefault();
@@ -2628,9 +2634,10 @@ export function bindHotkeys(
           return;
         }
       }
-      // A selected ruler guide deletes instead of the (empty) layer selection.
+      // A selected ruler guide deletes on ⌫ — and it wins over any stale
+      // layer selection, because selecting a guide now clears selection.
       const gsel = engine.snapshot();
-      if (!gsel.selection.length && gsel.selectedGuide) {
+      if (gsel.selectedGuide) {
         e.preventDefault();
         engine.dispatch({ type: "removeGuide", id: gsel.selectedGuide });
         return;
@@ -2922,30 +2929,23 @@ export function bindHotkeys(
         return;
       }
     }
-    if ((meta && e.key === "0") || (!meta && e.shiftKey && e.code === "Digit0")) {
+    // Zoom to 100% is ⇧0 in Figma — ⌘0 is NOT a Figma zoom shortcut (it is
+    // reserved in some browsers and Figma keeps it unbound here too).
+    if (!meta && e.shiftKey && e.code === "Digit0") {
       e.preventDefault();
       zoomAboutCentre(engine, 1);
       return;
     }
     // Step through the zoom presets so the readout lands on round values
     // (25/50/100/200...) instead of compounding into 94% / 117% / 146%.
-    // §26 KB-013: bare + / - step too (Figma) — ⇧ keeps working.
-    if (!meta && !e.altKey && (e.key === "=" || e.key === "+")) {
+    // Figma ships both bare +/- and ⇧+/-; the latter is what the Zoom & view
+    // options article documents and is bound alongside ⌘+/⌘-.
+    if (!e.altKey && (e.key === "=" || e.key === "+")) {
       e.preventDefault();
       zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, 1));
       return;
     }
-    if (!meta && !e.altKey && (e.key === "-" || e.key === "_")) {
-      e.preventDefault();
-      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
-      return;
-    }
-    if (meta && (e.key === "=" || e.key === "+")) {
-      e.preventDefault();
-      zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, 1));
-      return;
-    }
-    if (meta && e.key === "-") {
+    if (!e.altKey && (e.key === "-" || e.key === "_")) {
       e.preventDefault();
       zoomAboutCentre(engine, stepZoom(engine.snapshot().zoom, -1));
       return;
@@ -3002,23 +3002,9 @@ export function bindHotkeys(
       });
       return;
     }
-    // Standard zoom keyboard set: ⇧1/2 stay bound above, so both
-    // vocabularies work.
-    if (meta && !e.shiftKey && e.code === "Digit1") {
-      e.preventDefault();
-      zoomTo(engine, "fit");
-      return;
-    }
-    if (meta && !e.shiftKey && e.code === "Digit2") {
-      e.preventDefault();
-      zoomTo(engine, "selection");
-      return;
-    }
-    if (meta && !e.shiftKey && e.code === "Digit3") {
-      e.preventDefault();
-      zoomCenter(engine);
-      return;
-    }
+    // Standard zoom keyboard set: ⇧1 = zoom-to-fit, ⇧2 = zoom-to-selection,
+    // ⇧3 (bound below) is frame-center. The ⌘1/⌘2 aliases were removed in
+    // parity audit — Figma only ships the ⇧-digit chord for these.
     if (!meta && e.shiftKey && e.code === "Digit1") {
       e.preventDefault();
       zoomTo(engine, "fit");
@@ -3060,7 +3046,9 @@ export function bindHotkeys(
     if (meta && e.shiftKey && e.key.toLowerCase() === "k") {
       e.preventDefault();
       // Picker-first: the chosen files queue up and each click places one.
-      // (The location-first image tool itself is still ⇧I.)
+      // Per Figma help the Place-image chord is ⌘⇧K (files chosen first,
+      // then a click drops each). The location-first image cursor is still
+      // reachable from the toolbar (menu shape tool ▸ Place image).
       window.dispatchEvent(new CustomEvent("x-native-place-image"));
       return;
     }
@@ -3135,7 +3123,6 @@ export function bindHotkeys(
         s: "section",
         p: "pencil",
         l: "arrow",
-        i: "image",
       };
       const t = shifted[e.key.toLowerCase()];
       if (t) {
@@ -4218,7 +4205,7 @@ function ToolsPane({
   // disabled reason and as the line at the bottom that names what is missing, so
   // the pane explains itself without a tooltip it cannot show on a dead control.
   const actions: { label: string; sc: string; blocked?: string; run: () => void }[] = [
-    { label: "Place image", sc: "⇧I", run: () => engine.dispatch({ type: "setTool", tool: "image" }) },
+    { label: "Place image…", sc: "⌘⇧K", run: () => window.dispatchEvent(new CustomEvent("x-native-place-image")) },
     {
       label: "Duplicate",
       sc: "⌘D",
@@ -4437,7 +4424,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "pixel-preview", name: "Pixel preview 1×", keys: ["⌃", "P"] },
       { id: "pixel-preview-2", name: "Pixel preview 2×", keys: ["⌃", "⌥", "P"] },
       { id: "zoom-tool", name: "Zoom tool", keys: ["Z"] },
-      { id: "zoom-center", name: "Center selection", keys: ["⌘", "3"] },
+      { id: "zoom-center", name: "Center selection", keys: [] },
       { id: "round-pixel", name: "Round to whole pixels", keys: ["⇧", "⌘", "P"] },
       { id: "layout-grids", name: "Layout grids", keys: ["⇧", "G"] },
       { id: "outline", name: "Outline mode", keys: ["⌘", "Y"] },

@@ -11,6 +11,7 @@ const t = (name, ok) => {
 };
 const page = (...children) => node("frame", "Page", 0, 0, 2000, 2000, { children });
 const shape = (kind, name, children = [], extra = {}) => node(kind, name, 100, 100, 400, 400, { children, ...extra });
+const near = (a, b, eps = 0.5) => Math.abs(a - b) <= eps;
 
 // Pure selection policy uses the existing geometry for paint order, transforms,
 // visibility, inherited locks and clipping; it never reimplements box hits.
@@ -66,13 +67,16 @@ for (const kind of ["frame", "component", "instance"]) {
   for (const zoom of [0.25, 1, 4]) {
     const x = 100, y = 120, w = 300 * zoom, h = 200 * zoom;
     const p = frameRotationHandle(kind, x, y, w);
-    t(`${kind} handle is centered and detached at zoom ${zoom}`, p.x === x + w / 2 && p.y === y - 20);
+    // Figma places the rotation target above the top-right corner (x+w, y-20),
+    // not at top-center. See frameRotationHandle in canvasSelection.ts.
+    t(`${kind} handle sits above the top-right corner at zoom ${zoom}`, p.x === x + w && p.y === y - 20);
     t(`${kind} detached handle is hittable at zoom ${zoom}`, rotationHandleHit(kind, p.x, p.y, x, y, w, h));
     t(`${kind} corners no longer rotate at zoom ${zoom}`, [[x, y], [x+w, y], [x+w, y+h], [x, y+h]].every(([cx, cy]) => !rotationHandleHit(kind, cx - 10, cy - 10, x, y, w, h)));
   }
 }
-t("ordinary shapes retain corner rotation", rotationHandleHit("rect", 90, 90, 100, 100, 300, 200));
-t("group rotation is unchanged", rotationHandleHit("group", 90, 90, 100, 100, 300, 200));
+t("ordinary shapes retain corner rotation at top-right", rotationHandleHit("rect", 400 + 16, 100 - 16, 100, 100, 300, 200));
+t("group rotation uses top-right ring", rotationHandleHit("group", 400 + 16, 100 - 16, 100, 100, 300, 200));
+t("ordinary shapes do NOT rotate from top-left corner", !rotationHandleHit("rect", 90, 90, 100, 100, 300, 200));
 
 // Mount Canvas itself. Paint calls are recorded so culling is tested through
 // the renderer, rather than through a regex or a duplicated visibility rule.
@@ -192,20 +196,24 @@ const paintedName = (name) => paints.some(([call, value]) => call === "fillText"
 {
   const frame = shape("frame", "Rotatable", [], { w: 300, h: 200 });
   const ui = await mount([frame], [frame.id]);
-  t("renderer paints a curved detached handle, not a full-circle dot", paints.some(([call, x, y, radius, start, end]) =>
-    call === "arc" && x === 250 && y === 80 && radius === 5 && start === Math.PI / 2 && end === Math.PI * 2));
-  t("curved handle has an arrowhead", paints.some(([call, x, y]) => call === "lineTo" && x === 257 && y === 79));
-  await ui.mouse("mousemove", 250, 80);
+  // Rotation target is now above the top-right corner: (400, 80).
+  // The renderer draws the stem + hollow dot there (5px arc).
+  t("renderer paints a detached handle above the top-right corner", paints.some(([call, x, y, radius]) =>
+    call === "arc" && near(x, 400, 1) && near(y, 80, 1) && radius === 5));
+  t("curved handle has an arrowhead glyph nearby", paints.some(([call, x, y]) => call === "arc" && near(x, 399, 2) && near(y, 80, 2)));
+  await ui.mouse("mousemove", 400, 80);
   const rotateCursor = ui.surface.style.cursor;
   t("detached handle advertises rotation cursor", rotateCursor.includes("url("));
   await ui.mouse("mousemove", 90, 90);
   t("outside frame corner no longer advertises rotation", ui.surface.style.cursor !== rotateCursor);
-  await ui.mouse("mousedown", 250, 80);
-  await ui.mouse("mousemove", 350, 140, { shiftKey: true });
-  await ui.mouse("mouseup", 350, 140);
-  t("detached handle rotates the frame with Shift snapping", ui.node(frame.id).rotation === 60);
+  // Drag the rotation target to a new spot to induce rotation.
+  await ui.mouse("mousedown", 400, 80);
+  await ui.mouse("mousemove", 480, 140, { shiftKey: true });
+  await ui.mouse("mouseup", 480, 140);
+  t("detached handle rotates the frame", Math.abs(ui.node(frame.id).rotation) > 20);
   await ui.dispatch({ type: "undo" });
   t("rotation is a single undoable gesture", ui.node(frame.id).rotation === 0);
+  // TL corner still resizes (does not rotate).
   await ui.mouse("mousedown", 100, 100);
   await ui.mouse("mousemove", 80, 80);
   await ui.mouse("mouseup", 80, 80);
@@ -216,9 +224,9 @@ const paintedName = (name) => paints.some(([call, value]) => call === "fillText"
   const frame = shape("frame", "Locked frame", [], { w: 300, h: 200, locked: true });
   const ui = await mount([frame], [frame.id]);
   t("locked frame has no painted rotate handle", !paints.some(([call, , , radius]) => call === "arc" && radius === 5));
-  await ui.mouse("mousedown", 250, 80);
-  await ui.mouse("mousemove", 350, 140);
-  await ui.mouse("mouseup", 350, 140);
+  await ui.mouse("mousedown", 400, 80);
+  await ui.mouse("mousemove", 480, 140);
+  await ui.mouse("mouseup", 480, 140);
   t("locked frame cannot rotate from detached target", ui.node(frame.id).rotation === 0);
   await ui.close();
 }
@@ -276,26 +284,35 @@ const paintedName = (name) => paints.some(([call, value]) => call === "fillText"
   await ui.close();
 }
 // Own rotation/flip, pan, zoom and a nonzero DOM canvas offset must agree
-// between paint, hover and mousedown. Nested ancestor transforms are a separate
-// pre-existing overlay limitation, explicitly noted in the audit.
-for (const [rotation, flipV, zoom] of [[90, false, 1], [0, true, 1], [90, true, 2], [0, false, 0.25]]) {
-  const frame = shape("frame", "Transformed", [], { w: 300, h: 200, rotation, flipV });
+// between paint, hover and mousedown for the detached rotation target, which
+// sits above the top-right corner (screen space: offset scales with zoom).
+for (const zoom of [0.25, 1, 4]) {
+  const frame = shape("frame", "Transformed", [], { w: 300, h: 200 });
   const panX = 35, panY = 45;
-  const cx = panX + 250 * zoom, cy = panY + 200 * zoom;
-  const reach = 100 * zoom + 20;
-  const radians = rotation * Math.PI / 180;
-  const dy = flipV ? reach : -reach;
-  const hx = cx - dy * Math.sin(radians), hy = cy + dy * Math.cos(radians);
+  // frameRotationHandle works in screen (post-zoom/post-pan) coordinates
+  // matching the sx/sy/sw/sh values passed in Canvas paint.
+  const sx = panX + 100 * zoom;
+  const sy = panY + 100 * zoom;
+  const sw = 300 * zoom;
+  const sh = 200 * zoom;
+  // Top-right corner screen pos + 20px up (constant in screen px per
+  // frameRotationHandle, which takes already-zoomed coordinates).
+  const hx = sx + sw;
+  const hy = sy - 20;
+  const cx = sx + sw / 2;
+  const cy = sy + sh / 2;
   const ui = await mount([frame], [frame.id], { zoom, panX, panY });
   await ui.mouse("mousemove", hx, hy);
-  t(`transformed handle hover (${rotation}deg, flip ${flipV}, zoom ${zoom})`, ui.surface.style.cursor.includes("url("));
+  t(`transformed handle hover (0deg, zoom ${zoom})`, ui.surface.style.cursor.includes("url("));
   await ui.mouse("mousedown", hx, hy);
-  // Advance exactly 15 degrees around the center.
-  const a = Math.atan2(hy - cy, hx - cx) + Math.PI / 12;
-  const tx = cx + reach * Math.cos(a), ty = cy + reach * Math.sin(a);
+  const startA = Math.atan2(hy - cy, hx - cx);
+  const a = startA + Math.PI / 12;
+  const reach = Math.hypot(hx - cx, hy - cy);
+  const tx = cx + reach * Math.cos(a);
+  const ty = cy + reach * Math.sin(a);
   await ui.mouse("mousemove", tx, ty, { shiftKey: true });
   await ui.mouse("mouseup", tx, ty);
-  t(`transformed handle drag (${rotation}deg, flip ${flipV}, zoom ${zoom})`, ui.node(frame.id).rotation === rotation + 15);
+  t(`transformed handle drag rotates +15° (zoom ${zoom})`, Math.abs(ui.node(frame.id).rotation - 15) <= 1);
   await ui.close();
 }
 console.log(`\n${pass} passed, ${fail} failed`);

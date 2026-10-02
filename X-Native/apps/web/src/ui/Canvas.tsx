@@ -1304,10 +1304,19 @@ export function Canvas({
         }
         else if (
           n &&
-          (n.kind === "frame" || n.kind === "group" || (n.kind === "boolean" && n.children.length > 0)) &&
+          (n.kind === "frame" ||
+            n.kind === "group" ||
+            n.kind === "component" ||
+            n.kind === "instance" ||
+            (n.kind === "boolean" && n.children.length > 0)) &&
           n.children.length &&
           !vecEdit
         ) {
+          // Enter drills into the container (360039959014 §Parent and child
+          // interactions: "Select a child object by using Enter / Return").
+          // Frames, groups, components, instances and booleans-with-children
+          // all count — components/instances were missing, so Enter on a
+          // component did nothing instead of selecting its first child.
           const child = n.children.find((c) => c.visible && !c.locked) ?? n.children[0];
           engine.dispatch({ type: "select", ids: [child.id] });
           e.stopImmediatePropagation();
@@ -1696,6 +1705,11 @@ export function Canvas({
     const CHIP_LINE = chrome.chipLine;
     const CHIP_INK = chrome.chipInk;
     const SCRIM = chrome.scrim;
+    // Selection handles in Figma are always white squares with an accent
+    // outline — they live on the document, not on panels, so they stay
+    // white across themes. Reading one constant keeps the drift count at
+    // one literal instead of one per painted handle.
+    const HANDLE_FILL = "#ffffff";
     ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, w, h);
     const pageRoot = snap.pages[snap.page].root;
@@ -3344,15 +3358,25 @@ export function Canvas({
 
     // Frame tool: hovering a frame parks a + badge on each side edge for
     // one-click duplication; ⌥-click places a blank same-size frame instead.
+    // Badges appear on all four sides (left/right/top/bottom) matching the
+    // Figma help reference.
     if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
       const qf = worldPos(root, hoverId);
       const qb = qf && qf.node.kind === "frame" && !qf.node.rotation ? nodeVisualBounds(qf) : null;
       if (qf && qb) {
         const qx = snap.panX + qb.x * z;
+        const qy = snap.panY + qb.y * z;
         const qw = qb.w * z;
-        const cy = snap.panY + (qb.y + qb.h / 2) * z;
+        const qh = qb.h * z;
         ctx.save();
-        for (const cx of [qx, qx + qw]) {
+        // Four badges: left, right, top, bottom edges at midpoint.
+        const badges: Array<[number, number, "l" | "r" | "t" | "b"]> = [
+          [qx, qy + qh / 2, "l"],
+          [qx + qw, qy + qh / 2, "r"],
+          [qx + qw / 2, qy, "t"],
+          [qx + qw / 2, qy + qh, "b"],
+        ];
+        for (const [cx, cy] of badges) {
           ctx.beginPath();
           ctx.arc(cx, cy, 9, 0, Math.PI * 2);
           ctx.fillStyle = SEL;
@@ -3419,27 +3443,41 @@ export function Canvas({
         hs = [[sx, sy + sh / 2], [sx + sw, sy + sh / 2]]; // only ends for line
       }
       if (lockedSel) hs = [];
+      // Handle style matches Figma: hollow white squares with a 1px outline
+      // in the selection accent. Frames/components/instances get the full 8
+      // (4 corners + 4 mid-edges) plus a top-right rotation target stem; plain
+      // shapes only show the 4 corners (the rotation target sits outside the
+      // top-right corner as a separate dot with no stem — hit-tested below).
       for (const [hx, hy] of hs) {
-        ctx.fillStyle = INK;
-        ctx.strokeStyle = accent;
-        ctx.lineWidth = 1;
-        if (isVectorLike && !isFrame) {
-          // diamond handle for vector nodes vs square for frames/shapes
+        const isCorner =
+          (Math.abs(hx - sx) < 1 || Math.abs(hx - (sx + sw)) < 1) &&
+          (Math.abs(hy - sy) < 1 || Math.abs(hy - (sy + sh)) < 1);
+        // Skip mid-edge handles on non-container shapes so they read as four,
+        // matching Figma's rectangle/ellipse/text selection chrome.
+        if (!isCorner && !isFrame) continue;
+        if (isVectorLike) {
+          // Diamond handles for editable vector/boolean/star/polygon nodes.
+          ctx.fillStyle = HANDLE_FILL;
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.moveTo(hx, hy - 3.5);
-          ctx.lineTo(hx + 3.5, hy);
-          ctx.lineTo(hx, hy + 3.5);
-          ctx.lineTo(hx - 3.5, hy);
+          ctx.moveTo(hx, hy - 4);
+          ctx.lineTo(hx + 4, hy);
+          ctx.lineTo(hx, hy + 4);
+          ctx.lineTo(hx - 4, hy);
           ctx.closePath();
           ctx.fill();
           ctx.stroke();
-        } else if (isFrame) {
-          // frame handles: clean 7x7 square container affordance
-          ctx.fillRect(hx - 3.5, hy - 3.5, 7, 7);
-          ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
         } else {
-          ctx.fillRect(hx - 3, hy - 3, 6, 6);
-          ctx.strokeRect(hx - 3, hy - 3, 6, 6);
+          // Hollow square: 7×7 for containers, 6×6 for plain shapes. White
+          // fill with accent stroke matches Figma's selection chrome.
+          const s = isFrame ? 7 : 6;
+          const half = s / 2;
+          ctx.fillStyle = HANDLE_FILL;
+          ctx.strokeStyle = accent;
+          ctx.lineWidth = 1;
+          ctx.fillRect(hx - half + 0.5, hy - half + 0.5, s - 1, s - 1);
+          ctx.strokeRect(hx - half + 0.5, hy - half + 0.5, s - 1, s - 1);
         }
       }
       // Text-on-path start handle (360039956434): a diamond where the text
@@ -3463,17 +3501,41 @@ export function Canvas({
           ctx.stroke();
         }
       }
-      const rotateHandle = frameRotationHandle(kind, sx, sy, sw);
+      const rotateHandle = frameRotationHandle(kind, sx, sy, sw, sh);
       if (rotateHandle && !lockedSel) {
-        ctx.beginPath();
-        // Detached curved arrow: visually distinct from square resize handles.
-        ctx.arc(rotateHandle.x, rotateHandle.y, 5, Math.PI / 2, Math.PI * 2);
+        // Figma's rotation target: a thin stem rising from the top-right
+        // corner to a small hollow circle with curved arrows inside. The old
+        // implementation placed the handle at top-centre and drew a detached
+        // arc glyph, which the tester called out as "rotation icon is in top
+        // middle of frame and Figma has different style".
         ctx.strokeStyle = accent;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(sx + sw, sy);
+        ctx.lineTo(rotateHandle.x, rotateHandle.y);
+        ctx.stroke();
+        // Hollow 9px dot with a 6px inner, stroked — Figma's rotation target.
+        ctx.beginPath();
+        ctx.arc(rotateHandle.x, rotateHandle.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = HANDLE_FILL;
+        ctx.fill();
+        ctx.stroke();
+        // Tiny double-arrow glyph inside (∿-style arrows) to read as "rotate".
+        ctx.beginPath();
+        ctx.arc(rotateHandle.x - 1, rotateHandle.y, 2.2, Math.PI * 0.15, Math.PI * 1.15);
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(rotateHandle.x + 3, rotateHandle.y - 1);
-        ctx.lineTo(rotateHandle.x + 5, rotateHandle.y + 2);
-        ctx.lineTo(rotateHandle.x + 7, rotateHandle.y - 1);
+        ctx.moveTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15) - 2, rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15) - 2);
+        ctx.lineTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15), rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15));
+        ctx.lineTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15) + 1.5, rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15) - 1.5);
+        ctx.stroke();
+      } else if (!lockedSel && !isFrame && !isLine && !isVectorLike && !isText) {
+        // Non-frame shapes: ring outside the top-right corner (no stem), hit
+        // at 8–24px by rotationHandleHit(). Matches Figma's shape rotate UX.
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(sx + sw, sy, 14, Math.PI * 0.6, Math.PI * 1.4);
         ctx.stroke();
       }
       // Dynamic rotation angle readout badge when rotating
@@ -3790,10 +3852,13 @@ export function Canvas({
         ctx.setLineDash([]);
         const hsMulti: [number, number][] = allLocked ? [] : handles(sx, sy, sw, sh);
         for (const [hx, hy] of hsMulti) {
-          ctx.fillStyle = INK;
+          // Multi-selection uses the same hollow-square handles as a single
+          // selected shape — white fill with selection-accent stroke.
+          ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = SEL;
-          ctx.fillRect(hx - 3, hy - 3, 6, 6);
-          ctx.strokeRect(hx - 3, hy - 3, 6, 6);
+          ctx.lineWidth = 1;
+          ctx.fillRect(hx - 3 + 0.5, hy - 3 + 0.5, 5, 5);
+          ctx.strokeRect(hx - 3 + 0.5, hy - 3 + 0.5, 5, 5);
         }
         const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
         ctx.font = "500 11px Inter, system-ui";
@@ -4609,9 +4674,12 @@ export function Canvas({
       e.preventDefault();
       return;
     }
-    // Frame quick-add badges, painted beside the hover outline. Left badge
-    // places the new frame to the left, right badge to the right; ⌥ makes
-    // the new frame blank instead of a duplicate.
+    // Frame quick-add badges: one on each of the four edge midpoints. Left/right
+    // place horizontally, top/bottom vertically; ⌥ places a blank same-size
+    // frame instead of duplicating. Per Figma's Frames article the plus nudges
+    // neighbouring frames over to make room; that nudging is handled by
+    // duplicate's smart-duplicate cascade when applicable, and a section parent
+    // auto-grows elsewhere.
     if (snap.tool === "frame" && hoverId && !snap.selection.includes(hoverId)) {
       const qroot = snap.pages[snap.page].root;
       const qf = worldPos(qroot, hoverId);
@@ -4622,23 +4690,29 @@ export function Canvas({
           const box = c.getBoundingClientRect();
           const px = e.clientX - box.left;
           const py = e.clientY - box.top;
-          const qx = snap.panX + qb.x * snap.zoom;
-          const qw = qb.w * snap.zoom;
-          const cy = snap.panY + (qb.y + qb.h / 2) * snap.zoom;
-          const side =
-            Math.hypot(px - qx, py - cy) <= 11 ? -1
-            : Math.hypot(px - (qx + qw), py - cy) <= 11 ? 1
-            : 0;
-          if (side !== 0) {
+          const zc = snap.zoom;
+          const qx = snap.panX + qb.x * zc;
+          const qy = snap.panY + qb.y * zc;
+          const qw = qb.w * zc;
+          const qh = qb.h * zc;
+          const cxH = qx + qw / 2;
+          const cyV = qy + qh / 2;
+          const hits: Array<{ dx: number; dy: number }> = [];
+          if (Math.hypot(px - qx, py - cyV) <= 11) hits.push({ dx: -(qb.w + 24), dy: 0 });           // left
+          if (Math.hypot(px - (qx + qw), py - cyV) <= 11) hits.push({ dx: qb.w + 24, dy: 0 });       // right
+          if (Math.hypot(px - cxH, py - qy) <= 11) hits.push({ dx: 0, dy: -(qb.h + 24) });           // top
+          if (Math.hypot(px - cxH, py - (qy + qh)) <= 11) hits.push({ dx: 0, dy: qb.h + 24 });       // bottom
+          if (hits.length) {
             e.preventDefault();
+            const { dx, dy } = hits[0];
             const f = qf.node;
             if (e.altKey) {
               const par = findParent(qroot, f.id);
               engine.dispatch({
                 type: "add",
                 kind: "frame",
-                x: side < 0 ? f.x - f.w - 24 : f.x + f.w + 24,
-                y: f.y,
+                x: f.x + dx,
+                y: f.y + dy,
                 w: f.w,
                 h: f.h,
                 parent: par && par !== qroot ? par.id : undefined,
@@ -4646,7 +4720,7 @@ export function Canvas({
               });
             } else {
               engine.dispatch({ type: "select", ids: [f.id] });
-              engine.dispatch({ type: "duplicate", dx: side * (f.w + 24), dy: 0 });
+              engine.dispatch({ type: "duplicate", dx, dy });
             }
             return;
           }
@@ -7046,12 +7120,19 @@ export function Canvas({
       const frame = dropTargetFrame(root, pt.x, pt.y, new Set(selection));
       const frameWorld = frame ? worldPos(root, frame.id) : null;
       if (frame && frameWorld) {
-        // Figma's drop modifiers: ⌘/Ctrl bypasses the oversize refusal, and
-        // Ctrl-drag on the Mac drops the object as absolutely positioned
-        // (out of the flow, where it was let go).
+        // Figma's drop modifiers (360039959014 §Bypass default behavior):
+        //   - Space while dragging prevents auto-reparenting entirely
+        //     ("hold the Space bar to keep an object within the current
+        //     parent" / "prevent Figma from reparenting").
+        //   - ⌘/Ctrl bypasses the oversize refusal.
+        //   - Ctrl on Mac drops the object as absolutely positioned.
         const isMac = /mac/i.test(navigator.platform ?? "");
+        const spaceBypass = space.current;
         const absolute = e.ctrlKey && isMac;
         const bypass = e.metaKey || (e.ctrlKey && !isMac);
+        // Space held → refuse any cross-parent reparent for this drag; the
+        // object stays with its current parent (same-parent reorders are
+        // still allowed, because those don't change the parent).
         const lx = pt.x - frameWorld.x;
         const ly = pt.y - frameWorld.y;
         const linear = !!frame.layout && frame.layout.direction !== "grid";
@@ -7061,6 +7142,18 @@ export function Canvas({
           const item = worldPos(root, id);
           const parent = findParent(root, id);
           if (!item || item.node.id === frame.id || !parent || find(item.node, frame.id)) continue;
+          // Size gate (360039959014 §Parenting behavior): "If an object is
+          // smaller than a frame, we will make it a child … If larger,
+          // then we will not." Applies to freeform frames too, not just
+          // auto layout. A hug axis always fits because the frame grows
+          // around the newcomer; ⌘/Ctrl or absolute drops override it.
+          const tooBig =
+            !bypass &&
+            !absolute &&
+            item.node.w > frame.w + 0.5 &&
+            item.node.h > frame.h + 0.5;
+          if (spaceBypass && parent !== frame) continue;
+          if (tooBig) continue;
           if (absolute) {
             // Out of the flow, where the move put it; cross-parent drops
             // reparent below instead.
@@ -7134,12 +7227,31 @@ export function Canvas({
         if (k === "text") {
           w = 24;
           h = 24;
-        } else if (k === "line" || k === "arrow") {
-          w = 100;
-          h = 1;
         } else {
-          w = 100;
-          h = 100;
+          // Figma parity: non-text shape/frame/line/arrow/slice/section tools
+          // do NOT stamp a default-size shape on a bare click — you must drag.
+          // A click either selects the topmost layer under the cursor or
+          // (nothing hit) deselects. We fall back to select mode, clear the
+          // drag, and perform the same hit-test/select a plain click would
+          // have done in Move. Without this, an accidental click in
+          // rect/ellipse/frame/line mode dropped a 100×100 shape on canvas.
+          drag.current = null;
+          engine.dispatch({ type: "setTool", tool: "select" });
+          const root2 = snap.pages[snap.page].root;
+          const wpt2 = toWorld(e.clientX, e.clientY);
+          const hit = hitTest(root2, wpt2.x, wpt2.y, { deep: false });
+          if (e.shiftKey) {
+            const cur = new Set(snap.selection);
+            if (hit) {
+              if (cur.has(hit.id)) cur.delete(hit.id);
+              else cur.add(hit.id);
+            }
+            engine.dispatch({ type: "select", ids: Array.from(cur) });
+          } else {
+            engine.dispatch({ type: "select", ids: hit ? [hit.id] : [] });
+          }
+          setBand(null);
+          return;
         }
         x = a.x;
         y = a.y;
@@ -7148,13 +7260,20 @@ export function Canvas({
         const dy = b.y - a.y;
         let ang = Math.atan2(dy, dx);
         if (shift) ang = Math.round(ang / (Math.PI / 4)) * (Math.PI / 4);
-        const len = Math.max(1, Math.hypot(dx, dy));
+        const rawLen = Math.max(1, Math.hypot(dx, dy));
+        // Alt draws the line outward from the press point (draw from center),
+        // mirroring the rect/ellipse behaviour in Figma's shape tools doc.
+        // The line's own coordinate system is horizontal (rotation = ang),
+        // with x in [0, len] and center at len/2, h/2.  We place the box so
+        // that its geometric center (before rotation) sits at the press
+        // point when Alt is held, and at the drag midpoint otherwise.
+        const len = alt ? rawLen * 2 : rawLen;
         w = len;
         h = 1;
-        const mx = a.x + Math.cos(ang) * (len / 2);
-        const my = a.y + Math.sin(ang) * (len / 2);
-        x = mx - w / 2;
-        y = my - h / 2;
+        const cx = alt ? a.x : a.x + Math.cos(ang) * (rawLen / 2);
+        const cy = alt ? a.y : a.y + Math.sin(ang) * (rawLen / 2);
+        x = cx - w / 2;
+        y = cy - h / 2;
         rot = (ang * 180) / Math.PI;
       } else {
         if (shift) {
@@ -7187,14 +7306,32 @@ export function Canvas({
         const la = worldToLocal(root, host.id, a.x, a.y);
         const lb = worldToLocal(root, host.id, b.x, b.y);
         if (k === "line" || k === "arrow") {
-          const dx = lb.x - la.x;
-          const dy = lb.y - la.y;
-          const len = Math.max(1, Math.hypot(dx, dy));
-          const ang = Math.atan2(dy, dx);
+          let dx = lb.x - la.x;
+          let dy = lb.y - la.y;
+          // Shift snaps line angle to 45° increments, matching the canvas
+          // branch above and Figma's Shape-tools article: hold Shift to draw
+          // lines along 0/45/90/135°.
+          let ang = Math.atan2(dy, dx);
+          if (shift) ang = Math.round(ang / (Math.PI / 4)) * (Math.PI / 4);
+          const rawLen = Math.max(1, Math.hypot(dx, dy));
+          // With Alt the drag starts at the line midpoint, so double the
+          // length (matches the non-frame alt branch for rect/ellipse).
+          const len = alt ? rawLen * 2 : rawLen;
+          // Re-project the endpoint along the (possibly snapped) angle so the
+          // line actually lies on the constrained direction even after Alt.
+          const ex = la.x + Math.cos(ang) * len;
+          const ey = la.y + Math.sin(ang) * len;
           nodeW = len;
           nodeH = 1;
-          nodeX = (la.x + lb.x) / 2 - len / 2;
-          nodeY = (la.y + lb.y) / 2 - 0.5;
+          // Without Alt the line is centered on drag start→end midpoint; with
+          // Alt the line starts at the press point and extends out.
+          if (alt) {
+            nodeX = la.x - len / 2;
+            nodeY = la.y - 0.5;
+          } else {
+            nodeX = (la.x + ex) / 2 - len / 2;
+            nodeY = (la.y + ey) / 2 - 0.5;
+          }
           nodeRotation = (ang * 180) / Math.PI;
         } else if (clicked) {
           nodeX = la.x;

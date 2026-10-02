@@ -70,6 +70,9 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  Minimap.tsx and Rulers.tsx are at zero: they have no literals left to drift.
  *  Raised 2026-10-01 for the Crop an image audit: its canvas crop toolbar adds
  *  one colour literal, three action buttons, and one aspect-ratio select.
+ *  Raised 2026-10-01 for the Parent/child/Frames re-audit: selection handles
+ *  repainted as Figma-style hollow white squares (HANDLE_FILL constant = 1 new
+ *  colour literal) with a top-right rotation target and stem for containers.
  *  Raised 2026-10-01 for the Guide to fills audit: two inspector reorder
  *  buttons and three tooltips for extra stroke paints. Raised for About color
  *  models to replace the picker model button with a native select. Raised for
@@ -78,13 +81,18 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
   *  for Export static designs: one filename hover title on bulk-export thumbnails. */
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [11, 13, 12, 15, 1],
+  "Canvas.tsx": [11, 14, 12, 15, 1],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   "Dashboard.tsx": [1, 0, 11, 33, 1],
   "DialogHost.tsx": [0, 0, 1, 0, 0],
   "FigInspectorModal.tsx": [113, 10, 2, 8, 1],
-  "FillPicker.tsx": [12, 2, 15, 18, 2],
+  // Raised 2026-10-01 batch 21: add-stop (+) / remove-stop (−) buttons in the
+  // gradient editor, both with `title=` and `aria-label=` (per the gradients
+  // article the + and − next to "Stops" are the documented affordance). That
+  // is one new title and one new button; the remove-stop title replaced the
+  // trash-only icon so the title count goes up by one (from the new +).
+  "FillPicker.tsx": [12, 2, 16, 19, 2],
   "Guides.tsx": [0, 0, 2, 0, 0],
   "Minimap.tsx": [0, 0, 0, 0, 0],
   "PresentationPlayer.tsx": [5, 0, 12, 9, 2],
@@ -100,7 +108,10 @@ const CEILING = {
   "chrome.tsx": [49, 4, 41, 71, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],
-  "inspector.tsx": [187, 44, 247, 200, 47],
+  // Raised 2026-10-01 batch 21: Overflow scroll dropdown in the Layout section
+  // for frames — one extra native <select>, plus a three-column inline grid
+  // around it and the helper text.
+  "inspector.tsx": [190, 44, 247, 200, 48],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };

@@ -1063,7 +1063,30 @@ function GradientStops({
       <div className="grad-actions">
         <button
           className="icon-btn"
+          title="Add stop"
+          aria-label="Add stop"
+          onClick={() => {
+            // Insert a new stop halfway between the selected stop and the next
+            // one (or the previous, when the selected is last), with an
+            // interpolated colour so the ramp looks unchanged until the new
+            // handle is moved - the same behaviour as clicking empty space
+            // in the middle of the ramp.
+            const insertAt = Math.min(idx + 1, stops.length - 1);
+            const a = stops[insertAt === 0 ? 0 : insertAt - 1];
+            const b = stops[insertAt];
+            const t = (a.position + b.position) / 2;
+            const color = mixHex(a.color, b.color, 0.5);
+            const fresh = { color, position: t };
+            const sorted = commit([...stops.slice(0, insertAt), fresh, ...stops.slice(insertAt)]);
+            onSelect(sorted.indexOf(fresh));
+          }}
+        >
+          <Icon name="plus" size={14} />
+        </button>
+        <button
+          className="icon-btn"
           title="Remove stop"
+          aria-label="Remove stop"
           disabled={stops.length <= 2}
           onClick={() => {
             if (stops.length <= 2) return;
@@ -1071,7 +1094,7 @@ function GradientStops({
             onSelect(Math.max(0, idx - 1));
           }}
         >
-          <Icon name="trash" size={14} />
+          <Icon name="minus" size={14} />
         </button>
         <button
           className="icon-btn"
@@ -1081,7 +1104,12 @@ function GradientStops({
         >
           <Icon name="flip-h" size={14} />
         </button>
-        <button className="icon-btn" title="Rotate gradient" onClick={onRotate}>
+        <button
+          className="icon-btn"
+          title="Rotate gradient"
+          aria-label="Rotate gradient"
+          onClick={onRotate}
+        >
           <Icon name="rotate" size={14} />
         </button>
       </div>

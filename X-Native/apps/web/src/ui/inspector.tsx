@@ -508,12 +508,48 @@ export const PRESET_GROUPS: PresetCategory[] = [
     ],
   },
   {
-    category: "Social",
+    category: "Watch",
+    icon: "image",
+    items: [
+      { name: "Apple Watch 41mm", w: 352, h: 430 },
+      { name: "Apple Watch 45mm", w: 396, h: 484 },
+      { name: "Apple Watch Ultra", w: 410, h: 502 },
+    ],
+  },
+  {
+    category: "Paper",
+    icon: "copy",
+    items: [
+      { name: "A4", w: 595, h: 842 },
+      { name: "Letter", w: 612, h: 792 },
+      { name: "A5", w: 420, h: 595 },
+    ],
+  },
+  {
+    category: "Social Media",
     icon: "community",
     items: [
       { name: "Instagram Post", w: 1080, h: 1080 },
       { name: "Instagram Story", w: 1080, h: 1920 },
       { name: "X / Twitter Post", w: 1200, h: 675 },
+      { name: "Facebook Post", w: 1200, h: 630 },
+      { name: "LinkedIn Post", w: 1200, h: 627 },
+    ],
+  },
+  {
+    category: "Figma Community",
+    icon: "community",
+    items: [
+      { name: "Community cover", w: 1920, h: 960 },
+      { name: "Plugin / Widget card", w: 960, h: 480 },
+    ],
+  },
+  {
+    category: "Archive",
+    icon: "folder",
+    items: [
+      { name: "Thumbnail (16:10)", w: 1600, h: 960 },
+      { name: "Small preview", w: 800, h: 600 },
     ],
   },
 ];
@@ -4850,7 +4886,9 @@ function Design({
       </div>
       {/* A section never clips - it is the titled backdrop its frames are
           placed on - so Figma gives it no clip-content property, and neither
-          does this row. Frames, groups and shapes keep the toggle. */}
+          does this row. Frames, groups and shapes keep the toggle. Frames
+          also get a Scroll overflow dropdown (help.figma.com/360039818734)
+          so the author can pick No scrolling / Horizontal / Vertical / Both. */}
       {n.kind !== "section" && (
         <label className="check">
           <input
@@ -4860,12 +4898,46 @@ function Design({
               engine.dispatch({
                 type: "patch",
                 id: n.id,
-                patch: { overflow: e.target.checked ? "clip" : "visible" },
+                patch: { overflow: e.target.checked ? (n.kind === "frame" ? "clip" : "clip") : "visible" },
               })
             }
           />
           Clip content / mask
         </label>
+      )}
+      {n.kind === "frame" && n.overflow !== "visible" && (
+        <div className="insp-pad" style={{ display: "grid", gridTemplateColumns: "auto 1fr", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 11 }}>Overflow</span>
+          <select
+            aria-label="Scroll overflow"
+            value={
+              n.overflow === "scrollboth"
+                ? "scrollboth"
+                : n.overflow === "scrollx"
+                ? "scrollx"
+                : n.overflow === "scrolly"
+                ? "scrolly"
+                : "clip"
+            }
+            onChange={(e) =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { overflow: e.target.value as XNode["overflow"] },
+              })
+            }
+          >
+            <option value="clip">No scrolling</option>
+            <option value="scrollx">Horizontal scrolling</option>
+            <option value="scrolly">Vertical scrolling</option>
+            <option value="scrollboth">Both directions</option>
+          </select>
+          {n.overflow !== "clip" && (
+            <span style={{ gridColumn: "1 / -1", fontSize: 10, color: "var(--muted)" }}>
+              Content must extend beyond the frame to scroll.
+            </span>
+          )}
+        </div>
       )}
       <label className="check">
         <input
