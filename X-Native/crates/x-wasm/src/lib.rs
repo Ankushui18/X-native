@@ -288,12 +288,13 @@ mod bindings {
     }
 
     /// Independently versioned command session. V3 added Booleans, V4 added
-    /// aligned strokes, V5 added bounded single-layer signed offsets, and V6
-    /// adds reversible Outline Stroke projections. Older bindgen artifacts
-    /// cannot safely acknowledge/undo the new filled-vector rewrite.
+    /// aligned strokes, V5 added bounded single-layer signed offsets, V6
+    /// adds reversible Outline Stroke projections, V7 adds Phase 9 export
+    /// and vector editing, and V8 adds Phase 10 advanced drawing tools
+    /// (pen commit, pencil smoothing, eraser geometry splitting).
     #[wasm_bindgen(js_name = sessionBridgeVersion)]
     pub fn session_bridge_version() -> u32 {
-        6
+        8
     }
 
     #[wasm_bindgen]
@@ -407,6 +408,88 @@ mod bindings {
         pub fn export_x(&self) -> String {
             self.bridge.export_x()
         }
+
+        /// Phase 9: Export a node to PNG, JPG, or PDF via the Rust render
+        /// pipeline. Returns a JSON envelope with base64-encoded bytes.
+        #[wasm_bindgen(js_name = exportNode)]
+        pub fn export_node(
+            &self,
+            id: &str,
+            format: &str,
+            scale: f64,
+        ) -> Result<String, JsValue> {
+            self.bridge.export_node(id, format, scale).map_err(js_error)
+        }
+
+        /// Phase 9: Add a point to an existing vector path segment.
+        #[wasm_bindgen(js_name = vectorAddPoint)]
+        pub fn vector_add_point(
+            &mut self,
+            id: &str,
+            segment_idx: u32,
+            x: f64,
+            y: f64,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .vector_add_point(id, segment_idx as usize, x, y)
+                .map_err(js_error)
+        }
+
+    /// Phase 9: Convert a corner point to smooth (or vice versa).
+    #[wasm_bindgen(js_name = vectorConvertPoint)]
+    pub fn vector_convert_point(
+        &mut self,
+        id: &str,
+        anchor_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.bridge
+            .vector_convert_point(id, anchor_idx as usize)
+            .map_err(js_error)
+    }
+
+    /// Phase 10: Commit a pen-drawn path as a vector node with smooth bezier
+    /// curves. `points_json` is a JSON array of [x, y] pairs collected during
+    /// the drag. Creates the node as ONE atomic undo step.
+    #[wasm_bindgen(js_name = commitPenPath)]
+    pub fn commit_pen_path(
+        &mut self,
+        parent_id: &str,
+        points_json: &str,
+    ) -> Result<String, JsValue> {
+        self.bridge
+            .commit_pen_path(parent_id, points_json)
+            .map_err(js_error)
+    }
+
+    /// Phase 10: Commit a pencil-drawn stroke with RDP simplification and
+    /// Catmull-Rom bezier fitting. `points_json` is the raw pointer samples.
+    /// ONE atomic undo step.
+    #[wasm_bindgen(js_name = smoothPencilPath)]
+    pub fn smooth_pencil_path(
+        &mut self,
+        parent_id: &str,
+        points_json: &str,
+        tolerance: f64,
+    ) -> Result<String, JsValue> {
+        self.bridge
+            .smooth_pencil_path(parent_id, points_json, tolerance)
+            .map_err(js_error)
+    }
+
+    /// Phase 10: Erase geometry from a vector node along a stroke path.
+    /// Segments within `radius` of the erase path are removed, splitting the
+    /// vector. ONE atomic undo step.
+    #[wasm_bindgen(js_name = eraseGeometry)]
+    pub fn erase_geometry(
+        &mut self,
+        target_id: &str,
+        erase_points_json: &str,
+        radius: f64,
+    ) -> Result<String, JsValue> {
+        self.bridge
+            .erase_geometry(target_id, erase_points_json, radius)
+            .map_err(js_error)
+    }
     }
 
     #[wasm_bindgen(js_name = importFigToX)]

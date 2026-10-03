@@ -967,6 +967,12 @@ impl DocumentSession {
         Ok(delta)
     }
 
+    /// Phase 9: mutable access to the underlying editor for advanced vector
+    /// operations that are not part of the session command dialect.
+    pub fn editor_mut(&mut self) -> &mut Editor {
+        &mut self.editor
+    }
+
     /// Explicit, potentially large save/checkpoint path. Never call this from
     /// a paint loop or to acknowledge a command.
     pub fn snapshot(&self) -> Document {

@@ -439,6 +439,79 @@ export class RustSessionClient {
   redo(): RustStateChange { return stateValue(this.native("redo", b => b.redo())); }
   /** A complete .x document is returned ONLY at an explicit save. */
   exportX(): string { return this.native("exportX", b => b.exportX()); }
+
+  /** Phase 9: Export a node to PNG/JPG/PDF via the Rust raster pipeline.
+   *  Returns a Uint8Array of the encoded file bytes, suitable for creating
+   *  a Blob for download. Much higher quality than canvas.toDataURL. */
+  async exportNode(id: string, format: "png" | "jpg" | "pdf", scale: number): Promise<Uint8Array> {
+    const binding = this.current();
+    if (!binding.exportNode) {
+      throw new Error("Rust export not available in this bridge version");
+    }
+    const raw = this.native("exportNode", () => binding.exportNode!(id, format, scale));
+    const result = JSON.parse(raw) as { ok: boolean; bytes?: string; width?: number; height?: number; format?: string; error?: string };
+    if (!result.ok || !result.bytes) {
+      throw new Error(result.error ?? "Rust export failed");
+    }
+    const binaryStr = atob(result.bytes);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  /** Phase 9: Add a point to an existing vector segment. Atomic undo. */
+  vectorAddPoint(id: string, segmentIdx: number, x: number, y: number): RustStateChange {
+    const binding = this.current();
+    if (!binding.vectorAddPoint) {
+      throw new Error("Rust vector editing not available in this bridge version");
+    }
+    return stateValue(this.native("vectorAddPoint", () => binding.vectorAddPoint!(id, segmentIdx, x, y)));
+  }
+
+  /** Phase 9: Convert a corner ↔ smooth point. Atomic undo. */
+  vectorConvertPoint(id: string, anchorIdx: number): RustStateChange {
+    const binding = this.current();
+    if (!binding.vectorConvertPoint) {
+      throw new Error("Rust vector editing not available in this bridge version");
+    }
+    return stateValue(this.native("vectorConvertPoint", () => binding.vectorConvertPoint!(id, anchorIdx)));
+  }
+
+  /** Phase 10: Commit a pen-drawn path as a vector node with smooth bezier
+   *  curves. ONE atomic undo step. Points is an array of [x, y] pairs. */
+  commitPenPath(parentId: string, points: [number, number][]): RustStateChange {
+    const binding = this.current();
+    if (!binding.commitPenPath) {
+      throw new Error("Rust pen commit not available in this bridge version");
+    }
+    const json = JSON.stringify(points);
+    return stateValue(this.native("commitPenPath", () => binding.commitPenPath!(parentId, json)));
+  }
+
+  /** Phase 10: Commit a pencil stroke with RDP simplification and Catmull-Rom
+   *  bezier fitting. ONE atomic undo step. */
+  smoothPencilPath(parentId: string, points: [number, number][], tolerance: number): RustStateChange {
+    const binding = this.current();
+    if (!binding.smoothPencilPath) {
+      throw new Error("Rust pencil smoothing not available in this bridge version");
+    }
+    const json = JSON.stringify(points);
+    return stateValue(this.native("smoothPencilPath", () => binding.smoothPencilPath!(parentId, json, tolerance)));
+  }
+
+  /** Phase 10: Erase geometry from a vector node along a stroke path.
+   *  ONE atomic undo step. */
+  eraseGeometry(targetId: string, erasePoints: [number, number][], radius: number): RustStateChange {
+    const binding = this.current();
+    if (!binding.eraseGeometry) {
+      throw new Error("Rust eraser not available in this bridge version");
+    }
+    const json = JSON.stringify(erasePoints);
+    return stateValue(this.native("eraseGeometry", () => binding.eraseGeometry!(targetId, json, radius)));
+  }
+
   close(): void {
     const binding = this.binding;
     this.binding = null;

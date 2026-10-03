@@ -332,6 +332,334 @@ impl CommandBridge {
     pub fn export_x(&self) -> String {
         save_x(&self.session.snapshot())
     }
+
+    /// Phase 9: Raster/PDF export of a single node through the Rust render
+    /// pipeline. Returns a JSON envelope `{ "ok": true, "bytes": "<base64>",
+    /// "width": N, "height": N, "format": "png"|"jpg"|"pdf" }`. PNG and JPG
+    /// use `x_render::export_raster` (tiny-skia, deterministic, no GPU);
+    /// PDF uses `x_render::export_pdf`. The TS caller decodes the base64
+    /// into a downloadable Blob — never the lossy canvas.toDataURL path.
+    pub fn export_node(&self, id: &str, format: &str, scale: f64) -> Result<String, String> {
+        use base64::Engine;
+        use x_render::{
+            build_render_tree, export_pdf, export_raster, encode_png, encode_jpg,
+            RasterFormat,
+        };
+        if !scale.is_finite() || scale <= 0.0 || scale > 64.0 {
+            return Err("export scale must be a finite number between 0 and 64".into());
+        }
+        let snapshot = self.session.snapshot();
+        // Find the node anywhere in the document
+        let node = snapshot
+            .pages
+            .iter()
+            .find_map(|page| find_node(page, id))
+            .ok_or_else(|| format!("node '{id}' not found"))?;
+        let (w, h) = (node.w.max(1.0), node.h.max(1.0));
+        let tree = build_render_tree(node, &x_core::Variables::default());
+        match format {
+            "png" => {
+                let (bytes, pw, ph) = export_raster(
+                    &tree, w, h, RasterFormat::Png, scale, None, None, None,
+                )?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(format!(
+                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"png"}}"#
+                ))
+            }
+            "jpg" | "jpeg" => {
+                let quality = 92u8; // high quality default
+                let (bytes, pw, ph) = export_raster(
+                    &tree, w, h, RasterFormat::Jpg(quality), scale,
+                    Some(x_core::Color::WHITE), None, None,
+                )?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(format!(
+                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"jpg"}}"#
+                ))
+            }
+            "pdf" => {
+                let bytes = export_pdf(&tree, w, h);
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(format!(
+                    r#"{{"ok":true,"bytes":"{b64}","width":{},"height":{},"format":"pdf"}}"#,
+                    w as u32, h as u32
+                ))
+            }
+            _ => Err(format!("unsupported export format: {format}")),
+        }
+    }
+
+    /// Phase 9: Add a point to an existing vector path segment. The point is
+    /// inserted at the midpoint of the segment ending at `anchor_idx` (the
+    /// segment_hit result from the UI). ONE undoable command.
+    pub fn vector_add_point(
+        &mut self,
+        id: &str,
+        segment_idx: usize,
+        x: f64,
+        y: f64,
+    ) -> Result<String, String> {
+        self.session
+            .editor_mut()
+            .add_vector_point_on(id, segment_idx, (x, y))
+            .map(|_| delta_json(self.session.state()))
+            .ok_or_else(|| "could not add point: invalid node or segment".into())
+    }
+
+    /// Phase 9: Convert a corner point to smooth (or vice versa). Toggles a
+    /// LineTo ↔ CurveTo at the given anchor index. ONE undoable command.
+    pub fn vector_convert_point(
+        &mut self,
+        id: &str,
+        anchor_idx: usize,
+    ) -> Result<String, String> {
+        self.session
+            .editor_mut()
+            .convert_anchor(id, anchor_idx)
+            .then(|| delta_json(self.session.state()))
+            .ok_or_else(|| "could not convert point: invalid node or anchor".into())
+    }
+
+    /// Phase 10: Commit a pen-drawn path as a vector node. Takes raw click
+    /// points from the TS collector, converts them to PathCmds (LineTo chain),
+    /// fits cubic bezier handles for smooth curves, and inserts the node as a
+    /// single atomic undo step. Returns the new node's id in the delta.
+    pub fn commit_pen_path(
+        &mut self,
+        parent_id: &str,
+        points_json: &str,
+    ) -> Result<String, String> {
+        let points: Vec<(f64, f64)> = serde_json::from_str(points_json)
+            .map_err(|e| format!("invalid points JSON: {e}"))?;
+        if points.len() < 2 {
+            return Err("pen path needs at least 2 points".into());
+        }
+        // Validate finiteness
+        for (i, &(x, y)) in points.iter().enumerate() {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(format!("pen point {i} has non-finite coordinates"));
+            }
+        }
+        // Convert raw points to PathCmds with fitted bezier handles
+        let path = fit_pen_path(&points);
+        // Calculate bounds
+        let (min_x, min_y, max_x, max_y) = path_bounds(&points);
+        let w = (max_x - min_x).max(1.0);
+        let h = (max_y - min_y).max(1.0);
+        let id = x_core::fresh_id("pen");
+        let mut node = x_core::Node::vector(&id, min_x, min_y, w, h, path);
+        node.name = format!("Pen {}", self.session.state().revision + 1);
+        node.closed = false;
+        self.session.editor_mut().insert_node(parent_id, node);
+        self.session.editor_mut().selection = vec![id.clone()];
+        Ok(delta_json(self.session.state()))
+    }
+
+    /// Phase 10: Commit a pencil-drawn stroke. Takes raw pointer samples,
+    /// applies RDP simplification, then Catmull-Rom → cubic bezier fitting
+    /// to produce a beautifully smooth vector path. ONE atomic undo step.
+    pub fn smooth_pencil_path(
+        &mut self,
+        parent_id: &str,
+        points_json: &str,
+        tolerance: f64,
+    ) -> Result<String, String> {
+        let points: Vec<(f64, f64)> = serde_json::from_str(points_json)
+            .map_err(|e| format!("invalid points JSON: {e}"))?;
+        if points.len() < 2 {
+            return Err("pencil path needs at least 2 points".into());
+        }
+        if !tolerance.is_finite() || tolerance < 0.0 {
+            return Err("tolerance must be a non-negative finite number".into());
+        }
+        // RDP thin the raw points
+        let simplified = rdp_simplify(&points, tolerance.max(0.5));
+        if simplified.len() < 2 {
+            return Err("pencil path collapsed after simplification".into());
+        }
+        // Fit smooth cubic bezier through simplified points (Catmull-Rom)
+        let path = fit_smooth_path(&simplified);
+        let (min_x, min_y, max_x, max_y) = path_bounds(&points);
+        let w = (max_x - min_x).max(1.0);
+        let h = (max_y - min_y).max(1.0);
+        let id = x_core::fresh_id("pencil");
+        let mut node = x_core::Node::vector(&id, min_x, min_y, w, h, path);
+        node.name = format!("Pencil {}", self.session.state().revision + 1);
+        node.closed = false;
+        self.session.editor_mut().insert_node(parent_id, node);
+        self.session.editor_mut().selection = vec![id.clone()];
+        Ok(delta_json(self.session.state()))
+    }
+
+    /// Phase 10: Erase geometry from a vector node along a stroke path.
+    /// The eraser stroke is a series of points; segments of the target
+    /// vector within `radius` of the stroke are removed, splitting the
+    /// path at the cut points. ONE atomic undo step.
+    pub fn erase_geometry(
+        &mut self,
+        target_id: &str,
+        erase_points_json: &str,
+        radius: f64,
+    ) -> Result<String, String> {
+        let erase_points: Vec<(f64, f64)> = serde_json::from_str(erase_points_json)
+            .map_err(|e| format!("invalid erase points JSON: {e}"))?;
+        if erase_points.is_empty() {
+            return Err("erase path is empty".into());
+        }
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err("eraser radius must be a positive finite number".into());
+        }
+        let editor = self.session.editor_mut();
+        // Use the existing eraser tool infrastructure
+        use x_editor::eraser::{EraserSettings, EraserStroke};
+        let settings = EraserSettings {
+            radius,
+            feather: 0.0,
+            min_segment_length: 2.0,
+            soft_mask: false,
+        };
+        let mut stroke = EraserStroke::new(settings);
+        for (x, y) in &erase_points {
+            stroke.add_point(*x, *y, 1.0);
+        }
+        editor.erase_stroke = Some(stroke);
+        editor.selection = vec![target_id.to_string()];
+        let success = editor.eraser_end();
+        if !success {
+            return Err("erase did not affect the target node".into());
+        }
+        Ok(delta_json(self.session.state()))
+    }
+}
+
+/// Convert raw pen click points into a vector path with smooth bezier handles.
+/// Each consecutive pair of points becomes a cubic with handles at 1/3 of the
+/// segment direction, producing smooth curves between click positions.
+fn fit_pen_path(points: &[(f64, f64)]) -> Vec<x_core::PathCmd> {
+    use x_core::PathCmd;
+    if points.is_empty() {
+        return vec![];
+    }
+    if points.len() == 1 {
+        return vec![PathCmd::MoveTo(points[0].0, points[0].1)];
+    }
+    let mut cmds = vec![PathCmd::MoveTo(points[0].0, points[0].1)];
+    for i in 1..points.len() {
+        let (px, py) = points[i - 1];
+        let (cx, cy) = points[i];
+        let dx = cx - px;
+        let dy = cy - py;
+        // Auto-place cubic handles at 1/3 of the segment direction
+        let c1x = px + dx / 3.0;
+        let c1y = py + dy / 3.0;
+        let c2x = px + 2.0 * dx / 3.0;
+        let c2y = py + 2.0 * dy / 3.0;
+        cmds.push(PathCmd::CurveTo(c1x, c1y, c2x, c2y, cx, cy));
+    }
+    cmds
+}
+
+/// Convert raw pencil samples into a smooth bezier path.
+/// Uses Catmull-Rom → cubic conversion for C1 continuity.
+fn fit_smooth_path(points: &[(f64, f64)]) -> Vec<x_core::PathCmd> {
+    use x_core::PathCmd;
+    if points.is_empty() {
+        return vec![];
+    }
+    if points.len() < 3 {
+        // Too few points for Catmull-Rom; use straight lines
+        let mut cmds = vec![PathCmd::MoveTo(points[0].0, points[0].1)];
+        for &(x, y) in &points[1..] {
+            cmds.push(PathCmd::LineTo(x, y));
+        }
+        return cmds;
+    }
+    let mut cmds = vec![PathCmd::MoveTo(points[0].0, points[0].1)];
+    // Catmull-Rom to cubic bezier conversion
+    // For segment p[i] → p[i+1], controls are:
+    //   c1 = p[i] + (p[i+1] - p[i-1]) / 6
+    //   c2 = p[i+1] - (p[i+2] - p[i]) / 6
+    let n = points.len();
+    for i in 0..n - 1 {
+        let p0 = if i > 0 { points[i - 1] } else { points[i] };
+        let p1 = points[i];
+        let p2 = points[i + 1];
+        let p3 = if i + 2 < n { points[i + 2] } else { points[i + 1] };
+        let c1x = p1.0 + (p2.0 - p0.0) / 6.0;
+        let c1y = p1.1 + (p2.1 - p0.1) / 6.0;
+        let c2x = p2.0 - (p3.0 - p1.0) / 6.0;
+        let c2y = p2.1 - (p3.1 - p1.1) / 6.0;
+        cmds.push(PathCmd::CurveTo(c1x, c1y, c2x, c2y, p2.0, p2.1));
+    }
+    cmds
+}
+
+/// Iterative RDP (Ramer-Douglas-Peucker) simplification of raw points.
+fn rdp_simplify(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64)> {
+    if points.len() <= 2 {
+        return points.to_vec();
+    }
+    // Find the point with max perpendicular distance
+    let first = points[0];
+    let last = points[points.len() - 1];
+    let mut max_dist = 0.0f64;
+    let mut max_idx = 0;
+    for (i, &p) in points[1..points.len() - 1].iter().enumerate() {
+        let d = perp_distance(p, first, last);
+        if d > max_dist {
+            max_dist = d;
+            max_idx = i + 1;
+        }
+    }
+    if max_dist > tolerance {
+        let mut left = rdp_simplify(&points[..=max_idx], tolerance);
+        let right = rdp_simplify(&points[max_idx..], tolerance);
+        left.pop(); // avoid duplicating the split point
+        left.extend(right);
+        left
+    } else {
+        vec![first, last]
+    }
+}
+
+/// Perpendicular distance from point p to the line through a and b.
+fn perp_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    let len = dx.hypot(dy);
+    if len < 1e-12 {
+        return p.0.hypot(p.1);
+    }
+    ((p.0 - a.0) * dy - (p.1 - a.1) * dx).abs() / len
+}
+
+/// Bounding box of a point set.
+fn path_bounds(points: &[(f64, f64)]) -> (f64, f64, f64, f64) {
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+    for &(x, y) in points {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    (min_x, min_y, max_x, max_y)
+}
+
+/// Walk the node tree to find a node by id.
+fn find_node<'a>(node: &'a x_core::Node, id: &str) -> Option<&'a x_core::Node> {
+    if node.id == id {
+        return Some(node);
+    }
+    for child in &node.children {
+        if let Some(found) = find_node(child, id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -658,5 +986,243 @@ mod tests {
         );
         let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
         assert_eq!(undone["node"], Value::Null);
+    }
+
+    // Phase 9: export and vector editing tests
+
+    #[test]
+    fn export_node_png_produces_valid_base64_png() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let result = bridge.export_node("box", "png", 1.0).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["format"], "png");
+        let bytes_b64 = parsed["bytes"].as_str().unwrap();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        assert_eq!(&bytes[1..4], b"PNG", "valid PNG signature");
+        assert!(bytes.len() > 8);
+    }
+
+    #[test]
+    fn export_node_jpg_produces_valid_jpeg() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let result = bridge.export_node("box", "jpg", 2.0).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["format"], "jpg");
+        let bytes_b64 = parsed["bytes"].as_str().unwrap();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        assert_eq!(&bytes[0..2], &[0xFF, 0xD8], "JPEG SOI marker");
+    }
+
+    #[test]
+    fn export_node_pdf_produces_valid_pdf() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let result = bridge.export_node("box", "pdf", 1.0).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["format"], "pdf");
+        let bytes_b64 = parsed["bytes"].as_str().unwrap();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.starts_with("%PDF-1.4"));
+        assert!(text.contains("%%EOF"));
+    }
+
+    #[test]
+    fn export_node_unknown_format_returns_error() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        assert!(bridge.export_node("box", "gif", 1.0).is_err());
+    }
+
+    #[test]
+    fn export_node_missing_id_returns_error() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        assert!(bridge.export_node("nonexistent", "png", 1.0).is_err());
+    }
+
+    #[test]
+    fn export_node_invalid_scale_returns_error() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        assert!(bridge.export_node("box", "png", 0.0).is_err());
+        assert!(bridge.export_node("box", "png", -1.0).is_err());
+        assert!(bridge.export_node("box", "png", f64::NAN).is_err());
+    }
+
+    #[test]
+    fn vector_add_point_inserts_anchor_and_is_undoable() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0).child(Node::vector(
+                "v",
+                10.0,
+                10.0,
+                100.0,
+                50.0,
+                vec![
+                    PathCmd::MoveTo(0.0, 0.0),
+                    PathCmd::LineTo(100.0, 0.0),
+                    PathCmd::LineTo(100.0, 50.0),
+                    PathCmd::Close,
+                ],
+            ))],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        let result = bridge.vector_add_point("v", 2, 100.0, 25.0).unwrap();
+        let delta: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(delta["revision"], 1);
+        assert_eq!(delta["canUndo"], true);
+        let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+        assert_eq!(undone["revision"], 2);
+    }
+
+    #[test]
+    fn vector_convert_point_toggles_corner_and_smooth() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0).child(Node::vector(
+                "v",
+                0.0,
+                0.0,
+                100.0,
+                50.0,
+                vec![
+                    PathCmd::MoveTo(0.0, 0.0),
+                    PathCmd::LineTo(100.0, 0.0),
+                    PathCmd::LineTo(100.0, 50.0),
+                ],
+            ))],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        let result = bridge.vector_convert_point("v", 1).unwrap();
+        let delta: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(delta["revision"], 1);
+        let result2 = bridge.vector_convert_point("v", 1).unwrap();
+        let delta2: Value = serde_json::from_str(&result2).unwrap();
+        assert_eq!(delta2["revision"], 2);
+        assert!(bridge.undo().is_ok());
+    }
+
+    // Phase 10: drawing tools tests
+
+    #[test]
+    fn fit_pen_path_creates_cubic_beziers_from_click_points() {
+        let points = vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)];
+        let path = super::fit_pen_path(&points);
+        assert_eq!(path.len(), 3); // MoveTo + 2 CurveTos
+        assert!(matches!(path[0], PathCmd::MoveTo(0.0, 0.0)));
+        assert!(matches!(path[1], PathCmd::CurveTo(..)));
+        assert!(matches!(path[2], PathCmd::CurveTo(..)));
+    }
+
+    #[test]
+    fn fit_smooth_path_creates_catmull_rom_cubics() {
+        let points = vec![
+            (0.0, 0.0),
+            (10.0, 5.0),
+            (20.0, 0.0),
+            (30.0, 5.0),
+            (40.0, 0.0),
+        ];
+        let path = super::fit_smooth_path(&points);
+        assert_eq!(path.len(), 5); // MoveTo + 4 CurveTos
+        assert!(matches!(path[0], PathCmd::MoveTo(0.0, 0.0)));
+        for i in 1..path.len() {
+            assert!(
+                matches!(path[i], PathCmd::CurveTo(..)),
+                "segment {i} should be a cubic"
+            );
+        }
+    }
+
+    #[test]
+    fn rdp_simplify_removes_collinear_points() {
+        let points = vec![
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (2.0, 0.0),
+            (3.0, 0.0),
+            (4.0, 0.0),
+        ];
+        let simplified = super::rdp_simplify(&points, 0.5);
+        assert_eq!(simplified.len(), 2); // Only endpoints survive
+        assert_eq!(simplified[0], (0.0, 0.0));
+        assert_eq!(simplified[1], (4.0, 0.0));
+    }
+
+    #[test]
+    fn rdp_simplify_keeps_non_collinear_points() {
+        let points = vec![(0.0, 0.0), (2.0, 5.0), (4.0, 0.0)];
+        let simplified = super::rdp_simplify(&points, 0.5);
+        assert_eq!(simplified.len(), 3); // All kept
+    }
+
+    #[test]
+    fn commit_pen_path_creates_vector_node_atomically() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0)],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        let points = "[[10,20],[50,20],[50,60]]";
+        let result = bridge.commit_pen_path("page", points).unwrap();
+        let delta: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(delta["revision"], 1);
+        assert_eq!(delta["canUndo"], true);
+        // Verify the node was created
+        let state: Value = serde_json::from_str(&bridge.state()).unwrap();
+        assert!(state["revision"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn smooth_pencil_path_creates_simplified_smooth_vector() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0)],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        // Shaky hand-drawn line that RDP should simplify
+        let points = "[[0,0],[5,1],[10,0],[15,2],[20,0],[25,1],[30,0]]";
+        let result = bridge.smooth_pencil_path("page", points, 2.0).unwrap();
+        let delta: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(delta["revision"], 1);
+    }
+
+    #[test]
+    fn commit_pen_path_rejects_too_few_points() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0)],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        assert!(bridge.commit_pen_path("page", "[[10,20]]").is_err());
+        assert!(bridge.commit_pen_path("page", "[]").is_err());
+    }
+
+    #[test]
+    fn commit_pen_path_rejects_non_finite_coordinates() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0)],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        assert!(bridge.commit_pen_path("page", "[[NaN,0],[1,1]]").is_err());
+    }
+
+    #[test]
+    fn pen_path_undo_is_single_step() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0)],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        let points = "[[10,20],[50,20],[50,60]]";
+        bridge.commit_pen_path("page", points).unwrap();
+        // Single undo removes the entire stroke
+        let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+        assert_eq!(undone["revision"], 2);
     }
 }

@@ -30,7 +30,7 @@ const moduleWith = Session => {
   return {
     default: async () => {}, bridgeVersion: () => 1, engineVersion: () => "x-wasm 0.34.0 (rust)",
     importFigToX: () => "", importSketchToX: () => "", importSvgToX: () => "",
-    sessionBridgeVersion: () => 6, RustDocumentSession: Session,
+    sessionBridgeVersion: () => 8, RustDocumentSession: Session,
   };
 };
 

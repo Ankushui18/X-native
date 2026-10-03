@@ -837,6 +837,41 @@ export function Canvas({
   } | null>(null);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
+  /** Phase 10: eraser stroke collector for WASM finalization. */
+  const eraserPath = useRef<{ points: [number, number][]; targetId: string | null } | null>(null);
+
+  /** Phase 10: Commit a pen/pencil path through WASM first, fall back to TS.
+   *  Called on pen draft finalization (Enter/Escape/close-click). */
+  const commitPathWasm = useCallback(
+    (points: PathPoint[], closed: boolean) => {
+      if (points.length < 2) {
+        engine.dispatch({ type: "addPath", points, closed });
+        return;
+      }
+      const rawPoints: [number, number][] = points.map((p) => [p.x, p.y]);
+      const snap = engine.snapshot();
+      const parentId = snap.pages[snap.page].root.id;
+      const root = snap.pages[snap.page].root;
+      void (async () => {
+        try {
+          const { wasmCommitPenPath, wasmSmoothPencilPath, serializeToX } = await import("../engine/wasmDrawing");
+          const xDoc = serializeToX(root);
+          if (xDoc) {
+            const isPencil = engine.snapshot().tool === "pencil";
+            const tol = PENCIL_TOLERANCE_PX / engine.snapshot().zoom;
+            const result = isPencil
+              ? await wasmSmoothPencilPath(xDoc, parentId, rawPoints, tol)
+              : await wasmCommitPenPath(xDoc, parentId, rawPoints);
+            if (result?.success) return;
+          }
+        } catch {
+          // WASM unavailable — fall through to TS
+        }
+        engine.dispatch({ type: "addPath", points, closed });
+      })();
+    },
+    [engine],
+  );
   /**
    * Set while the pen is drawing a branch into an existing vector network: the
    * node to keep adding to and the vertex index the next click connects from.
@@ -1231,7 +1266,7 @@ export function Canvas({
       if (e.type === "keydown" && (e.key === "Escape" || e.key === "Enter") && (draft.length >= 2 || penBranch.current)) {
         e.stopImmediatePropagation();
         e.preventDefault();
-        if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+        if (draft.length >= 2) commitPathWasm(draft, false);
         setDraft([]);
         setCloseHint(null);
         penBranch.current = null;
@@ -1660,7 +1695,7 @@ export function Canvas({
       return undefined;
     }
     registerPenFinisher(() => {
-      if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+      if (draft.length >= 2) commitPathWasm(draft, false);
       setDraft([]);
       setCloseHint(null);
       penBranch.current = null;
@@ -1672,7 +1707,7 @@ export function Canvas({
   useEffect(() => {
     if (snap.tool !== "pen" && snap.tool !== "pencil" && snap.tool !== "brush" && draft.length) {
       if (draft.length >= 2) {
-        engine.dispatch({ type: "addPath", points: draft, closed: false });
+        commitPathWasm(draft, false);
       }
       setDraft([]);
       setCloseHint(null);
@@ -4896,6 +4931,14 @@ export function Canvas({
     }
     if (snap.tool === "eraser") {
       const wpt = toWorld(e.clientX, e.clientY);
+      // Phase 10: Collect the eraser stroke path for WASM finalization on up.
+      // Find the target node first so we can hand it to Rust on pointer-up.
+      const eraseRoot = snap.pages[snap.page].root;
+      const hit = hitTest(eraseRoot, wpt.x, wpt.y, { deep: true });
+      if (hit && !hit.locked && allowTopologyEdit(engine, hit.id)) {
+        eraserPath.current = { points: [[wpt.x, wpt.y]], targetId: hit.id };
+      }
+      // Also fire the immediate TS erase for visual feedback during the drag
       engine.dispatch({ type: "begin" });
       eraseAt(wpt.x, wpt.y);
       drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: "erase" };
@@ -4914,6 +4957,41 @@ export function Canvas({
       let wpt = toWorld(e.clientX, e.clientY);
       const rootForPen = snap.pages[snap.page].root;
       const near = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by) < 8 / snap.zoom;
+      // Phase 9: Alt/Option-click on an existing anchor converts corner↔smooth.
+      // This works in both vector-edit mode and when a vector is selected with
+      // the pen tool. The conversion toggles between a straight segment (LineTo)
+      // and a curved one (CurveTo with auto-placed handles at 1/3rds).
+      if (e.altKey && !penBranch.current && !draft.length) {
+        const targetId = vecEdit ?? (snap.selection.length === 1 ? snap.selection[0] : null);
+        if (targetId) {
+          const loc = worldPos(rootForPen, targetId);
+          if (loc && !loc.node.locked && (loc.node.kind === "vector" || loc.node.kind === "boolean")) {
+            const epts = loc.node.path.length ? loc.node.path : shapePoly(loc.node);
+            const elocal = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, loc.node);
+            // Find the nearest anchor
+            let bestIdx = -1;
+            let bestDist = Infinity;
+            for (let i = 0; i < epts.length; i++) {
+              const v = epts[i];
+              const d = Math.hypot(elocal.x - v.x, elocal.y - v.y);
+              if (d < bestDist) {
+                bestDist = d;
+                bestIdx = i;
+              }
+            }
+            if (bestIdx >= 0 && bestDist < 12 / snap.zoom) {
+              // Dispatch corner↔smooth conversion
+              engine.dispatch({
+                type: "convertAnchor",
+                id: targetId,
+                anchorIndex: bestIdx,
+              });
+              toast(bestDist < 6 / snap.zoom ? "Point converted (corner↔smooth)" : "Point converted");
+              return;
+            }
+          }
+        }
+      }
       // A branch is anchored on a vertex of the selected vector, so the pen can
       // keep drawing in that shape instead of starting a second one.
       // In vector edit, a pen click on the edited path inserts an anchor
@@ -4946,6 +5024,44 @@ export function Canvas({
               setVecEdit(loc.node.id, res.insertedIndex);
               toast("Point added on path");
               return;
+            }
+          }
+        }
+      }
+      // Phase 9: Click on a segment of a selected vector adds a point (pen re-edit).
+      // Works even outside vector-edit mode: the pen tool directly inserts a
+      // new anchor on the hit segment when no draft is in progress.
+      if (!vecEdit && !penBranch.current && !draft.length && snap.selection.length === 1) {
+        const sel = find(rootForPen, snap.selection[0]);
+        if (sel && !sel.locked && (sel.kind === "vector" || sel.kind === "boolean")) {
+          const src = sel.path.length ? sel.path : shapePoly(sel);
+          if (src.length >= 2) {
+            const elocal = nodeLocalPoint(wpt.x, wpt.y, sel.x, sel.y, sel);
+            // Check it's not too close to a vertex (that would be a branch start)
+            let tooCloseToVertex = false;
+            for (const v of src) {
+              if (Math.hypot(elocal.x - v.x, elocal.y - v.y) < 10 / snap.zoom) {
+                tooCloseToVertex = true;
+                break;
+              }
+            }
+            if (!tooCloseToVertex) {
+              const closed = sel.path.length ? !!sel.closed : sel.kind !== "line" && sel.kind !== "arrow";
+              const res = insertPointOnPath(src, elocal.x, elocal.y, closed, 10 / snap.zoom);
+              if (res) {
+                if (!allowTopologyEdit(engine, sel.id)) return;
+                engine.dispatch({
+                  type: "insertPointOnPath",
+                  id: sel.id,
+                  x: elocal.x,
+                  y: elocal.y,
+                  maxDist: 10 / snap.zoom,
+                });
+                vecPt.current = res.insertedIndex;
+                setVecEdit(sel.id, res.insertedIndex);
+                toast("Point added on segment");
+                return;
+              }
             }
           }
         }
@@ -5001,7 +5117,7 @@ export function Canvas({
       if (draft.length >= 2) {
         const a = draft[0];
         if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 14 / snap.zoom) {
-          engine.dispatch({ type: "addPath", points: draft, closed: true });
+          commitPathWasm(draft, true);
           setDraft([]);
           setCloseHint(null);
           penDrag.current = null;
@@ -6478,6 +6594,10 @@ export function Canvas({
       }
     } else if (d.mode === "marquee" && d.id === "erase") {
       const wpt = toWorld(e.clientX, e.clientY);
+      // Phase 10: collect the eraser stroke for WASM finalization
+      if (eraserPath.current) {
+        eraserPath.current.points.push([wpt.x, wpt.y]);
+      }
       eraseAt(wpt.x, wpt.y);
     } else if (d.mode === "create" || d.mode === "marquee") {
       let x = Math.min(d.sx, e.clientX) - box.left;
@@ -7060,13 +7180,9 @@ export function Canvas({
       const pts = pencil.current;
       pencil.current = null;
       if (pts.length >= 2) {
-        // Raw pointer samples are dense and jagged: thin them with RDP, then
-        // fit bezier handles so the stroke reads as a smooth curve. Tolerance
-        // is in world units so it is consistent at any zoom.
-        const tol = PENCIL_TOLERANCE_PX / snap.zoom;
-        const thinned = simplifyPath(pts, tol);
-        const smoothed = snap.tool === "pencil" ? smoothPath(thinned, false) : thinned;
-        engine.dispatch({ type: "addPath", points: smoothed, closed: false });
+        // Phase 10+: Delegate to Rust (RDP + Catmull-Rom) via commitPathWasm.
+        // TS smoothing is the fallback inside commitPathWasm when WASM fails.
+        commitPathWasm(pts, false);
       }
       setDraft([]);
       return;
@@ -7288,6 +7404,30 @@ export function Canvas({
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
+    // Phase 10: Finalize eraser via WASM when a stroke path was collected.
+    // The TS erase already ran during the drag for visual feedback; the WASM
+    // call here produces the mathematically correct geometry splitting as
+    // ONE atomic undo step (replacing the multiple TS dispatches).
+    if (d.mode === "marquee" && d.id === "erase" && eraserPath.current) {
+      const ep = eraserPath.current;
+      eraserPath.current = null;
+      if (ep.targetId && ep.points.length >= 2) {
+        const ERASER_RADIUS = ERASER_PX / snap.zoom;
+        void (async () => {
+          try {
+            const { wasmEraseGeometry, serializeToX } = await import("../engine/wasmDrawing");
+            const root = engine.snapshot().pages[engine.snapshot().page].root;
+            const xDoc = serializeToX(root);
+            if (xDoc) {
+              const result = await wasmEraseGeometry(xDoc, ep.targetId!, ep.points, ERASER_RADIUS);
+              if (result?.success) return;
+            }
+          } catch {
+            // WASM path unavailable — TS erase already applied during drag
+          }
+        })();
+      }
+    }
     if ((d.mode === "crop" || d.mode === "cropMove" || d.mode === "cropRotate" || d.mode === "cropScale") && d.id) {
       const fresh = engine.snapshot();
       const cn = find(fresh.pages[fresh.page].root, d.id);
@@ -9445,7 +9585,7 @@ export function Canvas({
             className={`tool-btn ${snap.tool === "select" && vecSubTool === "select" ? "on" : ""}`}
             onClick={() => {
               if (draft.length >= 2) {
-                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                commitPathWasm(draft, false);
                 setDraft([]);
                 setCloseHint(null);
                 penBranch.current = null;
@@ -9580,7 +9720,7 @@ export function Canvas({
             className="dock-done"
             onClick={() => {
               if (draft.length >= 2) {
-                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                commitPathWasm(draft, false);
                 setDraft([]);
                 setCloseHint(null);
                 penBranch.current = null;
