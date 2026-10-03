@@ -762,6 +762,16 @@ Disposition: **FIXED** (shipped + tested), **OPEN** (recorded, not fixed), **PAR
 | V-009 | ⌥-pull drags handle independently | No ⌥-pull | P2 | FIXED |
 | V-010 | Zero-length segments cleaned | Zero-length segments kept (bad hit/export) | P2 | FIXED |
 
+#### §15 follow-up — 2026-10-03 (draft PR #58)
+
+| ID | Figma behavior | X before this follow-up | Status |
+|---|---|---|---|
+| V-011 | Q activates freeform Lasso in vector edit | `lasso` was a dead sub-tool value; no gesture or control | Implemented in web UI; replace/add/subtract and Escape covered by mounted tests |
+| V-012 | Shift-drag a point-box corner rotates selected points in 15° steps | Point box resized only; Shift on a corner proportionally resized | Implemented; corner rotation, live angle readout, Bézier handles and one-step undo covered |
+| V-013 | Space temporarily repositions points during point-box resize/rotation | Space only panned the canvas; no point rebase during transform | Implemented; Space translation, resumed resize and one-step undo covered |
+
+Core Rust Editor APIs and nested-transform tests are included; execution remains unverified in this environment because `cargo`/`rustc` are unavailable. The web Lasso maps path-segment selection to endpoint anchors and does not expose branch-only graph vertices; exact path-selection semantics and the vector-edit Eraser remain open. See `docs/VECTOR_EDIT_FIGMA_PARITY_2026-10-03.md` for source, evidence, and boundaries.
+
 ### §16 Layers (L-001–L-007) — 3 × P1, 4 × P2, all FIXED
 
 | ID | Figma behavior | X before | Sev | Disp. |

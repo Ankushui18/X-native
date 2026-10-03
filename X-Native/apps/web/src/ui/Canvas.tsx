@@ -11,7 +11,8 @@ import { deepestFrame, defaultEffect, find, findParent, hitTest, insideInstance,
 // is painted, not where it would be if its parent were unrotated. The engine's
 // own `worldPos` stays translation-only (it is a reparenting offset there).
 import { worldPlacement as worldPos } from "../engine/memory";
-import { pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork } from "./pointBox";
+import { isPointBoxCorner, pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork, rotatePointNetwork, translatePointNetwork, type PointBounds } from "./pointBox";
+import { lassoSelectPathPoints, type LassoOperation } from "./vectorLasso";
 import { layersAt } from "./selectSame";
 import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit } from "./canvasSelection";
 import { rememberImage, hydrateNodes } from "../engine/assets";
@@ -238,6 +239,7 @@ type Drag =
         | "rotate"
         | "vec"
         | "vecResize"
+        | "vecLasso"
         | "bend"
         | "vecCut"
         | "widthPt"
@@ -332,6 +334,16 @@ type Drag =
       wSel?: number[];
       origNetwork?: VectorNetwork;
       networkIndices?: number[];
+      /** Freeform Lasso path and the modifier chosen at pointer-down. */
+      lassoPoints?: { x: number; y: number }[];
+      lassoOperation?: LassoOperation;
+      /** Live rotation readout/cursor position. */
+      rotationDeg?: number;
+      currentX?: number;
+      currentY?: number;
+      /** Space temporarily translates points while preserving the in-flight
+       * resize/rotation gesture as a fresh baseline on key-up. */
+      spaceState?: { network: VectorNetwork; bounds: PointBounds; dx: number; dy: number; lastX: number; lastY: number };
       startAngle?: number;
       origRotation?: number;
       cx?: number;
@@ -489,6 +501,7 @@ export function Canvas({
   const wrap = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const space = useRef(false);
+  const pointerClient = useRef({ x: 0, y: 0 });
   // Mirrors the ref so the grab cursor flips the moment Space lands; the ref
   // alone would leave the cursor stale until the next render.
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -764,6 +777,13 @@ export function Canvas({
   /** Run 22 (vector cut): the blade preview line, world coords, while the
    *  cut drags across the path. */
   const [cutLine, setCutLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [lassoPath, setLassoPath] = useState<{ x: number; y: number }[]>([]);
+  useEffect(() => {
+    if (!vecEdit) {
+      setVecSubTool((tool) => tool === "select" ? tool : "select");
+      setLassoPath((path) => path.length ? [] : path);
+    }
+  }, [vecEdit]);
   const [draft, setDraft] = useState<PathPoint[]>([]);
   // LP-U4: the dismissal outlives the session (firstRun.ts), so the card is
   // shown once per visitor rather than once per mount.
@@ -1111,6 +1131,32 @@ export function Canvas({
   }, []);
 
   useEffect(() => {
+    const updateVectorBoxSpace = (pressed: boolean) => {
+      const d = drag.current;
+      if (d?.mode !== "vecResize" || !d.id || !d.bounds || !d.origNetwork || !d.networkIndices) return;
+      const current = engine.snapshot();
+      const root = current.pages[current.page].root;
+      if (pressed) {
+        if (d.spaceState) return;
+        const box = pointBox(root, d.id, current.vecPoints ?? []);
+        if (!box) return;
+        const pointer = toWorld(pointerClient.current.x, pointerClient.current.y);
+        d.spaceState = { network: box.network, bounds: box.bounds, dx: 0, dy: 0, lastX: pointer.x, lastY: pointer.y };
+        return;
+      }
+      const state = d.spaceState;
+      if (!state) return;
+      d.origNetwork = translatePointNetwork(root, d.id, state.network, d.networkIndices, state.dx, state.dy);
+      d.bounds = { ...state.bounds, x: state.bounds.x + state.dx, y: state.bounds.y + state.dy };
+      const pointer = toWorld(pointerClient.current.x, pointerClient.current.y);
+      d.wx = pointer.x;
+      d.wy = pointer.y;
+      d.sx = pointerClient.current.x;
+      d.sy = pointerClient.current.y;
+      d.startAngle = Math.atan2(pointer.y - (d.bounds.y + d.bounds.h / 2), pointer.x - (d.bounds.x + d.bounds.w / 2));
+      d.spaceState = undefined;
+      d.rotationDeg = undefined;
+    };
     const onKey = (e: KeyboardEvent) => {
       // PM-U9: while a modal is open the canvas does not answer the keyboard —
       // not the point editor's digits, not its Delete. Escape is the modal's and
@@ -1172,14 +1218,15 @@ export function Canvas({
         setAltMeasure(e.type === "keydown");
       }
       if (e.code === "Space") {
-        // Space is the pan modifier, and it takes the caret off whatever panel
-        // control was clicked last: the browser would otherwise re-activate
-        // that button on the same keypress, and the canvas would be panning
-        // with the focus ring still sitting in the Inspector.
-        if (e.type === "keydown" && targetEl && targetEl !== document.body && !spaceIsText) targetEl.blur();
-        space.current = e.type === "keydown";
-        setSpaceHeld(e.type === "keydown");
-        if (e.type === "keydown") e.preventDefault();
+        // Space is normally the pan modifier. During a point-box transform it
+        // temporarily translates the selected points, then resumes resize or
+        // rotation from the new position when released (Figma).
+        const pressed = e.type === "keydown";
+        if (pressed && targetEl && targetEl !== document.body && !spaceIsText) targetEl.blur();
+        if (pressed !== space.current) updateVectorBoxSpace(pressed);
+        space.current = pressed;
+        setSpaceHeld(pressed);
+        if (pressed) e.preventDefault();
       }
       if (e.type === "keydown" && (e.key === "Escape" || e.key === "Enter") && (draft.length >= 2 || penBranch.current)) {
         e.stopImmediatePropagation();
@@ -1352,6 +1399,24 @@ export function Canvas({
           setVecEdit(null);
         }
       }
+      // Figma's Q shortcut activates the vector Lasso while a path is in point
+      // edit; outside vector edit the app's radial-menu shortcut owns Q.
+      if (
+        e.type === "keydown" &&
+        vecEdit &&
+        !edit &&
+        !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey &&
+        e.key.toLowerCase() === "q"
+      ) {
+        const next = vecSubTool === "lasso" ? "select" : "lasso";
+        setVecSubTool(next);
+        setLassoPath([]);
+        if (next === "lasso") engine.dispatch({ type: "setTool", tool: "select" });
+        toast(next === "lasso" ? "Lasso: drag around points or paths" : "Select mode");
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
       // Run 22 (vector cut, audit P1 #10): bare X toggles the Cut subtool
       // while a path is in point edit — ⇧X stays the fill/stroke swap and
       // ⌘X the clipboard cut, so both modifiers are excluded here.
@@ -1373,10 +1438,19 @@ export function Canvas({
         return;
       }
       if (e.type === "keydown" && e.key === "Escape" && vecEdit) {
-        // Escape leaves cut mode first, keeping the path in point edit —
-        // only the next Escape leaves point edit itself.
-        if (vecSubTool === "cut") {
+        // First Escape cancels an in-flight Lasso or exits a vector sub-tool;
+        // only the next one leaves point edit itself.
+        if (drag.current?.mode === "vecLasso") {
+          drag.current = null;
+          setLassoPath([]);
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          return;
+        }
+        if (vecSubTool === "cut" || vecSubTool === "lasso") {
           setVecSubTool("select");
+          setLassoPath([]);
+          e.preventDefault();
           e.stopImmediatePropagation();
           return;
         }
@@ -1539,6 +1613,7 @@ export function Canvas({
     // A Space keyup that lands in another window — or in none at all, after a
     // tab switch — would otherwise leave the canvas stuck in pan mode.
     const releaseSpace = () => {
+      if (space.current) updateVectorBoxSpace(false);
       space.current = false;
       setSpaceHeld(false);
     };
@@ -4201,9 +4276,48 @@ export function Canvas({
             ctx.fillRect(snap.panX + x * z - 3, snap.panY + y * z - 3, 6, 6);
             ctx.strokeRect(snap.panX + x * z - 3, snap.panY + y * z - 3, 6, 6);
           }
+          const pointRotation = drag.current?.mode === "vecResize" && drag.current.id === vecEdit
+            ? drag.current.rotationDeg
+            : undefined;
+          const rotationDrag = drag.current?.mode === "vecResize" && drag.current.id === vecEdit ? drag.current : null;
+          if (pointRotation != null && rotationDrag?.currentX != null && rotationDrag.currentY != null) {
+            const label = `${pointRotation > 0 ? "+" : ""}${pointRotation}°`;
+            ctx.font = "500 11px Inter, system-ui";
+            const bw = ctx.measureText(label).width + 12;
+            const bx = snap.panX + rotationDrag.currentX * z + 12;
+            const by = snap.panY + rotationDrag.currentY * z - 24;
+            ctx.fillStyle = SEL;
+            if (typeof ctx.roundRect === "function") {
+              ctx.beginPath();
+              ctx.roundRect(bx, by, bw, 20, 4);
+              ctx.fill();
+            } else ctx.fillRect(bx, by, bw, 20);
+            ctx.fillStyle = INK;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(label, bx + bw / 2, by + 10);
+            ctx.textAlign = "left";
+            ctx.textBaseline = "alphabetic";
+          }
           ctx.restore();
         }
       }
+    }
+
+    if (lassoPath.length > 1) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(snap.panX + lassoPath[0].x * z, snap.panY + lassoPath[0].y * z);
+      for (let i = 1; i < lassoPath.length; i++)
+        ctx.lineTo(snap.panX + lassoPath[i].x * z, snap.panY + lassoPath[i].y * z);
+      ctx.closePath();
+      ctx.fillStyle = withAlpha(SEL, 0.08);
+      ctx.fill();
+      ctx.strokeStyle = SEL;
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.restore();
     }
 
     const isDevMode = snap.rightTab === "inspect";
@@ -4538,7 +4652,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision, cutLine, widthSel, widthHover, eyedropModel]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -4663,6 +4777,7 @@ export function Canvas({
   );
 
   const onDown = (e: React.MouseEvent) => {
+    pointerClient.current = { x: e.clientX, y: e.clientY };
     if (dropHint) setDropHint(null);
     if (edit && (e.target as HTMLElement).closest(".text-edit, .text-edit-frame")) return;
     if (e.button === 2) return;
@@ -5025,6 +5140,19 @@ export function Canvas({
       };
       return;
     }
+    // Vector-edit Lasso is a direct drag gesture: it does not open an undo
+    // transaction because it changes only the editor's ephemeral point set.
+    if (vecEdit && vecSubTool === "lasso" && snap.tool === "select" && e.button === 0) {
+      const initial = [wpt];
+      drag.current = {
+        mode: "vecLasso", id: vecEdit, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
+        lassoPoints: initial,
+        lassoOperation: e.altKey ? "subtract" : e.shiftKey ? "add" : "replace",
+      };
+      setLassoPath(initial);
+      e.preventDefault();
+      return;
+    }
     // Point-box resize is separate from anchor movement and layer resize.
     if (vecEdit && vecSubTool === "select" && snap.tool === "select") {
       const box = pointBox(root, vecEdit, snap.vecPoints ?? []);
@@ -5032,7 +5160,8 @@ export function Canvas({
       if (box && corner >= 0) {
         engine.dispatch({ type: "begin" });
         drag.current = { mode: "vecResize", id: vecEdit, corner, sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y,
-          bounds: box.bounds, origNetwork: box.network, networkIndices: box.indices };
+          bounds: box.bounds, origNetwork: box.network, networkIndices: box.indices,
+          startAngle: Math.atan2(wpt.y - (box.bounds.y + box.bounds.h / 2), wpt.x - (box.bounds.x + box.bounds.w / 2)) };
         return;
       }
     }
@@ -5838,6 +5967,7 @@ export function Canvas({
    *  re-render the whole editor. */
   const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
+    pointerClient.current = { x: e.clientX, y: e.clientY };
     if (eyedropArmed() || snap.tool === "eraser" || placing) {
       cursorPosRef.current = { x: e.clientX, y: e.clientY };
       setCursorPos(cursorPosRef.current);
@@ -5929,7 +6059,8 @@ export function Canvas({
       let next: string | null = null;
       const pointBounds = vecEdit && vecSubTool === "select" ? pointBox(root0, vecEdit, snap.vecPoints ?? []) : null;
       const pointHandle = pointBounds ? pointBoxHit(pointBounds.bounds, wpt.x, wpt.y, snap.zoom) : -1;
-      if (pointHandle >= 0) next = resizeCursor(pointHandle);
+      if (pointHandle >= 0)
+        next = isPointBoxCorner(pointHandle) && e.shiftKey ? ROT_CURSOR : resizeCursor(pointHandle);
       if (r0 && snap.selection.length && !vecEdit) {
         const z = snap.zoom;
         const px0 = e.clientX - r0.left;
@@ -6100,6 +6231,28 @@ export function Canvas({
     }
     const d = drag.current;
     if (!d) return;
+    if (d.mode === "vecLasso") {
+      const p = toWorld(e.clientX, e.clientY);
+      const points = d.lassoPoints ?? [];
+      const last = points[points.length - 1];
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) * snap.zoom >= 2.5) {
+        d.lassoPoints = [...points, p];
+        setLassoPath(d.lassoPoints);
+      }
+      return;
+    }
+    if (d.mode === "vecResize" && d.spaceState && space.current && d.id && d.networkIndices) {
+      const p = toWorld(e.clientX, e.clientY);
+      const state = d.spaceState;
+      state.dx += p.x - state.lastX;
+      state.dy += p.y - state.lastY;
+      state.lastX = p.x;
+      state.lastY = p.y;
+      const root = snap.pages[snap.page].root;
+      engine.dispatch({ type: "patchVectorNetwork", id: d.id, preserveBounds: true,
+        network: translatePointNetwork(root, d.id, state.network, d.networkIndices, state.dx, state.dy) });
+      return;
+    }
     const box = wrap.current!.getBoundingClientRect();
     if (d.mode === "pan") {
       engine.dispatch({ type: "pan", dx: e.clientX - d.sx, dy: e.clientY - d.sy });
@@ -6504,9 +6657,21 @@ export function Canvas({
     } else if (d.mode === "vecResize" && d.id && d.corner != null && d.bounds && d.origNetwork && d.networkIndices) {
       const p = toWorld(e.clientX, e.clientY);
       const root = snap.pages[snap.page].root;
-      engine.dispatch({ type: "patchVectorNetwork", id: d.id, preserveBounds: true,
-        network: resizePointNetwork(root, d.id, d.origNetwork, d.networkIndices, d.bounds, d.corner,
-          p.x - d.wx, p.y - d.wy, e.shiftKey, e.altKey) });
+      let network: VectorNetwork;
+      if (isPointBoxCorner(d.corner) && e.shiftKey) {
+        let delta = (Math.atan2(p.y - (d.bounds.y + d.bounds.h / 2), p.x - (d.bounds.x + d.bounds.w / 2)) - (d.startAngle ?? 0)) * 180 / Math.PI;
+        if (delta > 180) delta -= 360;
+        if (delta < -180) delta += 360;
+        d.rotationDeg = Math.round(delta / 15) * 15;
+        d.currentX = p.x;
+        d.currentY = p.y;
+        network = rotatePointNetwork(root, d.id, d.origNetwork, d.networkIndices, d.bounds, d.rotationDeg);
+      } else {
+        d.rotationDeg = undefined;
+        network = resizePointNetwork(root, d.id, d.origNetwork, d.networkIndices, d.bounds, d.corner,
+          p.x - d.wx, p.y - d.wy, e.shiftKey && !isPointBoxCorner(d.corner), e.altKey);
+      }
+      engine.dispatch({ type: "patchVectorNetwork", id: d.id, preserveBounds: true, network });
     } else if (d.mode === "widthPt") {
       // Run 23 — the pull maps onto each selected point's stroke normal:
       // across the line thickens, along it slides. Positions never move.
@@ -6877,6 +7042,7 @@ export function Canvas({
   };
 
   const onUp = (e: React.MouseEvent) => {
+    pointerClient.current = { x: e.clientX, y: e.clientY };
     dragIx.current = null;
     // §23 PT-004: release completes the press pair on the release-position node.
     if (snap.presentFrame) {
@@ -6938,6 +7104,28 @@ export function Canvas({
       }
     }
     if (!d) return;
+    if (d.mode === "vecLasso") {
+      setLassoPath([]);
+      const moved = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) >= 4;
+      if (!moved || !d.id) return;
+      const root = snap.pages[snap.page].root;
+      const node = find(root, d.id);
+      if (!node) return;
+      const boundary = [...(d.lassoPoints ?? [])];
+      const end = toWorld(e.clientX, e.clientY);
+      const last = boundary[boundary.length - 1];
+      if (!last || Math.hypot(end.x - last.x, end.y - last.y) * snap.zoom >= 1) boundary.push(end);
+      const path = node.path.length ? node.path : shapePoly(node);
+      const previous = snap.vecPoints?.length ? snap.vecPoints : snap.vecPoint != null ? [snap.vecPoint] : [];
+      const selected = lassoSelectPathPoints(
+        path, effClosed(node), boundary,
+        (x, y) => localToWorld(root, node.id, x, y),
+        previous, d.lassoOperation ?? "replace",
+      );
+      vecPt.current = selected.length ? selected[0] : -1;
+      setVecEdit(node.id, selected[0] ?? null, selected);
+      return;
+    }
     if (d.mode === "vecCut") {
       setCutLine(null);
       const cutRoot = snap.pages[snap.page].root;
@@ -9269,6 +9457,22 @@ export function Canvas({
           >
             <Icon name="move" size={14} />
             <span>Select</span>
+          </button>
+          <button
+            className={`tool-btn ${vecSubTool === "lasso" ? "on" : ""}`}
+            disabled={!vecEdit}
+            onClick={() => {
+              const next = vecSubTool === "lasso" ? "select" : "lasso";
+              setVecSubTool(next);
+              setLassoPath([]);
+              if (next === "lasso") engine.dispatch({ type: "setTool", tool: "select" });
+              toast(next === "lasso" ? "Lasso: drag around points or paths · Shift adds · Alt subtracts" : "Select mode");
+            }}
+            title="Lasso (Q) — drag to select vector points and paths"
+            aria-label="Lasso tool"
+          >
+            <Icon name="lasso" size={14} />
+            <span>Lasso</span>
           </button>
           <button
             className={`tool-btn ${snap.tool === "pen" ? "on" : ""}`}

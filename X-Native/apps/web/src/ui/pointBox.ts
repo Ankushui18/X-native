@@ -33,6 +33,12 @@ export function pointBox(root: XNode, id: string | null, selected: number[]) {
   return { network, indices, bounds };
 }
 
+/** Figma rotates from a point-box corner while Shift is held; edge handles
+ * remain resize-only (Shift constrains their proportions). */
+export function isPointBoxCorner(handle: number): boolean {
+  return handle === 0 || handle === 2 || handle === 4 || handle === 6;
+}
+
 /** Eight padded screen-space handles leave the anchor circles free for moving.
  * The gesture uses pointer deltas, so padding never enters the scaling math. */
 export function pointBoxHandles(b: PointBounds, zoom: number): [number, number][] {
@@ -69,5 +75,58 @@ export function resizePointNetwork(
     return { x: p.x - vertices[index].x, y: p.y - vertices[index].y };
   };
   const segments = network.segments.map((s) => ({ ...s, tangentStart: tangent(s.start, s.tangentStart), tangentEnd: tangent(s.end, s.tangentEnd) }));
+  return { ...network, vertices, segments };
+}
+
+/** Rotate selected anchors and their handles in page space. `degrees` is an
+ * unsnapped delta; the canvas applies Figma's 15-degree snap before calling. */
+export function rotatePointNetwork(
+  root: XNode, id: string, network: VectorNetwork, indices: number[],
+  bounds: PointBounds, degrees: number,
+): VectorNetwork {
+  if (!Number.isFinite(degrees) || degrees === 0) return network;
+  const angle = degrees * Math.PI / 180;
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  const cx = bounds.x + bounds.w / 2, cy = bounds.y + bounds.h / 2;
+  const map = (x: number, y: number) => {
+    const p = localToWorld(root, id, x, y);
+    return worldToLocal(root, id,
+      cx + (p.x - cx) * cos - (p.y - cy) * sin,
+      cy + (p.x - cx) * sin + (p.y - cy) * cos,
+    );
+  };
+  return transformSelectedVertices(network, indices, map);
+}
+
+/** Temporarily reposition selected points while Space is held during a point-
+ * box transform. Page-space deltas preserve behavior under nested transforms. */
+export function translatePointNetwork(
+  root: XNode, id: string, network: VectorNetwork, indices: number[], dx: number, dy: number,
+): VectorNetwork {
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return network;
+  const map = (x: number, y: number) => {
+    const p = localToWorld(root, id, x, y);
+    return worldToLocal(root, id, p.x + dx, p.y + dy);
+  };
+  return transformSelectedVertices(network, indices, map);
+}
+
+function transformSelectedVertices(
+  network: VectorNetwork,
+  indices: number[],
+  map: (x: number, y: number) => { x: number; y: number },
+): VectorNetwork {
+  const selected = new Set(indices);
+  const vertices = network.vertices.map((v, i) => selected.has(i) ? { ...v, ...map(v.x, v.y) } : { ...v });
+  const tangent = (index: number, t: { x: number; y: number } | undefined) => {
+    if (!t || !selected.has(index)) return t ? { ...t } : undefined;
+    const v = network.vertices[index], p = map(v.x + t.x, v.y + t.y);
+    return { x: p.x - vertices[index].x, y: p.y - vertices[index].y };
+  };
+  const segments = network.segments.map((s) => ({
+    ...s,
+    tangentStart: tangent(s.start, s.tangentStart),
+    tangentEnd: tangent(s.end, s.tangentEnd),
+  }));
   return { ...network, vertices, segments };
 }

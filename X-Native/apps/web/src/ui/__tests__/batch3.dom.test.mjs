@@ -150,21 +150,21 @@ for(const tool of ['select','scale']) for(const multi of [false,true]) {
 // A storage order different from the editable walk, plus a branch/region that
 // must not disappear. Four editable path points, one untouched branch endpoint.
 const net={vertices:[{x:100,y:100},{x:0,y:0},{x:200,y:50},{x:0,y:100},{x:100,y:0}],segments:[{start:1,end:4},{start:4,end:0},{start:0,end:3},{start:3,end:1},{start:4,end:2,tangentEnd:{x:10,y:5}}],regions:[{windingRule:'nonzero',loops:[[0,1,2,3]]}]};
-for(const [label, modifiers, expected] of [
-  ['free',{},[150,125,0,0]],['Shift',{shiftKey:true},[150,150,0,0]],
-  ['Alt',{altKey:true},[200,150,-50,-25]],['Alt+Shift',{altKey:true,shiftKey:true},[200,200,-50,-50]],
-  ['Command is not Option',{metaKey:true},[150,125,0,0]],
+for(const [label, modifiers, expected, handle, dx, dy] of [
+  ['free',{},[150,125,0,0],4,50,25],['Shift',{shiftKey:true},[150,150,-25,0],5,0,50],
+  ['Alt',{altKey:true},[200,150,-50,-25],4,50,25],['Alt+Shift',{altKey:true,shiftKey:true},[200,200,-50,-50],5,0,50],
+  ['Command is not Option',{metaKey:true},[150,125,0,0],4,50,25],
 ]) {
   const n=node('vector','Graph',100,100,200,100,{path:vectorNetworkToPath(net).path,closed:true,vectorNetwork:structuredClone(net)});
   const ui=await mount([n],[n.id]);
   await ui.dispatch({type:'setVecEdit',id:n.id,pointIndices:[0,1,2,3]});
   const root=ui.snap().pages[0].root;const box=pointBox(root,n.id,[0,1,2,3]);
   t(`${label}: editable points mapped to graph indices`,same(box.indices,[1,4,0,3]));
-  const [x,y]=pointBoxHandles(box.bounds,1)[4];
+  const [x,y]=pointBoxHandles(box.bounds,1)[handle];
   await ui.mouse('mousedown',x,y);
-  await ui.mouse('mousemove',x+20,y+10,modifiers);
-  await ui.mouse('mousemove',x+50,y+25,modifiers);
-  await ui.mouse('mouseup',x+50,y+25,modifiers);
+  await ui.mouse('mousemove',x+dx*.4,y+dy*.4,modifiers);
+  await ui.mouse('mousemove',x+dx,y+dy,modifiers);
+  await ui.mouse('mouseup',x+dx,y+dy,modifiers);
   const got=ui.node(n.id).vectorNetwork;
   const [w,h,minx,miny]=expected;
   t(`${label}: real point-box drag gives expected size and pivot`,near(got.vertices[0].x,minx+w)&&near(got.vertices[0].y,miny+h)&&near(got.vertices[1].x,minx)&&near(got.vertices[1].y,miny));
@@ -209,10 +209,11 @@ for(const path of [[{x:0,y:0},{x:0,y:100}],[{x:0,y:0},{x:100,y:0}],[{x:0,y:0},{x
 for(const zoom of [.5,2]) {
   const n=node('vector','Zoomed rotated points',100,100,100,100,{rotation:35,flipH:true,path:square,closed:true,vectorNetwork:pathToVectorNetwork(square,true)});
   const ui=await mount([n],[n.id],{zoom,panX:30,panY:20});await ui.dispatch({type:'setVecEdit',id:n.id,pointIndices:[0,1,2,3]});
-  const box=pointBox(ui.snap().pages[0].root,n.id,[0,1,2,3]);const [wx,wy]=pointBoxHandles(box.bounds,zoom)[4];const x=30+wx*zoom,y=20+wy*zoom;
-  await ui.mouse('mousedown',x,y);await ui.mouse('mousemove',x+25*zoom,y+10*zoom,{shiftKey:true,altKey:true});await ui.mouse('mouseup',x+25*zoom,y+10*zoom);
+  const box=pointBox(ui.snap().pages[0].root,n.id,[0,1,2,3]);const [wx,wy]=pointBoxHandles(box.bounds,zoom)[5];const x=30+wx*zoom,y=20+wy*zoom;
+  const dy=box.bounds.h*.125*zoom;
+  await ui.mouse('mousedown',x,y);await ui.mouse('mousemove',x,y+dy,{shiftKey:true,altKey:true});await ui.mouse('mouseup',x,y+dy);
   const next=pointBox(ui.snap().pages[0].root,n.id,[0,1,2,3]);
-  t(`mounted rotated/flipped zoom ${zoom}: centered proportional resize`,near(next.bounds.w,box.bounds.w+50)&&near(next.bounds.h,box.bounds.h+50)&&near(next.bounds.x,box.bounds.x-25)&&near(next.bounds.y,box.bounds.y-25));
+  t(`mounted rotated/flipped zoom ${zoom}: centered proportional edge resize`,near(next.bounds.w,box.bounds.w*1.25)&&near(next.bounds.h,box.bounds.h*1.25)&&near(next.bounds.x+next.bounds.w/2,box.bounds.x+box.bounds.w/2)&&near(next.bounds.y+next.bounds.h/2,box.bounds.y+box.bounds.h/2));
   await ui.close();
 }
 {

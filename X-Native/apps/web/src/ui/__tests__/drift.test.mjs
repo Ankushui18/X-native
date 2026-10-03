@@ -78,13 +78,16 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  models to replace the picker model button with a native select. Raised for
  *  Manage color profiles: two File-menu profile actions, two export-profile
   *  selectors, and the inline settings row that lays them out. Raised again
-  *  for Export static designs: one filename hover title on bulk-export thumbnails. */
+  *  for Export static designs: one filename hover title on bulk-export thumbnails.
+ *  Raised 2026-10-03 for vector-edit Lasso (Q): one native toolbar button and
+ *  its title tooltip make the newly added tool discoverable. */
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [11, 14, 12, 15, 1],
+  "Canvas.tsx": [11, 14, 13, 16, 1],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
-  "Dashboard.tsx": [1, 0, 11, 33, 1],
+  // Raised 2026-10-03 for the dev-only Rust WASM POC trigger (one named button).
+  "Dashboard.tsx": [1, 0, 12, 34, 1],
   "DialogHost.tsx": [0, 0, 1, 0, 0],
   "FigInspectorModal.tsx": [113, 10, 2, 8, 1],
   // Raised 2026-10-01 batch 21: add-stop (+) / remove-stop (−) buttons in the

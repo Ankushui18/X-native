@@ -33,6 +33,16 @@ export interface WasmDocumentSession {
   exportX: () => string;
   free: () => void;
 }
+export type WasmPocCommand = {
+  type: "createNode";
+  nodeType: "rect";
+  x: number;
+  y: number;
+};
+export interface WasmPocExports {
+  init_wasm_engine: () => unknown;
+  dispatch_command: (command: WasmPocCommand) => unknown;
+}
 export interface WasmImportModule {
   default: () => Promise<unknown>;
   bridgeVersion: () => number;
@@ -40,6 +50,10 @@ export interface WasmImportModule {
   importFigToX: (bytes: Uint8Array) => string;
   importSketchToX: (bytes: Uint8Array) => string;
   importSvgToX: (text: string) => string;
+  /** Optional Phase 1 object/serde command proof. Older deployed artifacts
+   * remain valid for imports and sessions without these two exports. */
+  init_wasm_engine?: () => unknown;
+  dispatch_command?: (command: WasmPocCommand) => unknown;
   /** Optional independently versioned command/session slice. Older import
    * artifacts still work; they simply cannot open a Rust command session. */
   sessionBridgeVersion?: () => number;
@@ -121,6 +135,19 @@ export function rustSessionConstructor(): WasmImportModule["RustDocumentSession"
     // A broken optional session export must not disable the import-only bridge.
     return undefined;
   }
+}
+
+export function wasmPocExports(): WasmPocExports | undefined {
+  const glue = loaded;
+  if (
+    !glue ||
+    typeof glue.init_wasm_engine !== "function" ||
+    typeof glue.dispatch_command !== "function"
+  ) return undefined;
+  return {
+    init_wasm_engine: glue.init_wasm_engine,
+    dispatch_command: glue.dispatch_command,
+  };
 }
 
 export function getEngineInfo(): EngineInfo {

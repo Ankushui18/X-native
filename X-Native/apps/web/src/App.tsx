@@ -32,6 +32,7 @@ import { Dashboard } from "./ui/Dashboard";
 import { DEMO_ID, createFile, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
 import { initWasmBridge } from "./engine/wasmBridge";
+import { WasmEngine } from "./engine/WasmEngine";
 import { preloadGeo } from "./engine/geoBridge";
 import { decideRouteChange, readRoute } from "./ui/fileRoute";
 import { RustDocumentView, type RustPreviewOwner } from "./ui/RustDocumentView";
@@ -144,6 +145,19 @@ export default function App() {
     };
   }, [route]);
 
+  const runWasmPoc = useCallback(async () => {
+    try {
+      const wasmEngine = await WasmEngine.initialize();
+      const state = wasmEngine.createRectangle(100, 100);
+      console.log("[X-Native] Rust WASM DocumentState:", state);
+      toastMsg("Rust WASM created a rectangle · state logged to Console");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[X-Native] Rust WASM proof of concept failed:", error);
+      toastMsg(`Rust WASM POC unavailable · ${message}`);
+    }
+  }, []);
+
   if (route.view === "file") {
     if (seed && seed.id === route.id && seed.rust === route.rust && seed.missing) {
       return (
@@ -191,7 +205,12 @@ export default function App() {
       />
     );
   }
-  return <Dashboard onOpen={(id) => (window.location.hash = `#/file/${encodeURIComponent(id)}`)} />;
+  return (
+    <Dashboard
+      onOpen={(id) => (window.location.hash = `#/file/${encodeURIComponent(id)}`)}
+      onRunWasmPoc={() => { void runWasmPoc(); }}
+    />
+  );
 }
 
 /** A file link, narrowed to one layer when exactly one is selected, so the

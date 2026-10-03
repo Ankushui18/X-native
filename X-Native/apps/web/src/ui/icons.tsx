@@ -69,6 +69,7 @@ import {
   Info,
   Italic,
   Layers,
+  Lasso,
   LayoutGrid,
   LayoutList,
   LayoutTemplate,
@@ -293,6 +294,7 @@ export type IconName =
   | "join-miter"
   | "join-round"
   | "layers"
+  | "lasso"
   | "layout"
   | "layout-grid"
   | "layout-h"
@@ -493,6 +495,7 @@ const GLYPH: Record<Exclude<IconName, "logo">, LucideIcon> = {
   "join-miter": Square,
   "join-round": CornerDownRight,
   "layers": Layers,
+  "lasso": Lasso,
   "layout": LayoutTemplate,
   "layout-grid": Grid2x2,
   "layout-h": Columns2,

@@ -726,6 +726,24 @@ corner radius, paint toggle, eraser, multi-point bbox, corner smooth toggle).
 - Per-point caps inside edit mode beyond the node's start/end pair (same
   thing for every 2-endpoint path).
 
+### Follow-up re-audit — 2026-10-03
+
+The deferrals above are historical for the 2026-09-26 audit date; current
+source and later batches supersede several of them:
+
+- The multi-point point box gained eight topology-preserving resize handles in
+  Batch 3 (2026-09-27). Draft PR #58 adds Shift-corner rotation (15° snap),
+  Alt-centered resize, proportional Shift-edge resize, and Space reposition.
+- Vector-edit Lasso is no longer absent: Q and the toolbar activate the
+  freeform point/path selection gesture; Shift adds, Alt subtracts, and Escape
+  exits the sub-tool before leaving point edit.
+- Cut (X) is already implemented in the current Canvas and has a focused test
+  suite; the old “Cut absent” statement is stale.
+- Still open: vector-edit Eraser, Variable-width subtool, per-point caps beyond
+  start/end, branch-only network-point selection in the Lasso, and exact native
+  path-selection semantics. See `docs/VECTOR_EDIT_FIGMA_PARITY_2026-10-03.md`
+  for the direct comparison, test coverage, and caveats.
+
 ## §16 — Layers / structure
 
 Evidence: Figma “Lock and unlock layers” (⇧⌘L, inheritance, panel

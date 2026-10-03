@@ -134,10 +134,11 @@ jobs:
           cache: npm
           cache-dependency-path: X-Native/apps/web/package-lock.json
 
-      - name: Package both WASM bridges (matching bindgen glue)
+      - name: Package both WASM bridges (wasm-pack and matching bindgen glue)
         id: package-wasm
         run: |
           rustup target add wasm32-unknown-unknown --toolchain 1.98.1
+          cargo install wasm-pack --version 0.15.0 --locked
           cargo install wasm-bindgen-cli --version 0.2.127 --locked
           bash scripts/build-wasm.sh
 
