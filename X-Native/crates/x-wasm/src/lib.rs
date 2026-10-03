@@ -13,7 +13,121 @@
 
 pub mod session;
 
+use serde::{Deserialize, Serialize};
+use x_core::{Color, Node};
+use x_editor::Editor;
 use x_format::{figbinary, serialize::save_x, sketch, svg_import};
+
+/// One command in the foundation WASM proof of concept. The tagged Serde shape
+/// is a JS object (`{ type: "createNode", nodeType: "rect", x, y }`), not a
+/// JSON string. This is intentionally much smaller than the production editor
+/// command vocabulary.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum Command {
+    #[serde(rename = "createNode")]
+    CreateNode {
+        #[serde(rename = "nodeType")]
+        node_type: String,
+        x: f64,
+        y: f64,
+    },
+}
+
+/// Small renderable document projection returned by the WASM POC.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentState {
+    pub revision: u32,
+    pub can_undo: bool,
+    pub nodes: Vec<NodeSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeSnapshot {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// Host-testable proof-of-concept owner of an x-editor Editor. Production web
+/// documents continue to use the established, separately admitted session.
+pub struct PocEngine {
+    editor: Editor,
+    revision: u32,
+    next_id: u32,
+}
+
+impl PocEngine {
+    pub fn new() -> Self {
+        Self {
+            editor: Editor::new(Node::frame("wasm-poc-page", 1200.0, 800.0)),
+            revision: 0,
+            next_id: 1,
+        }
+    }
+
+    pub fn snapshot(&self) -> DocumentState {
+        DocumentState {
+            revision: self.revision,
+            can_undo: self.editor.undo_depth() > 0,
+            nodes: self
+                .editor
+                .root
+                .children
+                .iter()
+                .map(|node| NodeSnapshot {
+                    id: node.id.clone(),
+                    name: node.name.clone(),
+                    kind: "rect".into(),
+                    x: node.transform.x,
+                    y: node.transform.y,
+                    w: node.w,
+                    h: node.h,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn dispatch_command(&mut self, command: Command) -> Result<DocumentState, String> {
+        let Command::CreateNode { node_type, x, y } = command;
+        if node_type != "rect" && node_type != "rectangle" {
+            return Err("the WASM POC currently creates rectangle nodes only".into());
+        }
+        if !x.is_finite() || !y.is_finite() {
+            return Err("rectangle coordinates must be finite numbers".into());
+        }
+        let next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or("WASM POC rectangle id limit reached")?;
+        let revision = self
+            .revision
+            .checked_add(1)
+            .ok_or("WASM POC revision limit reached")?;
+        let id = format!("wasm-poc-rect-{}", self.next_id);
+        let mut rectangle = Node::rect(&id, x, y, 100.0, 80.0, Color::BLACK);
+        rectangle.name = format!("Rectangle {}", self.next_id);
+        let page_id = self.editor.root.id.clone();
+        if !self.editor.insert_node(&page_id, rectangle) {
+            return Err("Rust editor rejected the rectangle command".into());
+        }
+        self.next_id = next_id;
+        self.revision = revision;
+        Ok(self.snapshot())
+    }
+}
+
+impl Default for PocEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Result of an import, as a small JSON envelope.
 ///
@@ -131,10 +245,44 @@ pub fn engine_version() -> String {
 // shared command session. Native `cargo test` does not need wasm-bindgen.
 #[cfg(target_arch = "wasm32")]
 mod bindings {
+    use std::cell::RefCell;
+
     use wasm_bindgen::prelude::*;
+
+    thread_local! {
+        /// Isolated test engine; it never shares the production import or
+        /// RustDocumentSession state.
+        static POC_ENGINE: RefCell<Option<super::PocEngine>> = const { RefCell::new(None) };
+    }
 
     fn js_error(error: String) -> JsValue {
         JsValue::from_str(&error)
+    }
+
+    /// Start the isolated Phase 1 POC and return its initial typed snapshot.
+    #[wasm_bindgen(js_name = init_wasm_engine)]
+    pub fn init_wasm_engine() -> Result<JsValue, JsValue> {
+        let state = POC_ENGINE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            *slot = Some(super::PocEngine::new());
+            slot.as_ref().expect("POC engine was just initialized").snapshot()
+        });
+        serde_wasm_bindgen::to_value(&state).map_err(|error| js_error(error.to_string()))
+    }
+
+    /// Dispatch one Serde-tagged JS object and return the new Rust snapshot.
+    #[wasm_bindgen(js_name = dispatch_command)]
+    pub fn dispatch_command(command: JsValue) -> Result<JsValue, JsValue> {
+        let command = serde_wasm_bindgen::from_value(command)
+            .map_err(|error| js_error(format!("Invalid WASM POC command: {error}")))?;
+        let state = POC_ENGINE.with(|slot| -> Result<super::DocumentState, JsValue> {
+            let mut slot = slot.borrow_mut();
+            let engine = slot.as_mut().ok_or_else(|| {
+                js_error("Call init_wasm_engine() before dispatch_command()".into())
+            })?;
+            engine.dispatch_command(command).map_err(js_error)
+        })?;
+        serde_wasm_bindgen::to_value(&state).map_err(|error| js_error(error.to_string()))
     }
 
     /// Independently versioned command session. V3 added Booleans, V4 added
@@ -477,6 +625,58 @@ mod tests {
         )))
         .unwrap();
         assert!(sketch.get("figmaEffects").is_none());
+    }
+
+    #[test]
+    fn poc_engine_accepts_a_typed_create_rectangle_command() {
+        let command: Command = serde_json::from_value(serde_json::json!({
+            "type": "createNode",
+            "nodeType": "rect",
+            "x": 100.0,
+            "y": 100.0
+        }))
+        .unwrap();
+        let mut engine = PocEngine::new();
+        let initial = engine.snapshot();
+        assert_eq!(initial.revision, 0);
+        assert!(initial.nodes.is_empty());
+        assert!(!initial.can_undo);
+
+        let state = engine.dispatch_command(command).unwrap();
+        assert_eq!(state.revision, 1);
+        assert!(state.can_undo);
+        assert_eq!(state.nodes.len(), 1);
+        assert_eq!(state.nodes[0].id, "wasm-poc-rect-1");
+        assert_eq!(state.nodes[0].name, "Rectangle 1");
+        assert_eq!(state.nodes[0].kind, "rect");
+        assert_eq!((state.nodes[0].x, state.nodes[0].y), (100.0, 100.0));
+        assert_eq!((state.nodes[0].w, state.nodes[0].h), (100.0, 80.0));
+
+        let value = serde_json::to_value(&state).unwrap();
+        assert_eq!(value["canUndo"].as_bool(), Some(true));
+        assert_eq!(value["nodes"][0]["kind"], "rect");
+        assert_eq!(value["nodes"][0]["w"], 100.0);
+    }
+
+    #[test]
+    fn poc_engine_rejects_unknown_types_and_non_finite_coordinates_without_mutating() {
+        let mut engine = PocEngine::new();
+        assert!(engine
+            .dispatch_command(Command::CreateNode {
+                node_type: "ellipse".into(),
+                x: 0.0,
+                y: 0.0,
+            })
+            .is_err());
+        assert!(engine
+            .dispatch_command(Command::CreateNode {
+                node_type: "rect".into(),
+                x: f64::NAN,
+                y: 0.0,
+            })
+            .is_err());
+        assert_eq!(engine.snapshot().revision, 0);
+        assert!(engine.snapshot().nodes.is_empty());
     }
 
     #[test]

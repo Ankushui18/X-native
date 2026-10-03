@@ -49,7 +49,13 @@ const VIEWS: { id: View; label: string; icon: IconName }[] = [
   { id: "trash", label: "Trash", icon: "trash" },
 ];
 
-export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
+export function Dashboard({
+  onOpen,
+  onRunWasmPoc,
+}: {
+  onOpen: (id: string) => void;
+  onRunWasmPoc?: () => void;
+}) {
   const [view, setView] = useState<View>("recents");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("recent");
@@ -391,6 +397,17 @@ export function Dashboard({ onOpen }: { onOpen: (id: string) => void }) {
         </div>
         <div className="dash-top-r">
           {busy && <span className="dash-busy">{busy}</span>}
+          {import.meta.env.DEV && onRunWasmPoc && (
+            <button
+              type="button"
+              className="wasm-poc-btn"
+              title="Create a rectangle in Rust WASM and log the returned document state"
+              aria-label="Run Rust WASM proof of concept"
+              onClick={onRunWasmPoc}
+            >
+              WASM POC
+            </button>
+          )}
           <Tooltip label="Help" shortcut="?">
             <button
               className="icon-btn"

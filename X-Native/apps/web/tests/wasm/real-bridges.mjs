@@ -42,6 +42,20 @@ assert.equal(await initWasmBridge(async () => ({ ...glue,
 assert.equal(getEngineInfo().hasWasm, true);
 assert.equal(glue.bridgeVersion(), 1);
 assert.match(glue.engineVersion(), /^x-wasm /);
+// Exercise the new object-shaped Serde API against the generated module, not a
+// mock or JSON string, before testing the existing import/session boundaries.
+const pocInitial = glue.init_wasm_engine();
+assert.deepEqual(
+  { revision: pocInitial.revision, canUndo: pocInitial.canUndo, nodes: pocInitial.nodes },
+  { revision: 0, canUndo: false, nodes: [] },
+);
+const pocCreated = glue.dispatch_command({ type: "createNode", nodeType: "rect", x: 100, y: 100 });
+assert.equal(pocCreated.revision, 1);
+assert.equal(pocCreated.canUndo, true);
+assert.deepEqual(pocCreated.nodes, [{
+  id: "wasm-poc-rect-1", name: "Rectangle 1", kind: "rect", x: 100, y: 100, w: 100, h: 80,
+}]);
+console.log("PASS real typed WASM command POC: JS object -> Rust rectangle -> JS snapshot");
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect id="λ-box" x="10" y="10" width="80" height="50" fill="#ff0000"/></svg>';
 const imported = decodeRustImport(glue.importSvgToX(svg));
 assert.ok(imported.nodes.length > 0, "native pages are direct nodes, not Page.root");

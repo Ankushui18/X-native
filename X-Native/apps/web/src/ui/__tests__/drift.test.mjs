@@ -86,7 +86,8 @@ const CEILING = {
   "Canvas.tsx": [11, 14, 13, 16, 1],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
-  "Dashboard.tsx": [1, 0, 11, 33, 1],
+  // Raised 2026-10-03 for the dev-only Rust WASM POC trigger (one named button).
+  "Dashboard.tsx": [1, 0, 12, 34, 1],
   "DialogHost.tsx": [0, 0, 1, 0, 0],
   "FigInspectorModal.tsx": [113, 10, 2, 8, 1],
   // Raised 2026-10-01 batch 21: add-stop (+) / remove-stop (−) buttons in the
