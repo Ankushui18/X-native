@@ -24,6 +24,7 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-pack --version 0.15.0 --locked
 cargo install wasm-bindgen-cli --version 0.2.127 --locked
 cd apps/web
+npm ci
 npm run wasm:build
 npm run dev
 ```
@@ -37,7 +38,9 @@ From `X-Native`:
 ```sh
 cargo test --locked -p x-wasm
 cd apps/web
-npm run test:wasm  # real generated WASM bridge; run after npm run wasm:build
+npm ci
+npm run wasm:build
+npm run test:wasm  # real generated WASM bridge; run after packaging
 npm test            # full web suite
 npm run build       # TypeScript check and production bundle
 ```
