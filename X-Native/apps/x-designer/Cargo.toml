@@ -1,0 +1,38 @@
+[package]
+name = "x-designer"
+version = "0.34.0"
+edition = "2021"
+
+[[bin]]
+name = "render_headless"
+path = "src/bin/render_headless.rs"
+
+[[bin]]
+name = "x_native"
+path = "src/bin/x_native.rs"
+
+[[bin]]
+name = "type_proof"
+path = "src/bin/type_proof.rs"
+
+[[bin]]
+name = "export_regression"
+path = "src/bin/export_regression.rs"
+
+[[bin]]
+name = "bench_scale"
+path = "src/bin/bench_scale.rs"
+
+[[bin]]
+name = "mklib"
+path = "src/bin/mklib.rs"
+
+[dependencies]
+x-native = { path = "../../crates/x-native" }
+vello = "0.10"
+wgpu = "29"
+pollster = "1.0.1"
+png = "0.18.1"
+
+[lints]
+workspace = true

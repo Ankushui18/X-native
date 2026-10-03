@@ -1,0 +1,681 @@
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import type { Engine, Interaction, ProtoDevice, Snapshot, XNode } from "../engine/types";
+import { find, worldPos } from "../engine/memory";
+import { evaluateExpression } from "../engine/expressions";
+import { checkCondition } from "../engine/protoEval";
+import { resolveAllForMode, resolveVariable } from "../engine/variables";
+import { useReducedMotion } from "./a11y";
+import { Icon, rowIconSize } from "./icons";
+import { DEVICE_GROUPS, DeviceShell, deviceBox, deviceFor } from "./devices";
+
+// Web Audio API synthesizer for tactile prototype sound feedback
+let audioCtx: AudioContext | null = null;
+function playTapSound(freq = 750, duration = 0.04) {
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(180, audioCtx.currentTime + duration);
+
+    gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  } catch {
+    // Ignore audio context autoplay restrictions
+  }
+}
+
+interface HotspotBox {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  interactions: Interaction[];
+}
+
+interface FormFieldItem {
+  id: string;
+  name: string;
+  kind: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text?: string;
+  isToggle?: boolean;
+}
+
+export function PresentationPlayer({
+  engine,
+  snap,
+  onExit,
+  onInteraction,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onExit: () => void;
+  onInteraction?: (ix: Interaction, sourceId?: string) => void;
+}) {
+  const root = snap.pages[snap.page].root;
+  const presentNode = snap.presentFrame ? find(root, snap.presentFrame) : null;
+  const wp = presentNode ? worldPos(root, presentNode.id) : null;
+
+  // Local live form inputs state (nodeId -> typed value)
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [toggleValues, setToggleValues] = useState<Record<string, boolean>>({});
+
+  // Hotspot pulse & ripple
+  const [hotspotPulse, setHotspotPulse] = useState(false);
+  const [ripples, setRipples] = useState<{ id: number; x: number; y: number }[]>([]);
+
+  // Dock auto-hide
+  const [dockVisible, setDockVisible] = useState(true);
+  const dockTimeout = useRef<number | null>(null);
+
+  // Device & scale preferences
+  const device = snap.prototypeDevice ?? "none";
+  // §23 PT-008: default off — hints flash on a missed click (Figma), they
+  // are not painted over every hotspot until H says otherwise.
+  const hotspotsActive = snap.prototypeHotspots ?? false;
+  const liveInputsActive = snap.prototypeLiveInputs ?? true;
+  const soundActive = snap.prototypeSound ?? true;
+  const scaleMode = snap.prototypeScale ?? "fit";
+
+  // The frames the player can actually page through. `presentGo` lands on the
+  // outermost frame that contains the destination (§23 PT-002), so a frame
+  // nested inside another frame can never be the stage — listing it made the
+  // pager advertise a step that went nowhere and quietly grew the back history
+  // without moving (paging past the phone frame in the sample file landed on
+  // "2. Card" and stayed put). The frame being presented right now is kept in
+  // the list either way, so presenting a nested frame still shows where the
+  // presentation is.
+  const allFrames = useMemo(() => {
+    const list: XNode[] = [];
+    const walk = (n: XNode, underFrame: boolean) => {
+      for (const ch of n.children) {
+        const isFrame = ch.kind === "frame";
+        if (isFrame && (!underFrame || ch.id === snap.presentFrame)) list.push(ch);
+        walk(ch, underFrame || isFrame);
+      }
+    };
+    walk(root, false);
+    return list;
+  }, [root, snap.presentFrame]);
+
+  // Current frame index
+  const curIndex = allFrames.findIndex((f) => f.id === snap.presentFrame);
+  // §23 PT-007: "back" exists whenever history does, even at pager index 0.
+  const canGoPrev = snap.presentStack.length > 1 || curIndex > 0;
+
+  // Collect clickable hotspots inside active frame
+  const hotspots = useMemo(() => {
+    if (!presentNode) return [];
+    const list: HotspotBox[] = [];
+    const collect = (n: XNode, px: number, py: number) => {
+      const x = px + n.x;
+      const y = py + n.y;
+      const ixList = (n.interactions ?? []).filter((i) => i.trigger === "onClick");
+      if (ixList.length) {
+        list.push({ id: n.id, name: n.name, x, y, w: n.w, h: n.h, interactions: ixList });
+      }
+      for (const ch of n.children) collect(ch, x, y);
+    };
+    for (const ch of presentNode.children) collect(ch, 0, 0);
+    return list;
+  }, [presentNode]);
+
+  // Collect interactive text/form fields
+  const formFields = useMemo(() => {
+    if (!presentNode || !liveInputsActive) return [];
+    const list: FormFieldItem[] = [];
+    const isInputName = (name: string) =>
+      /input|field|search|email|password|text|form|comment/i.test(name);
+    const isToggleName = (name: string) => /switch|toggle|checkbox|check/i.test(name);
+
+    const collect = (n: XNode, px: number, py: number) => {
+      const x = px + n.x;
+      const y = py + n.y;
+      if (isToggleName(n.name)) {
+        list.push({ id: n.id, name: n.name, kind: n.kind, x, y, w: n.w, h: n.h, isToggle: true });
+      } else if (n.kind === "text" && (isInputName(n.name) || n.text?.startsWith("Enter ") || n.text?.startsWith("Search"))) {
+        list.push({ id: n.id, name: n.name, kind: n.kind, x, y, w: n.w, h: n.h, text: n.text });
+      } else if (isInputName(n.name) && n.children.length === 0) {
+        list.push({ id: n.id, name: n.name, kind: n.kind, x, y, w: n.w, h: n.h });
+      }
+      for (const ch of n.children) collect(ch, x, y);
+    };
+    for (const ch of presentNode.children) collect(ch, 0, 0);
+    return list;
+  }, [presentNode, liveInputsActive]);
+
+  const spec = deviceFor(device);
+
+  // Fit the device — shell and safe-area bands included — into the viewport, and
+  // shift the design down inside the glass so the status bar does not land on
+  // top of the design's first line. The engine only knows the frame's own rect.
+  useEffect(() => {
+    if (!presentNode) return;
+    const box = deviceBox(spec, presentNode.w, presentNode.h);
+    const mode = snap.prototypeScale ?? "fit";
+    const vw = window.innerWidth;
+    const vh = Math.max(240, window.innerHeight - 150);
+    const z =
+      mode === "100%"
+        ? 1
+        : mode === "fill"
+          ? Math.max(vw / box.w, (vh + 200) / box.h)
+          : Math.min(1, Math.min((vw - 80) / box.w, vh / box.h));
+    engine.dispatch({ type: "setZoom", zoom: z });
+    engine.dispatch({
+      type: "setPan",
+      x: Math.round((vw - box.w * z) / 2 + box.bezShift * z - (wp?.x ?? 0) * z),
+      y: Math.round((vh - box.glassH * z) / 2 - ((wp?.y ?? 0) - box.pad.top) * z),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [device, snap.presentFrame, snap.prototypeScale, snap.prototypeOrientation]);
+
+  // Screen coordinates of present frame
+  const z = snap.zoom;
+  const frameX = wp ? snap.panX + wp.x * z : 0;
+  const frameY = wp ? snap.panY + wp.y * z : 0;
+  const frameW = presentNode ? presentNode.w * z : 0;
+  const frameH = presentNode ? presentNode.h * z : 0;
+
+  // Handle missed click -> pulse hotspots and trigger ripple
+  const reducedMotion = useReducedMotion();
+  const handleMissedClick = useCallback((e: React.MouseEvent) => {
+    if (soundActive) playTapSound(320, 0.03);
+    if (reducedMotion) return;
+    const newRipple = { id: Date.now(), x: e.clientX, y: e.clientY };
+    setRipples((prev) => [...prev, newRipple]);
+    setTimeout(() => {
+      setRipples((prev) => prev.filter((r) => r.id !== newRipple.id));
+    }, 600);
+
+    setHotspotPulse(true);
+    setTimeout(() => setHotspotPulse(false), 550);
+  }, [soundActive, reducedMotion]);
+
+  // Execute hotspot interaction
+  const triggerHotspot = useCallback((h: { id: string; interactions: Interaction[] }) => {
+    if (soundActive) playTapSound(880, 0.05);
+    for (const ix of h.interactions) {
+    // Conditions gate hotspot runs the same as canvas runs.
+    if (ix.condition && !checkCondition(snap.variables ?? [], snap.variableCollections ?? [], snap.activeModes ?? {}, ix.condition)) continue;
+    if (onInteraction) {
+      onInteraction(ix, h.id);
+      continue;
+    }
+    if (ix.action === "back") {
+      engine.dispatch({ type: "presentBack" });
+    } else if (ix.action === "navigate" && ix.destination) {
+      engine.dispatch({ type: "presentGo", id: ix.destination });
+    } else if (ix.action === "openOverlay" && ix.destination) {
+      engine.dispatch({
+        type: "openOverlay",
+        id: ix.destination,
+        position: ix.overlayPosition || "center",
+        closeOutside: ix.overlayCloseOutside !== false,
+        backdrop: ix.overlayBackdrop !== false,
+        backdropColor: ix.overlayBackdropColor,
+      });
+    } else if (ix.action === "closeOverlay") {
+      engine.dispatch({ type: "closeOverlay" });
+    } else if (ix.action === "scrollTo" && ix.destination) {
+      // §23 PT-018: the no-runner fallback now covers every action the panel
+      // can author (scroll/swap/mode were silently dropped here).
+      const s = engine.snapshot();
+      const target = worldPos(s.pages[s.page].root, ix.destination);
+      if (target) {
+        engine.dispatch({
+          type: "setPan",
+          x: -target.x * s.zoom + 120,
+          y: -target.y * s.zoom + 120,
+        });
+      }
+    } else if (ix.action === "swapOverlay" && ix.destination) {
+      const open = engine.snapshot().activeOverlay;
+      if (!open) {
+        engine.dispatch({ type: "presentGo", id: ix.destination });
+      } else {
+        engine.dispatch({
+          type: "openOverlay",
+          id: ix.destination,
+          position: open.position,
+          closeOutside: open.closeOutside,
+          backdrop: open.backdrop,
+          backdropColor: open.backdropColor,
+        });
+      }
+    } else if (ix.action === "setVariableMode" && ix.variableCollectionId && ix.variableModeId) {
+      engine.dispatch({ type: "setActiveMode", collectionId: ix.variableCollectionId, modeId: ix.variableModeId });
+    } else if (ix.action === "openUrl" && ix.destination) {
+      const url = /^https?:\/\//i.test(ix.destination) ? ix.destination : `https://${ix.destination}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    } else if (ix.action === "setVariable" && ix.variableId) {
+      const vars = snap.variables ?? [];
+      const cur = resolveVariable(vars, snap.variableCollections ?? [], snap.activeModes ?? {}, ix.variableId);
+      if (cur && !cur.broken) {
+        let nextVal: string | number | boolean = ix.variableValue !== undefined ? ix.variableValue : cur.value;
+        if (typeof nextVal === "string" && nextVal.startsWith("=")) {
+          const res = evaluateExpression(nextVal.slice(1), {
+            vars: resolveAllForMode(vars, snap.variableCollections ?? [], snap.activeModes ?? {}),
+          });
+          if (!res.error && res.value !== undefined) {
+            nextVal = res.value;
+          }
+        }
+        if (ix.variableOp === "increment" && typeof cur.value === "number") nextVal = cur.value + 1;
+        else if (ix.variableOp === "decrement" && typeof cur.value === "number") nextVal = cur.value - 1;
+        else if (ix.variableOp === "toggle" && typeof cur.value === "boolean") nextVal = !cur.value;
+        engine.dispatch({ type: "patchVariable", id: ix.variableId, patch: { value: nextVal } });
+      }
+    } else if (ix.action === "setVariant" && ix.variantName) {
+      engine.dispatch({ type: "setVariant", id: h.id, name: ix.variantName });
+    }
+    }
+  }, [engine, snap.variables, snap.variableCollections, snap.activeModes, soundActive]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+      // PM-U3: Escape belongs to the one cascade, which already runs this exact
+      // three-way branch (activeOverlay → presentBack → exit) through App's
+      // onPresentExit and now consumes the press. Answering it here as well is
+      // what made a single Escape walk back two frames: this listener is in the
+      // bubble phase, so it ran after the capture-phase one with the same stale
+      // snapshot and dispatched presentBack a second time.
+      if (e.key === "Escape") return;
+      if (e.key === "ArrowLeft" || e.key === "Backspace") {
+        // §23 PT-007: back walks history first (Figma); doc order only when
+        // there is no history. (Going back used to push a NEW visit.)
+        if (snap.presentStack.length > 1) {
+          engine.dispatch({ type: "presentBack" });
+        } else if (curIndex > 0) {
+          const target = allFrames[curIndex - 1];
+          if (onInteraction) {
+            onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
+          } else {
+            engine.dispatch({ type: "presentGo", id: target.id });
+          }
+        }
+      } else if (e.key === "ArrowRight" || e.key === " ") {
+        if (curIndex < allFrames.length - 1) {
+          const target = allFrames[curIndex + 1];
+          if (onInteraction) {
+            onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
+          } else {
+            engine.dispatch({ type: "presentGo", id: target.id });
+          }
+        }
+      } else if (e.key.toLowerCase() === "r") {
+        engine.dispatch({ type: "presentStart" });
+      } else if (e.key.toLowerCase() === "h") {
+        engine.dispatch({ type: "togglePrototypeHotspots" });
+      } else if (e.key.toLowerCase() === "i") {
+        engine.dispatch({ type: "togglePrototypeLiveInputs" });
+      } else if (e.key.toLowerCase() === "m") {
+        engine.dispatch({ type: "togglePrototypeSound" });
+      } else if (e.key.toLowerCase() === "f") {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+      } else if (e.key.toLowerCase() === "z") {
+        // §23 PT-015: Z cycles the scale options (Figma).
+        const order = ["fit", "100%", "fill"] as const;
+        const next = order[(order.indexOf(scaleMode) + 1) % order.length];
+        engine.dispatch({ type: "setPrototypeScale", scale: next });
+      } else if (e.key.toLowerCase() === "n") {
+        // §23 PT-015: N advances one frame (Figma).
+        if (curIndex < allFrames.length - 1) {
+          const target = allFrames[curIndex + 1];
+          if (onInteraction) {
+            onInteraction({ trigger: "onClick", action: "navigate", destination: target.id, animation: "smart", delay: 0 });
+          } else {
+            engine.dispatch({ type: "presentGo", id: target.id });
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [snap, curIndex, allFrames, engine, onExit]);
+
+  // Dock mouse activity listener
+  const showDockTemporarily = useCallback(() => {
+    setDockVisible(true);
+    if (dockTimeout.current) clearTimeout(dockTimeout.current);
+    dockTimeout.current = window.setTimeout(() => setDockVisible(false), 3500);
+  }, []);
+
+  useEffect(() => {
+    showDockTemporarily();
+    return () => {
+      if (dockTimeout.current) clearTimeout(dockTimeout.current);
+    };
+  }, [showDockTemporarily]);
+
+  if (!presentNode) return null;
+
+  return (
+    <div className="prototype-player-layer" onMouseMove={showDockTemporarily} onClick={handleMissedClick}>
+      {/* Click ripple animations */}
+      {ripples.map((r) => (
+        <div
+          key={r.id}
+          style={{
+            position: "absolute",
+            left: r.x - 24,
+            top: r.y - 24,
+            width: 48,
+            height: 48,
+            borderRadius: "50%",
+            border: "2px solid var(--accent)",
+            background: "var(--accent-wash)",
+            pointerEvents: "none",
+            animation: "proto-ripple 0.5s ease-out forwards",
+          }}
+        />
+      ))}
+
+      {/* Device mockup: the shell is derived from the frame's own rect, so any
+          frame size lands in a plausible device instead of a floating rectangle. */}
+      {spec && <DeviceShell spec={spec} x={frameX} y={frameY} w={frameW} h={frameH} />}
+
+      {/* Interactive Form Fields Overlay */}
+      {liveInputsActive &&
+        formFields.map((f) => {
+          const sx = frameX + f.x * z;
+          const sy = frameY + f.y * z;
+          const sw = f.w * z;
+          const sh = f.h * z;
+          if (f.isToggle) {
+            const isChecked = toggleValues[f.id] ?? false;
+            return (
+              <div
+                key={f.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (soundActive) playTapSound(920, 0.04);
+                  setToggleValues((prev) => ({ ...prev, [f.id]: !isChecked }));
+                }}
+                title="Click to toggle"
+                style={{
+                  position: "absolute",
+                  left: sx,
+                  top: sy,
+                  width: sw,
+                  height: sh,
+                  cursor: "pointer",
+                  zIndex: 44,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: isChecked ? "flex-end" : "flex-start",
+                  padding: 2,
+                  boxSizing: "border-box",
+                }}
+              >
+                <div
+                  style={{
+                    width: Math.min(sw / 2, sh - 4),
+                    height: Math.min(sw / 2, sh - 4),
+                    borderRadius: "50%",
+                    background: isChecked ? "var(--accent)" : "var(--dim)",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                    transition: "all 0.15s ease",
+                  }}
+                />
+              </div>
+            );
+          }
+          return (
+            <input
+              key={f.id}
+              type="text"
+              placeholder={f.text || "Type here…"}
+              value={formValues[f.id] !== undefined ? formValues[f.id] : f.text || ""}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const val = e.target.value;
+                setFormValues((prev) => ({ ...prev, [f.id]: val }));
+                engine.dispatch({ type: "patch", id: f.id, patch: { text: val } });
+              }}
+              style={{
+                position: "absolute",
+                left: sx,
+                top: sy,
+                width: sw,
+                height: sh,
+                background: "transparent",
+                border: "1px dashed rgba(13, 153, 255, 0.35)",
+                borderRadius: 4,
+                color: "inherit",
+                fontSize: Math.max(10, 13 * z),
+                fontFamily: "Inter, system-ui",
+                padding: "0 8px",
+                outline: "none",
+                zIndex: 44,
+                boxSizing: "border-box",
+              }}
+            />
+          );
+        })}
+
+      {/* Interactive Hotspot Targets */}
+      {hotspots.map((h) => {
+        const sx = frameX + h.x * z;
+        const sy = frameY + h.y * z;
+        const sw = h.w * z;
+        const sh = h.h * z;
+        const isGlowing = hotspotPulse || (hotspotsActive && !snap.activeOverlay);
+        return (
+          <div
+            key={h.id}
+            onClick={(e) => {
+              e.stopPropagation();
+              triggerHotspot(h);
+            }}
+            title={`${h.name} (${h.interactions[0]?.action ?? "tap"})`}
+            style={{
+              position: "absolute",
+              left: sx,
+              top: sy,
+              width: sw,
+              height: sh,
+              cursor: "pointer",
+              zIndex: 43,
+              borderRadius: 6 * z,
+              border: isGlowing ? "2px solid var(--accent)" : "1px solid transparent",
+              background: isGlowing ? "var(--accent-wash)" : "transparent",
+              boxShadow: isGlowing ? "0 0 12px rgba(13, 153, 255, 0.45)" : "none",
+              transition: "border 0.2s, background 0.2s, box-shadow 0.2s",
+            }}
+          />
+        );
+      })}
+
+      {/* Presentation control dock. Every control used to be styled inline
+          with its own literal colours, so the player was the one surface in the
+          product that no token reached; `.player-dock` owns the stage's
+          palette and the classes below style each control (PT-U5). */}
+      <div className={`player-dock${dockVisible ? "" : " hidden"}`} onClick={(e) => e.stopPropagation()}>
+        {/* Flow & Frame Selector */}
+        <select
+          className="player-select"
+          aria-label="Preview frame"
+          value={snap.presentFrame}
+          onChange={(e) => {
+            const dest = e.target.value;
+            if (onInteraction) {
+              onInteraction({ trigger: "onClick", action: "navigate", destination: dest, animation: "smart", delay: 0 });
+            } else {
+              engine.dispatch({ type: "presentGo", id: dest });
+            }
+          }}
+        >
+          {allFrames.map((f, i) => (
+            <option key={f.id} value={f.id}>
+              {i + 1}. {f.name}
+            </option>
+          ))}
+        </select>
+
+        {/* Previous Frame */}
+        <button
+          className="player-btn"
+          onClick={() => {
+            if (snap.presentStack.length > 1) engine.dispatch({ type: "presentBack" });
+            else if (curIndex > 0) engine.dispatch({ type: "presentGo", id: allFrames[curIndex - 1].id });
+          }}
+          disabled={!canGoPrev}
+          title="Previous frame (←)"
+        >
+          <Icon name="arrow-left" size={14} />
+        </button>
+
+        {/* Frame Pager Index */}
+        <span className="player-page">
+          {curIndex >= 0 ? `${curIndex + 1} / ${allFrames.length}` : "—"}
+        </span>
+
+        {/* Next Frame */}
+        <button
+          className="player-btn"
+          onClick={() => {
+            if (curIndex < allFrames.length - 1) engine.dispatch({ type: "presentGo", id: allFrames[curIndex + 1].id });
+          }}
+          disabled={curIndex >= allFrames.length - 1}
+          title="Next frame (→ / Space)"
+        >
+          <Icon name="arrow-right" size={14} />
+        </button>
+
+        <div className="player-sep" />
+
+        {/* Restart Flow */}
+        <button className="player-btn" onClick={() => engine.dispatch({ type: "presentStart" })} title="Restart flow (R)">
+          <Icon name="history" size={rowIconSize()} />
+          <span>Restart</span>
+        </button>
+
+        {/* Hotspots Toggle */}
+        <button
+          className={`player-btn${hotspotsActive ? " on" : ""}`}
+          aria-pressed={hotspotsActive}
+          onClick={() => engine.dispatch({ type: "togglePrototypeHotspots" })}
+          title="Toggle hotspot hints (H)"
+        >
+          <Icon name="pointer" size={rowIconSize()} />
+          <span>Hotspots</span>
+        </button>
+
+        {/* Device Preset Switcher */}
+        <select
+          className="player-select"
+          aria-label="Device mockup frame"
+          value={device}
+          onChange={(e) => engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })}
+          title="Device Mockup Frame"
+        >
+          <option value="none">No device</option>
+          {DEVICE_GROUPS.map((g) => (
+            <optgroup key={g.group} label={g.group}>
+              {g.items.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+
+        {/* Scale Switcher */}
+        <button
+          className="player-btn"
+          onClick={() => {
+            const next = scaleMode === "fit" ? "100%" : "fit";
+            engine.dispatch({ type: "setPrototypeScale", scale: next });
+            if (next === "100%") {
+              engine.dispatch({ type: "setZoom", zoom: 1 });
+            } else if (presentNode) {
+              const vw = window.innerWidth;
+              const vh = window.innerHeight;
+              const nextZ = Math.min(1.0, Math.max(0.2, Math.min((vw - 160) / presentNode.w, (vh - 160) / presentNode.h)));
+              engine.dispatch({ type: "setZoom", zoom: nextZ });
+              engine.dispatch({
+                type: "setPan",
+                x: Math.round((vw - presentNode.w * nextZ) / 2 - (wp ? wp.x * nextZ : 0)),
+                y: Math.round((vh - presentNode.h * nextZ) / 2 - (wp ? wp.y * nextZ : 0)),
+              });
+            }
+          }}
+          title={`Scale mode: ${scaleMode} (click to toggle)`}
+        >
+          {scaleMode === "fit" ? "Fit" : "100%"}
+        </button>
+
+        {/* Live Form Inputs Toggle */}
+        <button
+          className={`player-btn${liveInputsActive ? " on green" : ""}`}
+          aria-pressed={liveInputsActive}
+          onClick={() => engine.dispatch({ type: "togglePrototypeLiveInputs" })}
+          title="Toggle live editable inputs (I)"
+        >
+          <Icon name="type" size={rowIconSize()} />
+          <span>Live Inputs</span>
+        </button>
+
+        {/* Sound Toggle */}
+        <button
+          className={`player-btn${soundActive ? " on" : ""}`}
+          aria-pressed={soundActive}
+          onClick={() => engine.dispatch({ type: "togglePrototypeSound" })}
+          title="Toggle tactile sound feedback (M)"
+        >
+          <Icon name={soundActive ? "volume" : "volume-x"} size={rowIconSize()} />
+        </button>
+
+        {/* Fullscreen Toggle */}
+        <button
+          className="player-btn"
+          onClick={() => {
+            if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+            else document.exitFullscreen().catch(() => {});
+          }}
+          title="Fullscreen (F)"
+        >
+          <Icon name="fullscreen" size={rowIconSize()} />
+        </button>
+
+        {/* Exit Presentation */}
+        <button className="player-btn exit" onClick={onExit} title="Exit presentation (Esc)">
+          <Icon name="close" size={12} />
+          <span>Exit</span>
+        </button>
+      </div>
+
+      <style>{`
+        @keyframes proto-ripple {
+          0% { transform: scale(0.3); opacity: 1; }
+          100% { transform: scale(2.4); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}

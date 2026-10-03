@@ -1,0 +1,1477 @@
+/**
+ * Document types that mirror `x-core::Node` / `.x` JSON enough for the
+ * designer chrome. WASM `x-editor` can implement the same command API later.
+ */
+
+export type ColorProfile = "srgb" | "display-p3";
+
+export type NodeKind =
+  | "frame"
+  | "section"
+  | "group"
+  | "rect"
+  | "ellipse"
+  | "text"
+  | "line"
+  | "arrow"
+  | "poly"
+  | "star"
+  | "vector"
+  | "boolean"
+  | "component"
+  | "instance";
+
+export type Overflow = "visible" | "clip" | "scrollx" | "scrolly" | "scrollboth";
+export type Sizing = "fixed" | "hug" | "fill";
+export type LayoutDirection = "horizontal" | "vertical" | "grid";
+/**
+ * How a grid track is sized, Three options for a column or a row.
+ *
+ * - `hug` keeps the smallest track the objects in it need.
+ * - `fill` shares the leftover space by fractional unit - the article's `fr`:
+ *   "Track proportion = Number of fractional units applied to the current track
+ *   ÷ Total number of fractional units across all tracks on the same dimension".
+ * - `fixed` stays the size it is, whatever the frame does.
+ */
+export type TrackMode = "fixed" | "fill" | "hug";
+
+export interface GridTrack {
+  mode: TrackMode;
+  /** Fractional units, only meaningful when `mode` is `"fill"` (1fr default). */
+  fr?: number;
+  /** The pinned size, only meaningful when `mode` is `"fixed"`. */
+  size?: number;
+}
+export type LayoutAlign = "min" | "center" | "max" | "baseline";
+export type LayoutJustify = "min" | "center" | "max" | "between";
+export type TextAlign = "left" | "center" | "right" | "justified";
+export type TextAlignVertical = "top" | "middle" | "bottom";
+/**
+ * How a wrapped paragraph breaks its lines - the type setting for
+ * "Wrap style". Mirrors x-core's TextWrap enum, which rides the node as the
+ * "tw" binding: Auto is the greedy first-fit, Balance evens the line lengths
+ * out per paragraph, Pretty balances and keeps a lone word off the last line.
+ */
+export type TextWrap = "auto" | "balance" | "pretty";
+/**
+ * Paragraph markers, x-core's ListStyle. Bulleted and numbered both hang a
+ * marker in the gutter and indent the paragraph beside it.
+ */
+export type ListStyle = "none" | "bulleted" | "numbered";
+export type TextDecoration = "none" | "underline" | "strikethrough";
+/** §26 KB-002: node-level italic for the ⌘I chord (absent = "normal"). */
+export type FontStyle = "normal" | "italic";
+export type TextCase = "none" | "upper" | "lower" | "title" | "small-caps";
+/** Underline details (360039956634 §Decoration): solid, dotted or wavy line. */
+export type UnderlineStyle = "solid" | "dotted" | "wavy";
+/** Numbers (360039956634 §Numbers): proportional/monospace × lining/old-style. */
+export type FigureStyle =
+  | "proportional-lining"
+  | "proportional-oldstyle"
+  | "monospace-lining"
+  | "monospace-oldstyle";
+/** Numbers §Position: "subscript … below the line of type", "superscript …
+ * above", both "default to a smaller size". Faux typography when the font has
+ * no such glyph: shrink and reposition the standard character. */
+export type BaselineShift = "normal" | "super" | "sub";
+/** Line height unit (360039956634 §Line height): Auto (font default), a fixed
+ * px value, or a percentage of the font size that converts to the nearest px. */
+export type LineHeightUnit = "auto" | "px" | "percent";
+export type StrokeAlign = "inside" | "center" | "outside";
+export type StrokeCap =
+  | "none"
+  | "round"
+  | "square"
+  | "arrow"
+  | "triangle"
+  | "reverse-triangle"
+  | "diamond"
+  | "circle";
+/** Individual strokes picker; `custom` keeps a weight per side. */
+export type StrokeSides = "all" | "top" | "right" | "bottom" | "left" | "custom";
+export type StrokeJoin = "miter" | "bevel" | "round";
+/**
+ * One control point of a variable-width stroke profile.
+ *
+ * `position` runs 0 (path start) to 1 (path end) along the centerline's
+ * arc length; `widthMultiplier` scales the node's `strokeWidth` at that
+ * point (1 = the weight in the panel, 0 = tapered to a point). Widths
+ * between points interpolate linearly. Stored sorted by position.
+ */
+export interface VariableWidthPoint {
+  position: number;
+  widthMultiplier: number;
+}
+/** The full profile; the modifier-stack `Stroke` modifier carries this shape. */
+export interface VariableWidthProfile {
+  points: VariableWidthPoint[];
+}
+export type Constraint = "min" | "center" | "max" | "stretch" | "scale";
+export type ExportFormat = "PNG" | "JPG" | "SVG" | "PDF";
+export type RightTab = "design" | "prototype" | "inspect";
+export type FillType = "solid" | "linear" | "radial" | "angular" | "diamond" | "image" | "pattern" | "brush" | "dynamic";
+/**
+ * Figma's Pattern fill (help.figma.com 33025308147223): a *source layer*
+ * repeated across the fill, with Tile type, Direction, Scale, X/Y spacing and
+ * Alignment. Rendering reads the live source by id, so editing the source
+ * repaints every layer using it; `snapshot` is a copy taken when the source
+ * was chosen, so the fill keeps painting if the source is deleted.
+ */
+export interface PatternSpec {
+  source?: string;
+  snapshot?: XNode;
+  /** Rectangular grid, or hexagonal (alternate rows/columns offset by half a step). */
+  tile?: "grid" | "hex";
+  /** Hexagonal offset axis: horizontal offsets alternate rows, vertical alternate columns. */
+  direction?: "horizontal" | "vertical";
+  /** Tile size as a fraction of the source's size (1 = 100%). */
+  scale?: number;
+  /** Step between tile origins as a fraction of the scaled tile (1 = edge to edge). */
+  spacingX?: number;
+  spacingY?: number;
+  /** Where the lattice is anchored inside the layer box. */
+  align?: "start" | "center" | "end";
+}
+export type ImageFit = "fill" | "fit" | "crop" | "tile";
+export type EffectKind =
+  | "drop-shadow"
+  | "inner-shadow"
+  | "layer-blur"
+  | "background-blur"
+  | "noise"
+  | "glass"
+  | "texture";
+export type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
+export type ProtoTrigger =
+  | "onClick"
+  | "onHover"
+  | "afterDelay"
+  | "mouseEnter"
+  | "mouseLeave"
+  | "mouseDown"
+  | "mouseUp"
+  | "keyPress"
+  | "onDrag";
+export type ProtoAction =
+  | "navigate"
+  | "back"
+  | "scrollTo"
+  | "openOverlay"
+  | "closeOverlay"
+  | "swapOverlay"
+  | "openUrl"
+  | "setVariable"
+  | "setVariableMode"
+  | "setVariant";
+export type ProtoAnim =
+  | "instant"
+  | "dissolve"
+  | "smart"
+  | "slideInLeft"
+  | "slideInRight"
+  | "slideInTop"
+  | "slideInBottom"
+  | "pushLeft"
+  | "pushRight";
+
+export type ProtoDevice =
+  | "iphone-16-pro"
+  | "iphone-se"
+  | "pixel-9"
+  | "ipad-pro"
+  | "macbook-pro"
+  | "desktop"
+  | "apple-watch"
+  | "none";
+
+export type VariableType = "color" | "number" | "string" | "boolean";
+
+/**
+ * A variable's value in one mode: a literal, or an alias pointing at
+ * another variable by id (same-type enforced at bind time).
+ */
+export type VariableValue = string | number | boolean | { alias: string };
+
+export interface VariableMode {
+  id: string;
+  name: string;
+}
+
+export interface VariableCollection {
+  id: string;
+  name: string;
+  modes: VariableMode[];
+}
+
+export interface VariableItem {
+  id: string;
+  name: string;
+  type: VariableType;
+  /** Default value (mode 0 of the collection). */
+  value: VariableValue;
+  /**
+   * Per-mode overrides, keyed by mode id. Absent entries fall back to
+   * `value`. Always resolved under the collection's active mode.
+   */
+  values?: Record<string, VariableValue>;
+  collection: string;
+}
+
+export interface AnnotationItem {
+  id: string;
+  nodeId: string;
+  note: string;
+  author?: string;
+  date?: string;
+}
+
+export interface PathPoint {
+  x: number;
+  y: number;
+  /** Incoming bezier handle, relative to the point (Pen tool). */
+  ix?: number;
+  iy?: number;
+  /** Outgoing bezier handle, relative to the point. */
+  ox?: number;
+  oy?: number;
+  mirrorMode?: "none" | "angle" | "angleAndLength";
+  cornerRadius?: number;
+}
+
+/**
+ * Vector Network Model.
+ * Represents vector paths as an arbitrary planar graph where vertices
+ * can connect to 3 or more segments (branching, T-junctions, interior faces).
+ */
+export interface VectorVertex {
+  x: number;
+  y: number;
+  strokeCap?: StrokeCap;
+  strokeJoin?: StrokeJoin;
+  cornerRadius?: number;
+  mirrorMode?: PathPoint["mirrorMode"];
+}
+
+export interface VectorSegment {
+  start: number; // index into vertices
+  end: number;   // index into vertices
+  tangentStart?: { x: number; y: number }; // relative handle from start vertex
+  tangentEnd?: { x: number; y: number };   // relative handle from end vertex
+}
+
+export interface VectorRegion {
+  windingRule?: "NONZERO" | "EVENODD";
+  loops: number[][]; // array of vertex index sequences forming closed loops
+  fill?: string;
+  fillOpacity?: number;
+}
+
+export interface VectorNetwork {
+  vertices: VectorVertex[];
+  segments: VectorSegment[];
+  regions?: VectorRegion[];
+}
+
+export type ProtoEasing = "linear" | "easeIn" | "easeOut" | "easeInOut" | "spring" | "bouncy";
+
+export interface Interaction {
+  trigger: ProtoTrigger;
+  action: ProtoAction;
+  destination: string;
+  animation: ProtoAnim;
+  delay: number;
+  duration?: number;
+  easing?: ProtoEasing;
+  smartMatch?: boolean;
+  overlayPosition?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+  overlayCloseOutside?: boolean;
+  overlayBackdrop?: boolean;
+  overlayBackdropColor?: string;
+  keyKey?: string;
+  variableId?: string;
+  variableOp?: "set" | "increment" | "decrement" | "toggle";
+  variableValue?: string | number | boolean;
+  /** §23 PT-012: target of the `setVariableMode` action. */
+  variableCollectionId?: string;
+  variableModeId?: string;
+  /**
+   * Gate: the interaction only runs when the condition holds, evaluated
+   * against variables resolved under the active modes. Absent = always run.
+   */
+  condition?: InteractionCondition;
+  /** Variant name for the `setVariant` action (interactive components). */
+  variantName?: string;
+}
+
+/** A variable comparison gating one prototype interaction. */
+export interface InteractionCondition {
+  variableId: string;
+  op: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "truthy" | "falsy";
+  value?: string | number | boolean;
+}
+
+export interface ComponentVariant {
+  name: string;
+  node: XNode;
+}
+
+/**
+ * A named, reusable paint definition — reusable color styles.
+ *
+ * A style owns the paint; nodes reference it by id through `XNode.fillStyle` /
+ * `XNode.strokeStyle`. Editing the style repaints every node bound to it,
+ * which is the whole point: the binding is live, not a one-off copy.
+ *
+ * Scoped to solid paints for now. Text and effect styles reuse the same store
+ * shape when they arrive, which is why the kind is explicit rather than
+ * implied by which array it lives in.
+ */
+export interface SharedStyle {
+  id: string;
+  name: string;
+  kind: "paint" | "text";
+  /** #rrggbb or #rrggbbaa, matching every other colour field in the engine.
+   *  Paint styles only: a text style carries no colour (360039957034). */
+  color?: string;
+  /** Text styles (360039957034): the type properties the style carries -
+   *  family, weight, size, line height, letter spacing, paragraph spacing,
+   *  indent, decoration, case, lists and OpenType; alignment and colour stay
+   *  out, per the article's property table. */
+  text?: TextStyleProps;
+}
+
+/** The property set of a text style. Every field is optional so a style made
+ *  from a partial selection propagates only what it captured. */
+export interface TextStyleProps {
+  fontFamily?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  lineHeight?: number;
+  lineHeightUnit?: LineHeightUnit;
+  letterSpacing?: number;
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  textDecoration?: TextDecoration;
+  textCase?: TextCase;
+  listStyle?: ListStyle;
+  listSpacing?: number;
+  textWrap?: TextWrap;
+  verticalTrim?: boolean;
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): CSS `font-feature-settings` entries -
+   *  ligatures, stylistic sets, character variants. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): CSS `font-variation-settings` -
+   *  weight/width/optical-size/slant and friends. */
+  fontVariations?: Record<string, number>;
+}
+
+export interface ComponentPropertyDef {
+  id: string;
+  name: string;
+  type: "variant" | "boolean" | "text" | "instance-swap";
+  defaultValue: string | boolean;
+  targetNodeName?: string;
+}
+
+export interface ComponentMaster {
+  id: string;
+  name: string;
+  node: XNode;
+  variants: ComponentVariant[];
+  property: string;
+  properties?: ComponentPropertyDef[];
+  /**
+   * Component → code mappings (Dev Mode codegen + design API, P1.10).
+   * Each entry links this master to a code component in one framework;
+   * the tree code generator renders mapped instances as component tags
+   * instead of expanding their layers.
+   */
+  codeMappings?: CodeMapping[];
+}
+
+/**
+ * How one component property reaches generated code: a named prop, the
+ * component's children/text, or dropped from the output entirely.
+ */
+export type CodePropKind = "prop" | "children" | "omit";
+
+export interface CodePropMapping {
+  /** Component property name (or the variant property name). */
+  prop: string;
+  /** Prop name in code; defaults to the slugified component property. */
+  codeProp?: string;
+  kind: CodePropKind;
+}
+
+/**
+ * A component → code mapping for one framework (P1.10): which code
+ * component an instance becomes, where it imports from, and how its
+ * properties map to props. `syncHash` snapshots the master the mapping
+ * was last verified against, so Dev Mode can flag drift.
+ */
+export interface CodeMapping {
+  id: string;
+  framework: "react" | "html" | "vue" | "svelte" | "tailwind" | "swiftui" | "compose" | "flutter" | "uikit";
+  componentName: string;
+  importPath?: string;
+  /** Source file the mapping points at, for the sync indicator. */
+  file?: string;
+  version?: string;
+  props: CodePropMapping[];
+  syncedAt?: number;
+  syncHash?: string;
+}
+
+export interface ExportPreset {
+  format: ExportFormat;
+  /** Output colour profile; absent means the document profile. */
+  colorProfile?: ColorProfile;
+  /** Scale field: a multiplier, or a size with a unit. A number is
+   *  read as a multiplier, the strings "500w" and "300h" as a fixed width or
+   *  height with the other side following the aspect ratio. */
+  scale: number | string;
+  suffix: string;
+  /** Format-specific settings. All optional: a preset saved before these
+   *  existed reads through `resolveSettings`, which fills in default settings
+   *  rather than treating a missing boolean as off. */
+  ignoreOverlap?: boolean;
+  boundingBox?: boolean;
+  includeId?: boolean;
+  outlineText?: boolean;
+  simplifyStroke?: boolean;
+  quality?: "low" | "medium" | "high";
+  resampling?: "detailed" | "basic";
+}
+
+/**
+ * One colour stop on a gradient ramp.
+ *
+ * `position` is 0..1 along the gradient axis. When `XNode.gradientStops` is
+ * empty the renderer falls back to the legacy two-colour `fill` → `fillB`
+ * ramp, so existing documents keep working.
+ */
+export interface GradientStop {
+  color: string;
+  position: number;
+}
+
+/**
+ * A character-level rich text styling run (matching x-core::TextRun).
+ */
+/** Styled text range in textarea-compatible UTF-16 [start, end) offsets.
+ * Overrides fall back to the text layer's properties. */
+export interface TextRun {
+  start: number;
+  end: number;
+  /** Text-style binding (360039957034): which shared style this run follows. */
+  textStyle?: string;
+  fill?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  fontFamily?: string;
+  textDecoration?: TextDecoration;
+  /** Underline details (360039956634 §Decoration) - per-range overrides. */
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  underlineColor?: string;
+  /** Numbers (§Numbers): faux super/subscript, fractions, slashed zero, figures. */
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): `font-feature-settings` entries. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): `font-variation-settings` entries. */
+  fontVariations?: Record<string, number>;
+  /** Links (360045942953): a linked range, underlined by default. */
+  link?: string;
+  /** Wrap style at the paragraph level (360039956634 §Wrap style). */
+  textWrap?: TextWrap;
+  /** Italic run override (⌘I on a range). */
+  fontStyle?: FontStyle;
+}
+
+/**
+ * One entry in a node's fill stack.
+ *
+ * List of fills paints bottom-to-top. The existing scalar `fill`/
+ * `fillType`/`gradientStops` fields on XNode describe the *bottom* fill and
+ * remain authoritative on their own, so every existing call site keeps working.
+ * `XNode.fills` holds any *additional* fills painted over it; an empty or
+ * absent array means "single fill", which is the legacy behaviour.
+ */
+export interface Paint {
+  type: FillType;
+  color: string;
+  opacity: number;
+  visible: boolean;
+  /** "Show in exports" for this stacked fill: false hides it from every
+   *  export while the canvas keeps showing it. Absent means shown. */
+  exportVisible?: boolean;
+  blend?: string;
+  /** Gradient geometry, normalised 0..1 within the node box. */
+  gx?: number;
+  gy?: number;
+  hx?: number;
+  hy?: number;
+  /** Radial focal point, normalised 0..1; absent = this paint's centre. */
+  fx?: number;
+  fy?: number;
+  /** Per-pair interpolation midpoints (fraction of the pair's span). */
+  midpoints?: number[];
+  stops?: GradientStop[];
+  /** Image fill: source plus its own fit/rotation/tile/adjustments, so a
+   *  stacked image never inherits the base fill's image settings. */
+  image?: string;
+  imageFit?: ImageFit;
+  imageRot?: number;
+  imageTile?: number;
+  imageExposure?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageTemperature?: number;
+  imageTint?: number;
+  imageHighlights?: number;
+  imageShadows?: number;
+  /** Pattern fill settings (type "pattern"). */
+  pattern?: PatternSpec;
+}
+
+/**
+ * One additional stroke, painted over the base stroke.
+ *
+ * Same split as fills: the scalar `strokePaint`/`strokeWidth`/… fields on
+ * XNode describe the *bottom* stroke and stay authoritative on their own, so
+ * every existing call site keeps working. `XNode.strokes` holds any extra
+ * strokes drawn on top, bottom-to-top, in bottom-to-top order. An empty or
+ * absent array means "single stroke", which is the legacy behaviour.
+ *
+ * Each layer carries its own geometry (width, align, dash, caps) because in
+ * a second stroke is a genuinely independent outline, not a recolour of
+ * the first.
+ */
+export interface StrokeLayer {
+  color: string;
+  opacity: number;
+  visible: boolean;
+  width: number;
+  align: StrokeAlign;
+  dash?: number;
+  gap?: number;
+  cap?: StrokeCap;
+  join?: StrokeJoin;
+  /** Same per-side picker the base stroke has, per stroke layer. */
+  sides?: StrokeSides;
+  sideW?: [number, number, number, number];
+  /** Custom dash sequence for this stroke, `dash, gap, dash, gap…`. */
+  pattern?: number[];
+}
+
+export interface Effect {
+  kind: EffectKind;
+  color: string;
+  x: number;
+  y: number;
+  blur: number;
+  spread: number;
+  visible: boolean;
+  /** How this effect blends with what is already on the canvas. Only inner
+   *  shadows, drop shadows and noise offer it; "Normal" is the
+   *  default, and "Pass through" is not available to fills or effects. */
+  blend?: string;
+  /** Drop shadows only. Checkbox; off by default, which means the
+   *  shadow is masked by whatever the layer actually paints, so a stroke-only
+   *  layer casts the shadow of its ring rather than of the whole outline. */
+  showBehind?: boolean;
+}
+
+export type Tool =
+  | "select"
+  | "scale"
+  | "frame"
+  | "section"
+  | "slice"
+  | "text"
+  | "rect"
+  | "ellipse"
+  | "line"
+  | "arrow"
+  | "poly"
+  | "star"
+  | "image"
+  | "pen"
+  | "pencil"
+  | "brush"
+  | "eraser"
+  | "comment"
+  | "hand"
+  /** Zoom tool: click to zoom in, ⌥-click out, drag to a region. */
+  | "zoom";
+
+export interface AutoLayout {
+  direction: LayoutDirection;
+  gap: number;
+  /** "Gap between lines" for a wrapping flow: the gap *between* rows (or
+   *  between columns in a vertical wrap), while `gap` keeps the within-line
+   *  spacing. Falls back to `gap` for documents written before the two were
+   *  separate. Only read when the flow wraps; the grid flow keeps its own
+   *  `gapRows`/`gapCols` pair. */
+  gapCross?: number;
+  padding: [number, number, number, number];
+  sizing: Sizing;
+  cross: Sizing;
+  wrap: boolean;
+  align: LayoutAlign;
+  justify: LayoutJustify;
+  /** Auto gap. When `"auto"`, `gap` is ignored and the space left over
+   *  is distributed by `spacing` - which is what makes a frame's contents sit
+   *  against its padding, or evenly through it, as the frame is resized. */
+  gapMode?: "fixed" | "auto";
+  spacing?: "between" | "around" | "evenly";
+  /** Canvas stacking: true = First on top, false = Last on top (canvas stacking) */
+  itemReverseZIndex?: boolean;
+  /* ── The grid flow ────────────────────────────────────────────────────────
+   * Grid flow, "Use the grid in auto layout flow": cells arranged
+   * into columns and rows, where an object can span several of each. Only read
+   * when `direction` is `"grid"`. */
+  /** Number of columns. */
+  columns?: number;
+  /** Number of rows, or `"auto"` - the default, where rows appear and vanish
+   *  with the objects that need them. */
+  rows?: number | "auto";
+  /** "Gap between rows" - the vertical gap between tracks. */
+  gapRows?: number;
+  /** "Gap between columns" - falls back to `gap` for documents written before
+   *  the two were separate. */
+  gapCols?: number;
+  /** Per-track sizing; a missing entry is a hug. */
+  colTracks?: GridTrack[];
+  rowTracks?: GridTrack[];
+  /** Automatic positioning, on by default: objects flow left to right
+   *  from the top row. Switching it off keeps every object in the cell it is
+   *  in, which is how empty cells survive a deletion. */
+  autoPosition?: boolean;
+}
+
+export type GridPattern = "columns" | "rows" | "grid";
+export type GridAlignment = "stretch" | "center" | "min" | "max";
+
+export interface LayoutGrid {
+  id: string;
+  pattern: GridPattern;
+  sectionSize?: number;
+  count?: number;
+  gutter?: number;
+  margin?: number;
+  alignment?: GridAlignment;
+  /** Shifts the grid over: fixed types start late, stretch types shrink to fit. */
+  offset?: number;
+  /** Fixed types: column width / row height in px. */
+  cell?: number;
+  color?: string;
+  visible?: boolean;
+}
+
+export interface ArcData {
+  startingAngle: number;
+  endingAngle: number;
+  innerRadius: number;
+}
+
+export interface XNode {
+  id: string;
+  name: string;
+  kind: NodeKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number;
+  /** Where the layer turns about, as a fraction of its own box: [0.5, 0.5] is
+   *  the centre, which is default. `⌥R` reveals a target that drags
+   *  this point, and rotating then slides the box so the point stays put. */
+  rotOrigin?: [number, number];
+  fill: string;
+  fillOpacity: number;
+  fillVisible: boolean;
+  /** "Show in exports", per Figma's fill-level toggle: false hides the base
+   *  fill from every export (SVG, raster, PDF) while the canvas keeps showing
+   *  it. Absent means shown. */
+  fillExportVisible?: boolean;
+  /** True for Slice-tool rects: a crop region, not artwork. The canvas keeps
+   *  painting the dashed outline, but exports render the region's content
+   *  (see `exportSvg`) instead of the rectangle itself. */
+  isSlice?: boolean;
+  fillType: FillType;
+  fillB: string;
+  /**
+   * Multi-stop gradient ramp. Empty means "use the legacy `fill`/`fillB` pair";
+   * two or more entries take precedence over it.
+   */
+  gradientStops: GradientStop[];
+  /**
+   * Extra fills painted on top of the base `fill`, bottom-to-top, the way
+   * stacked order. Absent/empty means the node has a single fill.
+   */
+  fills?: Paint[];
+  /** Base-fill pattern settings when `fillType` is "pattern". */
+  pattern?: PatternSpec;
+  /** Extra strokes painted over the base stroke; see StrokeLayer. */
+  strokes?: StrokeLayer[];
+  /** Id of the SharedStyle driving `fill`, if the fill is bound to one.
+   *  Editing that style updates this node; editing the node's colour directly
+   *  detaches it. */
+  fillStyle?: string;
+  /** Id of the SharedStyle driving `strokePaint`. */
+  strokeStyle?: string;
+  /** Id of the SharedStyle carrying this text layer's type properties
+   *  (360039957034). Editing that style re-types every bound node and run. */
+  textStyle?: string;
+  /**
+   * Variable bindings: layer prop name -> variable id. Bound props are
+   * re-applied from the resolved variable (under the active mode) on every
+   * relayout; editing a bound prop directly clears that entry (detach).
+   * Supported props: see BINDABLE_PROPS. Type-checked at bind time.
+   */
+  variableBindings?: Record<string, string>;
+  /**
+   * The subset of `variableBindings` bound on this instance node itself
+   * (root or member) rather than flowed down from its master. Own entries
+   * pin their props across master syncs; flowed entries follow the master,
+   * so a master bind — or unbind — propagates. Plain and master layers
+   * never carry it.
+   */
+  ownBindings?: Record<string, string>;
+  fillBlend: string;
+  /** Legacy solid stroke colour; pattern strokes keep it as the fallback swatch. */
+  strokePaint: string;
+  /** Pattern stroke paint is distinct from the numeric dash `StrokeLayer.pattern`. */
+  strokeType?: "solid" | "pattern" | "brush" | "dynamic";
+  /** Brush stroke: bristle direction in degrees (0 = +x). Brush strokes are
+   *  centre-aligned, undashed, and cannot take a width profile. */
+  strokeBrushAngle?: number;
+  /** Dynamic stroke: wiggle frequency in waves per 100px of path. */
+  strokeDynFreq?: number;
+  /** Dynamic stroke: wiggle amplitude in px. */
+  strokeDynWiggle?: number;
+  /** Dynamic stroke: smoothing 0..100 (0 = triangle wave, 100 = sine). */
+  strokeDynSmooth?: number;
+  strokePattern?: PatternSpec;
+  strokeOpacity: number;
+  strokeVisible: boolean;
+  strokeWidth: number;
+  strokeAlign: StrokeAlign;
+  strokeDash: number;
+  strokeGap: number;
+  strokeCap: StrokeCap;
+  strokeCapStart?: StrokeCap;
+  strokeCapEnd?: StrokeCap;
+  strokeJoin: StrokeJoin;
+  opacity: number;
+  effects: Effect[];
+  visible: boolean;
+  locked: boolean;
+  overflow: Overflow;
+  cornerRadii: [number, number, number, number];
+  cornerIndependent: boolean;
+  /**
+   * Corner smoothing, 0-1: keeps the radius but flattens the corner's
+   * shoulders into a squircle. A whole-shape property, never per corner, which
+   * is why it sits next to `cornerIndependent` rather than inside `cornerRadii`.
+   */
+  cornerSmoothing?: number;
+  /**
+   * Which sides of a rectangle/frame/component/instance carry the stroke.
+   * Individual strokes: the four pickers plus `custom`,
+   * which lets every side keep its own weight.
+   */
+  strokeSides?: StrokeSides;
+  /** Per-side weights in [top, right, bottom, left] order, used by `custom`. */
+  strokeSideW?: [number, number, number, number];
+  /** Custom dash sequence (`dash, gap, dash, gap…` syntax). Wins over the dash/gap pair. */
+  strokeDashPattern?: number[];
+  /** Cap drawn on each dash segment. */
+  strokeDashCap?: "butt" | "round" | "square";
+  /** "Miter angle": joins sharper than this bevel instead of pointing. */
+  strokeMiterAngle?: number;
+  /**
+   * Variable-width profile for the base stroke, as width multipliers along
+   * the path centerline (see VariableWidthPoint). Only honoured on `vector`,
+   * `line` and `arrow` nodes; absent/empty/uniform means a plain stroke.
+   * A profiled stroke paints centre-aligned and ignores dashes — canvas
+   * cannot dash a filled outline — and the extra `strokes` rows stay uniform.
+   */
+  strokeWidthProfile?: VariableWidthPoint[];
+  /** Drawn by the Brush tool: a fixed-width freehand stroke, so variable
+   *  width stays refused on it (see variableWidthBlockReason). */
+  brushStroke?: boolean;
+  aspectLocked: boolean;
+  /** The ratio the lock was taken at (height ÷ width), remembered so a size
+   *  that clamps to a pixel on the way to a new one cannot leave a locked box
+   *  square. Written when the lock is turned on; a locked resize keeps it up to
+   *  date. */
+  aspectRatio?: number;
+  sizingW: Sizing;
+  sizingH: Sizing;
+  constraintH: Constraint;
+  constraintV: Constraint;
+  count: number;
+  starRatio: number;
+  showName: boolean;
+  exports: ExportPreset[];
+  blendMode: string;
+  imageSrc: string;
+  imageFit: ImageFit;
+  imageRot: number;
+  /** Tile mode only: tile size as a percent of the image's original
+   *  dimensions. 100 when unset. */
+  imageTile?: number;
+  /** Crop mode only: the visible portion of the (rotated) image in normalised
+   *  0..1 coordinates, stretched to fill the layer. Unset means the whole
+   *  image, rendered as cover so switching modes never distorts. */
+  imageCrop?: { x: number; y: number; w: number; h: number };
+  imageExposure: number;
+  imageContrast: number;
+  imageSaturation: number;
+  imageTemperature: number;
+  imageTint: number;
+  imageHighlights: number;
+  imageShadows: number;
+  /** Set once the user renames a layer by hand, so automatic naming (e.g. a
+   *  text layer following its content, ) stops overriding it. */
+  nameLocked?: boolean;
+  /** Sizing constraints (min/max width & height) */
+  minW?: number;
+  maxW?: number;
+  minH?: number;
+  maxH?: number;
+  /** Absolute position inside auto-layout frame */
+  absolutePosition?: boolean;
+  /* ── Inside a grid ──────────────────────────────────────────────────────
+   * "Column span" / "Row span": how many cells the object stretches across.
+   * `gridCol`/`gridRow` are where it sits, written by the engine while
+   * automatic positioning is on and read back when it is switched off, so
+   * turning the setting off keeps the arrangement the objects already have. */
+  colSpan?: number;
+  rowSpan?: number;
+  gridCol?: number;
+  gridRow?: number;
+  /** A cell this object was placed into on purpose - the frame tool clicked
+   *  into one. Automatic positioning keeps it there and flows the rest of the
+   *  objects around it, which is also what puts `⌘D` in the next cell: the
+   *  copy sits directly above its original, so the flow picks up after it. */
+  gridPinned?: boolean;
+  /** Rich text formatting runs */
+  textRuns?: TextRun[];
+  /** Preserved per-instance property overrides */
+  overrides?: Record<string, unknown>;
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: number;
+  lineHeight: number;
+  letterSpacing: number;
+  paragraphSpacing: number;
+  textAlign: TextAlign;
+  textAlignVertical: TextAlignVertical;
+  textWrap: TextWrap;
+  listStyle: ListStyle;
+  /** First-line offset of every paragraph, in points (x-core's paragraph_indent). */
+  paragraphIndent: number;
+  textDecoration: TextDecoration;
+  /** §26 KB-002: italic toggle (⌘I). Optional: older docs lack it (= normal). */
+  fontStyle?: FontStyle;
+  textCase: TextCase;
+  truncate: boolean;
+  maxLines: number;
+  /** List spacing (360040449773 §Spacing): extra px between line items of a
+   * bulleted/numbered list. Default 0. Items are also paragraphs, so the
+   * paragraph gap applies too. */
+  listSpacing: number;
+  /** Per-paragraph list indentation level (360040449773 §Indentation): "up to
+   * five levels", so 0..4. Absent = 0 for every paragraph. */
+  listLevels?: number[];
+  /** Per-paragraph list override: `null` = counter deleted on that line
+   * ("Backspace … delete the counter, but keep the same level of
+   * indentation"); absent = inherit `listStyle`. */
+  paraList?: (ListStyle | null)[];
+  /** Per-paragraph wrap style (360039956634 §Wrap style applies at the
+   * paragraph level too). Absent = inherit `textWrap`. */
+  paraWrap?: (TextWrap | null)[];
+  /** Hanging lists (360040449773): markers outside the bounding box so the
+   * text content aligns with it. Absent = on (Figma's pictured lists). */
+  hangingLists?: boolean;
+  /** Hanging quotes (360040449773): opening quotation marks outside the box. */
+  hangingQuotes?: boolean;
+  /** Vertical trim (360039956634 §Vertical trim): remove the space above and
+   * below the text ("leading-trim: both" in Dev Mode). */
+  verticalTrim?: boolean;
+  /** Underline details (360039956634 §Decoration). */
+  underlineStyle?: UnderlineStyle;
+  underlineThickness?: number;
+  underlineOffset?: number;
+  underlineSkipInk?: boolean;
+  underlineColor?: string;
+  /** Numbers (360039956634 §Numbers) - faux super/sub, fractions, zero, figures. */
+  baselineShift?: BaselineShift;
+  fractions?: boolean;
+  slashedZero?: boolean;
+  figureStyle?: FigureStyle;
+  /** OpenType features (4913951097367): `font-feature-settings` entries. */
+  fontFeatures?: Record<string, number>;
+  /** Variable-font axes (5579502031511): `font-variation-settings` entries. */
+  fontVariations?: Record<string, number>;
+  /** Text on a path (360039956434): id of the path node the text follows. */
+  onPath?: string;
+  /** Where along the path the text starts, as a fraction of its length. The
+   *  start handle slides this. */
+  pathStart?: number;
+  /** Which side of the path the baseline sits on; "right" is Flip text
+   *  orientation. */
+  pathSide?: "left" | "right";
+  /** RTL/bidi (4972283635863): explicit text direction. Absent/"auto" = the
+   *  language detection the article describes. */
+  textDirection?: "auto" | "ltr" | "rtl";
+  /** Per-paragraph direction overrides (the article's per-paragraph control);
+   *  `null` falls back to `textDirection`/detection. */
+  paraDir?: ("ltr" | "rtl" | null)[];
+  /** Line height unit: px value vs percent of the font size vs Auto. */
+  lineHeightUnit?: LineHeightUnit;
+  /** Links (360045942953): the whole text layer is a link. */
+  link?: string;
+  children: XNode[];
+  layout: AutoLayout | null;
+  path: PathPoint[];
+  vectorNetwork?: VectorNetwork;
+  closed: boolean;
+  booleanOp: BooleanOp | null;
+  componentId: string;
+  isComponent: boolean;
+  interactions: Interaction[];
+  flipH: boolean;
+  flipV: boolean;
+  fillGX: number;
+  fillGY: number;
+  fillHX: number;
+  fillHY: number;
+  /** Radial gradient focal point, normalised 0..1. Absent = the gradient
+   *  centre (`fillGX`/`fillGY`), which is exactly how it renders and hits. */
+  fillFX?: number;
+  fillFY?: number;
+  /** Per-pair ramp interpolation midpoints for `gradientStops`:
+   *  `gradientMidpoints[i]` is where stops i and i+1 blend 50/50, as a
+   *  fraction of their span (0.5 = even). Absent = even everywhere. */
+  gradientMidpoints?: number[];
+  isMask: boolean;
+  maskType: "alpha" | "vector" | "luminance";
+  variant?: string;
+  componentProperties?: Record<string, string | boolean>;
+  /** Frame layout grids (columns, rows, grid) */
+  layoutGrids?: LayoutGrid[];
+  /** Ellipse arc / donut properties */
+  arcData?: ArcData;
+  /** Procedural non-destructive modifier stack */
+  modifiers?: import("./modifierStack").Modifier[];
+  /** Reactive dynamic expression bindings for properties */
+  expressions?: Record<string, string>;
+  /** Explicit identity for smart animate transitions */
+  animationId?: string;
+  prototypeIdentity?: string;
+  /** First-line text baseline offset from top of box (px). Populated from real font metrics. */
+  baseline?: number;
+  /** Measured text metrics from browser Canvas or offline font table. */
+  textMetrics?: {
+    fontBoundingBoxAscent?: number;
+    fontBoundingBoxDescent?: number;
+    actualBoundingBoxAscent?: number;
+    actualBoundingBoxDescent?: number;
+    fontAscentRatio?: number;
+    fontSize?: number;
+  };
+}
+
+/** A single message inside a comment thread. */
+export interface CommentReply {
+  id: string;
+  body: string;
+  at: number;
+}
+
+/** A comment pin anchored to a point in page space. Comments are annotations,
+ *  not geometry: they live on the page rather than in the layer tree, so they
+ *  never export, never hit-test as shapes and never appear as layers. */
+export interface CommentThread {
+  id: string;
+  x: number;
+  y: number;
+  body: string;
+  at: number;
+  resolved: boolean;
+  replies: CommentReply[];
+}
+
+/**
+ * A ruler guide: an infinite line the user drags out of a ruler.
+ *
+ * Distinct from `snapping.Guide`, which is the transient red line drawn while
+ * dragging a layer. These persist with the page and objects snap to them.
+ */
+export interface RulerGuide {
+  id: string;
+  axis: "x" | "y";
+  /** Position in world units — or in the frame's units when `frameId` is set. */
+  at: number;
+  /** Frame-level guide: lives on this frame and moves with it. */
+  frameId?: string;
+}
+
+export interface Page {
+  id: string;
+  name: string;
+  root: XNode;
+  comments: CommentThread[];
+  /** Ruler guides for this page; see RulerGuide. */
+  guides: RulerGuide[];
+  pixelGrid: boolean;
+  pixelGridColor: string;
+  /** Separates the visual grid from "Snap to pixel grid", which is the
+   *  behaviour (whole-pixel coordinates while moving/resizing). Optional so
+   *  documents written before the split keep loading; the default is on. */
+  pixelSnap?: boolean;
+  flowStart: string;
+}
+
+export interface Snapshot {
+  fileName: string;
+  colorProfile: ColorProfile;
+  pages: Page[];
+  page: number;
+  selection: string[];
+  selectedGuide: string | null;
+  /** Hover preview of a stroke position; render-only, never persisted. */
+  previewStroke: {
+    id: string;
+    align?: StrokeAlign;
+    cap?: StrokeCap;
+    join?: StrokeJoin;
+    dash?: { strokeDash: number; strokeGap: number; strokeDashPattern?: number[]; strokeDashCap?: StrokeCap };
+  } | null;
+  /** Hover preview of an effect kind from the type menu; render-only. */
+  previewEffect: { id: string; kind: EffectKind } | null;
+  /** Bumped on every dispatch except pure viewport moves (pan/zoom), so panels
+   *  showing document state can skip re-rendering viewport-only snapshots even
+   *  though tree edits mutate nodes in place (which defeats reference
+   *  equality). Session-only: never persisted, restored by undo like the rest
+   *  of state. */
+  treeRev: number;
+  tool: Tool;
+  zoom: number;
+  panX: number;
+  panY: number;
+  rightTab: RightTab;
+  canUndo: boolean;
+  canRedo: boolean;
+  components: ComponentMaster[];
+  /** Document-level named paints; see SharedStyle. */
+  styles: SharedStyle[];
+  presentFrame: string;
+  presentStack: string[];
+  prototypeDevice?: ProtoDevice;
+  prototypeOrientation?: "portrait" | "landscape";
+  prototypeScale?: "fit" | "100%" | "fill";
+  prototypeHotspots?: boolean;
+  prototypeLiveInputs?: boolean;
+  prototypeSound?: boolean;
+  activeOverlay?: {
+    id: string;
+    position?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+    closeOutside?: boolean;
+    backdrop?: boolean;
+    backdropColor?: string;
+  } | null;
+  /** View > Prototype flows. When off the canvas hides connection
+   *  noodles and hotspot handles, which is what makes Design mode look like
+   *  Design mode. */
+  showFlows: boolean;
+  /** View > Rulers (⇧R). */
+  showRulers: boolean;
+  /** View > Minimap. Off by default; it costs its own render pass. */
+  showMinimap: boolean;
+  /** View > Mask outlines: masks drawn with a green outline. */
+  showMaskOutlines: boolean;
+  /** "Pixel preview" in the Zoom/view options menu: vectors drawn as
+   *  the raster they would export as, at 1x or 2x device pixels. */
+  pixelPreview: PixelPreview;
+  /** "Layout guides" in the same menu: one switch to hide every
+   *  frame's layout grid without deleting any of them. */
+  viewLayoutGuides: boolean;
+  /** "Property labels": names beside the icon-only controls in the
+   *  right sidebar, for someone still learning what each one does. */
+  propertyLabels: boolean;
+  /** Comment pins are hidden unless the comment tool is active or the user
+   *  has explicitly turned them on, by default. */
+  showComments: boolean;
+  /** View > Outlines (⇧O / ⌘Y): wireframe mode showing object outlines without fills. */
+  outlineMode?: boolean;
+  /** Thread whose popover is open, if any. */
+  openComment: string;
+  /** Variables / Tokens store */
+  variables?: VariableItem[];
+  /** Variable collections (each with its own modes). */
+  variableCollections?: VariableCollection[];
+  /** Active mode id per collection id. */
+  activeModes?: Record<string, string>;
+  /** Dev Mode Annotations store */
+  annotations?: AnnotationItem[];
+  /** Node ID currently in vector edit mode, if any. */
+  vecEdit?: string | null;
+  /** Active vector point index currently selected, if any. */
+  vecPoint?: number | null;
+  /** Selected vector point indices for multi-selection. */
+  vecPoints?: number[];
+  /**
+   * Armed boolean live preview: the op whose result the canvas overlays on
+   * the current selection without committing. View state, never persisted
+   * and never in undo history; cleared by selection/tool change or commit.
+   */
+  booleanPreview?: BooleanOp | null;
+  /** Last top-level frame size this session: click-creation reuses it. */
+  lastFrameSize?: { w: number; h: number } | null;
+}
+
+/** Off, or the density a rasterised preview is drawn at. */
+export type PixelPreview = "off" | "1x" | "2x";
+
+export type Command =
+  | { type: "select"; ids: string[] }
+  | { type: "setTool"; tool: Tool }
+  | { type: "setZoom"; zoom: number; anchorX?: number; anchorY?: number }
+  | { type: "pan"; dx: number; dy: number }
+  | { type: "setPan"; x: number; y: number }
+  | { type: "setRightTab"; tab: RightTab }
+  | { type: "toggleRulers" }
+  | { type: "setPixelPreview"; preview: PixelPreview }
+  | { type: "toggleLayoutGuides" }
+  | { type: "togglePropertyLabels" }
+  | { type: "toggleMinimap" }
+  | { type: "toggleFlows"; enabled?: boolean }
+  | { type: "toggleComments" }
+  | { type: "addComment"; x: number; y: number; body: string }
+  | { type: "replyComment"; id: string; body: string }
+  | { type: "resolveComment"; id: string; resolved: boolean }
+  | { type: "deleteComment"; id: string }
+  | { type: "moveComment"; id: string; x: number; y: number }
+  | { type: "openComment"; id: string }
+  | { type: "setPage"; index: number }
+  | { type: "setFileName"; name: string }
+  | { type: "setColorProfile"; profile: ColorProfile; mode: "assign" | "convert" }
+  | { type: "addPage" }
+  | {
+      type: "add";
+      kind: NodeKind;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      parent?: string;
+      extra?: Partial<XNode>;
+    }
+  | {
+      type: "syncWasmState";
+      state: {
+        revision: number;
+        canUndo: boolean;
+        nodes: ReadonlyArray<{
+          id: string;
+          name: string;
+          kind: "rect" | "frame" | "text" | "ellipse" | "boolean" | "path";
+          x: number;
+          y: number;
+          w: number;
+          h: number;
+          parentId?: string | null;
+          parent_id?: string | null;
+          rotation?: number;
+          opacity?: number;
+          fill?: string | null;
+          stroke?: string;
+          strokeWidth?: number;
+          text?: string;
+          radius?: number;
+          visible?: boolean;
+          componentProperties?: Readonly<Record<string, string>>;
+          pathCommands?: ReadonlyArray<
+            | { readonly op: "M"; readonly x: number; readonly y: number }
+            | { readonly op: "L"; readonly x: number; readonly y: number }
+            | {
+                readonly op: "C";
+                readonly c1x: number;
+                readonly c1y: number;
+                readonly c2x: number;
+                readonly c2y: number;
+                readonly x: number;
+                readonly y: number;
+              }
+            | { readonly op: "Z" }
+          >;
+          booleanOp?: BooleanOp;
+          autoLayout?: {
+            readonly axis: "horizontal" | "vertical";
+            readonly padding: number;
+            readonly gap: number;
+          };
+        }>;
+        variables?: Readonly<Record<string, string>>;
+        activeModes?: Readonly<Record<string, string>>;
+        componentOverrides?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+      };
+      parent?: string;
+      selectId?: string;
+      deletedIds?: readonly string[];
+      reconcileWasmNodes?: boolean;
+      extra?: Partial<XNode>;
+    }
+  /** `world`: the delta is measured on the page (a pointer drag); the engine
+   *  turns it into each layer's parent-local axes, so a child of a rotated or
+   *  flipped frame follows the cursor. Without it the delta is parent-local. */
+  | { type: "move"; ids: string[]; dx: number; dy: number; world?: boolean }
+  | { type: "resize"; id: string; x: number; y: number; w: number; h: number; scaleProps?: boolean; ignoreConstraints?: boolean }
+  | {
+      type: "reparent";
+      ids: string[];
+      parent: string;
+      x?: number;
+      y?: number;
+      /** Explicit child-list slot; without it the point picks the slot in a
+       *  flow or grid, and anything else appends. */
+      index?: number;
+      /** Drop as an absolutely positioned child: it keeps its point and stays
+       *  out of the flow (Figma's Ctrl/Cmd-drag into auto layout). */
+      absolute?: boolean;
+      /** Skip the oversize refusal below (Figma's ⌘/Ctrl bypass). */
+      bypassSizeGate?: boolean;
+    }
+  /**
+   * Move layers to an explicit slot in a parent's child list, preserving their
+   * on-canvas position. This is what the layers-panel drag uses; `reparent`
+   * is driven by canvas coordinates instead.
+   */
+  | { type: "reorder"; ids: string[]; parent: string; index: number }
+  | { type: "delete" }
+  | { type: "duplicate"; dx?: number; dy?: number }
+  | { type: "undo" }
+  | { type: "redo" }
+  | { type: "patch"; id?: string; ids?: string[]; patch: Partial<XNode> }
+  | { type: "autoLayout"; id: string; layout: AutoLayout | null }
+  // "Auto layout is only supported on frames. If you have one or more layers
+  // selected, an auto layout frame wraps them." Selecting a
+  // frame sets the layout on it; anything else - a plain layer, a group, a
+  // multi-selection - is wrapped in a new frame that gets the layout.
+  | { type: "wrapAutoLayout"; ids: string[]; layout: AutoLayout }
+  // "Remove all auto layout": the frame and everything nested inside it.
+  | { type: "removeAllLayout"; id: string }
+  | { type: "nudge"; dx: number; dy: number }
+  | { type: "begin" }
+  | { type: "end" }
+  | { type: "cut" }
+  | { type: "copy" }
+  /** Paste the in-app clipboard. `x/y` aim the copy at a world point;
+   *  `anchor` picks the point on the clipboard group that lands there — the
+   *  group centre for a ⌘V at the middle of the viewport, the top-left for a
+   *  Paste here at the cursor (4409078832791: "Position your cursor where you
+   *  want the top left of your copied object to be placed"). `inPlace` keeps
+   *  the copied coordinates; `over` (⌘⇧V, Paste over selection) places the
+   *  copy at the selection's own position, in the selection's parent — "on
+   *  top of a selected frame, not inside it". */
+  | { type: "paste"; x?: number; y?: number; inPlace?: boolean; over?: boolean; anchor?: "center" | "topLeft" }
+  /** Paste to replace (⇧⌘R): "remove a selected object from your canvas or
+   *  frame and replace it with the object copied to your clipboard ... The
+   *  pasted object will adopt the constraints of the object it replaced."
+   *  Every selected object is replaced by a fresh clone of the clipboard at
+   *  the replaced object's position and z-slot. */
+  | { type: "pasteToReplace" }
+  /** Replace the in-app clipboard with layers that came from outside this
+   *  document — the system clipboard's own payload, so a copy made in another
+   *  tab or another file pastes with full fidelity. Not a document edit, so it
+   *  takes no undo step; the `paste` that follows does. */
+  | { type: "loadClip"; nodes: XNode[] }
+  | { type: "group" }
+  | { type: "ungroup" }
+  | { type: "frameSelection" }
+  | { type: "resizeToFit" }
+  | { type: "wrapSection" }
+  | { type: "arrange"; dir: "front" | "forward" | "backward" | "back" }
+  | { type: "selectAll" }
+  | { type: "lockSel" }
+  | { type: "hideSel" }
+  | { type: "copyCode" }
+  | { type: "copyProperties" }
+  | { type: "pasteProperties" }
+  | { type: "deleteInteraction"; id: string; destId: string }
+  | { type: "flip"; axis: "h" | "v" }
+  | { type: "duplicatePage" }
+  | { type: "deletePage" }
+  | { type: "renamePage"; name: string }
+  | { type: "movePage"; from: number; to: number }
+  | { type: "patchPage"; patch: Partial<Pick<Page, "pixelGrid" | "pixelGridColor" | "pixelSnap" | "name" | "flowStart">> }
+  | { type: "distribute"; axis: "h" | "v" }
+  /** Smart-selection gap handle (Figma help 360040450233): set the space
+   *  between every pair of the given layers to `gap` along `axis`, keeping the
+   *  order and the sizes. Unlike `distribute`, which pins both outer layers and
+   *  splits the existing span evenly, this one takes an absolute value from the
+   *  drag and anchors the run at its first layer, so the space grows away from
+   *  the handle in the direction the pointer moved. */
+  | { type: "distributeSpacing"; ids: string[]; axis: "h" | "v"; gap: number }
+  | { type: "tidyUp"; axis?: "auto" | "h" | "v" }
+  | { type: "swapFillStroke" }
+  | { type: "toggleStroke" }
+  /** §26 KB-004: one-way removals for `/` (stroke) and `⌥/` (fill). */
+  | { type: "removeStroke" }
+  | { type: "removeFill" }
+  | { type: "toggleOutlines" }
+  | { type: "toggleMaskOutlines" }
+  | { type: "boolean"; op: BooleanOp }
+  /** Arm (`op`) or clear (`null`) the boolean live preview overlay. View-only. */
+  | { type: "setBooleanPreview"; op: BooleanOp | null }
+  /** Create a named style from the selection's current fill, stroke or type
+   *  properties and bind the selection to it. */
+  | { type: "createStyle"; kind: "fill" | "stroke" | "text"; name: string }
+  /** Point the selection at an existing style. A text style may target just a
+   *  captured range by passing its merged runs (range application). */
+  | { type: "applyStyle"; kind: "fill" | "stroke" | "text"; styleId: string; runs?: TextRun[] }
+  /** Drop the binding, keeping the painted colour / type properties. */
+  | { type: "detachStyle"; kind: "fill" | "stroke" | "text" }
+  /** Recolour or retype a style; every bound node and run follows. */
+  | { type: "editStyle"; id: string; color?: string; name?: string; text?: Partial<TextStyleProps> }
+  | { type: "deleteStyle"; id: string }
+  | { type: "addGuide"; axis: "x" | "y"; at: number; frameId?: string }
+  | { type: "moveGuide"; id: string; at: number }
+  | { type: "setGuideFrame"; id: string; frameId: string | null }
+  | { type: "selectGuide"; id: string | null }
+  | {
+      type: "previewStroke";
+      id: string | null;
+      align?: StrokeAlign;
+      /** Hover previews for the cap/join/style rows (render-only, like align). */
+      cap?: StrokeCap;
+      join?: StrokeJoin;
+      dash?: { strokeDash: number; strokeGap: number; strokeDashPattern?: number[]; strokeDashCap?: StrokeCap };
+    }
+  | { type: "previewEffect"; id: string | null; kind?: EffectKind }
+  | { type: "removeGuide"; id: string }
+  | { type: "makeComponent" }
+  | { type: "detachInstance" }
+  | { type: "placeComponent"; id: string; x: number; y: number }
+  | { type: "addPath"; points: PathPoint[]; closed: boolean }
+  | { type: "patchPath"; id: string; path: PathPoint[]; closed?: boolean }
+  | { type: "patchVectorNetwork"; id: string; network: VectorNetwork; preserveBounds?: boolean }
+  | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
+  | { type: "bendSegment"; id: string; segIndex: number; dragX: number; dragY: number }
+  | { type: "insertPointOnPath"; id: string; x: number; y: number; maxDist?: number }
+  | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
+  | { type: "setPointCornerRadius"; id: string; pointIndex: number; radius: number }
+  | { type: "flatten"; id?: string }
+  | { type: "outlineStroke"; id?: string }
+  | { type: "offsetPath"; id?: string; distance: number; join?: StrokeJoin }
+  | { type: "simplifyPath"; id?: string; tolerance?: number }
+  | { type: "vectorCleanup"; id?: string }
+  | { type: "convertTextToVector"; id?: string }
+  | { type: "shapeBuilder"; op: "merge" | "subtract" }
+  | { type: "vectorAlign"; alignment: "left" | "center" | "right" | "top" | "middle" | "bottom" }
+  | { type: "addVariant"; name: string }
+  | { type: "setVariant"; id: string; name: string }
+  | { type: "setVecEdit"; id: string | null; pointIndex?: number | null; pointIndices?: number[] }
+  | { type: "addComponentProperty"; componentId: string; property: ComponentPropertyDef }
+  | { type: "deleteComponentProperty"; componentId: string; propId: string }
+  | { type: "setCodeMapping"; componentId: string; mapping: CodeMapping }
+  | { type: "deleteCodeMapping"; componentId: string; mappingId: string }
+  | { type: "syncCodeMapping"; componentId: string; mappingId: string }
+  | { type: "setComponentProperty"; id: string; propName: string; value: string | boolean }
+  | { type: "resetOverrides"; id?: string; property?: string }
+  | { type: "setInteractions"; id: string; interactions: Interaction[] }
+  | { type: "addVariable"; variable: VariableItem }
+  | { type: "patchVariable"; id: string; patch: Partial<VariableItem> }
+  | { type: "deleteVariable"; id: string }
+  | { type: "addCollection"; name: string }
+  | { type: "renameCollection"; id: string; name: string }
+  | { type: "deleteCollection"; id: string }
+  | { type: "addMode"; collectionId: string; name: string }
+  | { type: "renameMode"; collectionId: string; modeId: string; name: string }
+  | { type: "deleteMode"; collectionId: string; modeId: string }
+  | { type: "setActiveMode"; collectionId: string; modeId: string }
+  | { type: "bindVariable"; id: string; prop: string; variableId: string }
+  | { type: "unbindVariable"; id: string; prop: string }
+  | { type: "swapInstance"; id: string; componentId: string }
+  | { type: "addAnnotation"; annotation: AnnotationItem }
+  | { type: "deleteAnnotation"; id: string }
+  | { type: "presentStart"; id?: string }
+  | { type: "presentGo"; id: string }
+  | { type: "presentBack" }
+  | { type: "presentStop" }
+  | { type: "setPrototypeDevice"; device: ProtoDevice }
+  | { type: "setPrototypeOrientation"; orientation: "portrait" | "landscape" }
+  | { type: "commitTransaction"; transaction: import("./transaction").Transaction }
+  | { type: "applyModifier"; id: string; modifier: import("./modifierStack").Modifier }
+  | { type: "removeModifier"; id: string; index: number }
+  | { type: "setExpression"; id: string; property: string; expression: string }
+  | { type: "removeExpression"; id: string; property: string }
+  | { type: "setPrototypeScale"; scale: "fit" | "100%" | "fill" }
+  | { type: "togglePrototypeHotspots"; enabled?: boolean }
+  | { type: "togglePrototypeLiveInputs"; enabled?: boolean }
+  | { type: "togglePrototypeSound"; enabled?: boolean }
+  | {
+      type: "openOverlay";
+      id: string;
+      position?: "center" | "top" | "bottom" | "left" | "right" | "manual";
+      closeOutside?: boolean;
+      backdrop?: boolean;
+      backdropColor?: string;
+    }
+  | { type: "closeOverlay" };
+
+export interface Engine {
+  snapshot(): Snapshot;
+  subscribe(fn: () => void): () => void;
+  dispatch(cmd: Command): void;
+  /** The whole document, in the shape `persist.saveDoc` writes and the file
+   *  store seeds a reopened file from — what File ▸ Save local copy serialises.
+   *  Spelled as the stored form so the two ways out of the app (a local copy, a
+   *  file in the store) cannot disagree about the document's shape. */
+  toDoc(): Omit<import("./persist").PersistedDoc, "version">;
+}
+
+export const TOOL_META: {
+  id: Tool;
+  label: string;
+  shortcut: string;
+}[] = [
+  { id: "select", label: "Move", shortcut: "V" },
+  { id: "scale", label: "Scale", shortcut: "K" },
+  { id: "frame", label: "Frame", shortcut: "F" },
+  { id: "section", label: "Section", shortcut: "⇧S" },
+  { id: "slice", label: "Slice", shortcut: "S" },
+  { id: "text", label: "Text", shortcut: "T" },
+  { id: "rect", label: "Rectangle", shortcut: "R" },
+  { id: "ellipse", label: "Ellipse", shortcut: "O" },
+  { id: "line", label: "Line", shortcut: "L" },
+  { id: "arrow", label: "Arrow", shortcut: "⇧L" },
+  { id: "poly", label: "Polygon", shortcut: "" },
+  { id: "star", label: "Star", shortcut: "" },
+  { id: "image", label: "Image", shortcut: "⇧I" },
+  { id: "pen", label: "Pen", shortcut: "P" },
+  { id: "pencil", label: "Pencil", shortcut: "⇧P" },
+  { id: "brush", label: "Brush", shortcut: "B" },
+  { id: "eraser", label: "Eraser", shortcut: "" },
+  { id: "comment", label: "Comment", shortcut: "C" },
+  { id: "hand", label: "Hand", shortcut: "H" },
+];

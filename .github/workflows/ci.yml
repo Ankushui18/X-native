@@ -1,0 +1,504 @@
+# The repository gate. `X-Native/scripts/check.sh` is the single definition of
+# "green" — this workflow runs exactly that script so "it passes locally" and
+# "it passes on CI" are the same claim. Before this file existed the repo
+# shipped no checks at all.
+#
+# A failing gate is reported twice: as short annotations (the only failure
+# channel reachable through the check-runs API) and as a PR comment carrying
+# the full log (the raw step log is served from blob storage, which some
+# tooling cannot reach).
+name: CI
+
+on:
+  push:
+    branches: ["main", "arena/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: scripts/check.sh
+    runs-on: ubuntu-latest
+    # The workspace pulls vello/wgpu/winit; a cold dependency build plus the
+    # full test suite is minutes, not seconds. If this job fails early, suspect
+    # the environment (dependency download, cache) before the code — the gate
+    # compiles ~400 crates before it reaches any of ours.
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: X-Native
+    steps:
+      - uses: actions/checkout@v4
+
+      # System libraries the GUI stack (winit / wgpu / arboard) links against
+      # on Linux. Without them the build fails inside a C dependency rather
+      # than on any Rust error.
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev ripgrep \
+            libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev
+
+      # The pinned toolchain, installed explicitly. actions-rust-lang's setup
+      # action is avoided on purpose: it exports CARGO_BUILD_WARNINGS=deny by
+      # default (-D warnings), which turns every dead-code warning into an error
+      # and makes scripts/check.sh's DEAD_CODE_CEILING meaningless — and it did
+      # nothing at all when the toolchain inputs were left to rust-toolchain.toml,
+      # so rustup auto-installed 1.98.1 in the middle of the gate.
+      - name: Toolchain (1.98.1)
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal \
+            --component rustfmt --component clippy
+          rustup show active-toolchain
+          cargo --version
+          rustc --version
+          rustfmt --version
+          cargo clippy --version
+
+      # The design sheet's own two checks import jsdom — the repository's only
+      # node dependency (tools/design-sheet/package.json). Node is pinned because
+      # jsdom 30 requires 22.22.2+/24.15+, which the runner's default is not.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: X-Native/tools/design-sheet/package-lock.json
+
+      - name: Design-sheet dependencies (jsdom)
+        run: npm ci --prefix tools/design-sheet --no-audit --no-fund
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: X-Native
+          # Both jobs compile the same workspace; without a shared key each pays
+          # for its own cold build of wgpu/vello.
+          shared-key: x-native
+
+      # `bash scripts/check.sh`, not `./scripts/check.sh`: the script is
+      # committed 100644 (non-executable), so the direct form fails with
+      # "permission denied".
+      #
+      # The gate writes to a FILE, not into a pipeline: `check.sh | tee` loses
+      # output when the log sink stops reading (the step log dies with a broken
+      # pipe and the pipeline's status becomes tee's 0, masking the failure).
+      - name: Gate
+        run: |
+          set +e
+          bash scripts/check.sh > /tmp/gate.log 2>&1
+          status=$?
+          cat /tmp/gate.log || true
+          exit $status
+
+      # Sprint 3 measurement probe (crates/x-core/tests/vector_probe.rs): complex
+      # inputs through Rust Outline Stroke and the shared simplifier. Diagnostic
+      # for the outline numbers (never fatal on them); the simplify half asserts
+      # its tolerance contract. Published as a notice annotation because the raw
+      # step log is not reachable from every tool.
+      #
+      # `includes`, not `startsWith`, on "PROBE|": under --nocapture libtest
+      # prints "test <name> ... " with no newline, so the FIRST printed line of
+      # each test arrives as "test outline_probe ... PROBE|outline|acute10-miter|"
+      # and a prefix filter silently drops it — measured as 28 of 30 lines
+      # published on the first run. The regex then strips that prefix so the
+      # notice still carries one `PROBE|` line per case.
+      - name: Vector probe (Sprint 3 diagnostic)
+        if: always()
+        run: |
+          set +e
+          cargo test -p x-core --release --test vector_probe -- --ignored --nocapture --test-threads=1 > /tmp/probe.log 2>&1
+          status=$?
+          cat /tmp/probe.log
+          node -e 'const fs=require("fs");const l=fs.readFileSync("/tmp/probe.log","utf8").split("\n").filter(x=>x.includes("PROBE|")||/panicked|test result/.test(x)).map(x=>x.replace(/^.*(?=PROBE\|)/,""));const t=("Vector probe (exit '"$status"')\n"+l.join("\n")).slice(0,15000);console.log("::notice::"+t.replaceAll("%","%25").replaceAll("\r","%0D").replaceAll("\n","%0A"));'
+          exit $status
+
+      # The wasm bridge (crates/x-wasm) is the first slice connecting the Rust
+      # engine to the web app; see docs/ARCHITECTURE_BOUNDARY.md. Building it
+      # here is what makes the boundary mechanically checkable instead of a
+      # review rule — the sandbox this is developed in cannot reach the Rust
+      # toolchain hosts, so CI is the only place the artifact is produced.
+      #
+      # Runs after the Gate so a wasm failure can never be mistaken for, or
+      # mask, a workspace failure.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: X-Native/apps/web/package-lock.json
+
+      - name: Package both WASM bridges (wasm-pack and matching bindgen glue)
+        id: package-wasm
+        run: |
+          rustup target add wasm32-unknown-unknown --toolchain 1.98.1
+          cargo install wasm-pack --version 0.15.0 --locked
+          cargo install wasm-bindgen-cli --version 0.2.127 --locked
+          bash scripts/build-wasm.sh
+
+      - name: Real WASM bridge smoke tests (no mocks or replay)
+        id: wasm-smoke
+        run: |
+          cd apps/web
+          npm ci --no-audit --no-fund
+          set +e
+          npm run test:wasm > /tmp/wasm-smoke.log 2>&1
+          status=$?
+          cat /tmp/wasm-smoke.log
+          if [ "$status" -ne 0 ]; then
+            # Logs live behind a separate CDN. Annotations remain API-readable,
+            # but only about ten error annotations survive per step, and a
+            # failing runner's log is mostly PASS banner lines. Emit the actual
+            # failure lines first so they cannot be crowded out of the budget.
+            grep -anE 'Error|error|FAIL|fail|Expected|expected|actual |thrown|at /' /tmp/wasm-smoke.log |
+              head -8 | while IFS= read -r line; do
+                printf '::error::%s\n' "${line//%/%25}"
+              done
+            tail -60 /tmp/wasm-smoke.log | while IFS= read -r line; do
+              line=${line//%/%25}
+              printf '::error::%s\n' "$line"
+            done
+            exit "$status"
+          fi
+          node -e 'const fs = require("fs"); const text = "Native smoke PASS\n" + fs.readFileSync("/tmp/wasm-smoke.log", "utf8").slice(-15000); console.log("::notice::" + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));'
+          npm run build
+
+      # This measures promotion readiness, not just ABI connectivity. Until the
+      # native/web grids agree, auto mode retains its TS oracle. A diagnostic
+      # failure is explicit and must not be described as native parity passing.
+      - name: Native geometry promotion diagnostic (real corpus, no replay)
+        id: wasm-differential
+        continue-on-error: true
+        run: |
+          cd apps/web
+          set +e
+          npm run bench:wasm -- --module public/x_geo.wasm --repeat 2 --out /tmp/geo-native.json > /tmp/geo-native.log 2>&1
+          status=$?
+          cat /tmp/geo-native.log
+          # API annotations truncate at 4096 chars and at ten warnings/step.
+          # Publish a compact complete-case summary, not the first few log lines.
+          node -e '
+            const fs = require("fs");
+            let text = fs.readFileSync("/tmp/geo-native.log", "utf8").slice(-3500);
+            if (fs.existsSync("/tmp/geo-native.json")) {
+              const r = JSON.parse(fs.readFileSync("/tmp/geo-native.json", "utf8"));
+              const sum = (k) => r.rows.reduce((n, row) => n + row[k], 0).toFixed(2);
+              text = `${r.mode}: ${r.rows.length - r.fails}/${r.rows.length} equivalent; failures=${r.fails}; repeat=${r.repeat}; TS total=${sum("tsMs")}ms; native total=${sum("modMs")}ms\n` + r.rows.map(row => `${row.sanityOk && row.diffOk ? "PASS" : "FAIL"} ${row.name}: ${row.reasons.map(x => x.split(":")[0]).join(",")}`).join("\n");
+            }
+            const failed = Number(process.argv[1]) !== 0;
+            text = (failed ? "Native promotion NOT approved\n" : "Native corpus passed\n") + text;
+            console.log((failed ? "::warning::" : "::notice::") + text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A"));
+          ' "$status"
+          cat /tmp/geo-native.log >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Upload browser-ready wasm assets
+        if: always() && steps.package-wasm.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: x-wasm
+          path: |
+            X-Native/apps/web/public/wasm
+            X-Native/apps/web/public/x_geo.wasm
+          if-no-files-found: error
+
+      - name: Upload native verification logs and differential data
+        if: always() && steps.package-wasm.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-verification
+          path: |
+            /tmp/wasm-smoke.log
+            /tmp/geo-native.log
+            /tmp/geo-native.json
+          if-no-files-found: warn
+
+      # scripts/check.sh is deliberately opaque: cargo writes into temp files it
+      # greps, the CLI build sends stderr to /dev/null, and the clippy branch
+      # prints only lines starting with "error". When the gate fails, re-run the
+      # phases it covers with nothing filtered out, and publish that alongside
+      # the gate's own log.
+      #
+      # The publish step is a PR comment because the raw step log is served from
+      # blob storage (unreachable from some tooling) and large multi-line
+      # annotations are dropped by GitHub.
+      - name: Diagnose
+        if: failure()
+        run: |
+          set +e
+          report=/tmp/report.txt
+          build=/tmp/build.log
+          clippy=/tmp/clippy.log
+          tests=/tmp/tests.log
+
+          cargo build --workspace --message-format short       >"$build"  2>&1
+          build_status=$?
+          cargo clippy --workspace --all-targets --message-format short >"$clippy" 2>&1
+          clippy_status=$?
+          cargo test --workspace --locked --no-fail-fast       >"$tests"  2>&1
+          test_status=$?
+
+          # One line per diagnostic: rustc's source excerpts and "note:" lines
+          # say nothing the short line above them does not, and GitHub drops
+          # oversized comments, so the useful lines go in first.
+          diag() {
+            grep -aE '\.rs:[0-9]+:[0-9]+: (warning|error)' "$1" | cut -c1-200
+          }
+
+          {
+            echo "### statuses: build=$build_status clippy=$clippy_status test=$test_status"
+            echo
+            echo "### clippy: warnings outside the dead-code budget (the LIVE count)"
+            diag "$clippy" | grep -avE 'never (used|read|constructed)'
+            echo
+            echo "### tests: failures, with panic text"
+            grep -aA4 -E 'panicked at|^---- ' "$tests" | cut -c1-220 | head -70
+            echo
+            echo "### build: errors"
+            diag "$build" | head -40
+            echo
+            echo "### clippy: tracked dead code (first 20 of $(diag "$clippy" | grep -acE 'never (used|read|constructed)'))"
+            # Not head -20: when the dead-code ratchet trips, this list IS the
+            # actionable content — 20 of 84 lines cannot be reconciled against
+            # the per-file table in docs/KNOWN_DEBT.md, and for a checkout with
+            # no Rust toolchain this comment is the only channel there is.
+            diag "$clippy" | grep -aE 'never (used|read|constructed)' | cut -c1-200 | head -120
+          } > "$report"
+          echo "report: $(wc -c < "$report") bytes"
+          cat "$report" || true
+          exit 0
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Keep panic/assertion details API-readable even without an open PR.
+          # Emit this first: GitHub caps error annotations per step.
+          python3 -c '
+          import pathlib, re
+          p = pathlib.Path("/tmp/tests.log")
+          if p.exists():
+              raw = p.read_text(errors="replace")
+              # Anchor on actual test-harness failure headers. A warning line
+              # ending in `----` otherwise captures the entire test log first
+              # and truncates away the panic we need to debug.
+              names = re.findall(r"(?m)^test [^\n]+ \.\.\. FAILED$", raw)
+              failures = re.findall(r"(?ms)^---- [^\n]+ stdout ----.*?(?=^failures:|^---- [^\n]+ stdout ----|\Z)", raw)
+              failures += [raw[max(0, m.start() - 1600):m.end() + 300] for m in re.finditer(r"[^\n]*(?:overflowed its stack|fatal runtime error|memory allocation)[^\n]*", raw)]
+              if failures or names:
+                  text = ("Rust test failure detail:\n" + "\n".join(names + failures))[:3500]
+                  print("::error::" + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
+          '
+          if [ -f /tmp/report.txt ]; then
+            printf '::notice::%s\n' "$(head -1 /tmp/report.txt)"
+          fi
+          if grep -q 'unformatted code' /tmp/gate.log 2>/dev/null; then
+            # The gate's short summary has only "Diff in file:line"; emit the
+            # first actual hunks through the API for toolchain-less hosts.
+            python3 -c '
+          import subprocess
+          result = subprocess.run(["cargo", "fmt", "--all", "--", "--check"], capture_output=True, text=True)
+          if result.returncode:
+              text = (result.stdout + result.stderr)[:3000]
+              print("::error::Rust formatting diff:\n".replace("\n", "%0A") + text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
+            '
+          fi
+          esc=$(printf '\033')
+          if [ -f /tmp/gate.log ]; then
+            grep -aE '==>|FAIL|error|warning|Diff|panicked|process didn.t exit|signal:|Caused by:|\.rs:[0-9]+' /tmp/gate.log |
+              sed -e "s/${esc}\[[0-9;]*m//g" -e 's/%/%25/g' -e 's/\r//g' |
+              cut -c1-350 | head -35 |
+              while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+          fi
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ]; then
+            {
+              echo "Gate failed on \`${GITHUB_SHA:0:7}\` — gate log, then one line per diagnostic from each phase."
+              echo
+              echo '~~~'
+              head -c 6000 /tmp/gate.log 2>/dev/null
+              echo '~~~'
+              echo '~~~'
+              head -c 40000 /tmp/report.txt 2>/dev/null
+              echo '~~~'
+            } > /tmp/ci-comment.md
+            gh pr comment "$number" --body-file /tmp/ci-comment.md || true
+          fi
+
+  # The one layer scripts/check.sh cannot reach. The six `#[ignore]`d tests build
+  # wgpu with `force_fallback_adapter` and vello with `use_cpu: false`, so they
+  # need a Vulkan driver: lavapipe (Mesa's software implementation) is that
+  # driver. This job installs it, runs exactly the ignored set, and uploads the
+  # PNGs the screenshot fixtures write — a design regression then shows up as an
+  # artifact a human can look at, which is the only check that catches "the canvas
+  # is ugly now" as opposed to "an assertion failed".
+  visual:
+    name: Screenshots (software Vulkan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: X-Native
+    env:
+      # `loading_screen_visuals` is ignored with "output directory must be
+      # supplied": this is that directory. The three screenshot fixtures write to
+      # the default (`screenshots/` beside the crate), which the artifact step
+      # collects from `X-Native/apps/x-designer/screenshots` either way.
+      X_NATIVE_LOADING_PREVIEW_DIR: apps/x-designer/screenshots/loading
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies + lavapipe
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev \
+            libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libudev-dev \
+            mesa-vulkan-drivers libvulkan1 vulkan-tools
+
+      - name: Toolchain (1.98.1)
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup show active-toolchain
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: X-Native
+          # Both jobs compile the same workspace; without a shared key each pays
+          # for its own cold build of wgpu/vello.
+          shared-key: x-native
+
+      # Diagnostic only: when the adapter is missing, this line says which
+      # drivers the loader can see, which is the difference between "no lavapipe"
+      # and "lavapipe present but wgpu refused it".
+      - name: Vulkan adapter (diagnostic, never fatal)
+        run: vulkaninfo --summary || true
+
+      # The output goes to a file and then into a PR comment: the raw step log is
+      # served from blob storage (unreachable from some tooling), so a panic here
+      # would otherwise be invisible to whoever has to fix it.
+      - name: Opt-in GPU + screenshot tests
+        run: |
+          set +e
+          # The regular gate enforces Cargo.lock with --locked. The opt-in
+          # visual suite may resolve the ignored GPU test target's dev graph;
+          # keep it runnable while the normal workspace gate remains strict.
+          cargo test --workspace -- --ignored > /tmp/visual.log 2>&1
+          status=$?
+          tail -c 6000 /tmp/visual.log || true
+          exit $status
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ] && [ -f /tmp/visual.log ]; then
+            {
+              echo "Screenshots job failed on \`${GITHUB_SHA:0:7}\` — the opt-in tests' own output:"
+              echo
+              echo '~~~'
+              grep -aE 'test .* FAILED|panicked at|^assertion|^ *left:|^ *right:|error(\[|:)|no adapter' \
+                /tmp/visual.log | head -60
+              echo '~~~'
+            } > /tmp/visual-comment.md
+            gh pr comment "$number" --body-file /tmp/visual-comment.md || true
+          fi
+          exit 0
+
+      - name: Upload the screenshots (also when the tests fail)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: |
+            X-Native/apps/x-designer/screenshots
+            X-Native/screenshots
+          if-no-files-found: warn
+
+  # The product UI is `apps/web` (see its README: the GPU native window was
+  # removed and nothing in the app calls into the Rust crates), yet until this
+  # job existed no CI step ran a single one of its checks — 1,610 of them, across
+  # the engine, the headless DOM tier and the chrome-drift ratchet. "The gate is
+  # green" therefore said nothing about the surface a user actually touches, and
+  # docs/KNOWN_DEBT.md §12 had to carry that caveat. It does not have to any
+  # more.
+  #
+  # The browser tier is still not here: `e2e/behaviour.mjs` needs a Chromium and
+  # a running dev server, and a check nobody has watched run is a red CI waiting
+  # to happen. It is the next step for this job, not this one.
+  web:
+    name: Web chrome (npm test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: X-Native/apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: X-Native/apps/web/package-lock.json
+
+      # `npm ci`, not `npm install`: the lockfile is committed, and a job that
+      # quietly re-resolved it would test a dependency tree nobody reviewed.
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # The suite prints one `N passed, M failed` line per file and exits non-zero
+      # on any failure; the log goes to a file so the failure step below can put
+      # the tail of it in the PR comment (raw step logs are served from blob
+      # storage, which some tooling cannot reach — the same reason the two Rust
+      # jobs do this).
+      - name: Tests (engine + headless DOM + drift ratchet)
+        run: |
+          set +e
+          npm test > /tmp/web-test.log 2>&1
+          status=$?
+          tail -c 6000 /tmp/web-test.log || true
+          exit $status
+
+      # `tsc -b && vite build`: the type check is part of the build script, so a
+      # panel that compiles only in the test runner still fails here.
+      - name: Build
+        run: |
+          set +e
+          npm run build > /tmp/web-build.log 2>&1
+          status=$?
+          tail -c 4000 /tmp/web-build.log || true
+          exit $status
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          number=$(gh pr list --head "$GITHUB_REF_NAME" --state open \
+                     --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$number" ]; then
+            {
+              echo "Web job failed on \`${GITHUB_SHA:0:7}\`. The failing checks:"
+              echo
+              echo '~~~'
+              grep -aE '^(FAIL|not ok)|error TS|passed, [1-9][0-9]* failed' \
+                /tmp/web-test.log /tmp/web-build.log 2>/dev/null | head -60
+              echo '~~~'
+            } > /tmp/web-comment.md
+            gh pr comment "$number" --body-file /tmp/web-comment.md || true
+          fi
+          exit 0

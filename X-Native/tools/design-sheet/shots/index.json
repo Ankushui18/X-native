@@ -1,0 +1,502 @@
+{
+  "theme": "graphite",
+  "at": "2026-09-17 20:34",
+  "browser": "AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.0 Safari/537.36",
+  "runtime": "chrome 153.0.8010.0",
+  "window": {
+    "width": 1440,
+    "height": 900
+  },
+  "iconFrame": [
+    "M22 6H2",
+    "M6 2v4",
+    "M6 18v4",
+    "M18 2v4",
+    "M18 18v4"
+  ],
+  "verified": {
+    "screens": 26,
+    "boxes": 7959,
+    "issues": []
+  },
+  "screens": [
+    {
+      "id": "dash-home-grid",
+      "name": "Home \u00b7 Grid",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "Dashboard \u2192 Home: title bar 40, sidebar 260, sort chip + grid/list toggle, quick cards, 3-up grid.",
+      "note": "The sort chip names the current order and the grid/list toggle is a real hit target; both were the messy part of this screen before the IA pass.",
+      "checks": [
+        "Your design workspace",
+        "Sorted by Edited",
+        "Grid",
+        "List",
+        "Start from a template"
+      ],
+      "file": "shots/dash-home-grid.png",
+      "bytes": 80794,
+      "sha256": "728486ffdddae845",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "dash-home-list",
+      "name": "Home \u00b7 List",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "The same files in the List layout: one panel, NAME / TEAM / EDITED header, rows 48 tall.",
+      "note": "NAME and EDITED are sortable \u2014 the header chevron marks the active key; clicking a header sorts, clicking the sort chip opens the same list.",
+      "checks": [
+        "NAME",
+        "TEAM",
+        "EDITED",
+        "Design System"
+      ],
+      "file": "shots/dash-home-list.png",
+      "bytes": 83572,
+      "sha256": "805fe14d230421e1",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "dash-recents",
+      "name": "Recents",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "Sidebar view: files touched recently, same grid and sort machinery.",
+      "note": "`visible_files()` is the one filter+sort list every view reads, so Recents cannot disagree with Home about order.",
+      "checks": [
+        "Recents",
+        "All files"
+      ],
+      "file": "shots/dash-recents.png",
+      "bytes": 78744,
+      "sha256": "2c08c8e2b37735d4",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "dash-starred",
+      "name": "Starred",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "Starred files only; the star sits on the card and in the row.",
+      "note": "Starring is per file and shows in both layouts; the sort has a Starred-first mode that keeps recency inside each group.",
+      "checks": [
+        "Starred",
+        "\u2605"
+      ],
+      "file": "shots/dash-starred.png",
+      "bytes": 81416,
+      "sha256": "dfe91460466d5840",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "dash-trash",
+      "name": "Trash (empty)",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "Trash with nothing in it \u2014 an empty state with a way back.",
+      "note": "This used to be a dead end with no content and no exit; the state now says what Trash is for.",
+      "checks": [
+        "Trash is empty",
+        "nothing is removed"
+      ],
+      "file": "shots/dash-trash.png",
+      "bytes": 62779,
+      "sha256": "ef40964c3b7a2b30",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "dash-selection",
+      "name": "Selection + sort menu",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "Two files selected: bulk bar at the bottom, sort menu open over the grid.",
+      "note": "\u2318A selects everything visible, Esc unwinds menu \u2192 selection \u2192 focus ring. The bulk bar only exists while something is selected.",
+      "checks": [
+        "selected",
+        "Unstar",
+        "Open",
+        "Starred first"
+      ],
+      "file": "shots/dash-selection.png",
+      "bytes": 92070,
+      "sha256": "24bbbb1a46cf9ab4",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "dash-empty",
+      "name": "No files yet",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "An empty recents list (first run, or a search that matches nothing): instructions plus the two actions that get you out.",
+      "note": "The empty state offers \"Open existing file\"; with a file present the same slot shows the grid.",
+      "checks": [
+        "No matching recent files",
+        "Open existing file",
+        "Create new file"
+      ],
+      "file": "shots/dash-empty.png",
+      "bytes": 69260,
+      "sha256": "50937d949118c754",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "dash-templates",
+      "name": "Templates",
+      "group": "Dashboard",
+      "module": "dashboard.rs",
+      "what": "The template gallery modal: 48 audited starting points, one glyph per row.",
+      "note": "Backed by OpenDoc::TEMPLATES; a test asserts every row has a distinct glyph (a column of identical chips was the bug).",
+      "checks": [
+        "Start from a template",
+        "Checkout flow",
+        "Retro board"
+      ],
+      "file": "shots/dash-templates.png",
+      "bytes": 73268,
+      "sha256": "8dfdba4361088109",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-structure",
+      "name": "Editor \u00b7 Layers + canvas",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "Full editor chrome: title bar 36, rail 48, left dock 280 (Layers / Assets / Tokens), right dock 340, rulers, tool dock 40 tall. The Design inspector is drawn from paint_design: name + %, W/H, X/Y, rotation, Auto layout, Flow, Resizing, Alignment, Padding, Clip content, Appearance, Typography \u2014 fields are filled boxes with no outline until hover, and the value being typed into is ringed.",
+      "note": "Three canvas aids ship in this frame: the minimap (bottom-right, \u21e7M or its \u2715), page sketches in every PAGES row that has content, and \u21e71 fitting the frame to the page content.",
+      "checks": [
+        "Layers",
+        "Assets",
+        "Tokens",
+        "Design",
+        "minimap",
+        "PAGES",
+        "sketch",
+        "Auto layout",
+        "Resizing",
+        "Alignment",
+        "Padding",
+        "Appearance",
+        "Typography"
+      ],
+      "file": "shots/editor-structure.png",
+      "bytes": 93693,
+      "sha256": "c320ef2232d1e6e9",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-library",
+      "name": "Editor \u00b7 Assets",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "Left dock on Assets: fonts in this file, then linked libraries.",
+      "note": "The left tabs are Layers / Assets / Tokens \u2014 OpenPencil / Figma UI3 naming.",
+      "checks": [
+        "Assets",
+        "LIBRARIES",
+        "linked"
+      ],
+      "file": "shots/editor-library.png",
+      "bytes": 95830,
+      "sha256": "ebd6f99e2df1fd74",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-tokens",
+      "name": "Editor \u00b7 Tokens",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "Left dock on Tokens: the document variables, grouped by kind.",
+      "note": "Variable edits route through the undo log; the inspector shows the variable name beside any bound fill.",
+      "checks": [
+        "Tokens",
+        "color/accent",
+        "undoable"
+      ],
+      "file": "shots/editor-tokens.png",
+      "bytes": 92058,
+      "sha256": "d614f71a49cbc56f",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-flow",
+      "name": "Editor \u00b7 Flow (prototype)",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "Right dock on Prototype: start point, interactions, animation; connections draw on the canvas.",
+      "note": "\u201c\u25b6 Preview flow start\u201d enters the chrome-less flow viewer (next screen).",
+      "checks": [
+        "Prototype",
+        "Start flow here",
+        "Preview flow start"
+      ],
+      "file": "shots/editor-flow.png",
+      "bytes": 82515,
+      "sha256": "1f1dab876ccf63ef",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-ship",
+      "name": "Editor \u00b7 Ship (inspect)",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "Right dock on Inspect: size, fill (with its variable), text style, and the CSS line.",
+      "note": "The fill row names the variable it is bound to, which is the link the paint library edits.",
+      "checks": [
+        "Inspect",
+        "Selection",
+        "variable"
+      ],
+      "file": "shots/editor-ship.png",
+      "bytes": 81340,
+      "sha256": "3909a27791ff618a",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-ux",
+      "name": "Editor \u00b7 UX analysis",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "Right dock on UX: contrast, flow gaps, quality notes.",
+      "note": "The contrast rows read the same audited pairs the palette table and the CLI theme audit use.",
+      "checks": [
+        "UX",
+        "Contrast",
+        "pass AA"
+      ],
+      "file": "shots/editor-ux.png",
+      "bytes": 79760,
+      "sha256": "f99fa4acf1f35d50",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-paint-lib",
+      "name": "Paint library (new)",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "The fill/stroke library popover: variables (active mode resolved, tick on the bound one), paint styles, and a detach row.",
+      "note": "Linking is by reference, not a copy: a bound row shows the variable name, the popover is 300 wide, lists \u22648 variables then \"+N more in Variables (\u23255)\", and Detach keeps the resolved colour.",
+      "checks": [
+        "VARIABLES",
+        "PAINT STYLES",
+        "Detach",
+        "more in Variables"
+      ],
+      "file": "shots/editor-paint-lib.png",
+      "bytes": 115422,
+      "sha256": "d1f0913edb97aa03",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-guides",
+      "name": "Guides + guide readout (new)",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "Dragging a node: smart guides, ruler guides, and the mono readout chip that follows the pointer.",
+      "note": "The readout is clamped to the canvas and only exists inside it; the minimap and the page sketches are the other two aids from the same pass.",
+      "checks": [
+        "readout",
+        "sguide"
+      ],
+      "file": "shots/editor-guides.png",
+      "bytes": 95753,
+      "sha256": "477261909a49185c",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-empty-page",
+      "name": "Empty page (\u21e71)",
+      "group": "Editor",
+      "module": "editor_ui.rs",
+      "what": "A page with nothing on it: the canvas says what to do, and \u21e71 frames the camera instead of fitting nothing.",
+      "note": "Content-fit fits the union of visible nodes with 24 px of padding; on an empty page it falls back to framing the camera.",
+      "checks": [
+        "Empty page",
+        "fit the page"
+      ],
+      "file": "shots/editor-empty-page.png",
+      "bytes": 88613,
+      "sha256": "fbd2babf0bb386de",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-command",
+      "name": "Command palette (\u2318K)",
+      "group": "Overlays",
+      "module": "command.rs",
+      "what": "Centred 480\u00d7400 palette: input 40 tall, rows 30, categories File\u2192Help.",
+      "note": "Command-first discovery; fuzzy search over registered commands, \u2191\u2193 to move, \u23ce to run.",
+      "checks": [
+        "Toggle minimap",
+        "Zoom to fit",
+        "Prototype"
+      ],
+      "file": "shots/editor-command.png",
+      "bytes": 102511,
+      "sha256": "efaffd5ab316ee04",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-context",
+      "name": "Context menu",
+      "group": "Overlays",
+      "module": "context_menu.rs",
+      "what": "Right-click menu, 208 wide with 28-tall rows, keyboard hints on the right.",
+      "note": "The canvas menu carries the view toggles the last pass added \u2014 Toggle minimap (\u21e7M) sits beside Toggle grid.",
+      "checks": [
+        "Toggle minimap",
+        "Toggle grid",
+        "Duplicate"
+      ],
+      "file": "shots/editor-context.png",
+      "bytes": 101748,
+      "sha256": "b710537d308a2a3c",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-colour",
+      "name": "Colour picker",
+      "group": "Overlays",
+      "module": "editor_ui.rs",
+      "what": "The fill colour popover: hex, opacity, the accent ramp, and the palette note.",
+      "note": "Colour popovers are modal to the inspector: clicks inside are consumed, so a pick never falls through to the canvas.",
+      "checks": [
+        "Fill colour",
+        "Hex",
+        "Opacity"
+      ],
+      "file": "shots/editor-colour.png",
+      "bytes": 110408,
+      "sha256": "436393326ea9503f",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-app-menu",
+      "name": "App menu",
+      "group": "Overlays",
+      "module": "editor_ui.rs",
+      "what": "The hamburger menu, 220 wide: file actions, export, find, theme, preferences.",
+      "note": "Every row here is a real action; shortcuts are shown only where the app binds them.",
+      "checks": [
+        "New file",
+        "Export as\u2026",
+        "Preferences"
+      ],
+      "file": "shots/editor-app-menu.png",
+      "bytes": 93165,
+      "sha256": "64c389d7cc0132d5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-find",
+      "name": "Find & replace",
+      "group": "Overlays",
+      "module": "editor_ui.rs",
+      "what": "Find bar with replace row, match counter, case and selection-only toggles.",
+      "note": "\u21e7\u2318F opens it; matching is document-wide by default, or scoped to the selection.",
+      "checks": [
+        "selection only",
+        "1 / 4"
+      ],
+      "file": "shots/editor-find.png",
+      "bytes": 101637,
+      "sha256": "072bc0ba907ea73e",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "editor-notify",
+      "name": "Notifications",
+      "group": "Overlays",
+      "module": "editor_ui.rs",
+      "what": "Toasts in the corner: what happened, and the shortcut that undoes it.",
+      "note": "The undo toast names the exact operation because \"Undo\" alone never tells you what you are undoing.",
+      "checks": [
+        "Checkout flow saved",
+        "Undo"
+      ],
+      "file": "shots/editor-notify.png",
+      "bytes": 106666,
+      "sha256": "b149c39dc3ed805c",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "board",
+      "name": "Board",
+      "group": "Board",
+      "module": "board_ui.rs",
+      "what": "Infinite canvas: header 36 with a way back, dot grid, sticky notes, links, board tool dock (9 tools), zoom chip, outline.",
+      "note": "Boards carry their own tool set and a Grid / Links toggle; the header keeps a visible route to the dashboard.",
+      "checks": [
+        "Retro board",
+        "Grid",
+        "Links",
+        "where does the summary live",
+        "Board outline"
+      ],
+      "file": "shots/board.png",
+      "bytes": 54874,
+      "sha256": "ac50cdddd5b1470d",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "flow",
+      "name": "Flow viewer (present)",
+      "group": "Board",
+      "module": "editor_ui.rs",
+      "what": "Prototype playback: no chrome at all, hit targets numbered, preview chip floating.",
+      "note": "The flow viewer hides the docks, rulers and toolbar so the prototype gets every pixel; the chip is the only chrome left.",
+      "checks": [
+        "Preview",
+        "Page 1 of 3",
+        "Chrome-less"
+      ],
+      "file": "shots/flow.png",
+      "bytes": 26415,
+      "sha256": "8ab7d5dbc7a2ae5c",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "id": "loading",
+      "name": "Document loading",
+      "group": "Board",
+      "module": "loading.rs",
+      "what": "The loading screen: card, spinner, progress, and the nine phases named as they happen.",
+      "note": "Elapsed time changes the spinner, never the phase; a failure offers Recover / Open saved file, a working phase offers Cancel.",
+      "checks": [
+        "Reading the document structure",
+        "Cancel",
+        "Loading images"
+      ],
+      "file": "shots/loading.png",
+      "bytes": 36286,
+      "sha256": "1da4f458a1a4a62c",
+      "width": 1440,
+      "height": 900
+    }
+  ]
+}

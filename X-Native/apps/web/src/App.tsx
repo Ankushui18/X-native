@@ -1,0 +1,758 @@
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { MemoryEngine } from "./engine/memory";
+import { Canvas } from "./ui/Canvas";
+import { copyText, worldClones } from "./engine/clipboard";
+import { worldPos } from "./engine/memory";
+import { zoomTo } from "./ui/zoom";
+import { modalOpen, useEscape } from "./ui/escape";
+import { LiveStatus, ToastPill, useToastMessage } from "./ui/announce";
+import { devLangLabel, getDevPrefs, type DevFormat } from "./ui/devPrefs";
+import {
+  Actions,
+  FindReplaceBar,
+  HelpBtn,
+  LeftPanel,
+  NavRail,
+  NudgeDialog,
+  Toolbar,
+  bindHotkeys,
+  usePanelDrag,
+  type NavId,
+} from "./ui/chrome";
+import { Icon } from "./ui/icons";
+import { RightPanel, copyLayerCode, copyPng, copyPngNodes, layerCode } from "./ui/inspector";
+import { installDesignApi } from "./engine/designApi";
+import { FigInspectorModal } from "./ui/FigInspectorModal";
+import { PresentationPlayer } from "./ui/PresentationPlayer";
+import { ZenHUD } from "./ui/ZenHUD";
+import { RadialMenu } from "./ui/RadialMenu";
+import { toast as toastMsg } from "./ui/toast";
+import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
+import { Dashboard } from "./ui/Dashboard";
+import { DEMO_ID, createFile, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import { dehydrateDoc, hydrateDoc } from "./engine/assets";
+import { initWasmBridge } from "./engine/wasmBridge";
+import { WasmEngine } from "./engine/WasmEngine";
+import { preloadGeo } from "./engine/geoBridge";
+import { decideRouteChange, readRoute } from "./ui/fileRoute";
+import { RustDocumentView, type RustPreviewOwner } from "./ui/RustDocumentView";
+
+/** The hash is the source of truth for home, ordinary files and the explicit
+ * `?engine=rust` preview. The preview must never mount MemoryEngine beside a
+ * live Rust history, including when browser Back changes the hash. */
+
+export default function App() {
+  // Preload on the dashboard too, before the first file import.
+  useEffect(() => { void initWasmBridge(); }, []);
+  const [route, setRoute] = useState(readRoute);
+  const routeRef = useRef(route);
+  const acceptedHash = useRef(window.location.hash);
+  const rustOwner = useRef<RustPreviewOwner | null>(null);
+  const registerRustOwner = useCallback((owner: RustPreviewOwner | null) => {
+    rustOwner.current = owner;
+  }, []);
+  // The document is resolved before the editor mounts: seeding the engine is
+  // synchronous, so the canvas never paints half a file. Large documents live in
+  // IndexedDB, which is only readable asynchronously — hence this small state
+  // machine rather than a direct render.
+  const [seed, setSeed] = useState<{ id: string; rust: boolean; doc: DocSeed | null; missing: boolean } | null>(null);
+
+  useEffect(() => {
+    const on = () => {
+      // A cancelled Back/URL change restores the accepted hash. Ignore the
+      // resulting hashchange rather than confirming the same edits twice.
+      if (window.location.hash === acceptedHash.current) return;
+      const next = readRoute();
+      const previous = routeRef.current;
+      const owner = rustOwner.current;
+      const decision = decideRouteChange(previous, next, !!owner?.hasEdits(), () => window.confirm(
+        "The Rust preview does not autosave. Download a file copy first or leave and discard these edits?",
+      ));
+      // A selection/query change within one Rust-owned file does not reopen
+      // stale bytes. Cancelling a different owner change restores the URL.
+      if (decision === "same-owner") {
+        acceptedHash.current = window.location.hash;
+        return;
+      }
+      if (decision === "cancel") {
+        window.location.hash = acceptedHash.current;
+        return;
+      }
+      // React's passive effect cleanup runs AFTER rendering the next route.
+      // Close Rust synchronously here, before Editor can construct its TS
+      // history. This includes Back, shared links and manual URL edits.
+      rustOwner.current = null;
+      owner?.close();
+      acceptedHash.current = window.location.hash;
+      routeRef.current = next;
+      setRoute(next);
+    };
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+
+  // A pre-dashboard autosave becomes a Draft rather than vanishing behind the
+  // new front door, and a brand-new store gets the bundled sample file.
+  useEffect(() => {
+    if (route.view === "home") {
+      ensureDemoFile();
+      migrateLegacyDoc();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (route.view !== "file") {
+      setSeed(null);
+      return;
+    }
+    // A fresh browser opening a shared demo link should meet the sample file,
+    // not scratch "Untitled". A no-op once any files exist.
+    if (route.id === DEMO_ID) ensureDemoFile();
+    let alive = true;
+    const present = (doc: DocSeed | null) => {
+      // Images are references in storage; the editor needs the bytes. Resolve
+      // them first, so a document never reaches the engine half-loaded.
+      if (!doc) return Promise.resolve(setSeed({ id: route.id, rust: route.rust, doc: null, missing: !!getFile(route.id) }));
+      return hydrateDoc(doc as never).then((unresolved) => {
+        if (!alive) return;
+        if (unresolved) toastMsg(`${unresolved} image${unresolved > 1 ? "s" : ""} could not be loaded`);
+        setSeed({ id: route.id, rust: route.rust, doc, missing: false });
+      });
+    };
+    const sync = readDocSync(route.id);
+    if (sync) {
+      void present(sync);
+      return () => {
+        alive = false;
+      };
+    }
+    setSeed(null);
+    readDoc(route.id)
+      .then((doc) => {
+        if (!alive) return;
+        // An id that was never stored opens as a scratch document — that is how
+        // a direct link to a file in another browser should behave, and it is
+        // what the e2e harness drives. An id that exists but whose bytes are
+        // gone must NOT be overwritten by a blank file.
+        setSeed({ id: route.id, rust: route.rust, doc: doc ?? null, missing: !!doc === false && !!getFile(route.id) });
+      })
+      .catch(() => {
+        if (alive) setSeed({ id: route.id, rust: route.rust, doc: null, missing: !!getFile(route.id) });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [route]);
+
+  const runWasmPoc = useCallback(async () => {
+    try {
+      const wasmEngine = await WasmEngine.initialize();
+      const state = wasmEngine.createRectangle(100, 100);
+      console.log("[X-Native] Rust WASM DocumentState:", state);
+      toastMsg("Rust WASM created a rectangle · state logged to Console");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[X-Native] Rust WASM proof of concept failed:", error);
+      toastMsg(`Rust WASM POC unavailable · ${message}`);
+    }
+  }, []);
+
+  if (route.view === "file") {
+    if (seed && seed.id === route.id && seed.rust === route.rust && seed.missing) {
+      return (
+        <div className="open-screen">
+          <div className="open-card">
+            <b>This file is not in this browser</b>
+            <span>Its document is stored locally, and nothing was found here. Start a new file instead.</span>
+            <button className="primary" onClick={() => (window.location.hash = "#/")}>
+              Back to files
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (!seed || seed.id !== route.id || seed.rust !== route.rust) {
+      return (
+        <div className="open-screen">
+          <div className="open-card">
+            <b>Opening file…</b>
+            <span>Reading the document from local storage.</span>
+          </div>
+        </div>
+      );
+    }
+    if (route.rust) {
+      return (
+        <RustDocumentView
+          key={`rust:${route.id}`}
+          fileId={route.id}
+          seed={seed.doc}
+          onHome={() => { window.location.hash = "#/"; }}
+          onStandard={() => { window.location.hash = `#/file/${encodeURIComponent(route.id)}`; }}
+          onRelease={registerRustOwner}
+        />
+      );
+    }
+    return (
+      <Editor
+        key={route.id}
+        fileId={route.id}
+        seed={seed.doc}
+        onHome={() => {
+          window.location.hash = "#/";
+        }}
+      />
+    );
+  }
+  return (
+    <Dashboard
+      onOpen={(id) => (window.location.hash = `#/file/${encodeURIComponent(id)}`)}
+      onRunWasmPoc={() => { void runWasmPoc(); }}
+    />
+  );
+}
+
+/** A file link, narrowed to one layer when exactly one is selected, so the
+ *  receiver opens on that layer rather than somewhere on the page. */
+function linkForSelection(snap: { selection: string[] }, fileId: string): string {
+  const base = `#/file/${encodeURIComponent(fileId)}`;
+  const one = snap.selection.length === 1 ? snap.selection[0] : null;
+  return `${window.location.origin}${window.location.pathname}${base}${one ? `?f=${encodeURIComponent(one)}` : ""}`;
+}
+
+function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null; onHome: () => void }) {
+  const engine = useMemo(() => new MemoryEngine(!seed, seed), [seed]);
+  const snap = useSyncExternalStore(
+    (fn) => engine.subscribe(fn),
+    () => engine.snapshot(),
+    () => engine.snapshot(),
+  );
+  const [nav, setNav] = useState<NavId>("file");
+  const [leftW, setLeftW] = useState(240);
+  const [rightW, setRightW] = useState(240);
+  // A phone cannot dock two sidebars: start minimized at <=860px so the
+  // canvas owns the screen, with the chip restoring the panels as overlays.
+  const [minUi, setMinUi] = useState(
+    () => typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 860px)").matches,
+  );
+  const [hideUi, setHideUi] = useState(false);
+  const [zenMode, setZenMode] = useState(false);
+  const [radialMenu, setRadialMenu] = useState<{ x: number; y: number } | null>(null);
+  const [actions, setActions] = useState(false);
+  // Stable identities for the layers panel's memo: inline arrows here would
+  // defeat its comparator and re-render every row on every dispatch.
+  const toggleMinUi = useCallback(() => setMinUi((v) => !v), []);
+  const openActions = useCallback(() => setActions(true), []);
+
+  /** "New file…" (Actions): the stored copy of this file is replaced by a blank
+   *  document, so the reload opens an empty canvas instead of the file the user
+   *  just confirmed deleting. Clearing only the legacy autosave slot left the
+   *  per-file copy behind, which the next boot read straight back. */
+  const startBlankFile = useCallback(() => {
+    const blank = docFromTemplate("blank");
+    const name = getFile(fileId)?.name;
+    saveFile(fileId, (name ? { ...blank, fileName: name } : blank) as never);
+    clearDoc(); // the legacy autosave slot and its IndexedDB row
+    window.location.reload();
+  }, [fileId]);
+  /** File ▸ Open local copy: a downloaded .x.json becomes a *new* file, the way
+   *  Figma's local copy does — the document you were editing is left alone.
+   *  The file store owns the bytes from here on, so autosave, the Dashboard and
+   *  this session all read one copy. */
+  const openLocalCopy = useCallback((name: string, doc: DocSeed) => {
+    // `createFile` cannot fail here: `writeDoc` keeps a document over
+    // localStorage's quota in IndexedDB instead of throwing (files.ts:142).
+    const meta = createFile({ name, template: "blank", doc });
+    toastMsg(`Opened ${meta.name} from a local copy`);
+    window.location.hash = `#/file/${encodeURIComponent(meta.id)}`;
+  }, []);
+
+  const [figInspector, setFigInspector] = useState(false);
+  const [toast, setToast] = useState("");
+  const runnerRef = useRef<((ix: any, sourceId?: string) => void) | null>(null);
+  const leftDrag = usePanelDrag(leftW, setLeftW, 180, 420);
+  const rightDrag = usePanelDrag(rightW, setRightW, 200, 420, true);
+
+  // Geometry accelerator: fetch + handshake the wasm module while idle, so the
+  // first boolean bake finds it ready. Silent no-op when absent or disabled.
+  useEffect(() => {
+    preloadGeo();
+  }, [engine]);
+
+  // Autosave. The document is serialised on a trailing debounce so a burst of
+  // edits (dragging, typing) writes once when it settles rather than on every
+  // dispatch, and again on pagehide to catch a close mid-burst.
+  useEffect(() => {
+    let timer = 0;
+    let warned = false;
+    let pending = false;
+    const write = () => {
+      pending = false;
+      // "New file…" has already replaced this file's stored copy; the flush on
+      // the way to the reload must not put the discarded document back.
+      if (saveSuppressed()) return;
+      // Stored form: image bytes live in the asset store, so this JSON is a few
+      // kilobytes per image instead of its full data URL - which is what made a
+      // 50-photo file take a fifth of a second to save.
+      const doc = dehydrateDoc(engine.toDoc() as never);
+      const status = saveDoc(doc);
+      try {
+        saveFile(fileId, doc as never);
+      } catch {
+        /* the per-file index is a convenience; the autosave above is the copy */
+      }
+      if (status !== "saved" && !warned) {
+        warned = true; // one warning per session, not once per keystroke
+        toastMsg(
+          status === "quota"
+            ? "Document too large to autosave · export to keep a copy"
+            : "Autosave unavailable in this browser",
+        );
+      }
+      if (status === "saved") warned = false;
+    };
+    const off = engine.subscribe(() => {
+      pending = true;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(write, 600);
+    });
+    const flush = () => {
+      window.clearTimeout(timer);
+      write();
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      off();
+      window.clearTimeout(timer);
+      // Route changes do not fire pagehide. Flush only a pending edit before
+      // the next file/mode reads storage; otherwise the Rust preview could
+      // admit stale bytes while a TS debounce was cancelled on unmount.
+      if (pending) write();
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [engine, fileId]);
+
+  // View > Property labels. It is a stylesheet concern rather than a
+  // prop: the right sidebar is built from a hundred small field components and
+  // threading a boolean through all of them would touch every one of them for
+  // what is a single text-versus-icon decision.
+  useEffect(() => {
+    document.documentElement.dataset.proplabels = snap.propertyLabels ? "on" : "off";
+    return () => {
+      delete document.documentElement.dataset.proplabels;
+    };
+  }, [snap.propertyLabels]);
+
+  // If a stored document existed but could not be read, say so rather than
+  // silently presenting an empty file as if nothing was lost. This sets the
+  // toast state directly: the bus subscription below mounts after this effect,
+  // so a message raised through the bus here would be dropped.
+  // The design API for browser automation: window.__xNativeDesignApi.call().
+  useEffect(() => {
+    installDesignApi(() => engine.snapshot());
+  }, [engine]);
+
+  useEffect(() => {
+    if (!engine.restoreFailed) return;
+    setToast("Saved document could not be read · started a new one");
+    const t = window.setTimeout(() => setToast(""), 4000);
+    return () => window.clearTimeout(t);
+  }, [engine]);
+
+  // Any module can raise a toast via the bus (PM-U8: the subscription and the
+  // 1800ms are the shared hook's now, so the editor and the dashboard cannot
+  // drift). The editor's own warnings above keep their own, longer durations —
+  // what is shared is the channel, not the clock.
+  const busToast = useToastMessage();
+  const shown = toast || busToast;
+
+  // Opening a file shows the whole page - default view for a file you have
+  // not seen before - rather than whatever viewport the last session left in
+  // the document. A link that names a layer fits that layer instead, so this
+  // stands down when one is present.
+  useEffect(() => {
+    if (/[?&]f=/.test(window.location.hash || "")) return undefined;
+    let timer = 0;
+    let tries = 0;
+    const attempt = () => {
+      const wrap = document.querySelector(".canvas-wrap");
+      // Fit needs the size of the canvas that is really on screen; on the first
+      // frame the panels have been laid out but the canvas has not measured.
+      if (!wrap || wrap.getBoundingClientRect().width < 40) {
+        if (++tries < 8) timer = window.setTimeout(attempt, 40);
+        return;
+      }
+      zoomTo(engine, "fit");
+    };
+    timer = window.setTimeout(attempt, 0);
+    return () => window.clearTimeout(timer);
+  }, [engine]);
+
+  // The zoom menu offers "Hide UI", which is this component's state, so it asks
+  // through an event rather than threading another prop through the inspector.
+  // ⇧⌘E's bulk export sheet. The flag lives here, not in the panel, and each
+  // overlay joins the one Escape cascade while it is open (PM-U3): the sheet
+  // opened last is the one Escape closes first, whoever owns the state.
+  const [exportOpen, setExportOpen] = useState(false);
+  const [nudgeOpen, setNudgeOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  // PM-U9: the four veiled sheets are *modal* — the editor's global chords stand
+  // down while they are up (see ui/escape.ts). The find bar is not: it is a strip
+  // over the canvas and the editor keeps working underneath it.
+  useEscape(findOpen ? "find" : null, () => setFindOpen(false));
+  useEscape(nudgeOpen ? "nudge" : null, () => setNudgeOpen(false), true);
+  useEscape(exportOpen ? "export" : null, () => setExportOpen(false), true);
+  useEscape(actions ? "actions" : null, () => setActions(false), true);
+  useEscape(figInspector ? "fig-inspector" : null, () => setFigInspector(false), true);
+  // Handoff plumbing that needs the live document: land on the layer a shared
+  //  link points at, then answer the two copy commands the menu asks for.
+  useEffect(() => {
+    const linked = /[?&]f=([^/?#]+)/.exec(window.location.hash || "");
+    if (!linked) return undefined;
+    const id = decodeURIComponent(linked[1]);
+    let tries = 0;
+    let timer = 0;
+    // The node lives in whichever page the file last had open, so search every
+    // page and switch if the link points elsewhere. Retrying covers the first
+    // paint, where the restored page index and the tree land in the same tick.
+    const attempt = () => {
+      const s = engine.snapshot();
+      const at = s.pages.findIndex((pg) => !!worldPos(pg.root, id));
+      if (at < 0) {
+        if (++tries < 3) {
+          timer = window.setTimeout(attempt, 220);
+          return false;
+        }
+        // Say so: a link that silently opens the wrong view is worse than one
+        // that admits the layer is not in this copy of the file.
+        setToast("That link points at a layer this copy of the file does not have");
+        window.setTimeout(() => setToast(""), 3200);
+        return false;
+      }
+      if (at !== s.page) engine.dispatch({ type: "setPage", index: at });
+      // Handoff is a view anyone can inspect without touching the file;
+      // the closest thing we have is opening such a link already in Dev Mode.
+      engine.dispatch({ type: "setRightTab", tab: "inspect" });
+      engine.dispatch({ type: "select", ids: [id] });
+      zoomTo(engine, "selection");
+      return true;
+    };
+    attempt();
+    return () => window.clearTimeout(timer);
+  }, [engine]);
+  useEffect(() => {
+    // Through the bus, not the local state: these are ordinary confirmations, so
+    // they get the shared 1800ms clock and the announcement with it (PM-U8).
+    // What stays local is the two warnings below, which are deliberately longer.
+    const flash = (msg: string) => toastMsg(msg);
+    const onCopyLink = () => {
+      const s = engine.snapshot();
+      if (!s.selection.length) flash("Select a layer first · this link opens one layer");
+      else {
+        copyText(linkForSelection(s, fileId));
+        flash(s.selection.length === 1 ? "Link to that layer copied" : "Link copied · opens this file");
+      }
+    };
+    const onCopyCode = (e: Event) => {
+      const s = engine.snapshot();
+      const root = s.pages[s.page].root;
+      const nodes = s.selection
+        .map((id) => worldPos(root, id)?.node ?? null)
+        .filter((n): n is NonNullable<typeof n> => !!n);
+      if (!nodes.length) {
+        flash("Select a layer to copy its code");
+        return;
+      }
+      const detail = (e as CustomEvent<{ format?: string | null }>).detail;
+      const format = (detail?.format ?? undefined) as DevFormat | undefined;
+      if (nodes.length === 1) {
+        copyLayerCode(nodes[0], format, s);
+        return;
+      }
+      // A multi-selection copies one labelled block per layer, joined into a
+      // single clipboard write.
+      copyText(nodes.map((n) => `/* ${n.name} */\n${layerCode(n, format, s)}`).join("\n\n"));
+      flash(`Copied ${nodes.length} layers as ${devLangLabel(format ?? getDevPrefs().format)}`);
+    };
+    const onCopyPng = () => {
+      const s = engine.snapshot();
+      const root = s.pages[s.page].root;
+      const items = s.selection
+        .map((id) => worldPos(root, id))
+        .filter((w): w is NonNullable<typeof w> => !!w);
+      if (!items.length) {
+        flash("Select a layer to copy it as a PNG");
+        return;
+      }
+      if (items.length === 1) {
+        copyPng(items[0].node, root);
+        return;
+      }
+      copyPngNodes(worldClones(items));
+    };
+    window.addEventListener("x-native-copy-link", onCopyLink);
+    window.addEventListener("x-native-copy-png", onCopyPng);
+    window.addEventListener("x-native-copy-code", onCopyCode);
+    return () => {
+      window.removeEventListener("x-native-copy-link", onCopyLink);
+      window.removeEventListener("x-native-copy-png", onCopyPng);
+      window.removeEventListener("x-native-copy-code", onCopyCode);
+    };
+  }, [engine, fileId]);
+
+  useEffect(() => {
+    let mousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    const trackMouse = (e: MouseEvent) => {
+      mousePos = { x: e.clientX, y: e.clientY };
+    };
+
+    const on = () => {
+      setHideUi((v) => {
+        const next = !v;
+        if (!next) setZenMode(false);
+        return next;
+      });
+    };
+    const onZen = () => {
+      setZenMode((v) => {
+        const next = !v;
+        setHideUi(next);
+        toastMsg(next ? "Zen Mode active · Press Z or ⌘\\ to exit" : "Exited Zen Mode");
+        return next;
+      });
+    };
+    const onRadial = () => setRadialMenu(mousePos);
+    const onMin = () => setMinUi((v) => !v);
+    const onExport = () => setExportOpen(true);
+    const onNudge = () => setNudgeOpen(true);
+    const onFind = () => setFindOpen((v) => !v);
+
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return;
+      // PM-U9: a modal owns the keyboard. Zen (`z`) and the radial menu (`q`)
+      // are editor chords; opening either over a sheet is the same mistake the
+      // tool letters and Delete were making.
+      if (modalOpen()) return;
+      if (e.key === "z" || e.key === "Z") {
+        if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+          onZen();
+        }
+      }
+      if (e.key === "q" || e.key === "Q" || e.key === "`") {
+        if (!e.metaKey && !e.ctrlKey && !e.altKey && !snap.vecEdit) {
+          onRadial();
+        }
+      }
+    };
+
+    window.addEventListener("mousemove", trackMouse);
+    window.addEventListener("keydown", handleKey);
+    window.addEventListener("x-native-hide-ui", on);
+    window.addEventListener("x-native-zen-mode", onZen);
+    window.addEventListener("x-native-radial-menu", onRadial);
+    window.addEventListener("x-native-minimize-ui", onMin);
+    window.addEventListener("x-native-export-dialog", onExport);
+    window.addEventListener("x-native-nudge-dialog", onNudge);
+    window.addEventListener("x-native-find", onFind);
+    return () => {
+      window.removeEventListener("mousemove", trackMouse);
+      window.removeEventListener("keydown", handleKey);
+      window.removeEventListener("x-native-hide-ui", on);
+      window.removeEventListener("x-native-zen-mode", onZen);
+      window.removeEventListener("x-native-radial-menu", onRadial);
+      window.removeEventListener("x-native-minimize-ui", onMin);
+      window.removeEventListener("x-native-export-dialog", onExport);
+      window.removeEventListener("x-native-nudge-dialog", onNudge);
+      window.removeEventListener("x-native-find", onFind);
+    };
+  }, [snap.vecEdit]);
+
+  const share = () => {
+    const page = snap.pages[snap.page];
+    // The clipboard gets the link alone — a recipient pastes it into Slack or a
+    // ticket and it stays clickable. The file/page names are in the message.
+    // The button shares the *file*; a link to one layer comes from the layer's
+    // own right-click menu, so a teammate never receives a deep link by accident.
+    copyText(`${window.location.origin}${window.location.pathname}#/file/${encodeURIComponent(fileId)}`);
+    setToast(`Link copied — opens ${snap.fileName} · ${page.name}`);
+    window.setTimeout(() => setToast(""), 1600);
+  };
+  const present = () => {
+    engine.dispatch({ type: "presentStart" });
+    setHideUi(true);
+    toastMsg("Presenting — click hotspots, Esc to go back");
+  };
+
+  useEffect(
+    () =>
+      bindHotkeys(engine, {
+        onActions: () => setActions(true),
+        onPresent: present,
+        onHide: () => setHideUi((v) => !v),
+        onMinimize: () => setMinUi((v) => !v),
+        onNav: setNav,
+        onPresentExit: () => {
+          const s = engine.snapshot();
+          if (s.presentFrame) {
+            if (s.activeOverlay) {
+              engine.dispatch({ type: "closeOverlay" });
+            } else if (s.presentStack.length > 1) {
+              engine.dispatch({ type: "presentBack" });
+            } else {
+              engine.dispatch({ type: "presentStop" });
+              setHideUi(false);
+            }
+          }
+        },
+      }),
+    [engine],
+  );
+
+  const cls = [
+    "app",
+    minUi ? "min-ui" : "",
+    minUi && !snap.selection.length ? "no-sel" : "",
+    hideUi ? "hide-ui" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <div
+      className={cls}
+      style={{ ["--left-w" as string]: `${leftW}px`, ["--right-w" as string]: `${rightW}px` }}
+    >
+      <NavRail
+        engine={engine}
+        nav={nav}
+        setNav={setNav}
+        onActions={() => setActions(true)}
+        onInspectFig={() => setFigInspector(true)}
+        onHome={onHome}
+      />
+      <LeftPanel
+        engine={engine}
+        snap={snap}
+        nav={nav}
+        onMinimize={toggleMinUi}
+        onActions={openActions}
+        onHome={onHome}
+        onOpenLocalCopy={openLocalCopy}
+      />
+      <div
+        className="split l"
+        style={{ display: minUi || hideUi ? "none" : undefined }}
+        {...leftDrag}
+      />
+      {/* PM-U3: the editor's surface is the focus home — where the caret goes
+          when an overlay closes and the control that opened it is gone (the
+          palette row that ran Export assets, a deleted layer's button). It is
+          programmatically focusable, so `Tab` resumes inside the editor instead
+          of restarting at the top of the document, and `-1` keeps it out of the
+          tab order itself. */}
+      <main className="canvas-col" data-focus-home tabIndex={-1}>
+        <h1 className="sr-only">{snap.fileName}</h1>
+        {minUi && !hideUi && !snap.presentFrame && (
+          // Keeps the file name and a way out of the minimized state on
+          // screen; ours lives at the top of the left panel, which is hidden
+          // here, so the same two controls float in its place.
+          <div className="min-chip">
+            <button className="icon-btn" title="Back to files" aria-label="Back to files" onClick={onHome}>
+              <Icon name="back" size={14} />
+            </button>
+            <span className="min-chip-name" title="UI minimized · ⇧⌘\ restores the panels">
+              {snap.fileName}
+            </span>
+            <button className="icon-btn" title="Restore UI (⇧⌘\)" aria-label="Restore panels" onClick={() => setMinUi(false)}>
+              <Icon name="minimize" size={14} />
+            </button>
+          </div>
+        )}
+        <Canvas
+          engine={engine}
+          snap={snap}
+          onRunInteraction={(runner) => {
+            runnerRef.current = runner;
+          }}
+        />
+        {zenMode && (
+          <ZenHUD
+            engine={engine}
+            snap={snap}
+            onExit={() => {
+              setZenMode(false);
+              setHideUi(false);
+            }}
+          />
+        )}
+        {radialMenu && (
+          <RadialMenu
+            engine={engine}
+            x={radialMenu.x}
+            y={radialMenu.y}
+            onClose={() => setRadialMenu(null)}
+          />
+        )}
+        {snap.presentFrame ? (
+          <PresentationPlayer
+            engine={engine}
+            snap={snap}
+            onInteraction={(ix, sourceId) => {
+              if (runnerRef.current) runnerRef.current(ix, sourceId);
+            }}
+            onExit={() => {
+              engine.dispatch({ type: "presentStop" });
+              setHideUi(false);
+            }}
+          />
+        ) : (
+          <>
+            <Toolbar engine={engine} snap={snap} onActions={() => setActions(true)} onNav={setNav} />
+            <HelpBtn />
+          </>
+        )}
+        {actions && (
+          <Actions
+            engine={engine}
+            onPresent={present}
+            onNewFile={startBlankFile}
+            onNav={setNav}
+            onClose={() => setActions(false)}
+            onHide={() => {
+              setHideUi((v) => !v);
+              setActions(false);
+            }}
+            onMinimize={() => {
+              setMinUi((v) => !v);
+              setActions(false);
+            }}
+            onInspectFig={() => {
+              setFigInspector(true);
+              setActions(false);
+            }}
+          />
+        )}
+        {findOpen && (
+          <FindReplaceBar engine={engine} snap={snap} onClose={() => setFindOpen(false)} />
+        )}
+      </main>
+      <RightPanel
+        engine={engine}
+        snap={snap}
+        onPresent={present}
+        onShare={share}
+        exportOpen={exportOpen}
+        onCloseExport={() => setExportOpen(false)}
+        onOpenVariables={() => setNav("variables")}
+      />
+      <div className="split r" style={{ display: hideUi ? "none" : undefined }} {...rightDrag} />
+      {/* PM-U8: the message has two channels — the pill you see and the status
+          region a screen reader hears. The pill stays out of the live region on
+          purpose; two of them saying the same string says it twice. */}
+      <ToastPill text={shown} />
+      <LiveStatus text={shown} />
+      {nudgeOpen && <NudgeDialog onClose={() => setNudgeOpen(false)} />}
+      {figInspector && <FigInspectorModal engine={engine} onClose={() => setFigInspector(false)} />}
+    </div>
+  );
+}

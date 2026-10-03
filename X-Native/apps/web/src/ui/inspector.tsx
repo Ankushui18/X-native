@@ -1,0 +1,10545 @@
+import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+import type {
+  AutoLayout,
+  Constraint,
+  Effect,
+  EffectKind,
+  Engine,
+  ExportFormat,
+  ExportPreset,
+  GridTrack,
+  LayoutAlign,
+  LayoutJustify,
+  RightTab,
+  Sizing,
+  Snapshot,
+  StrokeAlign,
+  StrokeCap,
+  StrokeJoin,
+  VariableWidthPoint,
+  TextAlign,
+  TextAlignVertical,
+  Interaction,
+  InteractionCondition,
+  ProtoDevice,
+  ProtoAnim,
+  ProtoEasing,
+  ProtoTrigger,
+  LayoutGrid,
+  GridAlignment,
+  GridPattern,
+  XNode,
+  CodeMapping,
+  CodePropMapping,
+  ComponentMaster,
+} from "../engine/types";
+import type { Modifier } from "../engine/modifierStack";
+import { bindBlockReason, collectColors, defaultEffect, find, findParent, framesOf, insideInstance, isEffectivelyLocked, isInstanceMember, worldPos } from "../engine/memory";
+import { BINDABLE_PROPS, isAlias, resolveVariable } from "../engine/variables";
+import { lintDocument, type LintFix, type LintIssue } from "../engine/lint";
+import { colorUsageAll, recolorMatches, selectByColor, setOpacityMatches } from "./selectionColors";
+import { evalField, evalFieldMany, hasExpression } from "./fieldExpr";
+import {
+  SIDES,
+  STROKE_STYLES,
+  ellipseArced,
+  strokeStyleOf,
+  variableWidthBlockReason,
+  normalizeWidthProfile,
+  parseDashPattern,
+  sampleVariableWidth,
+  sideWidths,
+  sidesSupported,
+  usesVariableWidth,
+} from "../engine/strokeModel";
+import {
+  bgBlurSeesThrough,
+  canAddEffect,
+  canShowBehindTransparent,
+  countKind,
+  effectCanBlend,
+  effectCanShowBehind,
+  limitMessage,
+  moveEffect,
+  EFFECT_LIMITS,
+} from "./effectModel";
+import { fillCompositeAlpha, spreadApplies } from "../engine/paint";
+import {
+  parentAlignDelta,
+  rotateAboutOrigin,
+  SCALE_ANCHORS,
+  SCALE_FACTORS,
+  scaleMembers,
+  sizeKeepingRatio,
+  SCALE_LABEL,
+  unionBox,
+  type ScaleAnchor,
+} from "./scaleModel";
+import { smoothPath } from "../engine/geometry";
+import {
+  SPACING_MODES,
+  alignKey,
+  widthIsMain,
+  alignmentCells,
+  effectiveSizing,
+  hasFillChild,
+  hugsCross,
+  hugsMain,
+  planGrid,
+  insideStrokeWidth,
+  isAutoGap,
+  layoutKeyPatch,
+  parsePaddingShorthand,
+  wraps,
+  type AlignCell,
+} from "../engine/layout";
+import { hugSize } from "./textLayout";
+import { resolvedTextSpans, selectedTextRange, styleTextRange, type SpanStyle } from "./textSpans";
+import { hasRtlScript, directionOf } from "../engine/textInput";
+import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
+import { Tooltip } from "./Tooltip";
+import { copyText } from "../engine/clipboard";
+import { askChoice, askPrompt } from "./dialog";
+import { buildPdf } from "../engine/pdf";
+import { setRasterExportDpi } from "../engine/rasterMetadata";
+import { contentBox, exportClipSvg, exportSvg } from "../engine/svgExport";
+import { plural, toast } from "./toast";
+import { useEscape, useFocusTrap } from "./escape";
+import { ZOOM_STEPS, parseZoomInput, stepZoom, zoomAboutCentre, zoomLabel, zoomTo } from "./zoom";
+import {
+  addAutoLayout,
+  dispatchAutoLayoutWithWasmFallback,
+  dispatchBindVariableWithWasmFallback,
+  dispatchComponentPropertyWithWasmFallback,
+  dispatchOffsetPathWithWasmFallback,
+  dispatchOutlineStrokeWithWasmFallback,
+  removeAutoLayout,
+  setFlow,
+  suggestAutoLayout,
+  syncNodePatchToWasm,
+} from "./layoutActions";
+import {
+  FORMAT_CAPS,
+  FORMATS,
+  SCALE_PRESETS,
+  exportSize,
+  extrasOf,
+  formatScale,
+  newPreset,
+  qualityValue,
+  resolveSettings,
+} from "./exportModel";
+import { DEVICE_GROUPS, DevicePreview, deviceFor } from "./devices";
+import { roundToPixel } from "./round";
+import { XButton, XPopover, XSegmentedControl, XSelect, XTabs } from "./x-ui";
+
+/** "Round to Pixel" is only shown when rounding can actually do something. */
+function isFractional(n: XNode) {
+  return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
+}
+import { FillPicker, type FillValue, type PatternSourceOption } from "./FillPicker";
+import type { EyedropSource } from "./color";
+import { applyEyedropSource, promptCreateEyedropToken, type EyedropTargetProperty } from "./eyedropper";
+import { containsId } from "../engine/pattern";
+import { BLENDS, getCanvas2dContext, getRenderColorProfile, handlesForFill, isNone, parseHex, withAlpha } from "./color";
+import { ContextMenu, runMenu } from "./ContextMenu";
+import {
+  DEV_LANGS,
+  devLangLabel,
+  getDevPrefs,
+  setDevPrefs,
+  subscribeDevPrefs,
+  type DevFormat,
+  type DevScope,
+  type DevUnit,
+} from "./devPrefs";
+import {
+  generateAndroidXml,
+  generateSubtreeCode,
+  generateTailwindTheme,
+  generateUIKitCode,
+  mappingSyncStatus,
+  type TreeFormat,
+} from "../engine/codegen";
+
+export function RightPanel({
+  engine,
+  snap,
+  onPresent,
+  onShare,
+  exportOpen,
+  onCloseExport,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onPresent?: () => void;
+  onShare?: () => void;
+  /** ⇧⌘E's bulk sheet. App owns the flag so Escape can be handled centrally. */
+  exportOpen?: boolean;
+  onCloseExport?: () => void;
+  /** App-owned nav switch to the Variables pane. The pane follows App nav, so
+   *  without it there is nothing to switch; the entry points say so instead of
+   *  dispatching into dead state (LP-U2). */
+  onOpenVariables?: () => void;
+}) {
+  const tabs: { id: RightTab; label: string }[] = [
+    { id: "design", label: "Design" },
+    { id: "prototype", label: "Prototype" },
+  ];
+  const INSPECT_TABS: { id: string; label: string }[] = [
+    { id: "inspect", label: "Inspect" },
+    { id: "design", label: "Design" },
+  ];
+  const root = snap.pages[snap.page].root;
+  const id = snap.selection[0];
+  const wp = id ? worldPos(root, id) : null;
+  const n = wp?.node;
+  const inspect = snap.rightTab === "inspect";
+  return (
+    <aside className="panel right" aria-label="Inspector">
+      <div className="right-head">
+        <div className="avatar" title="You">
+          X
+        </div>
+        <span className="grow" />
+        <Tooltip label={inspect ? "Exit Dev Mode" : "Dev Mode"} shortcut="⇧D">
+          <button
+            className={`icon-btn dev-toggle${inspect ? " on" : ""}`}
+            aria-label="Dev Mode"
+            aria-pressed={inspect}
+            onClick={() => engine.dispatch({ type: "setRightTab", tab: inspect ? "design" : "inspect" })}
+          >
+            <Icon name="dev" />
+          </button>
+        </Tooltip>
+        {/* The chip advertised "Esc to exit" — a sentence in a shortcut slot,
+            and the player's key, not the one that starts a presentation. The
+            chord the palette lists is ⌘⌥↩ (PT-U7). */}
+        <Tooltip label="Present" shortcut="⌘⌥↩">
+          <button className="icon-btn" aria-label="Present" onClick={() => onPresent?.()}>
+            <Icon name="play" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Copy a link to this page">
+          <button className="share" onClick={() => onShare?.()}>
+            Share
+          </button>
+        </Tooltip>
+      </div>
+      <div className="tabs-row">
+        {/* Deeper in Dev Mode the strip reads "Inspect · Design": Inspect is the
+            mode you are in, so it has no target of its own. */}
+        <XTabs
+          ariaLabel="Inspector view"
+          variant="head"
+          active={inspect ? "inspect" : snap.rightTab}
+          tabs={inspect ? INSPECT_TABS : tabs}
+          onChange={(id) => {
+            if (id === "inspect") return;
+            engine.dispatch({ type: "setRightTab", tab: id as RightTab });
+          }}
+        />
+        <ZoomMenu engine={engine} snap={snap} />
+      </div>
+      <div className="inspector">
+        {snap.rightTab === "prototype" && !inspect && (
+          <Prototype n={n} engine={engine} snap={snap} onPresent={onPresent} />
+        )}
+        {inspect && <Inspect n={n} engine={engine} snap={snap} />}
+        {snap.rightTab === "design" && !inspect && !n && (
+          <>
+            <PageDesign engine={engine} tool={snap.tool} onOpenVariables={onOpenVariables} />
+            <DesignHealth engine={engine} snap={snap} onOpenVariables={onOpenVariables} />
+          </>
+        )}
+        {snap.rightTab === "design" && !inspect && n && wp && (
+          <Design key={n.id} n={n} x={n.x} y={n.y} engine={engine} snap={snap} onOpenVariables={onOpenVariables} />
+        )}
+      </div>
+      {exportOpen && (
+        <ExportAssetsDialog engine={engine} snap={snap} onClose={() => onCloseExport?.()} />
+      )}
+    </aside>
+  );
+}
+
+/**
+ * File ▸ Export… (⌘⇧E): one sheet listing every visible layer on the page
+ * with an export configuration. Each row shows its format and scale, and its
+ * checkbox decides whether it is included. Thumbnails focus the layer so a long
+ * list stays navigable.
+ */
+function ExportAssetsDialog({
+  engine,
+  snap,
+  onClose,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onClose: () => void;
+  onPresent?: () => void;
+}) {
+  const root = snap.pages[snap.page].root;
+  const candidates = useMemo(() => {
+    const out: XNode[] = [];
+    const walk = (n: XNode) => {
+      for (const ch of n.children) {
+        if (ch.visible === false) continue;
+        // The File ▸ Export sheet is specifically a bulk exporter for saved
+        // export configurations. Walk through frames and groups too so a
+        // configured descendant is not hidden by its unconfigured parent.
+        if ((ch.exports?.length ?? 0) > 0) out.push(ch);
+        walk(ch);
+      }
+    };
+    walk(root);
+    return out;
+  }, [root]);
+  const presetFor = (n: XNode): ExportPreset =>
+    n.exports?.[0] ?? { format: "PNG", scale: 1, suffix: "" };
+  const [checked, setChecked] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(candidates.map((n) => [n.id, true])),
+  );
+  const [configs, setConfigs] = useState<Record<string, ExportPreset>>(() => {
+    const init: Record<string, ExportPreset> = {};
+    for (const n of candidates) init[n.id] = presetFor(n);
+    return init;
+  });
+  const [filter, setFilter] = useState("");
+  const rows = candidates.filter((n) => n.name.toLowerCase().includes(filter.trim().toLowerCase()));
+  // Rasterising every frame is expensive enough that it must not re-run while
+  // the sheet is being filtered or ticked; it follows the document instead.
+  const thumbs = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const n of candidates) out[n.id] = previewUrl(n, { format: "PNG", scale: 0.2, suffix: "", colorProfile: snap.colorProfile }, { root });
+    return out;
+  }, [candidates]);
+  const chosen = candidates.filter((n) => checked[n.id]);
+  const filesFor = (n: XNode): ExportPreset[] => {
+    const dialog = configs[n.id] ?? presetFor(n);
+    return [dialog, ...extrasOf(n.exports, dialog)];
+  };
+  const total = chosen.reduce((acc, n) => acc + filesFor(n).length, 0);
+
+  const run = () => {
+    if (!chosen.length) {
+      toast("Nothing checked to export");
+      return;
+    }
+    // Each checked layer writes its dialog row plus any further stored
+    // presets; browsers throttle simultaneous downloads, so each file gets
+    // its own turn.
+    const jobs: { n: XNode; p: ExportPreset }[] = [];
+    for (const n of chosen) for (const p of filesFor(n)) jobs.push({ n, p });
+    jobs.forEach(({ n, p }, i) => {
+      window.setTimeout(() => runExport(n, { ...p, colorProfile: p.colorProfile ?? snap.colorProfile }, { root }), i * 220);
+    });
+    toast(`Exporting ${plural(jobs.length, "asset")} from "${snap.pages[snap.page].name}"`);
+    onClose();
+  };
+
+  // PM-U7: `aria-modal` says the page behind the veil is inert; this is what
+  // makes that true for the keyboard too, so Tab cannot leave the sheet for the
+  // toolbar behind it.
+  const sheet = useRef<HTMLDivElement>(null);
+  useFocusTrap(true, sheet);
+  // PM-U9: and the modality is intrinsic to the sheet, not only to the App state
+  // that opened it — anything that renders this sheet gets the guard that stops
+  // the editor's chords (Delete, tool letters, ⌘A/⌘Z) reaching through the veil.
+  // App registers its own entry for the same sheet ("export", also modal), which
+  // is the one that carries the caret home; this one is pushed later (child
+  // effects run first) so it is the top of the stack, and Escape closes the sheet
+  // exactly once either way.
+  useEscape("export-sheet", onClose, true);
+
+  return createPortal(
+    <div className="xmodal-veil" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={sheet} className="xmodal" role="dialog" aria-modal="true" aria-label="Export assets" tabIndex={-1}>
+        <div className="xmodal-head">
+          <h3>Export assets</h3>
+          {/* PM-U6: the sheet opened with focus still on whatever launched it, so
+              a keyboard user tabbed in from the top of the document behind the
+              veil. The filter is the first thing in the sheet and the first
+              thing worth doing in it — every other modal input in the app
+              (shortcuts, find-in-page, the palette) already focuses itself. */}
+          <input
+            className="xmodal-filter"
+            placeholder="Filter layers"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            autoFocus
+          />
+          <button className="link" onClick={() => setChecked(Object.fromEntries(candidates.map((n) => [n.id, true])))}>
+            Check all
+          </button>
+          <button className="link" onClick={() => setChecked({})}>
+            Clear
+          </button>
+          <button className="icon-btn" title="Close" onClick={onClose}>
+            <Icon name="x-mark" size={14} />
+          </button>
+        </div>
+        <div className="xmodal-body">
+          {!rows.length && <p className="empty">No export configurations on this page.</p>}
+          {rows.map((n) => {
+            const p = configs[n.id] ?? presetFor(n);
+            const set = (patch: Partial<ExportPreset>) =>
+              setConfigs((v) => ({ ...v, [n.id]: { ...p, ...patch } }));
+            // The size of the file this row writes, not the layer's design
+            // size: a 2x PNG of a 100px frame reads 200 × 200.
+            const size = exportSize(n, p);
+            return (
+              <label className={`xrow${checked[n.id] ? " on" : ""}`} key={n.id}>
+                <input
+                  type="checkbox"
+                  checked={!!checked[n.id]}
+                  onChange={(e) => setChecked((v) => ({ ...v, [n.id]: e.target.checked }))}
+                />
+                <img
+                  className="xrow-thumb"
+                  src={thumbs[n.id]}
+                  alt=""
+                  title={`${n.name}${p.suffix}.${p.format.toLowerCase()}`}
+                  onClick={(e) => {
+                    // The thumbnail is a shortcut to the layer itself.
+                    e.preventDefault();
+                    engine.dispatch({ type: "select", ids: [n.id] });
+                    zoomTo(engine, "selection");
+                    onClose();
+                  }}
+                />
+                <span className="xrow-name" title={`${n.name}${p.suffix}.${p.format.toLowerCase()}`}>{n.name}</span>
+                <span className="xrow-size">
+                  {size.width} × {size.height}
+                </span>
+                <select aria-label="Export format" value={p.format} onChange={(e) => {
+                  const format = e.target.value as ExportFormat;
+                  // Vector formats are pinned at 1x, as in the sidebar: a
+                  // stale 2x would otherwise write a double-sized SVG.
+                  set({ format, scale: FORMAT_CAPS[format].oneToOne ? 1 : p.scale });
+                }}>
+                  {FORMATS.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+                <select aria-label="Export color profile" value={p.colorProfile ?? "file"} onChange={(e) => set({ colorProfile: e.target.value === "file" ? undefined : e.target.value as "srgb" | "display-p3" })}>
+                  <option value="file">File profile</option>
+                  <option value="srgb">sRGB</option>
+                  <option value="display-p3">Display P3</option>
+                </select>
+                <select aria-label="Export scale" value={String(p.scale)} disabled={FORMAT_CAPS[p.format].oneToOne} title={FORMAT_CAPS[p.format].oneToOne ? "Vector formats export at 1x" : "Export scale"} onChange={(e) => set({ scale: Number(e.target.value) })}>
+                  {SCALES.map((x) => (
+                    <option key={x} value={String(x)}>
+                      {x}×
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="xrow-suffix"
+                  placeholder="@2x"
+                  value={p.suffix}
+                  onChange={(e) => set({ suffix: e.target.value })}
+                  aria-label="File name suffix"
+                />
+              </label>
+            );
+          })}
+        </div>
+        <div className="xmodal-foot">
+          <span className="muted">
+            {chosen.length ? `${chosen.length} of ${candidates.length} layers · ${total} file${total === 1 ? "" : "s"}` : "No layers selected for export"}
+          </span>
+          <button className="export-run" disabled={!chosen.length} onClick={run}>
+            Export {chosen.length || ""}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+
+interface PresetCategory {
+  category: string;
+  icon: IconName;
+  items: { name: string; w: number; h: number }[];
+}
+
+/** Frame presets, shared: the inspector's preset grid and the agent pane's
+ *  "add a frame" both place one of these, so the sizes and names stay in one
+ *  place (LP-U6 — the agent used to invent a 390x844 that matched nothing). */
+export const PRESET_GROUPS: PresetCategory[] = [
+  {
+    category: "Phone",
+    icon: "phone",
+    items: [
+      { name: "iPhone 16 Pro", w: 393, h: 852 },
+      { name: "iPhone 16 Pro Max", w: 440, h: 956 },
+      { name: "iPhone 15 / 14", w: 393, h: 852 },
+      { name: "Google Pixel 8", w: 412, h: 915 },
+    ],
+  },
+  {
+    category: "Tablet",
+    icon: "tablet",
+    items: [
+      { name: "iPad Pro 11\"", w: 834, h: 1194 },
+      { name: "iPad Pro 12.9\"", w: 1024, h: 1366 },
+    ],
+  },
+  {
+    category: "Desktop",
+    icon: "desktop",
+    items: [
+      { name: "Desktop", w: 1440, h: 1024 },
+      { name: "MacBook Air", w: 1280, h: 832 },
+      { name: "MacBook Pro 14\"", w: 1512, h: 982 },
+      { name: "Wireframe", w: 1200, h: 800 },
+    ],
+  },
+  {
+    category: "Presentation",
+    icon: "slide",
+    items: [
+      { name: "Slide 16:9", w: 1920, h: 1080 },
+      { name: "Slide 4:3", w: 1024, h: 768 },
+    ],
+  },
+  {
+    category: "Watch",
+    icon: "image",
+    items: [
+      { name: "Apple Watch 41mm", w: 352, h: 430 },
+      { name: "Apple Watch 45mm", w: 396, h: 484 },
+      { name: "Apple Watch Ultra", w: 410, h: 502 },
+    ],
+  },
+  {
+    category: "Paper",
+    icon: "copy",
+    items: [
+      { name: "A4", w: 595, h: 842 },
+      { name: "Letter", w: 612, h: 792 },
+      { name: "A5", w: 420, h: 595 },
+    ],
+  },
+  {
+    category: "Social Media",
+    icon: "community",
+    items: [
+      { name: "Instagram Post", w: 1080, h: 1080 },
+      { name: "Instagram Story", w: 1080, h: 1920 },
+      { name: "X / Twitter Post", w: 1200, h: 675 },
+      { name: "Facebook Post", w: 1200, h: 630 },
+      { name: "LinkedIn Post", w: 1200, h: 627 },
+    ],
+  },
+  {
+    category: "Figma Community",
+    icon: "community",
+    items: [
+      { name: "Community cover", w: 1920, h: 960 },
+      { name: "Plugin / Widget card", w: 960, h: 480 },
+    ],
+  },
+  {
+    category: "Archive",
+    icon: "folder",
+    items: [
+      { name: "Thumbnail (16:10)", w: 1600, h: 960 },
+      { name: "Small preview", w: 800, h: 600 },
+    ],
+  },
+];
+
+/**
+ * Design health, live from the snapshot: score, issue list, click-to-select,
+ * and one-click fixes. Recomputes every render, so feedback is real-time.
+ */
+function DesignHealth({
+  engine,
+  snap,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  onOpenVariables?: () => void;
+}) {
+  const report = useMemo(() => lintDocument(snap), [snap]);
+  const [open, setOpen] = useState(true);
+  const scoreColor = report.score >= 90 ? "var(--accent)" : report.score >= 70 ? "var(--amber)" : "var(--red)";
+
+  const selectIssue = (issue: LintIssue) => {
+    if (issue.nodeIds.length) {
+      engine.dispatch({ type: "setPage", index: issue.page });
+      engine.dispatch({ type: "select", ids: [issue.nodeIds[0]] });
+      zoomTo(engine, "selection");
+    } else if (issue.variableIds.length) {
+      // The left panel follows App-owned nav: opening Variables goes through
+      // the App callback, like the bridge row below.
+      if (onOpenVariables) onOpenVariables();
+      else toast("Variables and styles live in the left rail");
+    }
+  };
+
+  const runFix = (issue: LintIssue, fix: LintFix) => {
+    if (fix.kind === "delete-variable") {
+      engine.dispatch({ type: "deleteVariable", id: fix.variableId });
+      toast("Variable deleted");
+    } else if (fix.kind === "delete-style") {
+      engine.dispatch({ type: "deleteStyle", id: fix.styleId });
+      toast("Style deleted");
+    } else if (fix.kind === "reset-overrides") {
+      engine.dispatch({ type: "resetOverrides", id: fix.nodeId });
+      toast("Overrides reset");
+    } else if (fix.kind === "create-variable-bind") {
+      const collection = snap.variableCollections?.[0]?.name ?? "Brand";
+      const id = `var_${Date.now()}`;
+      const name = `token-${fix.color.replace("#", "").toLowerCase()}`;
+      engine.dispatch({ type: "addVariable", variable: { id, name, type: "color", value: fix.color, collection } });
+      engine.dispatch({ type: "bindVariable", id: fix.nodeId, prop: fix.prop, variableId: id });
+      toast(`Created ${name} and bound it`);
+    } else {
+      selectIssue(issue);
+    }
+  };
+
+  const fixLabel = (fix: LintFix): string =>
+    fix.kind === "delete-variable" || fix.kind === "delete-style"
+      ? "Delete"
+      : fix.kind === "reset-overrides"
+        ? "Reset"
+        : fix.kind === "create-variable-bind"
+          ? "Make token"
+          : "Show";
+
+  const dot = (sev: LintIssue["severity"]): string => (sev === "error" ? "var(--red)" : sev === "warning" ? "var(--amber)" : "var(--dim)");
+  const shown = report.issues.slice(0, 40);
+  return (
+    <>
+      <div className="h-row" style={{ marginTop: 4 }}>
+        <h3>Design health</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{ fontSize: 11, fontWeight: 700, color: scoreColor }}
+            title={`${report.counts.error} errors · ${report.counts.warning} warnings · ${report.counts.info} notes`}
+          >
+            {report.score} / 100
+          </span>
+          <button className="icon-btn" title={open ? "Collapse issues" : "Expand issues"} onClick={() => setOpen((v) => !v)}>
+            <Icon name={open ? "chevron-down" : "chevron-right"} size={12} />
+          </button>
+        </div>
+      </div>
+      {open && (
+        <div className="insp-pad" style={{ display: "grid", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+          {report.issues.length === 0 && <p className="muted">No issues — every color, variable, and component checks out.</p>}
+          {shown.map((issue, i) => (
+            <div
+              key={`${issue.rule}-${i}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 6px",
+                borderRadius: 6,
+                background: "var(--hover)",
+                fontSize: 11,
+                cursor: issue.nodeIds.length || issue.variableIds.length ? "pointer" : "default",
+              }}
+              title={issue.nodeIds.length || issue.variableIds.length ? "Click to show" : undefined}
+              onClick={() => selectIssue(issue)}
+            >
+              <span
+                style={{ width: 7, height: 7, borderRadius: 999, background: dot(issue.severity), flexShrink: 0 }}
+                aria-hidden
+              />
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={issue.message}>
+                {issue.message}
+              </span>
+              {issue.fix && (
+                <button
+                  className="mini"
+                  title="Apply fix"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (issue.fix) runFix(issue, issue.fix);
+                  }}
+                >
+                  {issue.fix && fixLabel(issue.fix)}
+                </button>
+              )}
+            </div>
+          ))}
+          {report.issues.length > shown.length && (
+            <p className="muted">+{report.issues.length - shown.length} more</p>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+function PageDesign({
+  engine,
+  tool,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  tool: string;
+  onOpenVariables?: () => void;
+}) {
+  const snap = engine.snapshot();
+  const root = snap.pages[snap.page].root;
+  return (
+    <>
+      {tool !== "frame" && (
+        // The empty right panel shows hints rather than leaving it
+        // blank; with nothing selected the only controls are page-level, so
+        // say what the panel will show once something is picked.
+        <div className="empty-state">
+          <Icon name="move" size={20} />
+          <p className="empty-title">Nothing selected</p>
+          <p className="empty-body">
+            Pick a layer — on the canvas or in the Layers list — and this panel becomes its
+            position, size, fill, stroke and effects.
+          </p>
+          <p className="empty-hint">
+            Right now these controls are the page&rsquo;s: background and pixel grid. <kbd>&#8984;</kbd>
+            <kbd>K</kbd> finds every command.
+          </p>
+        </div>
+      )}
+      {tool === "frame" && (
+        <>
+          <Section id="presets" title="Frame Presets">
+          <div className="presets" style={{ maxHeight: 340, overflowY: "auto" }}>
+            {PRESET_GROUPS.map((grp) => (
+              <div key={grp.category} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", padding: "4px 8px" }}>
+                  <Icon name={grp.icon} size={14} />
+                  <span>{grp.category}</span>
+                </div>
+                {grp.items.map((p) => (
+                  <button
+                    key={p.name}
+                    onClick={() => {
+                      // Preset frames land at the viewport's top-left, not at a
+                      // fixed point the user may have panned away from.
+                      // Rounded: frames always snap to the pixel grid.
+                      const vx = Math.round(-snap.panX / snap.zoom + 24);
+                      const vy = Math.round(-snap.panY / snap.zoom + 48);
+                      engine.dispatch({
+                        type: "add",
+                        kind: "frame",
+                        x: vx,
+                        y: vy,
+                        w: p.w,
+                        h: p.h,
+                        extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
+                      });
+                    }}
+                  >
+                    {p.name}
+                    <span className="sz">
+                      {p.w} × {p.h}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+          </Section>
+          <div className="hr" />
+        </>
+      )}
+      <Section id="background" title="Background">
+      <div className="insp-pad">
+        <ColorRow
+          value={root.fill}
+          opacity={Math.round((root.fillOpacity ?? 1) * 100)}
+          visible={root.fillVisible !== false && !isNone(root.fill)}
+          recents={collectColors(root)}
+          onChange={(fill) => engine.dispatch({ type: "patch", id: root.id, patch: { fill, fillVisible: true } })}
+          onOpacity={(v) =>
+            engine.dispatch({ type: "patch", id: root.id, patch: { fillOpacity: v / 100 } })
+          }
+          onVisible={(v) => engine.dispatch({ type: "patch", id: root.id, patch: { fillVisible: v } })}
+        />
+      </div>
+      </Section>
+      <div className="hr" />
+      <Section id="local-styles" title="Local styles">
+      <div className="insp-pad">
+        {/* With nothing selected the file's local styles and variables live
+            in the left panel's Variables tab; this row is the bridge there,
+            through the App-owned nav the panel actually reads. */}
+        <button
+          className="link"
+          onClick={() =>
+            onOpenVariables
+              ? onOpenVariables()
+              : toast("Variables and styles live in the left rail")
+          }
+        >
+          Open variables &amp; styles
+        </button>
+      </div>
+      </Section>
+      <div className="hr" />
+      <Section id="pixel-grid" title="Pixel grid">
+      <div className="insp-pad">
+        <ColorRow
+          value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
+          opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
+          visible={!!snap.pages[snap.page].pixelGrid}
+          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#10b981"]}
+          onChange={(pixelGridColor) =>
+            engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
+          }
+          onOpacity={(v) => engine.dispatch({ type: "patchPage", patch: { pixelGrid: v > 0 } })}
+          onVisible={(pixelGrid) => engine.dispatch({ type: "patchPage", patch: { pixelGrid } })}
+        />
+      </div>
+      </Section>
+      <div className="hr" />
+      <ExportBlock n={root} engine={engine} root={root} ids={[root.id]} page />
+    </>
+  );
+}
+
+function Prototype({
+  n,
+  engine,
+  snap,
+  onPresent,
+}: {
+  n?: XNode;
+  engine: Engine;
+  snap: Snapshot;
+  onPresent?: () => void;
+}) {
+  const frames = framesOf(snap.pages[snap.page].root);
+  const start = snap.pages[snap.page].flowStart;
+  const startName = frames.find((f) => f.id === start)?.name || frames[0]?.name || "—";
+  const interactions = n?.interactions ?? [];
+  const setIx = (next: Interaction[]) => {
+    if (!n) return;
+    engine.dispatch({ type: "setInteractions", id: n.id, interactions: next });
+  };
+  const coerceVal = (raw: string): string | number | boolean => {
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    const num = Number(raw);
+    return raw !== "" && !isNaN(num) ? num : raw;
+  };
+  // §23 PT-019: Scroll-to via the panel targets direct children of scrollable
+  // frames (Figma); the noodle still reaches any object on the canvas.
+  const scrollTargets: { id: string; label: string }[] = [];
+  for (const f of frames) {
+    if (f.overflow === "scrollx" || f.overflow === "scrolly" || f.overflow === "scrollboth") {
+      for (const c of f.children) scrollTargets.push({ id: c.id, label: `${c.name || c.kind} · ${f.name}` });
+    }
+  }
+  return (
+    <>
+      <Section id="proto-start" title="Flow starting point">
+      <div className="proto-row">
+        <span>Start</span>
+        <select
+          aria-label="Flow start frame"
+          value={start || frames[0]?.id || ""}
+          onChange={(e) => engine.dispatch({ type: "patchPage", patch: { flowStart: e.target.value } })}
+        >
+          {frames.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      </Section>
+
+      <Section id="proto-settings" title="Prototype settings">
+      <div className="proto-row">
+        <span>Device</span>
+        <select
+          aria-label="Prototype device"
+          value={snap.prototypeDevice || "none"}
+          onChange={(e) =>
+            engine.dispatch({ type: "setPrototypeDevice", device: e.target.value as ProtoDevice })
+          }
+        >
+          <option value="none">None (borderless)</option>
+          {DEVICE_GROUPS.map((g) => (
+            <optgroup key={g.group} label={g.group}>
+              {g.items.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+      <div className="proto-row">
+        <span>Size</span>
+        <select
+          aria-label="Prototype scale"
+          value={snap.prototypeScale || "fit"}
+          onChange={(e) =>
+            engine.dispatch({ type: "setPrototypeScale", scale: e.target.value as "fit" | "100%" | "fill" })
+          }
+        >
+          <option value="fit">Zoom to fit</option>
+          <option value="100%">Zoom to 100%</option>
+          <option value="fill">Fill screen</option>
+        </select>
+      </div>
+      {deviceFor(snap.prototypeDevice) && (
+        <div className="proto-row">
+          <span>Orientation</span>
+          <div className="seg icons">
+            {(["portrait", "landscape"] as const).map((o) => (
+              <button
+                key={o}
+                className={(snap.prototypeOrientation ?? "portrait") === o ? "on" : ""}
+                title={o === "portrait" ? "Portrait" : "Landscape"}
+                onClick={() => engine.dispatch({ type: "setPrototypeOrientation", orientation: o })}
+              >
+                <Icon name={o === "portrait" ? "phone" : "desktop"} size={14} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* The mockup preview shows the selected frame inside the real device
+          shell, so the choice is visible before pressing Play. */}
+      <div className="proto-preview device">
+        <DevicePreview
+          spec={deviceFor(snap.prototypeDevice)}
+          fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : "#fff"}
+          radius={n?.cornerRadii?.[0] || 0}
+        />
+      </div>
+      <p className="muted">Flow starts at {startName}. Esc steps back, then exits.</p>
+      </Section>
+
+      <Section id="proto-interactions" title="Interactions" actions={
+        <button
+          className="plus"
+          title="Add interaction"
+          disabled={!n}
+          onClick={() =>
+            n &&
+            setIx([
+              ...interactions,
+              {
+                trigger: "onClick",
+                action: "navigate",
+                destination: frames.find((f) => f.id !== n.id)?.id || "",
+                animation: "instant",
+                delay: 0,
+              },
+            ])
+          }
+        >
+          <Icon name="plus" size={14} />
+        </button>
+      }>
+      {!n && <p className="muted">Select a layer to add On click → Navigate.</p>}
+      {n &&
+        interactions.map((ix, i) => (
+          <div key={i} className="proto-interaction">
+            <div className="proto-top">
+              <select
+                aria-label="Interaction trigger"
+                value={ix.trigger}
+                onChange={(e) => {
+                  const next = interactions.map((x, j) =>
+                    j === i ? { ...x, trigger: e.target.value as ProtoTrigger } : x,
+                  );
+                  setIx(next);
+                }}
+              >
+                <option value="onClick">On click</option>
+                <option value="onHover">While hovering</option>
+                <option value="afterDelay">After delay</option>
+                <option value="mouseEnter">Mouse enter</option>
+                <option value="mouseLeave">Mouse leave</option>
+                <option value="mouseDown">Mouse down</option>
+                <option value="mouseUp">Mouse up</option>
+                <option value="keyPress">Key / Gamepad press</option>
+                <option value="onDrag">On drag</option>
+              </select>
+              <button
+                className="mini minus"
+                title="Remove interaction"
+                onClick={() => setIx(interactions.filter((_, j) => j !== i))}
+              >
+                <Icon name="minus" size={12} />
+              </button>
+            </div>
+
+            {ix.trigger === "keyPress" && (
+              <input
+                readOnly
+                placeholder="Click here, then press a key…"
+                title="The key that fires this interaction while presenting"
+                value={ix.keyKey || ""}
+                onKeyDown={(e) => {
+                  e.preventDefault();
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, keyKey: e.key } : x)));
+                }}
+              />
+            )}
+
+            {/* §23 PT-006: After-delay was unauthorable — every such row fired
+                at 0ms although the runner honors per-row delays. */}
+            {ix.trigger === "afterDelay" && (
+              <input
+                type="number"
+                placeholder="Delay ms"
+                title="Milliseconds on the frame before this interaction fires"
+                value={ix.delay ?? 800}
+                onChange={(e) => {
+                  const d = Math.max(0, parseInt(e.target.value, 10) || 0);
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, delay: d } : x)));
+                }}
+              />
+            )}
+
+            <select
+              aria-label="Interaction action"
+              value={ix.action}
+              onChange={(e) => {
+                const action = e.target.value as Interaction["action"];
+                setIx(interactions.map((x, j) => (j === i ? { ...x, action } : x)));
+              }}
+            >
+              <option value="navigate">Navigate to</option>
+              <option value="openOverlay">Open overlay</option>
+              <option value="closeOverlay">Close overlay</option>
+              <option value="swapOverlay">Swap overlay</option>
+              <option value="back">Back</option>
+              <option value="scrollTo">Scroll to</option>
+              <option value="openUrl">Open link</option>
+              <option value="setVariable">Set variable</option>
+              <option value="setVariableMode">Set variable mode</option>
+              <option value="setVariant">Swap variant</option>
+            </select>
+
+            {ix.action === "setVariant" && (
+              <select
+                value={ix.variantName || ""}
+                title="Variant to swap this instance to"
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, variantName: e.target.value } : x)))
+                }
+              >
+                <option value="">Choose variant…</option>
+                {(snap.components.find((c) => c.id === n.componentId)?.variants ?? []).map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {ix.action === "setVariant" && !n.componentId && (
+              <p className="muted">Put this interaction on an instance to swap its variant.</p>
+            )}
+
+            {(ix.action === "navigate" ||
+              ix.action === "scrollTo" ||
+              ix.action === "openOverlay" ||
+              ix.action === "swapOverlay") && (
+              <select
+                aria-label="Navigate to"
+                value={ix.destination}
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
+                }
+              >
+                <option value="">Choose target…</option>
+                {ix.action === "scrollTo" && scrollTargets.length > 0
+                  ? scrollTargets.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.label}
+                      </option>
+                    ))
+                  : frames
+                      .filter((f) => f.id !== n.id)
+                      .map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
+              </select>
+            )}
+
+            {(ix.action === "openOverlay" || ix.action === "swapOverlay") && (
+              <div className="proto-pair">
+                <select
+                  aria-label="Overlay position"
+                  value={ix.overlayPosition || "center"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, overlayPosition: e.target.value as "center" | "top" | "bottom" | "manual" } : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="center">Center modal</option>
+                  <option value="bottom">Bottom sheet</option>
+                  <option value="top">Top banner</option>
+                </select>
+                <label className="proto-check">
+                  <input
+                    type="checkbox"
+                    checked={ix.overlayCloseOutside !== false}
+                    onChange={(e) =>
+                      setIx(
+                        interactions.map((x, j) =>
+                          j === i ? { ...x, overlayCloseOutside: e.target.checked } : x,
+                        ),
+                      )
+                    }
+                  />
+                  Close outside
+                </label>
+              </div>
+            )}
+
+            {ix.action === "openUrl" && (
+              <input
+                placeholder="https://example.com"
+                value={ix.destination}
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, destination: e.target.value } : x)))
+                }
+              />
+            )}
+
+            {ix.action === "setVariable" && (
+              <div className="proto-pair">
+                <select
+                  aria-label="Variable"
+                  value={ix.variableId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableId: e.target.value } : x)))
+                  }
+                >
+                  <option value="">Choose variable…</option>
+                  {(snap.variables || []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Variable operation"
+                  value={ix.variableOp || "toggle"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, variableOp: e.target.value as "set" | "increment" | "decrement" | "toggle" } : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="set">Set value</option>
+                <option value="toggle">Toggle boolean</option>
+                  <option value="increment">Increment +1</option>
+                  <option value="decrement">Decrement -1</option>
+                </select>
+              </div>
+            )}
+            {ix.action === "setVariable" && ix.variableOp === "set" && (
+              <input
+                placeholder="Value"
+                title="Literal value to write (numbers and true/false are typed)"
+                value={ix.variableValue === undefined ? "" : String(ix.variableValue)}
+                onChange={(e) =>
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, variableValue: coerceVal(e.target.value) } : x)))
+                }
+              />
+            )}
+
+            {/* §23 PT-012: Figma's Set-variable-mode action; the engine command
+                already exists, the panel just never offered it. */}
+            {ix.action === "setVariableMode" && (
+              <div className="proto-pair">
+                <select
+                  aria-label="Variable collection"
+                  value={ix.variableCollectionId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableCollectionId: e.target.value, variableModeId: "" } : x)))
+                  }
+                >
+                  <option value="">Collection…</option>
+                  {(snap.variableCollections || []).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Variable mode"
+                  value={ix.variableModeId || ""}
+                  onChange={(e) =>
+                    setIx(interactions.map((x, j) => (j === i ? { ...x, variableModeId: e.target.value } : x)))
+                  }
+                >
+                  <option value="">Mode…</option>
+                  {((snap.variableCollections || []).find((c) => c.id === ix.variableCollectionId)?.modes ?? []).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="proto-anim">
+              <select
+                aria-label="Animation"
+              value={ix.animation}
+                onChange={(e) =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, animation: e.target.value as ProtoAnim } : x,
+                    ),
+                  )
+                }
+              >
+                <option value="instant">Instant</option>
+                <option value="dissolve">Dissolve</option>
+                <option value="smart">Smart animate</option>
+                <option value="slideInLeft">Slide in (Left)</option>
+                <option value="slideInRight">Slide in (Right)</option>
+                <option value="slideInTop">Slide in (Top)</option>
+                <option value="slideInBottom">Slide in (Bottom)</option>
+                <option value="pushLeft">Push (Left)</option>
+                <option value="pushRight">Push (Right)</option>
+              </select>
+              <input
+                type="number"
+                placeholder="250ms"
+                title="Duration in ms"
+                value={ix.duration || 250}
+                onChange={(e) => {
+                  // §23 PT-013: Figma clamps durations to 1–10000ms.
+                  const d = Math.max(1, Math.min(10000, parseInt(e.target.value, 10) || 250));
+                  setIx(interactions.map((x, j) => (j === i ? { ...x, duration: d } : x)));
+                }}
+              />
+            </div>
+            <div className="proto-pair">
+              <select
+                aria-label="Easing"
+              value={ix.easing || "easeOut"}
+                onChange={(e) =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, easing: e.target.value as ProtoEasing } : x,
+                    ),
+                  )
+                }
+                title="Animation Easing Curve"
+              >
+                <option value="easeOut">Ease out</option>
+                <option value="easeIn">Ease in</option>
+                <option value="easeInOut">Ease in and out</option>
+                <option value="linear">Linear</option>
+                <option value="spring">Spring (Gentle)</option>
+                <option value="bouncy">Spring (Bouncy)</option>
+              </select>
+              <label className="proto-check" title="Match layers by name and interpolate their properties">
+                <input
+                  type="checkbox"
+                  checked={Boolean(ix.smartMatch || ix.animation === "smart")}
+                  disabled={ix.animation === "smart"}
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i ? { ...x, smartMatch: e.target.checked } : x,
+                      ),
+                    )
+                  }
+                />
+                Smart match
+              </label>
+            </div>
+            <div className="proto-ease">
+              <svg width="32" height="18" viewBox="0 0 32 18" style={{ overflow: "visible" }}>
+                {ix.easing === "linear" && <line x1="2" y1="16" x2="30" y2="2" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "easeIn" && <path d="M 2 16 Q 22 16, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {(ix.easing === "easeOut" || !ix.easing) && <path d="M 2 16 Q 8 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "easeInOut" && <path d="M 2 16 C 14 16, 18 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "spring" && <path d="M 2 16 C 10 0, 16 2, 22 4 C 26 3, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+                {ix.easing === "bouncy" && <path d="M 2 16 C 8 -4, 14 6, 20 0 C 24 4, 30 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
+              </svg>
+              <span className="proto-ease-t">
+                {ix.duration || 250}ms • {ix.easing || "easeOut"}
+              </span>
+            </div>
+            {!ix.condition ? (
+              <button
+                className="mini"
+                title="Only run when a variable comparison holds"
+                onClick={() =>
+                  setIx(
+                    interactions.map((x, j) =>
+                      j === i ? { ...x, condition: { variableId: "", op: "truthy" as const } } : x,
+                    ),
+                  )
+                }
+              >
+                + Condition
+              </button>
+            ) : (
+              <div className="proto-cond">
+                <select
+                  value={ix.condition.variableId}
+                  title="Variable to test"
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i
+                          ? { ...x, condition: { ...(x.condition ?? { variableId: "", op: "truthy" as const }), variableId: e.target.value } }
+                          : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="">Variable…</option>
+                  {(snap.variables || []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={ix.condition.op}
+                  title="Comparison"
+                  onChange={(e) =>
+                    setIx(
+                      interactions.map((x, j) =>
+                        j === i
+                          ? {
+                              ...x,
+                              condition: {
+                                ...(x.condition ?? { variableId: "", op: "truthy" as const }),
+                                op: e.target.value as InteractionCondition["op"],
+                              },
+                            }
+                          : x,
+                      ),
+                    )
+                  }
+                >
+                  <option value="truthy">is true</option>
+                  <option value="falsy">is false</option>
+                  <option value="eq">=</option>
+                  <option value="neq">≠</option>
+                  <option value="gt">&gt;</option>
+                  <option value="gte">≥</option>
+                  <option value="lt">&lt;</option>
+                  <option value="lte">≤</option>
+                </select>
+                {ix.condition.op !== "truthy" && ix.condition.op !== "falsy" ? (
+                  <input
+                    placeholder="Value"
+                    value={ix.condition.value === undefined ? "" : String(ix.condition.value)}
+                    onChange={(e) =>
+                      setIx(
+                        interactions.map((x, j) =>
+                          j === i
+                            ? {
+                                ...x,
+                                condition: {
+                                  ...(x.condition ?? { variableId: "", op: "truthy" as const }),
+                                  value: coerceVal(e.target.value),
+                                },
+                              }
+                            : x,
+                        ),
+                      )
+                    }
+                  />
+                ) : (
+                  <span />
+                )}
+                <button
+                  className="mini minus"
+                  title="Remove condition"
+                  onClick={() => setIx(interactions.map((x, j) => (j === i ? { ...x, condition: undefined } : x)))}
+                >
+                  <Icon name="minus" size={12} />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </Section>
+      <div className="insp-pad">
+        <Tooltip label="Present" shortcut="⌘⌥↩">
+          <button className="x-primary" onClick={() => onPresent?.()}>
+            Present Prototype
+          </button>
+        </Tooltip>
+      </div>
+    </>
+  );
+}
+
+/**
+ * CSS for the layer. `unit` is the Dev Mode setting — the numbers are
+ * the same, only the unit they are written in changes.
+ */
+function generateCss(n: XNode, unit: DevUnit = "px"): string {
+  const rules: string[] = [
+    `/* ${n.name} (${n.kind}) */`,
+    `width: ${devLen(n.w, unit)};`,
+    `height: ${devLen(n.h, unit)};`,
+  ];
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      rules.push(`border-radius: ${[n.cornerRadii[0], n.cornerRadii[1], n.cornerRadii[3], n.cornerRadii[2]].map((r) => devLen(r, unit)).join(" ")};`);
+    } else {
+      rules.push(`border-radius: ${devLen(n.cornerRadii[0], unit)};`);
+    }
+    // Corner smoothing has no CSS equivalent, so the snippet says what it is
+    // rather than pretending the radius alone reproduces the curve.
+    if (n.cornerSmoothing)
+      rules.push(`/* corner smoothing ${Math.round(n.cornerSmoothing * 100)}% - border-radius is a circular arc */`);
+  }
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    rules.push(`background: ${n.fill};`);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    const sides = sideWidths(n.strokeSides, n.strokeSideW, n.strokeWidth);
+    if (sides.some((w) => w !== sides[0])) {
+      // Individual strokes export as per-side borders; a side with no
+      // weight still needs a style, or the corner mitre disappears.
+      rules.push(`border-width: ${sides.map((w) => devLen(w, unit)).join(" ")};`);
+      rules.push(`border-style: ${sides.map((w) => (w > 0 ? "solid" : "none")).join(" ")};`);
+      rules.push(`border-color: ${n.strokePaint};`);
+    } else {
+      rules.push(`border: ${devLen(n.strokeWidth, unit)} solid ${n.strokePaint};`);
+    }
+    if (n.strokeDashPattern?.length)
+      rules.push(`/* dashes: ${n.strokeDashPattern.join(", ")} - no CSS equivalent */`);
+    if (usesVariableWidth(n)) rules.push(`/* variable-width stroke: no CSS equivalent */`);
+  }
+  if (n.opacity < 1) {
+    rules.push(`opacity: ${Math.round(n.opacity * 100) / 100};`);
+  }
+  if (n.layout) {
+    rules.push("display: flex;");
+    rules.push(`flex-direction: ${n.layout.direction === "horizontal" ? "row" : "column"};`);
+    if (n.layout.gap) rules.push(`gap: ${devLen(n.layout.gap, unit)};`);
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl || pr || pt || pb) {
+      rules.push(`padding: ${[pt, pr, pb, pl].map((v) => devLen(v, unit)).join(" ")};`);
+    }
+    if (n.layout.align === "center") rules.push("align-items: center;");
+    else if (n.layout.align === "max") rules.push("align-items: flex-end;");
+    else if (n.layout.align === "baseline") rules.push("align-items: baseline;");
+    if (n.layout.justify === "center") rules.push("justify-content: center;");
+    else if (n.layout.justify === "between") rules.push("justify-content: space-between;");
+    else if (n.layout.justify === "max") rules.push("justify-content: flex-end;");
+    if (n.layout.wrap) rules.push("flex-wrap: wrap;");
+  }
+  if (n.kind === "text") {
+    rules.push(`font-family: "${n.fontFamily}", sans-serif;`);
+    rules.push(`font-size: ${devLen(n.fontSize, unit)};`);
+    rules.push(`font-weight: ${n.fontWeight};`);
+    if (n.lineHeight) rules.push(`line-height: ${devLen(Math.round(n.lineHeight), unit)};`);
+    if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
+    if (n.textAlign && n.textAlign !== "left")
+      rules.push(`text-align: ${n.textAlign === "justified" ? "justify" : n.textAlign};`);
+    if (n.textDecoration && n.textDecoration !== "none") {
+      rules.push(`text-decoration: ${n.textDecoration};`);
+      // Underline details (360039956634 §Decoration).
+      if (n.textDecoration === "underline") {
+        if (n.underlineStyle && n.underlineStyle !== "solid") rules.push(`text-decoration-style: ${n.underlineStyle};`);
+        if (n.underlineColor) rules.push(`text-decoration-color: ${n.underlineColor};`);
+        if (n.underlineThickness != null) rules.push(`text-decoration-thickness: ${devLen(n.underlineThickness, unit)};`);
+        if (n.underlineOffset) rules.push(`text-underline-offset: ${devLen(n.underlineOffset, unit)};`);
+        if (n.underlineSkipInk) rules.push("text-decoration-skip-ink: auto;");
+      }
+    }
+    if (n.textCase && n.textCase !== "none")
+      rules.push(
+        `text-transform: ${n.textCase === "upper" ? "uppercase" : n.textCase === "lower" ? "lowercase" : n.textCase === "title" ? "capitalize" : "none"};`,
+      );
+    if (n.textCase === "small-caps") rules.push("font-variant: small-caps;");
+    // The three type settings that have a real CSS equivalent are handed over
+    // by name, so the snippet reproduces the paragraph instead of only noting
+    // that it differs.
+    if ((n.textWrap === "balance" || n.textWrap === "pretty")) rules.push(`text-wrap: ${n.textWrap};`);
+    if (n.listStyle && n.listStyle !== "none")
+      rules.push(`list-style-type: ${n.listStyle === "numbered" ? "decimal" : "disc"};`);
+    if (n.paragraphIndent) rules.push(`text-indent: ${devLen(n.paragraphIndent, unit)};`);
+    // Numbers (360039956634 §Numbers) and vertical trim (§Vertical trim).
+    const nums = [
+      n.slashedZero ? "slashed-zero" : "",
+      n.fractions ? "diagonal-fractions" : "",
+      n.figureStyle === "proportional-oldstyle" ? "oldstyle-nums proportional-nums"
+        : n.figureStyle === "monospace-lining" ? "lining-nums tabular-nums"
+          : n.figureStyle === "monospace-oldstyle" ? "oldstyle-nums tabular-nums"
+            : n.figureStyle === "proportional-lining" ? "lining-nums proportional-nums" : "",
+    ].filter(Boolean);
+    if (nums.length) rules.push(`font-variant-numeric: ${nums.join(" ")};`);
+    if (n.baselineShift === "super") rules.push("vertical-align: super;");
+    if (n.baselineShift === "sub") rules.push("vertical-align: sub;");
+    if (n.verticalTrim) rules.push("leading-trim: both; text-edge: cap alphabetic;");
+    // RTL/bidi (4972283635863).
+    if (directionOf(n.text || "", n.textDirection) === "rtl") rules.push("direction: rtl;");
+    // OpenType features & variable axes (4913951097367 / 5579502031511).
+    const cssEntries = (v?: Record<string, number>) =>
+      v && Object.keys(v).length ? Object.entries(v).map(([k, x]) => `"${k}" ${x}`).join(", ") : "";
+    const feat = cssEntries(n.fontFeatures);
+    const vari = cssEntries(n.fontVariations);
+    if (feat) rules.push(`font-feature-settings: ${feat};`);
+    if (vari) rules.push(`font-variation-settings: ${vari};`);
+  }
+  if (n.effects?.length) {
+    const shadows = n.effects
+      .filter((e) => e.visible && (e.kind === "drop-shadow" || e.kind === "inner-shadow"))
+      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${[e.x, e.y, e.blur, e.spread].map((v) => devLen(v, unit)).join(" ")} ${e.color}`);
+    if (shadows.length) rules.push(`box-shadow: ${shadows.join(", ")};`);
+  }
+  return rules.join("\n");
+}
+
+function generateTailwind(n: XNode): string {
+  const cls: string[] = [];
+  if (n.sizingW === "fill") cls.push("w-full");
+  else cls.push(`w-[${Math.round(n.w)}px]`);
+
+  if (n.sizingH === "fill") cls.push("h-full");
+  else cls.push(`h-[${Math.round(n.h)}px]`);
+
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      if (n.cornerRadii[0]) cls.push(`rounded-tl-[${n.cornerRadii[0]}px]`);
+      if (n.cornerRadii[1]) cls.push(`rounded-tr-[${n.cornerRadii[1]}px]`);
+      if (n.cornerRadii[3]) cls.push(`rounded-br-[${n.cornerRadii[3]}px]`);
+      if (n.cornerRadii[2]) cls.push(`rounded-bl-[${n.cornerRadii[2]}px]`);
+    } else {
+      cls.push(`rounded-[${n.cornerRadii[0]}px]`);
+    }
+  }
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    cls.push(`bg-[${n.fill}]`);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    cls.push(`border-[${n.strokeWidth}px]`, `border-[${n.strokePaint}]`);
+  }
+  if (n.opacity < 1) {
+    cls.push(`opacity-${Math.round(n.opacity * 100)}`);
+  }
+  if (n.layout) {
+    cls.push("flex");
+    cls.push(n.layout.direction === "horizontal" ? "flex-row" : "flex-col");
+    if (n.layout.gap) cls.push(`gap-[${n.layout.gap}px]`);
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl === pr && pt === pb && pl === pt && pl > 0) cls.push(`p-[${pl}px]`);
+    else {
+      if (pl || pr) cls.push(`px-[${pl}px]`);
+      if (pt || pb) cls.push(`py-[${pt}px]`);
+    }
+    if (n.layout.align === "center") cls.push("items-center");
+    else if (n.layout.align === "max") cls.push("items-end");
+    else if (n.layout.align === "baseline") cls.push("items-baseline");
+    if (n.layout.justify === "center") cls.push("justify-center");
+    else if (n.layout.justify === "between") cls.push("justify-between");
+    else if (n.layout.justify === "max") cls.push("justify-end");
+    if (n.layout.wrap) cls.push("flex-wrap");
+  }
+  if (n.kind === "text") {
+    cls.push(`text-[${n.fontSize}px]`);
+    if (n.fontWeight >= 700) cls.push("font-bold");
+    else if (n.fontWeight >= 600) cls.push("font-semibold");
+    else if (n.fontWeight >= 500) cls.push("font-medium");
+    if (n.lineHeight) cls.push(`leading-[${Math.round(n.lineHeight)}px]`);
+    if (n.textAlign && n.textAlign !== "left")
+      cls.push(n.textAlign === "justified" ? "text-justify" : `text-${n.textAlign}`);
+    if (n.textDecoration === "underline") cls.push("underline");
+    else if (n.textDecoration === "strikethrough") cls.push("line-through");
+    if (n.textCase === "upper") cls.push("uppercase");
+    else if (n.textCase === "lower") cls.push("lowercase");
+    else if (n.textCase === "title") cls.push("capitalize");
+  }
+  return `<!-- ${n.name} -->\n<div className="${cls.join(" ")}">\n  {/* Children */}\n</div>`;
+}
+
+function generateSwiftUI(n: XNode): string {
+  const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
+  if (n.kind === "text") {
+    const weight = n.fontWeight >= 700 ? ".bold" : n.fontWeight >= 600 ? ".semibold" : n.fontWeight >= 500 ? ".medium" : ".regular";
+    const deco =
+      n.textDecoration === "underline"
+        ? "\n    .underline()"
+        : n.textDecoration === "strikethrough"
+          ? "\n    .strikethrough()"
+          : "";
+    const tcase =
+      n.textCase === "upper"
+        ? "\n    .textCase(.uppercase)"
+        : n.textCase === "lower"
+          ? "\n    .textCase(.lowercase)"
+          : "";
+    return `Text("${n.text || n.name}")
+    .font(.system(size: ${n.fontSize}, weight: ${weight}))${deco}${tcase}
+    .foregroundColor(Color(hex: "${hex(n.fill || "#000000")}"))`;
+  }
+  const stack = n.layout ? (n.layout.direction === "horizontal" ? "HStack" : "VStack") : "ZStack";
+  const spacing = n.layout?.gap ? `spacing: ${n.layout.gap}` : "";
+  const align = n.layout?.align === "center" ? "alignment: .center" : n.layout?.align === "max" ? "alignment: .trailing" : "";
+  const args = [align, spacing].filter(Boolean).join(", ");
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  const padStr = pl || pr || pt || pb ? `\n    .padding(EdgeInsets(top: ${pt}, leading: ${pl}, bottom: ${pb}, trailing: ${pr}))` : "";
+  const bgStr = n.fillVisible !== false && n.fill && n.fill !== "#00000000" ? `\n    .background(Color(hex: "${hex(n.fill)}"))` : "";
+  const cornerStr = n.cornerRadii[0] > 0 ? `\n    .cornerRadius(${n.cornerRadii[0]})` : "";
+  const borderStr = n.strokeVisible && n.strokeWidth > 0 ? `\n    .overlay(RoundedRectangle(cornerRadius: ${n.cornerRadii[0] || 0}).stroke(Color(hex: "${hex(n.strokePaint)}"), lineWidth: ${n.strokeWidth}))` : "";
+
+  return `${stack}(${args}) {
+    // Child views
+}
+.frame(width: ${Math.round(n.w)}, height: ${Math.round(n.h)})${padStr}${bgStr}${cornerStr}${borderStr}`;
+}
+
+function generateCompose(n: XNode): string {
+  const hex8 = (c: string) => "0xFF" + c.replace("#", "").slice(0, 6).toUpperCase();
+  if (n.kind === "text") {
+    const weight = n.fontWeight >= 700 ? "Bold" : n.fontWeight >= 600 ? "SemiBold" : n.fontWeight >= 500 ? "Medium" : "Normal";
+    return `Text(
+    text = "${n.text || n.name}",
+    fontSize = ${n.fontSize}.sp,
+    fontWeight = FontWeight.${weight},
+    color = Color(${hex8(n.fill || "#000000")})
+)`;
+  }
+  const container = n.layout ? (n.layout.direction === "horizontal" ? "Row" : "Column") : "Box";
+  const mod: string[] = [`Modifier.size(${Math.round(n.w)}.dp, ${Math.round(n.h)}.dp)`];
+  if (n.cornerRadii[0] > 0) mod.push(`clip(RoundedCornerShape(${n.cornerRadii[0]}.dp))`);
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") mod.push(`background(Color(${hex8(n.fill)}))`);
+  if (n.strokeVisible && n.strokeWidth > 0) mod.push(`border(${n.strokeWidth}.dp, Color(${hex8(n.strokePaint)}))`);
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  if (pl || pr || pt || pb) mod.push(`padding(${pt}.dp, ${pr}.dp, ${pb}.dp, ${pl}.dp)`);
+
+  return `${container}(
+    modifier = ${mod.join("\n        .")}
+) {
+    // Child composables
+}`;
+}
+
+function generateReact(n: XNode, unit: DevUnit = "px"): string {
+  const componentName = (n.name.replace(/[^a-zA-Z0-9]/g, "") || "Component")
+    .replace(/^[a-z]/, (c) => c.toUpperCase());
+
+  if (n.kind === "text") {
+    const textStyle: Record<string, string | number> = {
+      fontFamily: `"${n.fontFamily}", sans-serif`,
+      fontSize: unit === "rem" ? `${Math.round((n.fontSize / 16) * 100) / 100}rem` : `${n.fontSize}px`,
+      fontWeight: n.fontWeight,
+      color: n.fillVisible !== false && n.fill ? n.fill : "#000000",
+    };
+    if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
+    if (n.letterSpacing) textStyle.letterSpacing = `${n.letterSpacing}px`;
+    if (n.textAlign && n.textAlign !== "left")
+      textStyle.textAlign = n.textAlign === "justified" ? "justify" : n.textAlign;
+    if (n.textDecoration && n.textDecoration !== "none") textStyle.textDecoration = n.textDecoration;
+    if (n.textCase === "upper" || n.textCase === "lower" || n.textCase === "title")
+      textStyle.textTransform = n.textCase === "title" ? "capitalize" : n.textCase;
+    else if (n.textCase === "small-caps") textStyle.fontVariant = "small-caps";
+
+    const styleEntries = Object.entries(textStyle)
+      .map(([k, v]) => `    ${k}: ${typeof v === "number" ? v : `"${v}"`},`)
+      .join("\n");
+
+    return `import React from "react";\n\nexport const ${componentName}: React.FC = () => {\n  return (\n    <span\n      style={{\n${styleEntries}\n      }}\n    >\n      {${JSON.stringify(n.text || n.name)}}\n    </span>\n  );\n};`;
+  }
+
+  const styles: Record<string, string | number> = {};
+  if (n.sizingW === "fill") styles.width = '"100%"';
+  else styles.width = unit === "rem" ? `"${Math.round((n.w / 16) * 100) / 100}rem"` : Math.round(n.w);
+
+  if (n.sizingH === "fill") styles.height = '"100%"';
+  else styles.height = unit === "rem" ? `"${Math.round((n.h / 16) * 100) / 100}rem"` : Math.round(n.h);
+
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      styles.borderRadius = `"${n.cornerRadii[0]}px ${n.cornerRadii[1]}px ${n.cornerRadii[3]}px ${n.cornerRadii[2]}px"`;
+    } else {
+      styles.borderRadius = unit === "rem" ? `"${Math.round((n.cornerRadii[0] / 16) * 100) / 100}rem"` : n.cornerRadii[0];
+    }
+  }
+
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    styles.backgroundColor = `"${n.fill}"`;
+  }
+
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    styles.border = `"${n.strokeWidth}px solid ${n.strokePaint}"`;
+  }
+
+  if (n.opacity < 1) {
+    styles.opacity = Math.round(n.opacity * 100) / 100;
+  }
+
+  if (n.layout) {
+    styles.display = '"flex"';
+    styles.flexDirection = n.layout.direction === "horizontal" ? '"row"' : '"column"';
+    if (n.layout.gap) styles.gap = unit === "rem" ? `"${Math.round((n.layout.gap / 16) * 100) / 100}rem"` : n.layout.gap;
+    const [pl, pr, pt, pb] = n.layout.padding;
+    if (pl || pr || pt || pb) {
+      styles.padding = `"${pt}px ${pr}px ${pb}px ${pl}px"`;
+    }
+    if (n.layout.align === "center") styles.alignItems = '"center"';
+    else if (n.layout.align === "max") styles.alignItems = '"flex-end"';
+    else if (n.layout.align === "baseline") styles.alignItems = '"baseline"';
+
+    if (n.layout.justify === "center") styles.justifyContent = '"center"';
+    else if (n.layout.justify === "between") styles.justifyContent = '"space-between"';
+    else if (n.layout.justify === "max") styles.justifyContent = '"flex-end"';
+
+    if (n.layout.wrap) styles.flexWrap = '"wrap"';
+  }
+
+  if (n.effects?.length) {
+    const shadows = n.effects
+      .filter((e) => e.visible && (e.kind === "drop-shadow" || e.kind === "inner-shadow"))
+      .map((e) => `${e.kind === "inner-shadow" ? "inset " : ""}${e.x}px ${e.y}px ${e.blur}px ${e.spread}px ${e.color}`);
+    if (shadows.length) styles.boxShadow = `"${shadows.join(", ")}"`;
+  }
+
+  const formattedStyles = Object.entries(styles)
+    .map(([k, v]) => `    ${k}: ${v},`)
+    .join("\n");
+
+  return `import React from "react";\n\nexport const ${componentName}: React.FC = () => {\n  return (\n    <div\n      style={{\n${formattedStyles}\n      }}\n    >\n      {/* Child elements */}\n    </div>\n  );\n};`;
+}
+
+function generateFlutter(n: XNode): string {
+  const hex = (n.fill || "#000000").replace("#", "").padEnd(6, "0");
+  return `Container(
+  width: ${Math.round(n.w)}.0,
+  height: ${Math.round(n.h)}.0,
+  decoration: BoxDecoration(
+    color: const Color(0xFF${hex.toUpperCase()}),
+    borderRadius: BorderRadius.circular(${n.cornerRadii[0]}.0),
+  ),
+  child: ${n.kind === "text" ? `Text(
+    '${n.text.replace(/'/g, "\\'")}',
+    style: TextStyle(
+      fontSize: ${n.fontSize}.0,
+      fontWeight: FontWeight.w${n.fontWeight},
+    ),
+  )` : "// Children"},
+)`;
+}
+
+/** Copy-as-SVG and the inspect panel's SVG tab: the real exporter, so children,
+ *  gradients, effects, text and rotation survive the trip. This used to be a
+ *  lossy single-path emitter that dropped everything but the outline. */
+function generateSvg(n: XNode): string {
+  return exportSvg(n, { format: "SVG", scale: 1, suffix: "", colorProfile: getRenderColorProfile() });
+}
+
+function generateLayerJson(n: XNode): string {
+  const hexToNormalizedRgb = (hex: string) => {
+    const clean = hex.replace("#", "");
+    const r = parseInt(clean.slice(0, 2) || "0", 16) / 255;
+    const g = parseInt(clean.slice(2, 4) || "0", 16) / 255;
+    const b = parseInt(clean.slice(4, 6) || "0", 16) / 255;
+    return { r, g, b, a: 1 };
+  };
+
+  const payload: Record<string, unknown> = {
+    id: n.id,
+    name: n.name,
+    type: n.kind.toUpperCase(),
+    visible: n.visible,
+    opacity: n.opacity,
+    blendMode: n.blendMode.toUpperCase(),
+    absoluteBoundingBox: {
+      x: n.x,
+      y: n.y,
+      width: n.w,
+      height: n.h,
+    },
+    constraints: {
+      horizontal: n.constraintH.toUpperCase(),
+      vertical: n.constraintV.toUpperCase(),
+    },
+    fills: n.fillVisible && !isNone(n.fill)
+      ? [{
+          type: "SOLID",
+          visible: true,
+          opacity: n.fillOpacity,
+          color: hexToNormalizedRgb(n.fill),
+        }]
+      : [],
+    strokes: n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)
+      ? [{
+          type: "SOLID",
+          visible: true,
+          opacity: n.strokeOpacity,
+          color: hexToNormalizedRgb(n.strokePaint),
+        }]
+      : [],
+    strokeWeight: n.strokeWidth,
+    strokeAlign: n.strokeAlign.toUpperCase(),
+    strokeCap: n.strokeCap.toUpperCase(),
+    strokeJoin: n.strokeJoin.toUpperCase(),
+    cornerRadius: n.cornerRadii[0],
+    effects: n.effects,
+  };
+
+  if (n.layout) {
+    payload.layoutMode = n.layout.direction === "horizontal" ? "HORIZONTAL" : "VERTICAL";
+    payload.itemSpacing = n.layout.gap;
+    payload.paddingLeft = n.layout.padding[0];
+    payload.paddingRight = n.layout.padding[1];
+    payload.paddingTop = n.layout.padding[2];
+    payload.paddingBottom = n.layout.padding[3];
+  }
+
+  if (n.kind === "text") {
+    payload.characters = n.text;
+    payload.style = {
+      fontFamily: n.fontFamily,
+      fontSize: n.fontSize,
+      fontWeight: n.fontWeight,
+      textAlignHorizontal: n.textAlign.toUpperCase(),
+    };
+  }
+
+  if (n.vectorNetwork && n.vectorNetwork.vertices.length > 0) {
+    payload.vectorNetwork = {
+      vertices: n.vectorNetwork.vertices,
+      segments: n.vectorNetwork.segments,
+      regions: n.vectorNetwork.regions,
+    };
+  }
+
+  return JSON.stringify(payload, null, 2);
+}
+
+function BoxModelDiagram({ n }: { n: XNode }) {
+  const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
+  const borderW = n.strokeVisible && n.strokeWidth > 0 ? n.strokeWidth : 0;
+  const contentW = Math.max(0, Math.round(n.w - pl - pr));
+  const contentH = Math.max(0, Math.round(n.h - pt - pb));
+
+  const copyVal = (text: string, label: string) => {
+    copyText(text);
+    toast(`Copied ${label}: ${text}`);
+  };
+
+  return (
+    <div className="box-model-diagram-v2" aria-label="Box Model Inspector">
+      <div
+        className="bm-layer bm-margin"
+        title="Position / Offset (Click to copy)"
+        onClick={() => copyVal(`/* x: ${Math.round(n.x)}px, y: ${Math.round(n.y)}px */`, "position")}
+      >
+        <span className="bm-tag">OFFSET / MARGIN</span>
+        <div className="bm-pos-top">{Math.round(n.y)}</div>
+        <div className="bm-mid-row">
+          <div className="bm-pos-left">{Math.round(n.x)}</div>
+
+          <div
+            className="bm-layer bm-border"
+            title="Border (Click to copy)"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (borderW > 0) copyVal(`border: ${borderW}px solid ${n.strokePaint};`, "border");
+              else copyVal("border: none;", "border");
+            }}
+          >
+            <span className="bm-tag">BORDER {borderW > 0 ? `${borderW}px` : "0"}</span>
+            <div className="bm-pos-top">{borderW}</div>
+            <div className="bm-mid-row">
+              <div className="bm-pos-left">{borderW}</div>
+
+              <div
+                className="bm-layer bm-padding"
+                title="Padding (Click to copy)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyVal(`padding: ${pt}px ${pr}px ${pb}px ${pl}px;`, "padding");
+                }}
+              >
+                <span className="bm-tag">PADDING</span>
+                <div className="bm-pos-top">{pt}</div>
+                <div className="bm-mid-row">
+                  <div className="bm-pos-left">{pl}</div>
+
+                  <div
+                    className="bm-content-box"
+                    title="Content dimensions (Click to copy)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyVal(`width: ${contentW}px; height: ${contentH}px;`, "content size");
+                    }}
+                  >
+                    <span className="bm-content-dims">
+                      {contentW} × {contentH}
+                    </span>
+                    {n.cornerRadii[0] > 0 && <span className="bm-radius-badge">r:{n.cornerRadii[0]}</span>}
+                  </div>
+
+                  <div className="bm-pos-right">{pr}</div>
+                </div>
+                <div className="bm-pos-bottom">{pb}</div>
+              </div>
+
+              <div className="bm-pos-right">{borderW}</div>
+            </div>
+            <div className="bm-pos-bottom">{borderW}</div>
+          </div>
+
+          <div className="bm-pos-right">{n.layout?.gap ? `gap: ${n.layout.gap}` : "—"}</div>
+        </div>
+        <div className="bm-pos-bottom">—</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Dev Mode inspect panel: a Code|List
+ * toggle over the layer properties, a language picker with a units setting,
+ * click any value to copy it, then component info, assets, prototype
+ * interactions and annotations. The styling is ours.
+ */
+function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapshot }) {
+  const [mode, setMode] = useState<"code" | "list">("code");
+  // Language and units are app-wide Dev Mode preferences (see devPrefs.ts) rather
+  // than panel state: that is what lets the right-click menu and the ⌥⇧C chord
+  // copy exactly what this panel shows, and it is why the choice outlives a
+  // reload.
+  const { format, unit, scope } = useSyncExternalStore(subscribeDevPrefs, getDevPrefs, getDevPrefs);
+  const setFormat = (f: DevFormat) => setDevPrefs({ format: f });
+  const setUnit = (u: DevUnit) => setDevPrefs({ unit: u });
+  const setScope = (s: DevScope) => setDevPrefs({ scope: s });
+
+  if (!n) {
+    return (
+      <div className="insp-pad dev-empty" style={{ display: "grid", gap: 12 }}>
+        <div style={{ padding: 14, borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--panel)", border: "1px solid var(--line)", display: "grid", placeItems: "center", flexShrink: 0 }}>◈</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 12 }}>Select a layer to inspect</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>Click any layer — code, specs, and assets appear here. Hover with ⌥ to measure distances.</div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <div style={{ padding: 10, borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.04, textTransform: "uppercase" }}>Measure</div>
+            <div style={{ fontSize: 11, color: "var(--text)", marginTop: 4 }}><b>⌥ hover</b> with a selection to show redlines</div>
+          </div>
+          <div style={{ padding: 10, borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.04, textTransform: "uppercase" }}>Export</div>
+            <div style={{ fontSize: 11, color: "var(--text)", marginTop: 4 }}><b>⇧⌘E</b> bulk export all assets</div>
+          </div>
+        </div>
+        <DevTokens snap={snap} />
+      </div>
+    );
+  }
+
+  const treeCapable = TREE_FORMATS[format] !== undefined && (n.children?.length ?? 0) > 0;
+  const code = renderDevCodeScoped(n, format, unit, scope, snap);
+  return (
+    <>
+      <div style={{ margin: "0 12px 10px", padding: "10px 12px", borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent)", boxShadow: "0 0 0 4px var(--accent-wash)", flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>Ready for development</div>
+          <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
+        </div>
+        <span style={{ fontSize: 10, padding: "3px 7px", borderRadius: 999, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--muted)" }}>{snap.pages[snap.page].name}</span>
+      </div>
+      <div className="h-row dev-head">
+        <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} /> Inspect</h3>
+        <XSegmentedControl
+          className="dev-seg"
+          ariaLabel="Inspect view"
+          value={mode}
+          options={[
+            { value: "code", label: "Code" },
+            { value: "list", label: "List" },
+          ]}
+          onChange={(v) => setMode(v as typeof mode)}
+        />
+      </div>
+      <div className="insp-pad dev-preview">
+        {n.kind === "text" ? <TypeSpecimen n={n} /> : <BoxModelDiagram n={n} />}
+      </div>
+      {mode === "code" ? (
+        <div className="insp-pad dev-code">
+          <div className="dev-codebar">
+            <DevLangMenu
+              format={format}
+              setFormat={setFormat}
+              unit={unit}
+              setUnit={setUnit}
+              showUnits={format === "css" || scope === "subtree"}
+            />
+            {treeCapable && (
+              <XSegmentedControl
+                className="dev-seg"
+                ariaLabel="Code scope"
+                value={scope}
+                options={[
+                  { value: "layer", label: "Layer" },
+                  { value: "subtree", label: "Subtree" },
+                ]}
+                onChange={(v) => setScope(v as typeof scope)}
+              />
+            )}
+            <Tooltip label="Copy the snippet">
+              <button
+                className="mini"
+                aria-label="Copy code"
+                onClick={() => {
+                  copyText(code);
+                  toast(`Copied ${devLangLabel(format)}`);
+                }}
+              >
+                <Icon name="copy" size={12} />
+              </button>
+            </Tooltip>
+          </div>
+          <pre className="css-block dev-pre">{code}</pre>
+        </div>
+      ) : (
+        <DevList n={n} snap={snap} unit={unit} />
+      )}
+      <DevComponent n={n} engine={engine} snap={snap} />
+      <DevAssets n={n} engine={engine} />
+      <DevInteractions n={n} engine={engine} snap={snap} />
+      <DevAnnotations n={n} engine={engine} snap={snap} />
+    </>
+  );
+}
+
+/** Value of a property in the unit the developer asked for. */
+function devLen(v: number, unit: DevUnit): string {
+  const r = Math.round(v * 100) / 100;
+  if (unit === "rem") return `${Math.round((r / 16) * 10000) / 10000}rem`;
+  return `${r}px`;
+}
+
+/* --------------------------------------------------------------------- tokens */
+
+/** Turn a token name into a CSS custom-property name. */
+function kebab(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+type TokenRow = { group: string; name: string; value: string; color?: string; alias?: string };
+
+/**
+ * The file's colour and number tokens, offered as CSS custom properties or as a
+ * JSON token file. Styles and variables sit in the properties panel when
+ * nothing is selected.
+ * A developer who has just inspected one layer usually wants the whole palette,
+ * and until now had to read it off the Assets tab one row at a time.
+ */
+function DevTokens({ snap }: { snap: Snapshot }) {
+  const rows: TokenRow[] = [];
+  const vars = snap.variables ?? [];
+  const varCollections = snap.variableCollections ?? [];
+  const activeModes = snap.activeModes ?? {};
+  // Active mode per collection, for groups that actually have alternatives.
+  const modeOf = new Map<string, string>();
+  for (const c of varCollections) {
+    if (c.modes.length < 2) continue;
+    const m = c.modes.find((x) => x.id === (activeModes[c.id] ?? c.modes[0]?.id));
+    if (m) modeOf.set(c.name, m.name);
+  }
+  const groupLabel = (collection: string) =>
+    modeOf.has(collection) ? `${collection} · ${modeOf.get(collection)}` : collection;
+  for (const v of vars) {
+    const r = resolveVariable(vars, varCollections, activeModes, v.id);
+    const value = r ? String(r.value) : "?";
+    // Aliases export as DTCG references; flat formats get the resolved value.
+    const col = varCollections.find((c) => c.name === v.collection);
+    const modeId = col ? (activeModes[col.id] ?? col.modes[0]?.id) : undefined;
+    const slot = modeId && v.values?.[modeId] !== undefined ? v.values[modeId] : v.value;
+    let alias: string | undefined;
+    if (isAlias(slot)) {
+      const t = vars.find((x) => x.id === slot.alias);
+      if (t) alias = `{${kebab(groupLabel(t.collection)) || "tokens"}.${kebab(t.name)}}`;
+    }
+    rows.push({
+      group: groupLabel(v.collection),
+      name: v.name,
+      value,
+      color: v.type === "color" ? value : undefined,
+      alias,
+    });
+  }
+  for (const s of snap.styles) {
+    if (s.kind === "paint") rows.push({ group: "Styles", name: s.name, value: s.color ?? "", color: s.color });
+  }
+  if (!rows.length) return null;
+
+  const byGroup = new Map<string, TokenRow[]>();
+  for (const r of rows) {
+    const list = byGroup.get(r.group) ?? [];
+    list.push(r);
+    byGroup.set(r.group, list);
+  }
+  const css = `:root {\n${[...byGroup.entries()]
+    .map(([g, list]) => `  /* ${g} */\n${list.map((r) => `  --${kebab(`${g}-${r.name}`)}: ${r.value};`).join("\n")}`)
+    .join("\n")}\n}`;
+  const json = JSON.stringify(
+    Object.fromEntries(
+      [...byGroup.entries()].map(([g, list]) => [
+        kebab(g) || "tokens",
+        Object.fromEntries(list.map((r) => [kebab(r.name), { value: r.value, type: r.color ? "color" : "number" }])),
+      ]),
+    ),
+    null,
+    2,
+  );
+  const styleDict = JSON.stringify(
+    Object.fromEntries(
+      [...byGroup.entries()].map(([g, list]) => [
+        kebab(g) || "tokens",
+        Object.fromEntries(
+          list.map((r) => [
+            kebab(r.name),
+            {
+              $value: r.alias ?? r.value,
+              $type: r.color ? "color" : "dimension",
+              $description: `${g} · ${r.name}`,
+            },
+          ]),
+        ),
+      ]),
+    ),
+    null,
+    2,
+  );
+
+  const copy = (text: string, what: string) => {
+    copyText(text);
+    toast(`Copied ${what} \u00b7 ${rows.length} tokens`);
+  };
+
+  return (
+    <div className="dev-tokens">
+      <div className="dev-tokens-head">
+        <b>Tokens in this file</b>
+        <span>{rows.length}</span>
+        <button className="mini" title="Copy as CSS custom properties" onClick={() => copy(css, "CSS variables")}>
+          CSS
+        </button>
+        <button className="mini" title="Copy as a JSON token file" onClick={() => copy(json, "JSON")}>
+          JSON
+        </button>
+        <button className="mini" title="Copy as Style Dictionary (W3C DTCG)" onClick={() => copy(styleDict, "Style Dictionary")}>
+          DTCG
+        </button>
+        <button
+          className="mini"
+          title="Copy a tailwind.config theme.extend built from these tokens"
+          onClick={() => copy(generateTailwindTheme(snap), "Tailwind theme")}
+        >
+          TW
+        </button>
+        <button
+          className="mini"
+          title="Download tokens.json"
+          onClick={() => {
+            downloadBlob(new Blob([json], { type: "application/json" }), "tokens.json");
+            toast("Downloaded tokens.json");
+          }}
+        >
+          <Icon name="export" size={12} />
+        </button>
+        <button
+          className="mini"
+          title="Download style-dictionary.json"
+          onClick={() => {
+            downloadBlob(new Blob([styleDict], { type: "application/json" }), "style-dictionary.json");
+            toast("Downloaded style-dictionary.json (W3C DTCG)");
+          }}
+        >
+          DTCG ↓
+        </button>
+      </div>
+      <p className="dev-tokens-note">
+        Colours are hex as stored; numbers carry no unit, so spacing and radius land as raw
+        values for your preprocessor to interpret.
+      </p>
+      {[...byGroup.entries()].map(([g, list]) => (
+        <div className="dev-tokens-group" key={g}>
+          <p className="menu-label">{g}</p>
+          {list.map((r) => (
+            <button
+              className="dev-token"
+              key={`${g}/${r.name}`}
+              title="Click to copy this value"
+              onClick={() => {
+                copyText(r.value);
+                toast(`Copied ${r.name} \u00b7 ${r.value}`);
+              }}
+            >
+              {r.color ? <span className="dev-token-sw" style={{ background: r.color }} aria-hidden /> : null}
+              <span className="dev-token-name">{r.name}</span>
+              <span className="dev-token-val">{r.value}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function generateDesignTokens(n: XNode): string {
+  const tokens: Record<string, unknown> = {};
+  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+    tokens.color = {
+      value: n.fill,
+      type: "color",
+    };
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
+    tokens.border = {
+      color: { value: n.strokePaint, type: "color" },
+      width: { value: `${n.strokeWidth}px`, type: "dimension" },
+    };
+  }
+  tokens.size = {
+    width: { value: `${Math.round(n.w)}px`, type: "dimension" },
+    height: { value: `${Math.round(n.h)}px`, type: "dimension" },
+  };
+  if (n.cornerRadii && n.cornerRadii.some((r) => r > 0)) {
+    tokens.borderRadius = {
+      value: `${n.cornerRadii[0]}px`,
+      type: "dimension",
+    };
+  }
+  if (n.kind === "text") {
+    tokens.typography = {
+      fontSize: { value: `${n.fontSize}px`, type: "dimension" },
+      fontWeight: { value: String(n.fontWeight), type: "fontWeight" },
+    };
+  }
+  return JSON.stringify(tokens, null, 2);
+}
+
+function renderDevCode(n: XNode, format: DevFormat, unit: DevUnit): string {
+  switch (format) {
+    case "react":
+      return generateReact(n, unit);
+    case "tailwind":
+      return generateTailwind(n);
+    case "swiftui":
+      return generateSwiftUI(n);
+    case "uikit":
+      return generateUIKitCode(n);
+    case "xml":
+      return generateAndroidXml(n);
+    case "compose":
+      return generateCompose(n);
+    case "flutter":
+      return generateFlutter(n);
+    case "svg":
+      return generateSvg(n);
+    case "tokens":
+      return generateDesignTokens(n);
+    case "layerJson":
+    case "figma":
+      return generateLayerJson(n);
+    default:
+      return generateCss(n, unit);
+  }
+}
+
+/**
+ * Dev formats that can render a whole subtree, and the tree emitter each
+ * one maps to. The native formats (SwiftUI, Compose, Flutter, SVG, tokens…)
+ * stay single-layer: their generators have no tree walker.
+ */
+const TREE_FORMATS: Partial<Record<DevFormat, TreeFormat>> = {
+  css: "css",
+  react: "tsx",
+  tailwind: "tailwind",
+  html: "html",
+  vue: "vue",
+  svelte: "svelte",
+};
+
+/**
+ * The panel's code renderer: single-layer snippets by default, the subtree
+ * generator when the scope says so. HTML/Vue/Svelte have no single-node
+ * generator, so even "layer" scope renders through the tree emitter with
+ * depth 0 — one element, same code path, no second implementation.
+ */
+function renderDevCodeScoped(n: XNode, format: DevFormat, unit: DevUnit, scope: DevScope, snap: Snapshot): string {
+  // A slice's SVG is its region's content, like the export's.
+  if (format === "svg" && n.isSlice === true)
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "", colorProfile: snap.colorProfile }, { root: snap.pages[snap.page].root });
+  const tree = TREE_FORMATS[format];
+  if (!tree) return renderDevCode(n, format, unit);
+  if (scope === "subtree" && n.children?.length) {
+    return generateSubtreeCode(n, { format: tree, unit, snap });
+  }
+  if (format === "html" || format === "vue" || format === "svelte") {
+    return generateSubtreeCode(n, { format: tree, unit, snap, maxDepth: 0 });
+  }
+  return renderDevCode(n, format, unit);
+}
+
+/** Language dropdown with the units setting underneath. */
+function DevLangMenu({
+  format,
+  setFormat,
+  unit,
+  setUnit,
+  showUnits,
+}: {
+  format: DevFormat;
+  setFormat: (f: DevFormat) => void;
+  unit: DevUnit;
+  setUnit: (u: DevUnit) => void;
+  showUnits: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+    };
+  }, [open]);
+  // PM-U3: the menu joins the one Escape cascade. It used to arm the shared
+  // popover counter, which protected the selection but closed nothing when the
+  // app's capture handler got there first.
+  useEscape(open ? "dev-lang" : null, () => setOpen(false));
+  const current = DEV_LANGS.find((l) => l.id === format)?.label ?? "CSS";
+  const pick = (fn: () => void) => () => {
+    fn();
+    setOpen(false);
+  };
+  return (
+    <div className="dev-lang" ref={root}>
+      <button className="dev-lang-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        {current}
+        {showUnits && <span className="dev-lang-unit">{unit}</span>}
+        <span className={`dev-lang-caret${open ? " up" : ""}`}>
+          <Icon name="chevron-down" size={caretSize()} />
+        </span>
+      </button>
+      {open && (
+        <div className="dev-menu" role="menu">
+          <p className="menu-label">Language</p>
+          {DEV_LANGS.map((l) => (
+            <button
+              key={l.id}
+              role="menuitemradio"
+              aria-checked={l.id === format}
+              className={l.id === format ? "on" : ""}
+              onClick={pick(() => setFormat(l.id))}
+            >
+              {l.label}
+              <span className="dev-menu-note">{l.lang}</span>
+            </button>
+          ))}
+          {showUnits && (
+            <>
+              <p className="menu-label">Units</p>
+              {(["px", "rem"] as DevUnit[]).map((u) => (
+                <button
+                  key={u}
+                  role="menuitemradio"
+                  aria-checked={u === unit}
+                  className={u === unit ? "on" : ""}
+                  onClick={pick(() => setUnit(u))}
+                >
+                  {u === "px" ? "Pixels (px)" : "Root em (rem)"}
+                  <span className="dev-menu-note">{u}</span>
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** List view: property rows whose values copy on click. */
+function DevList({ n, snap, unit }: { n: XNode; snap: Snapshot; unit: DevUnit }) {
+  const rows = devProperties(n, snap, unit);
+  const groups: { title: string; items: DevProp[] }[] = [];
+  for (const r of rows) {
+    let g = groups.find((x) => x.title === r.group);
+    if (!g) {
+      g = { title: r.group, items: [] };
+      groups.push(g);
+    }
+    g.items.push(r);
+  }
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.title} className="insp-pad dev-group">
+          <p className="dev-group-title">{g.title}</p>
+          {g.items.map((r) => (
+            <DevRow key={r.label} p={r} />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+interface DevProp {
+  group: string;
+  label: string;
+  value: string;
+  swatch?: string;
+}
+
+function DevRow({ p }: { p: DevProp }) {
+  return (
+    <button
+      className="dev-row"
+      title="Copy value"
+      onClick={() => {
+        copyText(p.value);
+        toast(`Copied ${p.label}`);
+      }}
+    >
+      <span className="dev-k">{p.label}</span>
+      {p.swatch && <span className="dev-sw" style={{ background: p.swatch }} />}
+      <span className="dev-v">{p.value}</span>
+      <Icon name="copy" size={12} />
+    </button>
+  );
+}
+
+function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
+  const out: DevProp[] = [];
+  const L = (label: string, value: string, group = "Layout", swatch?: string) =>
+    out.push({ group, label, value, swatch });
+  L("Position", `${Math.round(n.x)}, ${Math.round(n.y)}`);
+  L("Size", `${devLen(n.w, unit)} × ${devLen(n.h, unit)}`);
+  if (n.rotation) L("Rotation", `${Math.round(n.rotation * 100) / 100}°`);
+  if (n.flipH || n.flipV) L("Flip", [n.flipH && "Horizontal", n.flipV && "Vertical"].filter(Boolean).join(", "));
+  L("Constraints", `${n.constraintH} / ${n.constraintV}`);
+  if (n.layout) {
+    const [pl, pr, pt, pb] = n.layout.padding;
+    L("Direction", n.layout.direction === "horizontal" ? "Row" : "Column");
+    if (n.layout.gap) L("Gap", devLen(n.layout.gap, unit));
+    L("Padding", [pl, pr, pb, pt].map((v) => devLen(v, unit)).join(" "));
+    if (n.layout.wrap) L("Wrap", "Enabled");
+  }
+  if (n.sizingW !== "fixed" || n.sizingH !== "fixed") {
+    const size = (v: string) => (v === "hug" ? "Hug" : v === "fill" ? "Fill" : "Fixed");
+    L("Sizing", `${size(n.sizingW)} / ${size(n.sizingH)}`);
+  }
+  if (n.opacity < 1) L("Opacity", `${Math.round(n.opacity * 100)}%`, "Layer");
+  if (n.blendMode && n.blendMode !== "normal") L("Blend mode", n.blendMode, "Layer");
+  if (n.isMask)
+    L("Mask", n.maskType === "luminance" ? "Luminance" : n.maskType === "vector" ? "Vector" : "Alpha", "Layer");
+  const fills = (n.fills ?? []).filter((f) => f.visible !== false);
+  // Same reading order as the Design panel now uses: the paints stacked above
+  // the base fill come first, so both sides count the stack from the canvas down.
+  for (const f of [...fills].reverse()) {
+    if (isNone(f.color)) continue;
+    const label = f.type === "solid" ? "Fill" : f.type.replace("-", " ").replace(/^./, (c) => c.toUpperCase());
+    L(label, `${f.color.toUpperCase()} · ${Math.round((f.opacity ?? 1) * 100)}%`, "Style", f.color);
+  }
+  if (n.fillVisible && !isNone(n.fill)) {
+    L("Fill", `${n.fill.toUpperCase()} · ${Math.round((n.fillOpacity ?? 1) * 100)}%`, "Style", n.fill);
+  }
+  if (n.strokeVisible && n.strokeWidth > 0 && !isNone(n.strokePaint)) {
+    L(
+      "Border",
+      `${
+        (n.strokeSides ?? "all") === "custom"
+          ? sideWidths("custom", n.strokeSideW, n.strokeWidth).map((w) => devLen(w, unit)).join(" ")
+          : (n.strokeSides ?? "all") !== "all"
+            ? `${devLen(n.strokeWidth, unit)} ${n.strokeSides} only`
+            : devLen(n.strokeWidth, unit)
+      } ${n.strokeAlign} ${n.strokePaint.toUpperCase()}`,
+      "Style",
+      n.strokePaint,
+    );
+  }
+  if (usesVariableWidth(n)) L("Stroke width", "variable", "Style");
+  if (n.strokeDash && n.strokeDash > 0) L("Dashed", `${n.strokeDash}`, "Style");
+  for (const e of n.effects ?? []) {
+    if (e.visible === false) continue;
+    if (e.kind === "drop-shadow" || e.kind === "inner-shadow") {
+      L(
+        e.kind === "drop-shadow" ? "Drop shadow" : "Inner shadow",
+        `${e.x}, ${e.y} · blur ${e.blur}${e.spread ? ` · spread ${e.spread}` : ""} · ${e.color}${
+          e.blend && e.blend !== "Normal" ? ` · ${e.blend}` : ""
+        }`,
+        "Style",
+        e.color,
+      );
+    } else {
+      L(e.kind === "layer-blur" ? "Layer blur" : "Blur", `${e.blur}`, "Style");
+    }
+  }
+  if (n.cornerRadii?.some((r) => r > 0)) {
+    if (n.cornerIndependent) {
+      L("Corner radius", n.cornerRadii.map((r) => devLen(r, unit)).join(" "));
+    } else {
+      L("Corner radius", devLen(n.cornerRadii[0], unit));
+    }
+    if (n.cornerSmoothing) L("Corner smoothing", `${Math.round(n.cornerSmoothing * 100)}%`);
+  }
+  if (n.kind === "text") {
+    L("Text", n.text || "", "Typography");
+    L("Font", `${n.fontFamily} ${n.fontWeight}`, "Typography");
+    L("Font size", devLen(n.fontSize, unit), "Typography");
+    if (n.lineHeight) L("Line height", devLen(n.lineHeight, unit), "Typography");
+    if (n.letterSpacing) L("Letter spacing", devLen(n.letterSpacing, unit), "Typography");
+    if (n.textAlign && n.textAlign !== "left") L("Alignment", n.textAlign, "Typography");
+    if (n.textDecoration && n.textDecoration !== "none")
+      L("Decoration", n.textDecoration === "strikethrough" ? "Strikethrough" : "Underline", "Typography");
+    if (n.textCase && n.textCase !== "none")
+      L(
+        "Letter case",
+        n.textCase === "upper"
+          ? "Uppercase"
+          : n.textCase === "lower"
+            ? "Lowercase"
+            : n.textCase === "title"
+              ? "Title Case"
+              : "Small caps",
+        "Typography",
+      );
+    if (n.textAlignVertical && n.textAlignVertical !== "top")
+      L("Vertical alignment", n.textAlignVertical, "Typography");
+    if ((n.textWrap === "balance" || n.textWrap === "pretty")) L("Wrap style", n.textWrap, "Typography");
+    if (n.listStyle && n.listStyle !== "none") L("List", n.listStyle, "Typography");
+    if (n.paragraphIndent) L("Paragraph indent", devLen(n.paragraphIndent, unit), "Typography");
+  }
+  // View applied styles: only paints are named here, matching the
+  // two style slots the engine actually has.
+  for (const [label, id] of [
+    ["Fill style", n.fillStyle],
+    ["Stroke style", n.strokeStyle],
+  ] as [string, string | undefined][]) {
+    if (!id) continue;
+    const style = snap.styles.find((s) => s.id === id || s.name === id);
+    L(label, style ? (style.color ? `${style.name} · ${style.color.toUpperCase()}` : style.name) : String(id), "Styles", style?.color);
+  }
+  if (n.textStyle) {
+    const style = snap.styles.find((s) => s.id === n.textStyle);
+    L("Text style", style ? style.name : String(n.textStyle), "Styles");
+  }
+  if (n.exports?.length) {
+    L(
+      "Export",
+      n.exports.map((p) => `${p.format} ${p.scale}×${p.suffix ? ` ${p.suffix}` : ""}`).join(", "),
+      "Export",
+    );
+  }
+  return out;
+}
+
+/** Typographic sample instead of the box model for text layers. */
+function TypeSpecimen({ n }: { n: XNode }) {
+  return (
+    <div className="dev-type">
+      <div
+        className="dev-type-sample"
+        style={{
+          fontFamily: `${n.fontFamily}, Inter, system-ui, sans-serif`,
+          fontSize: Math.min(28, Math.max(11, n.fontSize / 2)),
+          fontWeight: n.fontWeight,
+          lineHeight: n.lineHeight ? `${n.lineHeight / n.fontSize}` : 1.3,
+          letterSpacing: n.letterSpacing ? `${n.letterSpacing}px` : undefined,
+          color: n.fillVisible === false || isNone(n.fill) ? "var(--text)" : n.fill,
+          textAlign: n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left",
+        }}
+      >
+        {(n.text || n.name).split("\n").slice(0, 3).join("\n")}
+      </div>
+      <div className="dev-type-meta">
+        <span>
+          {n.fontFamily} {n.fontWeight}
+        </span>
+        <span>
+          {Math.round(n.fontSize)} / {n.lineHeight ? Math.round(n.lineHeight) : "auto"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Component / instance information, with a route to the main component. */
+function DevComponent({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
+  const root = snap.pages[snap.page].root;
+  const master = snap.components.find((c) => c.id === (n.componentId || n.id));
+  const own = n.componentId ? find(root, n.componentId) : null;
+  const instances = n.isComponent
+    ? (() => {
+        let count = 0;
+        const walk = (p: XNode) => {
+          for (const ch of p.children) {
+            if (ch.componentId === n.id) count++;
+            walk(ch);
+          }
+        };
+        walk(root);
+        return count;
+      })()
+    : 0;
+  if (!n.isComponent && !n.componentId) return null;
+  const props = Object.entries(n.componentProperties ?? {});
+  return (
+    <>
+      <div className="hr" />
+      <Section id="dev-component" title="Component" defaultOpen={true}>
+        <div className="insp-pad dev-group">
+          {n.componentId && (
+            <button
+              className="dev-row link"
+              title="Select the main component"
+              onClick={() => {
+                const id = n.componentId;
+                if (own || master) {
+                  engine.dispatch({ type: "select", ids: [id] });
+                  toast(`Selected ${master?.name ?? "main component"}`);
+                } else {
+                  toast("Main component is on another page");
+                }
+              }}
+            >
+              <span className="dev-k">Instance of</span>
+              <span className="dev-v">{master?.name ?? "Component"}</span>
+              <Icon name="chevron-right" size={12} />
+            </button>
+          )}
+          {n.isComponent && (
+            <DevRow p={{ group: "Component", label: "Instances", value: `${instances} on this page` }} />
+          )}
+          {n.variant && <DevRow p={{ group: "Component", label: "Variant", value: n.variant }} />}
+          {master && master.variants.length > 0 && (
+            <DevRow
+              p={{ group: "Component", label: "Variants", value: master.variants.map((v) => v.name).join(", ") }}
+            />
+          )}
+          {props.map(([k, v]) => (
+            <DevRow key={k} p={{ group: "Component", label: k, value: String(v) }} />
+          ))}
+          {master?.properties?.length ? (
+            <p className="dev-note">
+              {master.properties.length} {plural(master.properties.length, "property", "properties")} defined on the
+              main component.
+            </p>
+          ) : null}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/** Everything exportable inside the selection, downloadable from the panel. */
+function DevAssets({ n, engine }: { n: XNode; engine: Engine }) {
+  const items = collectExportables(n);
+  if (!items.length) return null;
+  return (
+    <>
+      <div className="hr" />
+      <Section id="dev-assets" title={`Assets · ${items.length}`} defaultOpen={true}>
+        <div className="insp-pad dev-assets">
+          {items.map((a) => {
+            const p = a.exports?.[0] ?? { format: "PNG" as const, scale: 1, suffix: "" };
+            return (
+              <div className="dev-asset" key={a.id}>
+                <img className="xrow-thumb" src={previewUrl(a, { ...p, scale: 0.2 })} alt="" />
+                <button
+                  className="dev-asset-name"
+                  title="Select on canvas"
+                  onClick={() => {
+                    engine.dispatch({ type: "select", ids: [a.id] });
+                    zoomTo(engine, "selection");
+                  }}
+                >
+                  {a.name}
+                </button>
+                <span className="dev-asset-size">
+                  {Math.round(a.w)} × {Math.round(a.h)}
+                </span>
+                <button className="mini" title={`Download ${p.format}`} onClick={() => runExport(a, p)}>
+                  <Icon name="arrow-downward" size={12} />
+                </button>
+              </div>
+            );
+          })}
+          <button
+            className="export-run"
+            onClick={() => {
+              items.forEach((a, i) =>
+                window.setTimeout(() => runExport(a, a.exports?.[0] ?? { format: "PNG", scale: 1, suffix: "" }), i * 220),
+              );
+              toast(`Exporting ${plural(items.length, "asset")}`);
+            }}
+          >
+            Download all
+          </button>
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/** Prototype interactions on the layer, listed with a jump target. */
+function DevInteractions({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
+  const list = n.interactions ?? [];
+  if (!list.length) return null;
+  const root = snap.pages[snap.page].root;
+  return (
+    <>
+      <div className="hr" />
+      <Section id="dev-interactions" title={`Interactions · ${list.length}`} defaultOpen={true}>
+        <div className="insp-pad dev-group">
+          {list.map((it, i) => {
+            const dest = it.destination ? find(root, it.destination) : null;
+            return (
+              <div className="dev-row" key={i}>
+                <span className="dev-k">{devLabel(it.trigger)}</span>
+                <span className="dev-v">
+                  {devLabel(it.action)}
+                  {dest ? ` → ${dest.name}` : ""}
+                  {it.duration ? ` · ${it.duration}ms` : ""}
+                </span>
+                {dest && (
+                  <button
+                    className="mini"
+                    title="Go to destination"
+                    onClick={() => {
+                      engine.dispatch({ type: "select", ids: [dest.id] });
+                      zoomTo(engine, "selection");
+                    }}
+                  >
+                    <Icon name="chevron-right" size={12} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+    </>
+  );
+}
+
+/**
+ * Annotations: a note can pin a property so the value travels with the
+ * callout; here the + menu writes the property text into the note, which keeps
+ * the model a single string (and the canvas marker unchanged).
+ */
+function DevAnnotations({ n, engine, snap }: { n: XNode; engine: Engine; snap: Snapshot }) {
+  const [note, setNote] = useState("");
+  const [pin, setPin] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  // ⇧T lands here, so the caret should already be in the note field.
+  useEffect(() => {
+    const on = () => input.current?.focus();
+    window.addEventListener("x-native-annotate", on);
+    return () => window.removeEventListener("x-native-annotate", on);
+  }, []);
+  // While the property menu is open it owns Escape, like the language menu —
+  // which arming the popover counter never actually delivered: the counter kept
+  // the selection alive and the menu stayed open. PM-U3 registers it instead.
+  useEscape(pin ? "dev-property-menu" : null, () => setPin(false));
+  const list = (snap.annotations ?? []).filter((a) => a.nodeId === n.id) ?? [];
+  const pins: [string, () => string][] = [
+    ["Fill", () => (n.fillVisible === false || isNone(n.fill) ? "Fill: none" : `Fill: ${n.fill.toUpperCase()}`)],
+    ["Border", () => `Border: ${n.strokeWidth}px ${n.strokePaint.toUpperCase()}`],
+    ["Size", () => `Size: ${Math.round(n.w)} × ${Math.round(n.h)}`],
+    ["Position", () => `Position: ${Math.round(n.x)}, ${Math.round(n.y)}`],
+    ["Radius", () => `Radius: ${n.cornerRadii.join(" ")}`],
+    ["Font", () => `Font: ${n.fontFamily} ${n.fontSize}/${n.lineHeight || "auto"}`],
+  ];
+  const add = () => {
+    const text = note.trim();
+    if (!text) return;
+    engine.dispatch({
+      type: "addAnnotation",
+      annotation: {
+        id: `ann_${Date.now().toString(36)}`,
+        nodeId: n.id,
+        note: text,
+        author: "You",
+        date: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      },
+    });
+    setNote("");
+    toast(`Annotation pinned to ${n.name}`);
+  };
+  return (
+    <>
+      <div className="hr" />
+      <Section id="annotations" title="Annotations" actions={<span className="sc">{list.length}</span>}>
+      <div className="insp-pad dev-annos">
+        {list.map((a) => (
+          <div className="dev-anno" key={a.id}>
+            <span className="dev-anno-dot" aria-hidden />
+            <div className="dev-anno-body">
+              <p>{a.note}</p>
+              <span className="dev-anno-meta">
+                {a.author ?? "You"}
+                {a.date ? ` · ${a.date}` : ""}
+              </span>
+            </div>
+            <button
+              className="mini"
+              title="Delete annotation"
+              onClick={() => engine.dispatch({ type: "deleteAnnotation", id: a.id })}
+            >
+              <Icon name="trash" size={12} />
+            </button>
+          </div>
+        ))}
+        <div className="dev-anno-add">
+          <input
+            ref={input}
+            placeholder="Add a note…"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") add();
+            }}
+          />
+          <div className="dev-pin">
+            <button className="mini" title="Pin a property" aria-expanded={pin} onClick={() => setPin((v) => !v)}>
+              <Icon name="plus" size={rowIconSize()} />
+            </button>
+            {pin && (
+              <div className="dev-menu right">
+                <p className="menu-label">Add property</p>
+                {pins.map(([label, get]) => (
+                  <button
+                    key={label}
+                    onClick={() => {
+                      const t = get();
+                      setNote((v) => (v.trim() ? `${v.trim()}\n${t}` : t));
+                      setPin(false);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button className="mini primary" title="Post annotation" onClick={add}>
+            <Icon name="check" size={rowIconSize()} />
+          </button>
+        </div>
+        <p className="dev-note">Markers show on the canvas as green dots while Dev Mode is on.</p>
+      </div>
+      </Section>
+    </>
+  );
+}
+
+/** "closeOverlay" reads as code; the panel lists intent, so split the camelCase. */
+function devLabel(v: string): string {
+  return (v || "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+/** Layers that can be exported: frames, slices and anything with settings. */
+function collectExportables(n: XNode): XNode[] {
+  const out: XNode[] = [];
+  const walk = (p: XNode) => {
+    for (const ch of p.children) {
+      if (ch.visible === false) continue;
+      if (ch.kind === "frame" || (ch.exports?.length ?? 0) > 0) out.push(ch);
+      else walk(ch);
+    }
+  };
+  walk(n);
+  return out;
+}
+const CODE_FRAMEWORKS: CodeMapping["framework"][] = [
+  "react",
+  "html",
+  "vue",
+  "svelte",
+  "tailwind",
+  "swiftui",
+  "compose",
+  "flutter",
+  "uikit",
+];
+
+/**
+ * One mapping's editor card. Text fields edit a local draft and save on
+ * blur — every keystroke as its own undo step would make ⌘Z unusable —
+ * while discrete controls (selects, add/remove) save immediately.
+ */
+function MappingCard({
+  engine,
+  master,
+  mapping,
+  propNames,
+}: {
+  engine: Engine;
+  master: ComponentMaster;
+  mapping: CodeMapping;
+  propNames: string[];
+}) {
+  const [draft, setDraft] = useState(mapping);
+  const save = (m: CodeMapping) => {
+    setDraft(m);
+    engine.dispatch({ type: "setCodeMapping", componentId: master.id, mapping: m });
+  };
+  const set = (patch: Partial<CodeMapping>) => setDraft({ ...draft, ...patch });
+  const commit = () => {
+    if (JSON.stringify(draft) !== JSON.stringify(mapping)) save(draft);
+  };
+  const status = mappingSyncStatus(master, mapping);
+  const unmapped = propNames.filter((p) => !draft.props.some((x) => x.prop === p));
+  return (
+    <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, display: "grid", gap: 6, background: "var(--panel)" }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <select
+          aria-label="Framework"
+          title="Framework"
+          value={draft.framework}
+          onChange={(e) => save({ ...draft, framework: e.target.value as CodeMapping["framework"] })}
+          style={{ width: 92 }}
+        >
+          {CODE_FRAMEWORKS.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Component name in code"
+          title="Component name in code"
+          value={draft.componentName}
+          placeholder="Button"
+          onChange={(e) => set({ componentName: e.target.value })}
+          onBlur={commit}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <button
+          className="icon-btn"
+          title={`Delete this ${draft.framework} mapping`}
+          aria-label={`Delete this ${draft.framework} mapping`}
+          onClick={() => {
+            engine.dispatch({ type: "deleteCodeMapping", componentId: master.id, mappingId: mapping.id });
+            toast("Code mapping deleted");
+          }}
+        >
+          <Icon name="trash" size={12} />
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          aria-label="Import path"
+          title="Import path"
+          value={draft.importPath ?? ""}
+          placeholder='Import path, e.g. @/components/Button'
+          onChange={(e) => set({ importPath: e.target.value })}
+          onBlur={commit}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <input
+          aria-label="Version"
+          title="Version"
+          value={draft.version ?? ""}
+          placeholder="v1"
+          onChange={(e) => set({ version: e.target.value })}
+          onBlur={commit}
+          style={{ width: 52 }}
+        />
+      </div>
+      <input
+        aria-label="Source file (optional)"
+        title="Source file (optional)"
+        value={draft.file ?? ""}
+        placeholder="Source file, e.g. src/components/Button.tsx"
+        onChange={(e) => set({ file: e.target.value })}
+        onBlur={commit}
+        style={{ width: "100%" }}
+      />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span className="insp-label">Props</span>
+        {unmapped.length > 0 && (
+          <button
+            className="mini"
+            onClick={() => {
+              save({
+                ...draft,
+                props: [...draft.props, ...unmapped.map((p) => ({ prop: p, kind: "prop" as const }))],
+              });
+              toast(`Mapped ${unmapped.length} ${unmapped.length === 1 ? "property" : "properties"}`);
+            }}
+          >
+            Auto-map all
+          </button>
+        )}
+      </div>
+      {draft.props.map((pm, ix) => (
+        <div key={`${pm.prop}-${ix}`} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <select
+            aria-label="Component property"
+            value={pm.prop}
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, prop: e.target.value };
+              save({ ...draft, props });
+            }}
+            style={{ flex: 1, minWidth: 0 }}
+          >
+            {propNames.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+          <span style={{ color: "var(--fg-muted)" }} aria-hidden>→</span>
+          <input
+            aria-label={`Code prop for ${pm.prop}`}
+            value={pm.codeProp ?? ""}
+            placeholder="prop"
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, codeProp: e.target.value };
+              setDraft({ ...draft, props });
+            }}
+            onBlur={commit}
+            style={{ flex: 1, minWidth: 0 }}
+          />
+          <select
+            aria-label={`Mapping kind for ${pm.prop}`}
+            value={pm.kind}
+            onChange={(e) => {
+              const props = draft.props.slice();
+              props[ix] = { ...pm, kind: e.target.value as CodePropMapping["kind"] };
+              save({ ...draft, props });
+            }}
+            style={{ width: 86 }}
+          >
+            <option value="prop">prop</option>
+            <option value="children">children</option>
+            <option value="omit">omit</option>
+          </select>
+          <button
+            className="icon-btn"
+            title={`Remove the ${pm.prop} mapping`}
+            aria-label={`Remove the ${pm.prop} mapping`}
+            onClick={() => save({ ...draft, props: draft.props.filter((_, j) => j !== ix) })}
+          >
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 999,
+            background: status === "synced" ? "var(--accent)" : status === "stale" ? "var(--amber)" : "var(--fg-muted)",
+          }}
+        />
+        <span className="insp-label grow" style={{ flex: 1 }}>
+          {status === "synced"
+            ? `Verified${mapping.syncedAt ? ` · ${new Date(mapping.syncedAt).toLocaleString()}` : ""}`
+            : status === "stale"
+              ? "Master changed since verification"
+              : "Never verified against the master"}
+        </span>
+        <button
+          className="mini"
+          onClick={() => {
+            engine.dispatch({ type: "syncCodeMapping", componentId: master.id, mappingId: mapping.id });
+            toast("Mapping verified against the master");
+          }}
+        >
+          Verify now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Component → code mappings (P1.10): which code component each instance
+ * becomes in generated output. Collapsed until used — most sessions never
+ * touch it, and the section is already long.
+ */
+function CodeMappingEditor({ engine, master }: { engine: Engine; master: ComponentMaster }) {
+  const mappings = master.codeMappings ?? [];
+  const [open, setOpen] = useState(mappings.length > 0);
+  const propNames = [...new Set([master.property || "Variant", ...(master.properties ?? []).map((p) => p.name)])].filter(
+    Boolean,
+  );
+  return (
+    <div style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--text)" }}
+      >
+        <span style={{ fontSize: 11, fontWeight: 700 }}>Code mappings</span>
+        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 999, background: "var(--input)", border: "1px solid var(--line)", color: "var(--muted)" }}>
+          {mappings.length}
+        </span>
+        <span style={{ flex: 1 }} />
+        <Icon name="chevron-down" size={12} />
+      </button>
+      {open && (
+        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+          {mappings.map((m) => (
+            <MappingCard key={m.id} engine={engine} master={master} mapping={m} propNames={propNames} />
+          ))}
+          <button
+            style={{ fontSize: 11, padding: "4px 8px" }}
+            onClick={() => {
+              engine.dispatch({
+                type: "setCodeMapping",
+                componentId: master.id,
+                mapping: {
+                  id: `map-${Date.now()}`,
+                  framework: "react",
+                  componentName: master.name.replace(/[^a-zA-Z0-9]/g, "") || "Component",
+                  props: [],
+                },
+              });
+              toast("Code mapping added");
+            }}
+          >
+            + Add mapping
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Design({
+  n,
+  x,
+  y,
+  engine,
+  snap,
+  onOpenVariables,
+}: {
+  n: XNode;
+  x: number;
+  y: number;
+  engine: Engine;
+  snap: Snapshot;
+  onOpenVariables?: () => void;
+}) {
+  const [typeOpen, setTypeOpen] = useState(false);
+  const [offsetDist, setOffsetDist] = useState(8);
+  const [offsetJoin, setOffsetJoin] = useState<"round" | "miter">("round");
+  const [showOffsetControls, setShowOffsetControls] = useState(false);
+  const [simplifyTol, setSimplifyTol] = useState(4);
+  const [showSimplifyControls, setShowSimplifyControls] = useState(false);
+  /** Which fill row the pointer picked up, and the row it is over. Only fills
+   *  are reorderable: the base fill is the bottom of the stack by definition, so
+   *  the rows above it are the ones a designer moves around. */
+  const [localFonts, setLocalFonts] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    // System local fonts via the Local Font Access API (Chrome/Edge). The spec
+    // calls it `queryLocalFonts()` and it is permission-gated. When available
+    // we enumerate once and merge the families into the dropdown so every font
+    // installed on the machine shows up in the font menu.
+    async function load() {
+      try {
+        const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+        if (!q) return;
+        // Avoid a permission prompt unless the user interacts with fonts: try
+        // without options first, which many Chromium builds allow silently.
+        const list: { family: string }[] = await q.call(window);
+        if (cancelled) return;
+        const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
+          a.localeCompare(b),
+        );
+        setLocalFonts(families.slice(0, 400));
+      } catch {
+        /* denied or not supported - keep built-in list */
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const [fillDrag, setFillDrag] = useState<number | null>(null);
+  const [fillOver, setFillOver] = useState<number | null>(null);
+  const [strokeDrag, setStrokeDrag] = useState<number | null>(null);
+  const [strokeOver, setStrokeOver] = useState<number | null>(null);
+  const [padOpen, setPadOpen] = useState(false);
+  const [conOpen, setConOpen] = useState(false);
+  const [cornersOpen, setCornersOpen] = useState(!!n.cornerIndependent);
+  // An instance inherits its corners; individual radii are rejected there.
+  /* Locks a handful of properties on a layer that lives inside an
+   * instance: individual corner radii here, and the aspect-ratio lock and the
+   * Scale tool below. All three ask the same question, so they share one
+   * answer. */
+  const inInstance = insideInstance(snap.pages[snap.page].root, n.id);
+  /* Layout overrides on instances: members keep none of the layout controls,
+   * while an instance root may override spacing (padding and gaps) but never
+   * structure (direction, wrap, alignment, distribution). The engine refuses
+   * the rest; the panel says so instead of no-op'ing. */
+  const isInstRoot = (!!n.componentId && !n.isComponent) || n.kind === "instance";
+  const layoutMemberLocked = inInstance && !isInstRoot;
+  const layoutStructLocked = inInstance;
+  const layoutMemberTitle = "Layout comes from the main component";
+  const layoutStructTitle = "An instance can only override padding and gaps";
+  /* Auto layout answers three questions the panel asks in several places: is
+   * the gap on Auto, does this flow wrap, and is a declared hug still a hug
+   * once something inside it is filling the same axis. */
+  const isGrid = n.layout?.direction === "grid";
+  const autoGap = n.layout ? isAutoGap(n.layout) : false;
+  const wrapOn = n.layout ? wraps(n.layout) : false;
+  const resolved = n.layout ? effectiveSizing(n.layout, n, n.children) : null;
+  /* The parent frame will no longer hug contents and become Fixed for
+   * the axis" - so the resizing menu shows Fixed, and says why. */
+  /* The two fields ask by *dimension*, not by axis. A vertical flow's main axis
+   * is its height, so asking for "main" in the W field would show - and edit -
+   * the height's answer. */
+  const axisFor = (dim: "width" | "height"): "main" | "cross" => {
+    const horiz = n.layout ? widthIsMain(n.layout) : true;
+    return (dim === "width") === horiz ? "main" : "cross";
+  };
+  const showSizing = (dim: "width" | "height") => {
+    const own = dim === "width" ? n.sizingW : n.sizingH;
+    if (n.layout && n.kind !== "text") {
+      // A layer that fills says so, and the layout's own hug answer only
+      // applies to the axes the layer is not filling along.
+      if (own === "fill") return "fill" as Sizing;
+      return resolved![axisFor(dim)];
+    }
+    return own;
+  };
+  /* When that happens the label says so, so a frame that stopped hugging is
+   * not mistaken for a bug in the resize itself. */
+  const hugNote = (dim: "width" | "height") => {
+    if (!n.layout || n.kind === "text") return undefined;
+    const axis = axisFor(dim);
+    const horiz = widthIsMain(n.layout);
+    const wants = (axis === "main" ? n.layout.sizing : n.layout.cross) === "hug";
+    const nodeWants = (dim === "width" ? n.sizingW : n.sizingH) === "hug";
+    if ((!wants && !nodeWants) || showSizing(dim) !== "fixed") return undefined;
+    return hasFillChild(n.children, axis, horiz)
+      ? `a child fills the ${dim}, so the frame is Fixed here instead of hugging`
+      : undefined;
+  };
+  /* Choosing Fixed or Hug - or Fill, which is not a hug - writes the answer on
+   * the axis that dimension belongs to, so the layout's own pair cannot snap
+   * the frame back over what the menu just said. */
+  const setSizingAxis = (dim: "width" | "height", sizing: Sizing) => {
+    if (!n.layout) return;
+    const key = (dim === "width") === widthIsMain(n.layout) ? "sizing" : "cross";
+    engine.dispatch({
+      type: "autoLayout",
+      id: n.id,
+      layout: { ...n.layout, [key]: sizing === "hug" ? "hug" : "fixed" },
+    });
+  };
+  const [strokeMore, setStrokeMore] = useState(n.strokeDash > 0);
+  const [more, setMore] = useState<{ x: number; y: number } | null>(null);
+  const multi = snap.selection.length > 1;
+  const [scaleAnchor, setScaleAnchor] = useState<ScaleAnchor>("mc");
+  /* Min and max width/height options behind the resizing menu: "Add min/max width and
+   * height" puts the four fields in the panel, "Remove min and max" takes them
+   * away again, and a layer that has none shows none. Tracked per layer, so the
+   * fields come back only for the layer that asked for them. */
+  const [minMaxOpen, setMinMaxOpen] = useState<Record<string, boolean>>({});
+  const hasMinMax = n.minW != null || n.maxW != null || n.minH != null || n.maxH != null;
+  const showMinMax = !!minMaxOpen[n.id] || hasMinMax;
+  /* The Scale tool multiplies the box and everything inside it - stroke weights,
+   * corner radii, type sizes, effects, auto layout gaps - while a plain resize
+   * re-applies the parent's constraints. Both end up in the engine's `resize`,
+   * which owns that difference, so the panel only has to choose the numbers. */
+  const applyScale = (f: number) => {
+    if (!Number.isFinite(f) || f <= 0 || f === 1) return;
+    const root = snap.pages[snap.page].root;
+    const picked = snap.selection
+      .map((id) => find(root, id))
+      .filter((m): m is XNode => !!m && !isEffectivelyLocked(root, m.id));
+    if (!picked.length) {
+      toast("Nothing to scale · the selection is empty or locked");
+      return;
+    }
+    // Scales any object, with the exception of locked layers and layers
+    // nested inside a component instance" - scaling children of an instance
+    // would multiply overrides the instance does not own.
+    const nested = picked.filter((m) => insideInstance(root, m.id));
+    if (nested.length) {
+      toast(
+        nested.length > 1
+          ? `Not scalable · ${nested.length} layers are inside an instance`
+          : "Not scalable · this layer is inside an instance",
+      );
+      return;
+    }
+    const boxes = picked.map((m) => ({ x: m.x, y: m.y, w: m.w, h: m.h }));
+    const next = scaleMembers(unionBox(boxes), boxes, f, scaleAnchor);
+    engine.dispatch({ type: "begin" });
+    picked.forEach((m, i) =>
+      engine.dispatch({ type: "resize", id: m.id, ...next[i], scaleProps: true }),
+    );
+    engine.dispatch({ type: "end" });
+    toast(`Scaled ${SCALE_LABEL(f)}${picked.length > 1 ? ` · ${plural(picked.length, "layer")}` : ""}`);
+  };
+  const rangeStyle = (() => {
+    const range = selectedTextRange(engine, n, snap.selection);
+    return range ? resolvedTextSpans(n).find((r) => r.start <= range.start && r.end > range.start) : null;
+  })();
+  const patchSelectedSpan = (over: Partial<SpanStyle>): boolean => {
+    const range = selectedTextRange(engine, n, snap.selection);
+    if (!range) return false;
+    const textRuns = styleTextRange(n, range.start, range.end, over);
+    engine.dispatch({ type: "begin" });
+    engine.dispatch({ type: "patch", id: n.id, patch: { textRuns } });
+    refitHugFor(n, { textRuns });
+    engine.dispatch({ type: "end" });
+    return true;
+  };
+  const num = (
+    key: "x" | "y" | "w" | "h" | "rotation" | "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing" | "listSpacing",
+    v: number,
+  ) => {
+    if (key === "x" || key === "y") {
+      engine.dispatch({
+        type: "move",
+        ids: [n.id],
+        dx: key === "x" ? v - x : 0,
+        dy: key === "y" ? v - y : 0,
+      });
+      return;
+    }
+    if (key === "w" || key === "h") {
+      let w = key === "w" ? v : n.w;
+      let h = key === "h" ? v : n.h;
+      // The Scale tool's fields are ratio-bound by definition, whether or not the
+      // layer carries an aspect lock.
+      if (snap.tool === "scale" && n.w > 0 && n.h > 0) {
+        const box = sizeKeepingRatio({ x: n.x, y: n.y, w: n.w, h: n.h }, key === "w" ? { w: v } : { h: v });
+        w = box.w;
+        h = box.h;
+      } else if (n.aspectLocked) {
+        const ratio = n.aspectRatio && n.aspectRatio > 0 ? n.aspectRatio : n.w > 0 && n.h > 0 ? n.h / n.w : 1;
+        if (key === "w") h = Math.max(1, v * ratio);
+        else w = Math.max(1, v / ratio);
+      }
+      engine.dispatch({ type: "resize", id: n.id, x: n.x, y: n.y, w, h });
+      // The axis that is still set to hug follows what was just typed.
+      if (key === "w") refitHug({ w, sizingW: "fixed" }, { h: n.sizingH === "hug" });
+      else refitHug({ h, sizingH: "fixed" }, { w: n.sizingW === "hug" });
+      return;
+    }
+    if (key === "rotation") {
+      // Turning a layer turns it about its rotation origin, so a moved origin
+      // means the box has to slide as well. The arithmetic is the canvas's.
+      const turned = rotateAboutOrigin(
+        { x: n.x, y: n.y, w: n.w, h: n.h, rotation: n.rotation },
+        n.rotOrigin ?? [0.5, 0.5],
+        v,
+      );
+      engine.dispatch({
+        type: "patch",
+        id: n.id,
+        patch: { x: turned.x, y: turned.y, rotation: turned.rotation },
+      });
+      syncNodePatchToWasm(engine, n.id, { rotation: turned.rotation });
+      return;
+    }
+    // Floor the type metrics the renderer could not honour: a sub-unit font
+    // never paints, a negative leading/paragraph gap/indent inverts the
+    // layout instead of tightening it. Zero leading stays Auto.
+    const next =
+      key === "opacity"
+        ? Math.max(0, Math.min(1, v))
+        : key === "fontSize"
+          ? Math.max(1, v)
+          : key === "lineHeight" || key === "paragraphSpacing"
+            ? Math.max(0, v)
+            : v;
+    if (key === "fontSize" && patchSelectedSpan({ fontSize: next })) return;
+    engine.dispatch({ type: "patch", id: n.id, patch: { [key]: next } });
+    if (key === "opacity") {
+      syncNodePatchToWasm(engine, n.id, { opacity: next });
+    }
+    if (key === "fontSize" || key === "letterSpacing" || key === "lineHeight" || key === "paragraphSpacing")
+      refitHug({ [key]: next });
+  };
+  // A multi-selection edits position, size and rotation together: the fields
+  // show Mixed while the layers disagree, and a commit applies to every layer
+  // that may move — locked layers and instance members sit out, the same pair
+  // the engine's `move` refuses. Each layer keeps its own aspect lock, ratio,
+  // rotation origin and hug refit.
+  const dRoot = snap.pages[snap.page].root;
+  const selNodes = snap.selection
+    .map((id) => find(dRoot, id))
+    .filter((m): m is XNode => !!m);
+  const applySampledEyedropBinding = (source: EyedropSource, target: EyedropTargetProperty) => {
+    const applied = applyEyedropSource(engine, snap.selection, target, source);
+    if (applied) toast(`Applied ${source.name}`);
+    return applied;
+  };
+  const createSampledEyedropToken = (hex: string, target: EyedropTargetProperty) =>
+    promptCreateEyedropToken(engine, snap.selection, target, hex);
+  const movers =
+    selNodes.length > 1
+      ? selNodes.filter((m) => !isEffectivelyLocked(dRoot, m.id) && !isInstanceMember(dRoot, m.id))
+      : [];
+  const multiKey = (key: "x" | "y" | "w" | "h" | "rotation"): number[] =>
+    movers.map((m) => (key === "rotation" ? (m.rotation ?? 0) : m[key]));
+  const multiMixed = (key: "x" | "y" | "w" | "h" | "rotation"): string | undefined => {
+    if (!multi) return undefined;
+    const all = selNodes.map((m) => (key === "rotation" ? (m.rotation ?? 0) : m[key]));
+    return new Set(all).size > 1 ? "Mixed" : undefined;
+  };
+  const numMany = (key: "x" | "y" | "w" | "h" | "rotation", vals: number[]) => {
+    if (!movers.length) return;
+    engine.dispatch({ type: "begin" });
+    movers.forEach((m, i) => {
+      const v = vals[i];
+      if (v == null || !Number.isFinite(v)) return;
+      if (key === "x" || key === "y") {
+        engine.dispatch({
+          type: "move",
+          ids: [m.id],
+          dx: key === "x" ? v - m.x : 0,
+          dy: key === "y" ? v - m.y : 0,
+        });
+        return;
+      }
+      if (key === "w" || key === "h") {
+        let w = key === "w" ? v : m.w;
+        let h = key === "h" ? v : m.h;
+        if (snap.tool === "scale" && m.w > 0 && m.h > 0) {
+          const box = sizeKeepingRatio(
+            { x: m.x, y: m.y, w: m.w, h: m.h },
+            key === "w" ? { w: v } : { h: v },
+          );
+          w = box.w;
+          h = box.h;
+        } else if (m.aspectLocked) {
+          const ratio =
+            m.aspectRatio && m.aspectRatio > 0 ? m.aspectRatio : m.w > 0 && m.h > 0 ? m.h / m.w : 1;
+          if (key === "w") h = Math.max(1, v * ratio);
+          else w = Math.max(1, v / ratio);
+        }
+        engine.dispatch({ type: "resize", id: m.id, x: m.x, y: m.y, w, h });
+        if (key === "w") refitHugFor(m, { w, sizingW: "fixed" }, { h: m.sizingH === "hug" });
+        else refitHugFor(m, { h, sizingH: "fixed" }, { w: m.sizingW === "hug" });
+        return;
+      }
+      // rotateAboutOrigin wraps to ±180, so a typed 190 lands on -170.
+      const turned = rotateAboutOrigin(
+        { x: m.x, y: m.y, w: m.w, h: m.h, rotation: m.rotation ?? 0 },
+        m.rotOrigin ?? [0.5, 0.5],
+        v,
+      );
+      engine.dispatch({
+        type: "patch",
+        id: m.id,
+        patch: { x: turned.x, y: turned.y, rotation: turned.rotation },
+      });
+    });
+    engine.dispatch({ type: "end" });
+  };
+  // Multi-select scalars beyond geometry (IN-U1/TY-U3): the type metrics,
+  // opacity, stroke weight, corners, blend and the base fill/stroke rows
+  // show Mixed while the selection disagrees, and a commit applies to
+  // every selected layer. Unlike geometry these are plain patches, which
+  // the engine applies to locked layers and instance members exactly as
+  // it does for a single selection — so all of them take the edit, and a
+  // multi-edit means the same thing a single-edit does. Structural lists
+  // (fill/stroke/effect stacks) keep showing the first layer's, the same
+  // compromise the Export block documents for its presets.
+  const textTargets = selNodes.filter((m) => m.kind === "text");
+  const mixedProp = <T,>(get: (m: XNode) => T, pool: XNode[] = selNodes): string | undefined => {
+    if (!multi) return undefined;
+    return new Set(pool.map(get)).size > 1 ? "Mixed" : undefined;
+  };
+  const manyVals = (get: (m: XNode) => number, pool: XNode[] = selNodes): number[] =>
+    pool.map(get);
+  // A committed number per layer, with num()'s floors, then a hug refit
+  // for the metrics that change how much room the copy needs.
+  const patchNumMany = (
+    key: "opacity" | "fontSize" | "letterSpacing" | "lineHeight" | "paragraphSpacing" | "paragraphIndent" | "listSpacing" | "strokeWidth",
+    vals: number[],
+    pool: XNode[] = selNodes,
+    extra?: (m: XNode, v: number) => Partial<XNode>,
+  ) => {
+    if (!pool.length) return;
+    engine.dispatch({ type: "begin" });
+    pool.forEach((m, i) => {
+      const raw = vals[i];
+      if (raw == null || !Number.isFinite(raw)) return;
+      const v =
+        key === "opacity"
+          ? Math.max(0, Math.min(1, raw))
+          : key === "fontSize"
+            ? Math.max(1, raw)
+            : key === "lineHeight" || key === "paragraphSpacing"
+              ? Math.max(0, raw)
+              : raw;
+      engine.dispatch({ type: "patch", id: m.id, patch: { [key]: v, ...extra?.(m, v) } });
+      if (
+        key === "fontSize" ||
+        key === "letterSpacing" ||
+        key === "lineHeight" ||
+        key === "paragraphSpacing" ||
+        key === "paragraphIndent"
+      )
+        refitHugFor(m, { [key]: v });
+    });
+    engine.dispatch({ type: "end" });
+  };
+  // One patch fragment for every selected layer — fixed values (a picked
+  // colour, a corner toggle) or per-layer fragments via a function.
+  const patchMany = (p: Partial<XNode> | ((m: XNode, i: number) => Partial<XNode>)) => {
+    if (!selNodes.length) return;
+    engine.dispatch({ type: "begin" });
+    selNodes.forEach((m, i) =>
+      engine.dispatch({ type: "patch", id: m.id, patch: typeof p === "function" ? p(m, i) : p }),
+    );
+    engine.dispatch({ type: "end" });
+  };
+  // patchType for every text layer in the selection, with the same refit.
+  const patchTypeMany = (over: Partial<XNode>) => {
+    if (!textTargets.length) return;
+    engine.dispatch({ type: "begin" });
+    for (const m of textTargets) {
+      engine.dispatch({ type: "patch", id: m.id, patch: over });
+      refitHugFor(m, over);
+    }
+    engine.dispatch({ type: "end" });
+  };
+  const kindLabel = n.imageSrc
+    ? "Image"
+    : n.isComponent
+      ? "Component"
+      : n.componentId
+        ? "Instance"
+        : n.kind === "rect"
+          ? "Rectangle"
+          : n.kind[0].toUpperCase() + n.kind.slice(1);
+  const patch = (p: Partial<XNode>) => {
+    engine.dispatch({ type: "patch", id: n.id, patch: p });
+    syncNodePatchToWasm(engine, n.id, p);
+  };
+  /** Run 24 — brush/dynamic strokes are centre-only and never dashed. */
+  const brushish = n.strokeType === "brush" || n.strokeType === "dynamic";
+  /** Run 24 — hover previews: render-only strokes that clear on leave/blur. */
+  const pvStroke = (fields: {
+    align?: "inside" | "center" | "outside";
+    cap?: import("../engine/types").StrokeCap;
+    join?: import("../engine/types").StrokeJoin;
+    dash?: { strokeDash: number; strokeGap: number; strokeDashPattern?: number[]; strokeDashCap?: import("../engine/types").StrokeCap };
+  }) => engine.dispatch({ type: "previewStroke", id: n.id, ...fields });
+  const pvStrokeClear = () => engine.dispatch({ type: "previewStroke", id: null });
+  /* Re-fits a text layer the moment a resizing mode is chosen, and after
+   * any type metric that changes how much room the copy needs. The flags and
+   * the box have to travel in the same patch: sizing alone leaves a stale box
+   * up to the next keystroke. */
+  const setSizing = (sizingW: Sizing, sizingH: Sizing) =>
+    patch({ sizingW, sizingH, ...hugSize({ ...n, sizingW, sizingH } as XNode, n.text) });
+  /** A type metric moved: apply it, then re-hug the axes that follow it. */
+  const patchType = (over: Partial<XNode>) => {
+    if ((over.fontFamily !== undefined || over.fontWeight !== undefined || over.fontSize !== undefined) &&
+      patchSelectedSpan(Object.fromEntries(
+        (["fontFamily", "fontWeight", "fontSize"] as const).filter((key) => over[key] !== undefined).map((key) => [key, over[key]]),
+      ) as Partial<SpanStyle>)) return;
+    patch(over);
+    refitHug(over);
+  };
+  /** Move a fill within the extra stack; `to` is an index into the same array. */
+  const moveFill = (from: number, to: number) => {
+    const list = [...(n.fills ?? [])];
+    if (from === to || from < 0 || from >= list.length) return;
+    const [item] = list.splice(from, 1);
+    if (!item) return;
+    list.splice(Math.max(0, Math.min(list.length, to)), 0, item);
+    patch({ fills: list });
+  };
+  /** Move an extra stroke in the model's bottom-to-top array. The scalar base
+   *  stroke is always the bottom row; these controls reorder extra rows above it. */
+  const moveStroke = (from: number, to: number) => {
+    const list = [...(n.strokes ?? [])];
+    if (from === to || from < 0 || from >= list.length) return;
+    const [item] = list.splice(from, 1);
+    if (!item) return;
+    list.splice(Math.max(0, Math.min(list.length, to)), 0, item);
+    patch({ strokes: list });
+  };
+  /* A min or max is a limit the hugging axes have to be measured against: each
+   * keystroke clamps the box, and without a re-fit a limit typed as "200" would
+   * leave the width at the "2" the first keystroke clamped it to. */
+  const refitHugFor = (m: XNode, over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) => {
+    if (m.kind !== "text") return;
+    const fit = hugSize({ ...m, ...over } as XNode, m.text, axes);
+    if (fit.w === undefined && fit.h === undefined) return;
+    engine.dispatch({ type: "patch", id: m.id, patch: fit });
+  };
+  const refitHug = (over: Partial<XNode>, axes?: { w?: boolean; h?: boolean }) =>
+    refitHugFor(n, over, axes);
+  // An aspect lock links the min/max limits too: typing one sets the
+  // proportional opposite alongside it, as Figma does. Clearing a limit only
+  // clears the one typed.
+  const setMinMax = (key: "minW" | "maxW" | "minH" | "maxH", v: number, extra: Partial<XNode> = {}) => {
+    const p: Partial<XNode> = { [key]: v > 0 ? v : undefined, ...extra };
+    if (n.aspectLocked && v > 0) {
+      const ratio = n.aspectRatio && n.aspectRatio > 0 ? n.aspectRatio : n.w > 0 && n.h > 0 ? n.h / n.w : 1;
+      const sib = key === "minW" ? "minH" : key === "maxW" ? "maxH" : key === "minH" ? "minW" : "maxW";
+      const wide = key === "minW" || key === "maxW";
+      p[sib] = Math.max(1, Math.round((wide ? v * ratio : v / ratio) * 100) / 100);
+    }
+    patch(p);
+    refitHug(p);
+  };
+  const parent = findParent(snap.pages[snap.page].root, n.id);
+  // A member of a boolean group cannot own fill, stroke, effects or opacity -
+  // the group's own properties render instead, so the panel locks all four.
+  const boolChild = parent?.kind === "boolean";
+  const hasAutoLayoutParent = !!parent?.layout;
+  const gridParent = parent?.layout?.direction === "grid";
+  /* First press turns the base stroke on; after that each press stacks another
+     stroke on top, the way Stroke "+" behaves. Shared by the header "+"
+     and the empty-state row so both paths do exactly the same thing. */
+  const addStroke = () => {
+    openSection("stroke");
+    if (multi) {
+      patchMany((m) =>
+        m.strokeWidth > 0 && (!isNone(m.strokePaint) || m.strokeVisible)
+          ? {
+              strokes: [
+                ...(m.strokes ?? []),
+                { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: m.strokeAlign },
+              ],
+            }
+          : {
+              strokePaint: isNone(m.strokePaint) ? "#1e1e1e" : m.strokePaint,
+              strokeVisible: true,
+              strokeWidth: m.strokeWidth || 1,
+            },
+      );
+      return;
+    }
+    const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
+    if (!hasBase) {
+      patch({
+        strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
+        strokeVisible: true,
+        strokeWidth: n.strokeWidth || 1,
+      });
+      return;
+    }
+    patch({
+      strokes: [...(n.strokes ?? []), { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
+    });
+  };
+
+  const renderTypographySection = () => {
+    if (n.kind !== "text") return null;
+    return (
+      <>
+        <Section
+          id="typography"
+          title="Typography"
+          actions={
+            <button className="plus" title="Type settings" onClick={() => setTypeOpen((v) => !v)}>
+              <Icon name="type-settings" size={14} />
+            </button>
+          }
+        >
+          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+            <div className="field">
+              <select
+                aria-label="Font family"
+                value={mixedProp((m) => m.fontFamily, textTargets) ? "__mixed" : rangeStyle?.fontFamily ?? n.fontFamily}
+                onChange={(e) => {
+                  if (e.target.value === "__mixed") return;
+                  if (multi) patchTypeMany({ fontFamily: e.target.value });
+                  else patchType({ fontFamily: e.target.value });
+                }}
+              >
+                {mixedProp((m) => m.fontFamily, textTargets) && <option value="__mixed">Mixed</option>}
+                {(() => {
+                  const base = [
+                    "Inter",
+                    "Roboto",
+                    // SF Pro is a system font, not a distributable web font.
+                    ...(/Mac|iPhone|iPad/.test(navigator.platform) ? ["SF Pro"] : []),
+                    "Geist",
+                    "Space Grotesk",
+                    "Plus Jakarta Sans",
+                    "Poppins",
+                    "Outfit",
+                    "Fira Code",
+                    "JetBrains Mono",
+                    // CJK (360040449673): Figma lists the Noto CJK fonts in
+                    // shorthand (SC/TC/JP/KR) and falls back to Noto for
+                    // unsupported characters. RTL (4972283635863): RTL fonts
+                    // are in the default list. These resolve from the system
+                    // when installed, like Figma's desktop fonts.
+                    "— Noto fonts —",
+                    "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR",
+                    "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR",
+                    "Noto Sans Arabic", "Noto Sans Hebrew",
+                    // Icon fonts (360040449513): Font Awesome; an icon's
+                    // Regular/Solid variant is the font weight (400/900).
+                    "— Icon fonts —",
+                    "Font Awesome 6 Free", "Font Awesome 6 Brands",
+                    "Font Awesome 5 Free", "Font Awesome 5 Brands",
+                    "system-ui",
+                  ];
+                  const merged = (() => {
+                    const seen = new Set(base.map((b) => b.toLowerCase()));
+                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
+                    const list = [...base];
+                    if (extra.length) {
+                      list.push("— System fonts —");
+                      list.push(...extra);
+                    }
+                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
+                    if (rangeStyle?.fontFamily && !list.includes(rangeStyle.fontFamily)) list.unshift(rangeStyle.fontFamily);
+                    return list;
+                  })();
+                  return merged.map((f) =>
+                    f.startsWith("—") ? (
+                      <option key={f} disabled>
+                        {f}
+                      </option>
+                    ) : (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ),
+                  );
+                })()}
+              </select>
+              <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontFamily" onOpenVariables={onOpenVariables} />
+              {localFonts.length === 0 && (
+                <button
+                  type="button"
+                  className="link muted"
+                  style={{ fontSize: 11, marginTop: 4 }}
+                  onClick={async () => {
+                    try {
+                      const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+                      if (!q) {
+                        toast("Local fonts not supported in this browser");
+                        return;
+                      }
+                      const list: { family: string }[] = await q.call(window);
+                      const families = Array.from(new Set(list.map((f) => f.family).filter(Boolean))).sort((a, b) =>
+                        a.localeCompare(b),
+                      );
+                      setLocalFonts(families.slice(0, 400));
+                      toast(`Loaded ${families.length} system fonts`);
+                    } catch {
+                      toast("Could not load system fonts");
+                    }
+                  }}
+                >
+                  Load system fonts
+                </button>
+              )}
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <select
+                  aria-label="Font weight"
+                  value={mixedProp((m) => m.fontWeight, textTargets) ? "mixed" : rangeStyle?.fontWeight ?? n.fontWeight}
+                  onChange={(e) => {
+                    if (e.target.value === "mixed") return;
+                    const fontWeight = parseInt(e.target.value, 10);
+                    if (multi) patchTypeMany({ fontWeight });
+                    else patchType({ fontWeight });
+                  }}
+                >
+                  {mixedProp((m) => m.fontWeight, textTargets) && <option value="mixed">Mixed</option>}
+                  <option value={100}>Thin (100)</option>
+                  <option value={200}>Extra Light (200)</option>
+                  <option value={300}>Light (300)</option>
+                  <option value={400}>Regular (400)</option>
+                  <option value={500}>Medium (500)</option>
+                  <option value={600}>Semi Bold (600)</option>
+                  <option value={700}>Bold (700)</option>
+                  <option value={800}>Extra Bold (800)</option>
+                  <option value={900}>Black (900)</option>
+                </select>
+                <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontWeight" onOpenVariables={onOpenVariables} />
+              </div>
+              <Field
+                label="S"
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="fontSize" onOpenVariables={onOpenVariables} />}
+                value={rangeStyle?.fontSize ?? n.fontSize}
+                onChange={(v) => num("fontSize", v)}
+                mixed={mixedProp((m) => m.fontSize, textTargets)}
+                values={multi ? manyVals((m) => m.fontSize, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("fontSize", vs, textTargets) : undefined}
+              />
+              <Field
+                label={n.lineHeight ? "↑" : "Auto"}
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="lineHeight" onOpenVariables={onOpenVariables} />}
+                value={n.lineHeight || n.fontSize * 1.2}
+                onLabelClick={() => (multi ? patchTypeMany({ lineHeight: 0 }) : num("lineHeight", 0))}
+                onChange={(v) => num("lineHeight", v)}
+                mixed={mixedProp((m) => m.lineHeight, textTargets)}
+                values={multi ? manyVals((m) => m.lineHeight, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("lineHeight", vs, textTargets) : undefined}
+              />
+              <Field
+                label="↔"
+                bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="letterSpacing" onOpenVariables={onOpenVariables} />}
+                value={n.letterSpacing}
+                onChange={(v) => num("letterSpacing", v)}
+                mixed={mixedProp((m) => m.letterSpacing, textTargets)}
+                values={multi ? manyVals((m) => m.letterSpacing, textTargets) : undefined}
+                onChangeMany={multi ? (vs) => patchNumMany("letterSpacing", vs, textTargets) : undefined}
+              />
+            </div>
+            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
+              <Tooltip label="Auto width" shortcut="">
+                <button
+                  className={n.sizingW === "hug" ? "on" : ""}
+                  onClick={() => setSizing("hug", "hug")}
+                >
+                  <Icon name="text-auto-width" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Auto height" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH === "hug" ? "on" : ""}
+                  onClick={() => setSizing("fixed", "hug")}
+                >
+                  <Icon name="text-auto-height" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
+                </button>
+              </Tooltip>
+              <Tooltip label="Fixed size" shortcut="">
+                <button
+                  className={n.sizingW !== "hug" && n.sizingH !== "hug" ? "on" : ""}
+                  onClick={() => setSizing("fixed", "fixed")}
+                >
+                  <Icon name="text-fixed" size={14} />
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
+                </button>
+              </Tooltip>
+            </div>
+            <div className="seg icons">
+              {(["left", "center", "right", "justified"] as TextAlign[]).map((a) => (
+                <Tooltip key={a} label={`Align ${a}`}>
+                  <button
+                    className={n.textAlign === a ? "on" : ""}
+                    aria-label={`Align ${a}`}
+                    aria-pressed={n.textAlign === a}
+                    onClick={() => engine.dispatch({ type: "patch", id: n.id, patch: { textAlign: a } })}
+                  >
+                    <Icon name={`align-text-${a}`} size={14} />
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
+            <div className="seg icons">
+              {(["top", "middle", "bottom"] as TextAlignVertical[]).map((a) => (
+                <Tooltip key={a} label={`Vertical align ${a}`}>
+                  <button
+                    className={n.textAlignVertical === a ? "on" : ""}
+                    aria-label={`Vertical align ${a}`}
+                    aria-pressed={n.textAlignVertical === a}
+                    onClick={() =>
+                      engine.dispatch({ type: "patch", id: n.id, patch: { textAlignVertical: a } })
+                    }
+                  >
+                    <Icon name={`valign-${a}`} size={14} />
+                  </button>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+          {typeOpen && (
+            <div className="type-pop">
+              <h4>Type settings</h4>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <Tooltip label="Italic" shortcut="⌘I">
+                    <button
+                      className={n.fontStyle === "italic" ? "on" : ""}
+                      aria-label="Italic"
+                      aria-pressed={n.fontStyle === "italic"}
+                      onClick={() =>
+                        patchType({ fontStyle: n.fontStyle === "italic" ? "normal" : "italic" })
+                      }
+                    >
+                      <Icon name="italic" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Underline" shortcut="⌘U">
+                    <button
+                      className={n.textDecoration === "underline" ? "on" : ""}
+                      aria-label="Underline"
+                      aria-pressed={n.textDecoration === "underline"}
+                      onClick={() =>
+                        engine.dispatch({
+                          type: "patch",
+                          id: n.id,
+                          patch: {
+                            textDecoration: n.textDecoration === "underline" ? "none" : "underline",
+                          },
+                        })
+                      }
+                    >
+                      <Icon name="underline" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Strikethrough">
+                    <button
+                      className={n.textDecoration === "strikethrough" ? "on" : ""}
+                      aria-label="Strikethrough"
+                      aria-pressed={n.textDecoration === "strikethrough"}
+                      onClick={() =>
+                        engine.dispatch({
+                          type: "patch",
+                          id: n.id,
+                          patch: {
+                            textDecoration:
+                              n.textDecoration === "strikethrough" ? "none" : "strikethrough",
+                          },
+                        })
+                      }
+                    >
+                      <Icon name="strike" />
+                    </button>
+                  </Tooltip>
+                  <select
+                    aria-label="Letter case"
+                    value={n.textCase}
+                    onChange={(e) => patchType({ textCase: e.target.value as XNode["textCase"] })}
+                  >
+                    <option value="none">Aa</option>
+                    <option value="upper">AA</option>
+                    <option value="lower">aa</option>
+                    <option value="title">Title Case</option>
+                    <option value="small-caps">Small caps</option>
+                  </select>
+                </div>
+              </div>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={n.truncate}
+                  onChange={(e) =>
+                    patchType({ truncate: e.target.checked })
+                  }
+                />
+                Truncate text
+              </label>
+              {n.truncate && (
+                <div
+                  className="insp-pad"
+                  title={
+                    n.sizingW === "hug" || n.sizingH === "hug"
+                      ? undefined
+                      : "Max lines needs Auto width or Auto height - a fixed box truncates at its own height"
+                  }
+                >
+                  <Field
+                    label="L"
+                    aria="Max lines"
+                    invalidValue={0}
+                    value={n.maxLines}
+                    disabled={n.sizingW !== "hug" && n.sizingH !== "hug"}
+                    onChange={(v) =>
+                      // Maximum lines and maximum height are exclusive: setting
+                      // either clears the other, in both directions.
+                      patchType({ maxLines: Math.max(0, Math.round(v)), maxH: undefined })
+                    }
+                  />
+                </div>
+              )}
+              <div className="insp-pad">
+                <Field
+                  label="¶"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="paragraphSpacing" onOpenVariables={onOpenVariables} />}
+                  value={n.paragraphSpacing}
+                  onChange={(v) => num("paragraphSpacing", v)}
+                  aria="Space after each paragraph"
+                  mixed={mixedProp((m) => m.paragraphSpacing, textTargets)}
+                  values={multi ? manyVals((m) => m.paragraphSpacing, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("paragraphSpacing", vs, textTargets) : undefined}
+                />
+                <Field
+                  label="⇥"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="paragraphIndent" onOpenVariables={onOpenVariables} />}
+                  value={n.paragraphIndent}
+                  onChange={(v) => patchType({ paragraphIndent: Math.max(0, v) })}
+                  aria="First-line indent of each paragraph"
+                  mixed={mixedProp((m) => m.paragraphIndent, textTargets)}
+                  values={multi ? manyVals((m) => m.paragraphIndent, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("paragraphIndent", vs, textTargets) : undefined}
+                />
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Wrap style"
+                    title="Wrap style - how a fixed-width paragraph breaks its lines"
+                    value={n.textWrap}
+                    onChange={(e) => patchType({ textWrap: e.target.value as XNode["textWrap"] })}
+                  >
+                    <option value="auto">Wrap: Auto</option>
+                    <option value="balance">Wrap: Balance</option>
+                    <option value="pretty">Wrap: Pretty</option>
+                  </select>
+                  <select
+                    aria-label="List"
+                    title="List - markers hang beside the paragraph"
+                    value={n.listStyle}
+                    onChange={(e) => patchType({ listStyle: e.target.value as XNode["listStyle"] })}
+                  >
+                    <option value="none">No list</option>
+                    <option value="bulleted">Bulleted</option>
+                    <option value="numbered">Numbered</option>
+                  </select>
+                </div>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  {/* Line height unit (360039956634 §Line height): px or a
+                      percentage of the font size - "Figma will convert the
+                      value for you, to the nearest pixel". */}
+                  <select
+                    aria-label="Line height unit"
+                    title="Line height unit - converts the value on switch"
+                    value={n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto")}
+                    onChange={(e) => {
+                      const u = e.target.value as XNode["lineHeightUnit"];
+                      const cur = n.lineHeight || n.fontSize * 1.2;
+                      const val =
+                        u === "auto" ? 0
+                          : u === "percent" ? Math.round((cur / Math.max(1, n.fontSize)) * 100)
+                            : Math.round((n.lineHeight / 100) * n.fontSize);
+                      patchType({ lineHeightUnit: u, lineHeight: val });
+                    }}
+                  >
+                    <option value="auto">Leading: Auto</option>
+                    <option value="px">Leading: px</option>
+                    <option value="percent">Leading: %</option>
+                  </select>
+                  <label className="check" title="Vertical trim - remove the space above and below the text">
+                    <input
+                      type="checkbox"
+                      checked={!!n.verticalTrim}
+                      onChange={(e) => patchType({ verticalTrim: e.target.checked })}
+                    />
+                    Vertical trim
+                  </label>
+                </div>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Underline style"
+                    title="Underline style (360039956634 §Decoration)"
+                    value={n.underlineStyle ?? "solid"}
+                    onChange={(e) => patchType({ underlineStyle: e.target.value as XNode["underlineStyle"] })}
+                  >
+                    <option value="solid">Underline: solid</option>
+                    <option value="dotted">Underline: dotted</option>
+                    <option value="wavy">Underline: wavy</option>
+                  </select>
+                  <label className="check" title="Skip ink - the underline steps around glyph crossings">
+                    <input
+                      type="checkbox"
+                      checked={!!n.underlineSkipInk}
+                      onChange={(e) => patchType({ underlineSkipInk: e.target.checked })}
+                    />
+                    Skip ink
+                  </label>
+                </div>
+              </div>
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="U━"
+                  value={n.underlineThickness ?? 1}
+                  aria="Underline thickness"
+                  onChange={(v) => patchType({ underlineThickness: Math.max(0, v) })}
+                />
+                <Field
+                  label="U↕"
+                  value={n.underlineOffset ?? 0}
+                  aria="Underline offset"
+                  onChange={(v) => patchType({ underlineOffset: v })}
+                />
+              </div>
+              {/* RTL/bidi (4972283635863): "If an RTL script is detected in
+                  your text layer, a [control] will appear in the text section
+                  … allowing you to control the text direction." */}
+              {(hasRtlScript(n.text || "") || (n.textDirection !== undefined && n.textDirection !== "auto")) && (
+                <div className="dir-row">
+                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>Text direction</span>
+                  <div className="seg icons">
+                    <button
+                      className={`mini${(n.textDirection ?? "auto") === "ltr" ? " on" : ""}`}
+                      title="Left to right text direction"
+                      onClick={() => patchType({ textDirection: "ltr" })}
+                    >
+                      LTR
+                    </button>
+                    <button
+                      className={`mini${n.textDirection === "rtl" ? " on" : ""}`}
+                      title="Right to left text direction"
+                      onClick={() => patchType({ textDirection: "rtl" })}
+                    >
+                      RTL
+                    </button>
+                    <button
+                      className={`mini${(n.textDirection ?? "auto") === "auto" ? " on" : ""}`}
+                      title="Automatic - text direction follows language detection"
+                      onClick={() => patchType({ textDirection: "auto" })}
+                    >
+                      Auto
+                    </button>
+                  </div>
+                </div>
+              )}
+              {/* Text on a path (360039956434): the start handle slides along
+                  the path on canvas; Flip moves the text to its other side. */}
+              {n.onPath && (
+                <div className="dir-row">
+                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>On a path</span>
+                  <button
+                    className="mini"
+                    title="Flip text orientation - the text turns over to the other side of the path"
+                    onClick={() => patchType({ pathSide: n.pathSide === "right" ? "left" : "right" })}
+                  >
+                    Flip text
+                  </button>
+                  <button
+                    className="mini"
+                    title="Take the text off its path"
+                    onClick={() => patchType({ onPath: undefined, pathStart: undefined, pathSide: undefined })}
+                  >
+                    Detach
+                  </button>
+                </div>
+              )}
+              {/* Links (360045942953): "Click Create link … Type or paste a URL
+                  … Press Enter to apply the link." Underlined by default. */}
+              <div className="dir-row" style={{ padding: "2px 0" }}>
+                <input
+                  aria-label="Link URL"
+                  placeholder="Link URL (⇧⌘U)"
+                  key={n.id + (n.link ?? "")}
+                  defaultValue={n.link ?? ""}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    const url = (e.target as HTMLInputElement).value.trim();
+                    patchType({
+                      ...(url ? { link: url } : {}),
+                      ...(url && n.textDecoration === "none" ? { textDecoration: "underline" as const } : {}),
+                    });
+                  }}
+                  style={{ flex: 1, minWidth: 0, font: "11px Inter, system-ui", padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--text)" }}
+                />
+                <button
+                  className="icon-btn"
+                  title="Remove link"
+                  onClick={() => patchType({ link: undefined })}
+                >
+                  Unlink
+                </button>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <select
+                    aria-label="Numbers position"
+                    title="Numbers - position (superscript / subscript)"
+                    value={n.baselineShift ?? "normal"}
+                    onChange={(e) => patchType({ baselineShift: e.target.value as XNode["baselineShift"] })}
+                  >
+                    <option value="normal">Numbers: normal</option>
+                    <option value="super">Numbers: superscript</option>
+                    <option value="sub">Numbers: subscript</option>
+                  </select>
+                  <select
+                    aria-label="Figure style"
+                    title="Numbers - figure style (proportional/monospace, lining/old-style)"
+                    value={n.figureStyle ?? "proportional-lining"}
+                    onChange={(e) => patchType({ figureStyle: e.target.value as XNode["figureStyle"] })}
+                  >
+                    <option value="proportional-lining">Fig: prop lining</option>
+                    <option value="proportional-oldstyle">Fig: prop old-style</option>
+                    <option value="monospace-lining">Fig: mono lining</option>
+                    <option value="monospace-oldstyle">Fig: mono old-style</option>
+                  </select>
+                </div>
+              </div>
+              <div className="dir-row">
+                <div className="seg icons">
+                  <label className="check" title="Fractions - X/X renders as a fraction">
+                    <input
+                      type="checkbox"
+                      checked={!!n.fractions}
+                      onChange={(e) => patchType({ fractions: e.target.checked })}
+                    />
+                    Fractions
+                  </label>
+                  <label className="check" title="Slashed zero">
+                    <input
+                      type="checkbox"
+                      checked={!!n.slashedZero}
+                      onChange={(e) => patchType({ slashedZero: e.target.checked })}
+                    />
+                    Slashed zero
+                  </label>
+                  <label className="check" title="Hanging lists - markers outside the bounding box">
+                    <input
+                      type="checkbox"
+                      checked={n.hangingLists !== false}
+                      onChange={(e) => patchType({ hangingLists: e.target.checked })}
+                    />
+                    Hanging lists
+                  </label>
+                  <label className="check" title="Hanging quotes - opening quotes outside the box">
+                    <input
+                      type="checkbox"
+                      checked={!!n.hangingQuotes}
+                      onChange={(e) => patchType({ hangingQuotes: e.target.checked })}
+                    />
+                    Hanging quotes
+                  </label>
+                </div>
+              </div>
+              <div className="insp-pad">
+                <Field
+                  label="≡"
+                  bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="listSpacing" onOpenVariables={onOpenVariables} />}
+                  value={n.listSpacing || 0}
+                  aria="List spacing - distance between line items"
+                  onChange={(v) => patchType({ listSpacing: Math.max(0, v) })}
+                  mixed={mixedProp((m) => m.listSpacing, textTargets)}
+                  values={multi ? manyVals((m) => m.listSpacing, textTargets) : undefined}
+                  onChangeMany={multi ? (vs) => patchNumMany("listSpacing", vs, textTargets) : undefined}
+                />
+              </div>
+              {/* OpenType features (4913951097367) - the Details tab's common
+                  toggles: ligatures, stylistic sets, character variants. */}
+              <div className="dir-row">
+                <div className="seg icons">
+                  <label className="check" title="Standard ligatures (liga) - on by default in the font">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.liga !== 0}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) delete f.liga;
+                        else f.liga = 0;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Ligatures
+                  </label>
+                  <label className="check" title="Discretionary ligatures (dlig)">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.dlig === 1}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) f.dlig = 1;
+                        else delete f.dlig;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Discretionary
+                  </label>
+                  <label className="check" title="Contextual alternates (calt)">
+                    <input
+                      type="checkbox"
+                      checked={n.fontFeatures?.calt === 1}
+                      onChange={(e) => {
+                        const f = { ...(n.fontFeatures ?? {}) };
+                        if (e.target.checked) f.calt = 1;
+                        else delete f.calt;
+                        patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                      }}
+                    />
+                    Contextual
+                  </label>
+                </div>
+              </div>
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="ss"
+                  value={Number(Object.keys(n.fontFeatures ?? {}).find((k) => /^ss\d\d$/.test(k))?.slice(2) ?? 0)}
+                  aria="Stylistic set (1-20, 0 = off)"
+                  onChange={(v) => {
+                    const f = { ...(n.fontFeatures ?? {}) };
+                    for (const k of Object.keys(f)) if (/^ss\d\d$/.test(k)) delete f[k];
+                    const i = Math.round(v);
+                    if (i >= 1 && i <= 20) f[`ss${String(i).padStart(2, "0")}`] = 1;
+                    patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                  }}
+                />
+                <Field
+                  label="cv"
+                  value={Number(Object.keys(n.fontFeatures ?? {}).find((k) => /^cv\d\d$/.test(k))?.slice(2) ?? 0)}
+                  aria="Character variant (1-99, 0 = off)"
+                  onChange={(v) => {
+                    const f = { ...(n.fontFeatures ?? {}) };
+                    for (const k of Object.keys(f)) if (/^cv\d\d$/.test(k)) delete f[k];
+                    const i = Math.round(v);
+                    if (i >= 1 && i <= 99) f[`cv${String(i).padStart(2, "0")}`] = 1;
+                    patchType({ fontFeatures: Object.keys(f).length ? f : undefined });
+                  }}
+                />
+              </div>
+              {/* Variable-font axes (5579502031511) - weight rides the regular
+                  weight control; width, optical size and slant are axes. */}
+              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+                <Field
+                  label="wdth"
+                  value={n.fontVariations?.wdth ?? 0}
+                  aria="Variable width axis (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.wdth = v;
+                    else delete g.wdth;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
+                <Field
+                  label="opsz"
+                  value={n.fontVariations?.opsz ?? 0}
+                  aria="Variable optical-size axis (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.opsz = v;
+                    else delete g.opsz;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
+                <Field
+                  label="slnt"
+                  value={n.fontVariations?.slnt ?? 0}
+                  aria="Variable slant axis in degrees (0 = unset)"
+                  onChange={(v) => {
+                    const g = { ...(n.fontVariations ?? {}) };
+                    if (v) g.slnt = v;
+                    else delete g.slnt;
+                    patchType({ fontVariations: Object.keys(g).length ? g : undefined });
+                  }}
+                />
+              </div>
+            </div>
+          )}
+        </Section>
+        <div className="hr" />
+      </>
+    );
+  };
+  return (
+    <>
+      <div className="layer-type">
+        <span className="kind">{kindLabel}</span>
+        <span className="grow" />
+        <button
+          className={`icon-btn${n.visible ? "" : " on"}`}
+          title={n.visible ? "Hide" : "Show"}
+          onClick={() => engine.dispatch({ type: "hideSel" })}
+        >
+          <Icon name={n.visible ? "eye" : "eye-off"} size={14} />
+        </button>
+        <button
+          className={`icon-btn${n.locked ? " on" : ""}`}
+          title={n.locked ? "Unlock" : "Lock"}
+          onClick={() => engine.dispatch({ type: "lockSel" })}
+        >
+          <Icon name={n.locked ? "lock" : "unlock"} size={14} />
+        </button>
+        <Tooltip label="Round to whole pixels" shortcut="⇧⌘P">
+          <button
+            className={`icon-btn${isFractional(n) ? " warn" : ""}`}
+            aria-label="Round to whole pixels"
+            onClick={() => roundToPixel(engine)}
+          >
+            <Icon name="grid" size={14} />
+          </button>
+        </Tooltip>
+        <button
+          className="icon-btn"
+          title="Dev Mode"
+          onClick={() => engine.dispatch({ type: "setRightTab", tab: "inspect" })}
+        >
+          <Icon name="dev" size={14} />
+        </button>
+        <button
+          className="icon-btn"
+          title="More"
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setMore({ x: r.right - 220, y: r.bottom + 4 });
+          }}
+        >
+          <Icon name="more" size={14} />
+        </button>
+      </div>
+      {more && (
+        <ContextMenu
+          x={more.x}
+          y={more.y}
+          items={[
+            { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
+            { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
+            { kind: "action", id: "copyCode", label: `Copy as ${devLangLabel(getDevPrefs().format)}`, icon: "code" },
+            { kind: "sep" },
+            { kind: "action", id: "lockSel", label: "Lock/Unlock", shortcut: "⇧⌘L", icon: "lock" },
+            { kind: "action", id: "hideSel", label: "Show/Hide", shortcut: "⇧⌘H", icon: "eye" },
+            { kind: "action", id: "delete", label: "Delete", shortcut: "⌫", icon: "trash" },
+          ]}
+          onRun={(id) => runMenu(engine, id)}
+          onClose={() => setMore(null)}
+        />
+      )}
+
+      {multi && (
+        <>
+          <Section id="boolean" title="Boolean">
+          <div className="insp-pad">
+            <div className="seg icons">
+              {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
+                <button
+                  key={op}
+                  className={snap.booleanPreview === op ? "on" : ""}
+                  title={
+                    snap.booleanPreview
+                      ? `Preview ${op}`
+                      : `Boolean ${op[0].toUpperCase() + op.slice(1)}`
+                  }
+                  onClick={() => {
+                    // With a preview armed, the op buttons switch the previewed
+                    // operation; otherwise they apply immediately, as before.
+                    if (snap.booleanPreview) engine.dispatch({ type: "setBooleanPreview", op });
+                    else engine.dispatch({ type: "boolean", op });
+                  }}
+                >
+                  <Icon name={`boolean-${op}`} size={16} />
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <button
+                className={snap.booleanPreview ? "on" : ""}
+                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                title="Preview the result on the canvas before applying (Enter applies, Esc cancels)"
+                aria-pressed={!!snap.booleanPreview}
+                onClick={() =>
+                  engine.dispatch({ type: "setBooleanPreview", op: snap.booleanPreview ? null : "union" })
+                }
+              >
+                <Icon name="eye" size={14} />
+                <span>Preview</span>
+              </button>
+              <button
+                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                onClick={() => engine.dispatch({ type: "flatten" })}
+              >
+                <Icon name="flatten" size={14} />
+                <span>Flatten</span>
+              </button>
+            </div>
+            {snap.booleanPreview && (
+              <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: "var(--dim)", textTransform: "capitalize" }}>
+                  {snap.booleanPreview}
+                </span>
+                <span style={{ flex: 1 }} />
+                <button
+                  title="Apply the previewed boolean (Enter)"
+                  onClick={() => {
+                    const op = snap.booleanPreview;
+                    if (op) engine.dispatch({ type: "boolean", op });
+                  }}
+                >
+                  Apply
+                </button>
+                <button
+                  title="Discard the preview (Esc)"
+                  onClick={() => engine.dispatch({ type: "setBooleanPreview", op: null })}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+          </Section>
+        </>
+      )}
+
+      {/* Typography prominently placed at top for text layers (Audit P0-B) */}
+      {renderTypographySection()}
+
+      <Section
+        id="position"
+        title="Position"
+        actions={
+          hasAutoLayoutParent ? (
+            <button
+              className={`plus${n.absolutePosition ? " on" : ""}`}
+              title={n.absolutePosition ? "In auto layout flow" : "Absolute position (exclude from auto layout flow)"}
+              onClick={() => patch({ absolutePosition: !n.absolutePosition })}
+            >
+              <Icon name="absolute" size={14} />
+            </button>
+          ) : undefined
+        }
+      >
+      <div className="insp-pad">
+        <div className="align">
+          <div className="g">
+            {(["align-left", "align-hcenter", "align-right"] as const).map((ic) => (
+              <Tooltip key={ic} label={ALIGN_LABEL[ic]} shortcut={ALIGN_SHORTCUT[ic]}>
+                <button aria-label={ALIGN_LABEL[ic]} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
+                  <Icon name={ic} />
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+          <div className="g">
+            {(["align-top", "align-vcenter", "align-bottom"] as const).map((ic) => (
+              <Tooltip key={ic} label={ALIGN_LABEL[ic]} shortcut={ALIGN_SHORTCUT[ic]}>
+                <button aria-label={ALIGN_LABEL[ic]} onClick={(e) => align(engine, snap, ic, e.shiftKey)}>
+                  <Icon name={ic} />
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+          <div className="g">
+            <Tooltip label="Distribute horizontal spacing" shortcut="⌃⌥H">
+            <button aria-label="Distribute horizontal" onClick={() => engine.dispatch({ type: "distribute", axis: "h" })}>
+              <Icon name="distribute-h" />
+            </button>
+            </Tooltip>
+            <Tooltip label="Distribute vertical spacing" shortcut="⌃⌥V">
+            <button aria-label="Distribute vertical" onClick={() => engine.dispatch({ type: "distribute", axis: "v" })}>
+              <Icon name="distribute-v" />
+            </button>
+            </Tooltip>
+            <Tooltip label="Tidy up" shortcut="⌃⌥⇧T">
+            <button aria-label="Tidy up" onClick={() => { engine.dispatch({ type: "tidyUp" }); toast("Tidied up selection"); }}>
+              <Icon name="grid" size={14} />
+            </button>
+            </Tooltip>
+          </div>
+        </div>
+        <div className="grid3">
+          <Field
+            label="X"
+            value={x}
+            onChange={(v) => num("x", v)}
+            mixed={multiMixed("x")}
+            values={multi ? multiKey("x") : undefined}
+            onChangeMany={multi ? (vs) => numMany("x", vs) : undefined}
+          />
+          <Field
+            label="Y"
+            value={y}
+            onChange={(v) => num("y", v)}
+            mixed={multiMixed("y")}
+            values={multi ? multiKey("y") : undefined}
+            onChangeMany={multi ? (vs) => numMany("y", vs) : undefined}
+          />
+          <button
+            className={`icon-btn${conOpen ? " on" : ""}`}
+            title="Constraints"
+            onClick={() => setConOpen((v) => !v)}
+          >
+            <Icon name="constraints" size={14} />
+          </button>
+          <Field
+            icon="rotate"
+            aria="Rotation"
+            value={n.rotation}
+            onChange={(v) => num("rotation", v)}
+            mixed={multiMixed("rotation")}
+            values={multi ? multiKey("rotation") : undefined}
+            onChangeMany={multi ? (vs) => numMany("rotation", vs) : undefined}
+          />
+          <div className="seg icons">
+            <button
+              title="Flip horizontal"
+              onClick={() => engine.dispatch({ type: "flip", axis: "h" })}
+            >
+              <Icon name="flip-h" size={14} />
+            </button>
+            <button title="Flip vertical" onClick={() => engine.dispatch({ type: "flip", axis: "v" })}>
+              <Icon name="flip-v" size={14} />
+            </button>
+          </div>
+        </div>
+        {conOpen && (
+          <Constraints
+            h={n.constraintH}
+            v={n.constraintV}
+            onChange={(axis, value) => patch(axis === "h" ? { constraintH: value } : { constraintV: value })}
+          />
+        )}
+      </div>
+      </Section>
+
+      <div className="hr" />
+      <Section id="layout" title="Layout" actions={
+        <div style={{ display: "flex", gap: 2 }}>
+          {/* Two ways in: add an auto layout frame with the defaults, or
+              work the values out from how the objects already sit. */}
+          {!n.layout && (
+            <button
+              className="plus"
+              title="Suggest auto layout (⌃⇧A)"
+              onClick={() => suggestAutoLayout(engine, snap, n.id)}
+            >
+              <Icon name="magic-noodle" size={14} />
+            </button>
+          )}
+          <button
+            className="plus"
+            // Add auto layout (⇧A) wraps a layer that cannot hold a layout in a
+            // frame; remove refuses on an instance, saying so.
+            title={n.layout ? "Remove auto layout (⌥⇧A)" : "Add auto layout (⇧A)"}
+            onClick={() => (n.layout ? removeAutoLayout(engine, snap, n.id) : addAutoLayout(engine, snap, n.id))}
+          >
+            <Icon name={n.layout ? "minus" : "plus"} size={14} />
+          </button>
+          {(n.kind === "frame" || n.kind === "group") && (
+            <button
+              className="plus"
+              title="Resize to fit (⌥⇧⌘R)"
+              onClick={() => engine.dispatch({ type: "resizeToFit" })}
+            >
+              <Icon name="minimize" size={14} />
+            </button>
+          )}
+        </div>
+      }>
+      <div className="insp-group-title flush" style={{ marginBottom: 6 }}>Flow</div>
+      <div className="dir-row">
+        <div className="seg icons">
+          <button
+            className={!n.layout ? "on" : ""}
+            // "In the right sidebar, click Freeform or Remove auto layout."
+            title={layoutStructLocked ? layoutStructTitle : "Freeform (remove auto layout, ⌥⇧A)"}
+            disabled={layoutStructLocked}
+            onClick={() => removeAutoLayout(engine, snap, n.id)}
+          >
+            <Icon name="layout-none" />
+          </button>
+          <button
+            className={n.layout?.direction === "vertical" ? "on" : ""}
+            title={layoutStructLocked ? layoutStructTitle : "Vertical"}
+            disabled={layoutStructLocked}
+            onClick={() => setDir(engine, snap, n, "vertical")}
+          >
+            <Icon name="layout-v" />
+          </button>
+          <button
+            className={n.layout?.direction === "horizontal" ? "on" : ""}
+            title={layoutStructLocked ? layoutStructTitle : "Horizontal"}
+            disabled={layoutStructLocked}
+            onClick={() => setDir(engine, snap, n, "horizontal")}
+          >
+            <Icon name="layout-h" />
+          </button>
+          {/* The third flow: cells in columns and rows. Wrap is what a grid
+              does not need, so choosing Grid leaves it out of the picture
+              rather than doubling up on the horizontal flow - and switching
+              back to Horizontal or Vertical drops the grid's own fields. */}
+          <button
+            className={n.layout?.direction === "grid" ? "on" : ""}
+            title={layoutStructLocked ? layoutStructTitle : "Grid"}
+            disabled={layoutStructLocked}
+            onClick={() => setFlow(engine, snap, n.id, "grid")}
+          >
+            <Icon name="layout-grid" />
+          </button>
+          {/* Wrap is offered on horizontal and vertical flows alike (a
+              vertical flow fills top to bottom, then starts a new column);
+              only the grid flow has no wrap to offer. */}
+          <button
+            className={wrapOn ? "on" : ""}
+            disabled={!n.layout || n.layout.direction === "grid" || layoutStructLocked}
+            title={
+              layoutStructLocked
+                ? layoutStructTitle
+                : !n.layout || n.layout.direction === "grid"
+                  ? "Wrap is available on horizontal and vertical flows"
+                  : wrapOn
+                    ? "Wrapping onto the next line"
+                    : "Wrap onto the next line"
+            }
+            onClick={() =>
+              n.layout &&
+              engine.dispatch({
+                type: "autoLayout",
+                id: n.id,
+                layout: { ...n.layout, wrap: !n.layout.wrap },
+              })
+            }
+          >
+            <Icon name="wrap" />
+          </button>
+        </div>
+      </div>
+      <div className="insp-group-title">Sizing</div>
+      <div className="insp-pad">
+        <div className="grid4">
+          <Field
+            label="W"
+            hint={showSizing("width")}
+            hintNote={hugNote("width")}
+            value={n.w}
+            onChange={(v) => num("w", v)}
+            mixed={multiMixed("w")}
+            values={multi ? multiKey("w") : undefined}
+            onChangeMany={multi ? (vs) => numMany("w", vs) : undefined}
+            onLabelClick={() => {
+              const sizingW = cycleSizing(n.sizingW);
+              if (n.kind === "text") setSizing(sizingW, n.sizingH);
+              else patch({ sizingW });
+              setSizingAxis("width", sizingW);
+            }}
+            bind={<BindControl engine={engine} snap={snap} targets={multi ? movers : [n]} prop="w" onOpenVariables={onOpenVariables} />}
+          />
+          <Field
+            label="H"
+            hint={showSizing("height")}
+            hintNote={hugNote("height")}
+            value={n.h}
+            onChange={(v) => num("h", v)}
+            mixed={multiMixed("h")}
+            values={multi ? multiKey("h") : undefined}
+            onChangeMany={multi ? (vs) => numMany("h", vs) : undefined}
+            onLabelClick={() => {
+              const sizingH = cycleSizing(n.sizingH);
+              if (n.kind === "text") setSizing(n.sizingW, sizingH);
+              else patch({ sizingH });
+              setSizingAxis("height", sizingH);
+            }}
+            bind={<BindControl engine={engine} snap={snap} targets={multi ? movers : [n]} prop="h" onOpenVariables={onOpenVariables} />}
+          />
+          <button
+            className={`icon-btn${n.aspectLocked ? " on" : ""}`}
+            // The aspect ratio of a child layer of an instance "can be
+            // adjusted from their respective main components".
+            disabled={inInstance}
+            title={
+              inInstance
+                ? "Aspect ratio comes from the main component"
+                : n.aspectLocked
+                  ? "Unlock aspect ratio"
+                  : "Lock aspect ratio"
+            }
+            onClick={() => patch({ aspectLocked: !n.aspectLocked })}
+          >
+            <Icon name="aspect" size={14} />
+          </button>
+          <button
+            className={`icon-btn${showMinMax ? " on" : ""}`}
+            title={showMinMax ? "Remove min and max" : "Add min/max width and height"}
+            onClick={() => {
+              if (showMinMax) {
+                setMinMaxOpen((v) => ({ ...v, [n.id]: false }));
+                if (hasMinMax) patch({ minW: undefined, maxW: undefined, minH: undefined, maxH: undefined });
+              } else {
+                setMinMaxOpen((v) => ({ ...v, [n.id]: true }));
+              }
+            }}
+          >
+            <Icon name={showMinMax ? "minus" : "width-min"} size={14} />
+          </button>
+        </div>
+        {snap.tool === "scale" && (
+          <div className="scale-panel">
+            <div className="scale-head">
+              <span>Scale</span>
+              <select
+                aria-label="Scale multiplier"
+                value=""
+                title="Multiply the size of every selected layer, strokes and type included"
+                onChange={(e) => {
+                  const f = Number(e.target.value);
+                  if (f) applyScale(f);
+                }}
+              >
+                <option value="">Multiplier…</option>
+                {SCALE_FACTORS.map((f) => (
+                  <option key={f} value={f}>
+                    {SCALE_LABEL(f)}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="scale-type"
+                aria-label="Scale by"
+                placeholder="×"
+                title="Type a multiplier, e.g. 1.5, then press Enter"
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  const el = e.target as HTMLInputElement;
+                  const f = parseFloat(el.value);
+                  if (Number.isFinite(f) && f > 0) applyScale(f);
+                  el.value = "";
+                  el.blur();
+                }}
+                onBlur={(e) => {
+                  const el = e.target as HTMLInputElement;
+                  const f = parseFloat(el.value);
+                  if (Number.isFinite(f) && f > 0) applyScale(f);
+                  el.value = "";
+                }}
+              />
+            </div>
+            <div className="scale-anchor" role="group" aria-label="Scale anchor">
+              {SCALE_ANCHORS.map((a) => (
+                <button
+                  key={a.id}
+                  title={`${a.label} stays put`}
+                  aria-label={`Scale from the ${a.label.toLowerCase()}`}
+                  aria-pressed={scaleAnchor === a.id}
+                  className={scaleAnchor === a.id ? "on" : ""}
+                  onClick={() => setScaleAnchor(a.id)}
+                />
+              ))}
+            </div>
+            <span className="scale-note">
+              Anchor sets which side holds while the multiplier or W/H change.
+            </span>
+          </div>
+        )}
+        {showMinMax && (
+          <div className="grid2" style={{ marginTop: 4 }}>
+            <Field label="Min W" value={n.minW || 0} onChange={(v) => setMinMax("minW", v)} />
+            <Field label="Max W" value={n.maxW || 0} onChange={(v) => setMinMax("maxW", v)} />
+            <Field label="Min H" value={n.minH || 0} onChange={(v) => setMinMax("minH", v)} />
+            <Field
+              label="Max H"
+              invalidValue={n.kind === "text" ? 0 : undefined}
+              value={n.maxH || 0}
+              onChange={(v) => setMinMax("maxH", v, n.kind === "text" ? { maxLines: 0 } : {})}
+            />
+          </div>
+        )}
+        {gridParent && (
+          // "You can also use the Column span and Row span fields in the right
+          // sidebar" - shown only for an object that lives in a grid.
+          <div className="grid2" style={{ marginTop: 4 }}>
+            <Field
+              label="Col span"
+              value={n.colSpan ?? 1}
+              onChange={(v) => patch({ colSpan: Math.max(1, Math.round(v)) })}
+            />
+            <Field
+              label="Row span"
+              value={n.rowSpan ?? 1}
+              onChange={(v) => patch({ rowSpan: Math.max(1, Math.round(v)) })}
+            />
+          </div>
+        )}
+        {hasAutoLayoutParent && (
+          <label className="check" style={{ marginTop: 6, paddingLeft: 0 }}>
+            <input
+              type="checkbox"
+              checked={!!n.absolutePosition}
+              onChange={(e) => patch({ absolutePosition: e.target.checked })}
+            />
+            Ignore auto layout
+          </label>
+        )}
+      </div>
+      {/* A section never clips - it is the titled backdrop its frames are
+          placed on - so Figma gives it no clip-content property, and neither
+          does this row. Frames, groups and shapes keep the toggle. Frames
+          also get a Scroll overflow dropdown (help.figma.com/360039818734)
+          so the author can pick No scrolling / Horizontal / Vertical / Both. */}
+      {n.kind !== "section" && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={n.overflow !== "visible"}
+            onChange={(e) =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { overflow: e.target.checked ? (n.kind === "frame" ? "clip" : "clip") : "visible" },
+              })
+            }
+          />
+          Clip content / mask
+        </label>
+      )}
+      {n.kind === "frame" && n.overflow !== "visible" && (
+        <div className="insp-pad" style={{ display: "grid", gridTemplateColumns: "auto 1fr", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 11 }}>Overflow</span>
+          <select
+            aria-label="Scroll overflow"
+            value={
+              n.overflow === "scrollboth"
+                ? "scrollboth"
+                : n.overflow === "scrollx"
+                ? "scrollx"
+                : n.overflow === "scrolly"
+                ? "scrolly"
+                : "clip"
+            }
+            onChange={(e) =>
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { overflow: e.target.value as XNode["overflow"] },
+              })
+            }
+          >
+            <option value="clip">No scrolling</option>
+            <option value="scrollx">Horizontal scrolling</option>
+            <option value="scrolly">Vertical scrolling</option>
+            <option value="scrollboth">Both directions</option>
+          </select>
+          {n.overflow !== "clip" && (
+            <span style={{ gridColumn: "1 / -1", fontSize: 10, color: "var(--muted)" }}>
+              Content must extend beyond the frame to scroll.
+            </span>
+          )}
+        </div>
+      )}
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={!!n.isMask}
+          onChange={(e) => patch({ isMask: e.target.checked })}
+        />
+        Use as mask
+      </label>
+      {n.isMask && (
+        <div className="insp-pad">
+          <div className="field">
+            <select
+              aria-label="Mask type"
+              value={n.maskType || "alpha"}
+              onChange={(e) => patch({ maskType: e.target.value as XNode["maskType"] })}
+            >
+              <option value="alpha">Alpha</option>
+              <option value="vector">Vector</option>
+              <option value="luminance">Luminance</option>
+            </select>
+          </div>
+        </div>
+      )}
+      <div className="insp-pad">
+        <div className="seg">
+          <button
+            title="Edit this shape's points on the canvas (double-click does the same)"
+            onClick={() => {
+              // The inspector's twin of double-clicking the layer: enter vector
+              // edit mode. It used to dispatch `flatten` — the very action of the
+              // button next to it — so the label promised editing and delivered
+              // a bake (IN-U5). Booleans still bake first, because their points
+              // only exist once the group is applied.
+              if (n.kind === "boolean") {
+                engine.dispatch({ type: "flatten" });
+                engine.dispatch({ type: "setVecEdit", id: engine.snapshot().selection[0] ?? null });
+              } else {
+                engine.dispatch({ type: "setVecEdit", id: n.id });
+              }
+            }}
+          >
+            {snap.vecEdit === n.id ? "Editing points" : "Edit points"}
+          </button>
+          <button onClick={() => engine.dispatch({ type: "flatten" })}>Flatten</button>
+          {n.strokeWidth > 0 &&
+            !(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
+              <button
+                onClick={() => {
+                  dispatchOutlineStrokeWithWasmFallback(engine, n.id);
+                  toast("Outlined stroke");
+                }}
+                title="Convert stroke to vector path (⇧⌘O)"
+              >
+                Outline stroke
+              </button>
+            )}
+        </div>
+      </div>
+      {(n.kind === "vector" || n.path.length > 0 || snap.vecEdit === n.id) && (
+        <>
+          {/* IN-U4: the vector card was the last bespoke block in the panel — a
+              `<strong>` header, `export-run` buttons resized by inline style, a
+              hand-written 24px icon row and raw `<input type="number">`s. It is
+              the shared primitives now: `Section` for the header (fold +
+              persistence + the scroll-to hook every other block has), `Field`
+              for the vertex numbers (arithmetic, label-scrub, accessible
+              names), `XSegmentedControl` for the two switches and `XButton` for
+              the actions. The names are vertex-specific on purpose: the e2e
+              suite (and assistive tech) address inspector fields by aria-label,
+              so "Corner radius" has to stay the *layer's* corner radius. */}
+          <Section
+            id="vector"
+            title="Vector"
+            actions={
+              <div className="h-act">
+                <span className="vec-chip" title="This layer keeps an editable vector network">
+                  Native Graph
+                </span>
+                {snap.vecEdit === n.id ? (
+                  <XButton variant="primary" size="sm" title="Done editing path (Esc / ↵)" onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}>
+                    Done
+                  </XButton>
+                ) : (
+                  <XButton variant="secondary" size="sm" title="Enter vector edit mode (↵)" onClick={() => engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 })}>
+                    Edit points
+                  </XButton>
+                )}
+              </div>
+            }
+          >
+            <div className="insp-pad">
+              <div className="vec-card">
+                {/* Point alignment is the panel's own align idiom — `.align > .g`
+                    icon buttons behind a shared Tooltip, exactly what the
+                    Position section draws for layers — not a segmented control:
+                    these are six one-shot actions, so a `role=tab` row would
+                    claim a selection the points do not have (and, with nothing
+                    selected, would have taken the row out of the tab order).
+                    No shortcut chip either: `vectorAlign` has no chord, and ⌥A
+                    belongs to the layer row above. */}
+                <div className="vec-row">
+                  <span className="vec-label">Alignment</span>
+                  <span className="vec-note">Selected points</span>
+                </div>
+                <div className="align vec-align">
+                  {POINT_ALIGN_ROWS.map((row) => (
+                    <div className="g" key={row[0]}>
+                      {row.map((a) => (
+                        <Tooltip key={a} label={POINT_ALIGN[a].label}>
+                          <button
+                            aria-label={POINT_ALIGN[a].label}
+                            onClick={() => engine.dispatch({ type: "vectorAlign", alignment: a })}
+                          >
+                            <Icon name={POINT_ALIGN[a].icon} />
+                          </button>
+                        </Tooltip>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Position & active vertex */}
+                {(() => {
+                  const activePtIdx =
+                    snap.vecPoint !== null &&
+                    snap.vecPoint !== undefined &&
+                    snap.vecPoint >= 0 &&
+                    snap.vecPoint < n.path.length
+                      ? snap.vecPoint
+                      : (n.path.length > 0 ? 0 : null);
+                  const pt = activePtIdx !== null ? n.path[activePtIdx] : null;
+                  if (!pt || activePtIdx === null) return null;
+                  const movePoint = (axis: "x" | "y", val: number) => {
+                    const newPath = [...n.path];
+                    newPath[activePtIdx] = { ...newPath[activePtIdx], [axis]: val };
+                    engine.dispatch({ type: "patchPath", id: n.id, path: newPath, closed: n.closed });
+                  };
+
+                  return (
+                    <div className="vec-vertex">
+                      <div className="vec-row">
+                        <span className="vec-label">Position</span>
+                        <span className="vec-note">Vertex #{activePtIdx + 1}</span>
+                      </div>
+                      <div className="vec-pair">
+                        <Field label="X" aria="Vertex X" value={Math.round(pt.x)} onChange={(v) => movePoint("x", v)} />
+                        <Field label="Y" aria="Vertex Y" value={Math.round(pt.y)} onChange={(v) => movePoint("y", v)} />
+                      </div>
+                      <div className="vec-row">
+                        <span className="vec-label">Mirroring</span>
+                      </div>
+                      <XSegmentedControl
+                        className="vec-seg"
+                        ariaLabel="Handle mirroring"
+                        value={pt.mirrorMode ?? "none"}
+                        options={[
+                          { value: "none", label: "No mirror", title: "No mirroring (sharp corner / independent handles)" },
+                          { value: "angleAndLength", label: "Angle & len", title: "Mirror angle and length (symmetric handles)" },
+                          { value: "angle", label: "Angle only", title: "Mirror angle only (asymmetric lengths)" },
+                        ]}
+                        onChange={(v) =>
+                          engine.dispatch({
+                            type: "setPointMirror",
+                            id: n.id,
+                            pointIndex: activePtIdx,
+                            mode: v as "none" | "angleAndLength" | "angle",
+                          })
+                        }
+                      />
+                      <div className="vec-row">
+                        <span className="vec-label">Corner radius</span>
+                      </div>
+                      <div className="vec-slider">
+                        <input
+                          type="range"
+                          className="vec-range"
+                          aria-label="Vertex corner radius"
+                          min={0}
+                          max={60}
+                          value={Math.min(60, pt.cornerRadius ?? 0)}
+                          onChange={(e) =>
+                            engine.dispatch({
+                              type: "setPointCornerRadius",
+                              id: n.id,
+                              pointIndex: activePtIdx,
+                              radius: parseFloat(e.target.value) || 0,
+                            })
+                          }
+                        />
+                        <Field
+                          icon="radius"
+                          aria="Vertex corner radius"
+                          value={pt.cornerRadius ?? 0}
+                          onChange={(r) =>
+                            engine.dispatch({
+                              type: "setPointCornerRadius",
+                              id: n.id,
+                              pointIndex: activePtIdx,
+                              radius: Math.max(0, r),
+                            })
+                          }
+                        />
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Quick actions: the four path operations, on the shared button
+                    recipe. The two that open a form read as pressed while it is
+                    open, which is what the state is. */}
+                <div className="vec-actions">
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    active={showSimplifyControls}
+                    disabled={topologyEditBlocked(n)}
+                    title={topologyEditBlocked(n) ? NETWORK_EDIT_LIMIT : "Reduce redundant anchor points with tolerance control"}
+                    onClick={() => {
+                      setShowSimplifyControls((v) => !v);
+                      setShowOffsetControls(false);
+                    }}
+                  >
+                    Simplify…
+                  </XButton>
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    title="Smooth bezier curves"
+                    onClick={() => {
+                      const smoothed = smoothPath(n.path, n.closed);
+                      engine.dispatch({ type: "patchPath", id: n.id, path: smoothed, closed: n.closed });
+                      toast("Smoothed vector handles");
+                    }}
+                  >
+                    Smooth
+                  </XButton>
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    active={showOffsetControls}
+                    disabled={topologyEditBlocked(n)}
+                    title={topologyEditBlocked(n) ? NETWORK_EDIT_LIMIT : "Expand or contract outline path with offset distance"}
+                    onClick={() => {
+                      setShowOffsetControls((v) => !v);
+                      setShowSimplifyControls(false);
+                    }}
+                  >
+                    Offset Path…
+                  </XButton>
+                  <XButton
+                    variant="secondary"
+                    size="sm"
+                    title="Convert stroke to vector path (⇧⌘O)"
+                    onClick={() => {
+                      if (!(n.kind === "text" || n.strokeWidth > 0 || n.kind === "line" || n.kind === "arrow")) {
+                        toast("Add a stroke to outline it");
+                        return;
+                      }
+                      if (n.id.startsWith("wasm-poc-")) {
+                        dispatchOutlineStrokeWithWasmFallback(engine, n.id);
+                      } else {
+                        engine.dispatch({ type: "outlineStroke", id: n.id });
+                      }
+                      toast("Outlined stroke");
+                    }}
+                  >
+                    Outline stroke
+                  </XButton>
+                </div>
+
+                {topologyEditBlocked(n) && <p className="muted" role="note">{NETWORK_EDIT_LIMIT}</p>}
+
+                {/* Inline Simplify form */}
+                {showSimplifyControls && (
+                  <div className="vec-sub">
+                    <div className="vec-sub-head">
+                      <span className="vec-sub-title">Simplify path</span>
+                      <XButton variant="icon" size="sm" icon="close" title="Close simplify" onClick={() => setShowSimplifyControls(false)} />
+                    </div>
+                    <div className="vec-sub-row">
+                      <input
+                        className="vec-range"
+                        type="range"
+                        aria-label="Simplify tolerance slider"
+                        min={1}
+                        max={20}
+                        step={0.5}
+                        value={simplifyTol}
+                        onChange={(e) => setSimplifyTol(parseFloat(e.target.value) || 1)}
+                      />
+                      {/* The number is a `Field`, not a raw input: it takes the
+                          panel's arithmetic (`*2`), its label-scrub and its
+                          accessible name, so the slider's twin behaves like
+                          every other number in the inspector. */}
+                      <Field
+                        label="Tolerance"
+                        aria="Simplify tolerance"
+                        value={simplifyTol}
+                        onChange={(v) => setSimplifyTol(Math.min(50, Math.max(1, v)))}
+                      />
+                    </div>
+                    <XButton
+                      variant="primary"
+                      size="sm"
+                      className="vec-apply"
+                      disabled={topologyEditBlocked(n)}
+                      onClick={() => {
+                        if (!allowTopologyEdit(engine, n.id)) return;
+                        engine.dispatch({ type: "simplifyPath", id: n.id, tolerance: simplifyTol });
+                        toast(`Simplified path with tolerance ${simplifyTol}`);
+                        setShowSimplifyControls(false);
+                      }}
+                    >
+                      Apply simplify
+                    </XButton>
+                  </div>
+                )}
+
+                {/* Inline Offset form */}
+                {showOffsetControls && (
+                  <div className="vec-sub">
+                    <div className="vec-sub-head">
+                      <span className="vec-sub-title">Offset vector path</span>
+                      <XButton variant="icon" size="sm" icon="close" title="Close offset" onClick={() => setShowOffsetControls(false)} />
+                    </div>
+                    <div className="vec-sub-row">
+                      <input
+                        className="vec-range"
+                        type="range"
+                        aria-label="Offset distance slider"
+                        min={-40}
+                        max={40}
+                        step={1}
+                        value={offsetDist}
+                        onChange={(e) => setOffsetDist(parseFloat(e.target.value) || 0)}
+                      />
+                      <Field
+                        label="Distance"
+                        aria="Offset distance"
+                        value={offsetDist}
+                        onChange={setOffsetDist}
+                      />
+                    </div>
+                    <div className="vec-sub-row">
+                      <span className="vec-label">Join</span>
+                      <XSegmentedControl
+                        className="vec-seg"
+                        ariaLabel="Offset join"
+                        value={offsetJoin}
+                        options={[
+                          { value: "round", label: "Round" },
+                          { value: "miter", label: "Square" },
+                        ]}
+                        onChange={(v) => setOffsetJoin(v as "round" | "miter")}
+                      />
+                    </div>
+                    <XButton
+                      variant="primary"
+                      size="sm"
+                      className="vec-apply"
+                      disabled={topologyEditBlocked(n)}
+                      onClick={() => {
+                        if (!allowTopologyEdit(engine, n.id)) return;
+                        if (n.id.startsWith("wasm-poc-")) {
+                          dispatchOffsetPathWithWasmFallback(engine, offsetDist, offsetJoin, n.id);
+                        } else {
+                          engine.dispatch({ type: "offsetPath", id: n.id, distance: offsetDist, join: offsetJoin });
+                        }
+                        toast(`Offset path by ${offsetDist > 0 ? "+" : ""}${offsetDist}px`);
+                        setShowOffsetControls(false);
+                      }}
+                    >
+                      Apply offset
+                    </XButton>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Section>
+        </>
+      )}
+      {(n.isComponent || n.componentId) && (() => {
+        const master = snap.components.find((c) => c.id === n.componentId || c.node.id === n.componentId || (n.isComponent && (c.id === n.id || c.node.id === n.id)));
+        const propDefs = master?.properties ?? [];
+        return (
+          <>
+            <Section
+              id="component"
+              title={n.isComponent ? "Component" : "Instance"}
+              actions={
+                <div className="h-act">
+                {n.componentId && (
+                  <>
+                    <button
+                      className="icon-btn"
+                      title="Go to main component"
+                      onClick={() => {
+                        if (master) {
+                          engine.dispatch({ type: "select", ids: [master.node.id] });
+                          toast("Navigated to main component");
+                        }
+                      }}
+                    >
+                      <Icon name="component" size={14} />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Reset all overrides"
+                      onClick={() => {
+                        engine.dispatch({ type: "resetOverrides", id: n.id });
+                        toast("Overrides reset");
+                      }}
+                    >
+                      <Icon name="reset" size={14} />
+                    </button>
+                    <select
+                      style={{ width: 14, opacity: 0.6, border: 0, background: "transparent", cursor: "pointer", marginLeft: -4 }}
+                      title="Reset specific override"
+                      value=""
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        if (val === "all") engine.dispatch({ type: "resetOverrides", id: n.id });
+                        else engine.dispatch({ type: "resetOverrides", id: n.id, property: val });
+                        toast(`Reset ${val} override`);
+                      }}
+                    >
+                      <option value="" disabled>▾</option>
+                      <option value="fill">Reset fill</option>
+                      <option value="stroke">Reset stroke</option>
+                      <option value="text">Reset text</option>
+                      <option value="w">Reset size</option>
+                      <option value="all">Reset all</option>
+                    </select>
+                    <button
+                      className="icon-btn"
+                      title="Detach instance (⌥⌘B)"
+                      onClick={() => {
+                        engine.dispatch({ type: "detachInstance" });
+                        toast("Instance detached");
+                      }}
+                    >
+                      <Icon name="detach" size={14} />
+                    </button>
+                  </>
+                )}
+                </div>
+              }
+            >
+            <div className="insp-pad">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <span className="insp-label">Variant</span>
+                <select
+                  style={{ flex: 1, maxWidth: 140 }}
+                  aria-label="Variant"
+                  value={n.variant || "Default"}
+                  onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
+                >
+                  {(master?.variants ?? [{ name: "Default" }]).map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {!n.isComponent && n.componentId && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span className="insp-label">Swap instance</span>
+                  <select
+                    style={{ flex: 1, maxWidth: 140 }}
+                    value={n.componentId}
+                    title="Replace this instance with another component"
+                    onChange={(e) => {
+                      engine.dispatch({ type: "swapInstance", id: n.id, componentId: e.target.value });
+                      toast("Instance swapped");
+                    }}
+                  >
+                    {snap.components.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {propDefs.filter((p) => p.type !== "variant").map((prop) => {
+                const currentVal = n.componentProperties?.[prop.name] ?? prop.defaultValue;
+                return (
+                  <div key={prop.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span className="insp-label grow" title={prop.name}>
+                      {prop.name}
+                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {prop.type === "boolean" ? (
+                        <input
+                          type="checkbox"
+                          checked={Boolean(currentVal)}
+                          onChange={(e) =>
+                            dispatchComponentPropertyWithWasmFallback(
+                              engine,
+                              n.id,
+                              prop.name,
+                              e.target.checked,
+                            )
+                          }
+                        />
+                      ) : prop.type === "instance-swap" ? (
+                        <select
+                          style={{ width: 110, padding: "2px 4px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          value={String(currentVal)}
+                          title="Component to show in the nested instance"
+                          onChange={(e) =>
+                            dispatchComponentPropertyWithWasmFallback(
+                              engine,
+                              n.id,
+                              prop.name,
+                              e.target.value,
+                            )
+                          }
+                        >
+                          {snap.components.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          style={{ width: 110, padding: "2px 6px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          value={String(currentVal)}
+                          onChange={(e) =>
+                            dispatchComponentPropertyWithWasmFallback(
+                              engine,
+                              n.id,
+                              prop.name,
+                              e.target.value,
+                            )
+                          }
+                        />
+                      )}
+                      {n.isComponent && master && (
+                        <button
+                          className="icon-btn"
+                          title={`Delete property "${prop.name}"`}
+                          onClick={() => {
+                            engine.dispatch({
+                              type: "deleteComponentProperty",
+                              componentId: master.id,
+                              propId: prop.id,
+                            });
+                            toast(`Property "${prop.name}" deleted`);
+                          }}
+                          style={{ padding: 2, opacity: 0.6 }}
+                        >
+                          <Icon name="trash" size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {n.isComponent && master && (
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    onClick={() => {
+                      const name = `Variant ${(master.variants?.length ?? 1) + 1}`;
+                      engine.dispatch({ type: "addVariant", name });
+                    }}
+                  >
+                    + Add variant
+                  </button>
+                  <button
+                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    onClick={async () => {
+                      // A picker for the type: the old prompt asked the user to
+                      // spell "instance-swap" correctly or the click did nothing.
+                      const picked = await askChoice({
+                        title: "Property type",
+                        body: `New property on "${n.name}"`,
+                        options: [
+                          { label: "Boolean", value: "boolean", primary: true },
+                          { label: "Text", value: "text" },
+                          { label: "Instance swap", value: "instance-swap" },
+                        ],
+                      });
+                      const propType = picked?.toLowerCase();
+                      if (propType === "boolean" || propType === "text" || propType === "instance-swap") {
+                        const propName = await askPrompt({
+                          title: "Property name",
+                          label: `${propType} property name`,
+                          placeholder: propType === "boolean" ? "Show icon" : propType === "text" ? "Title" : "Icon slot",
+                          confirmLabel: "Add property",
+                          validate: (v) => (v.trim() ? null : "Enter a property name"),
+                        });
+                        if (propName) {
+                          const targetLayer =
+                            (await askPrompt({
+                              title: propType === "instance-swap" ? "Nested instance" : "Target layer",
+                              label:
+                                propType === "instance-swap"
+                                  ? "Nested instance name to swap"
+                                  : "Child layer name to bind to",
+                              hint:
+                                propType === "instance-swap"
+                                  ? "Required — the instance this property swaps"
+                                  : "Optional — leave empty to bind to nothing yet",
+                              confirmLabel: "Add property",
+                              validate:
+                                propType === "instance-swap"
+                                  ? (v) => (v.trim() ? null : "An instance swap needs a target instance")
+                                  : undefined,
+                            })) || undefined;
+                          engine.dispatch({
+                            type: "addComponentProperty",
+                            componentId: master.id,
+                            property: {
+                              id: `prop-${Date.now()}`,
+                              name: propName,
+                              type: propType,
+                              defaultValue:
+                                propType === "boolean" ? true : propType === "instance-swap" ? (snap.components[0]?.id ?? "") : "Text",
+                              targetNodeName: targetLayer,
+                            },
+                          });
+                          toast(`Added ${propType} property: ${propName}`);
+                        }
+                      }
+                    }}
+                  >
+                    + Property
+                  </button>
+                </div>
+              )}
+              {master && <CodeMappingEditor engine={engine} master={master} />}
+            </div>
+            </Section>
+          </>
+        );
+      })()}
+      {n.layout && (
+        <>
+          <div className="dir-row">
+            {/* A grid has no single run of objects to pack - its objects are
+                positioned by their cells - so the packing box is the grid's
+                one exception. Per-cell alignment is on the object itself, in
+                the Position section, as the grid article describes. */}
+            <div className="insp-group-title">Alignment</div>
+            {!isGrid && (
+              <Nine
+                layout={n.layout}
+                disabled={layoutStructLocked}
+                disabledTitle={layoutStructTitle}
+                onChange={(patch) =>
+                  engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })
+                }
+              />
+            )}
+            <button
+              className="icon-btn"
+              title={layoutStructLocked ? layoutStructTitle : n.layout.justify === "between" ? "Packed" : "Space between"}
+              disabled={layoutStructLocked}
+              onClick={() =>
+                engine.dispatch({
+                  type: "autoLayout",
+                  id: n.id,
+                  layout: {
+                    ...n.layout!,
+                    justify: n.layout!.justify === "between" ? "min" : "between",
+                  },
+                })
+              }
+            >
+              <Icon name="distribute-h" />
+            </button>
+            {n.layout.direction === "horizontal" && (
+              <button
+                className={`icon-btn${n.layout.align === "baseline" ? " on" : ""}`}
+                title={
+                  layoutStructLocked
+                    ? layoutStructTitle
+                    : n.layout.align === "baseline"
+                      ? "Baseline alignment active"
+                      : "Align to text baseline"
+                }
+                disabled={layoutStructLocked}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: {
+                      ...n.layout!,
+                      align: n.layout!.align === "baseline" ? "min" : "baseline",
+                    },
+                  })
+                }
+              >
+                <Icon name="align-bottom" />
+              </button>
+            )}
+          </div>
+          {isGrid && (
+            <GridPanel
+              node={n}
+              layout={n.layout}
+              disabled={layoutStructLocked}
+              disabledTitle={layoutStructTitle}
+              onChange={(patch) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, ...patch } })}
+            />
+          )}
+          <div className="insp-group-title">Spacing</div>
+          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+            {isGrid ? (
+              // A grid has a gap per axis rather than one gap and a packing
+              // rule: "Gap between rows" and "Gap between columns".
+              <div className="gap-row">
+                <Field
+                  icon="gap"
+                  aria="Gap between columns"
+                  value={n.layout.gapCols ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapCols: v } })}
+                />
+                <Field
+                  icon="padding-vertical"
+                  aria="Gap between rows"
+                  value={n.layout.gapRows ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  onChange={(v) => engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapRows: v } })}
+                />
+              </div>
+            ) : (
+            <div className="gap-row">
+              {autoGap ? (
+                <button
+                  className="gap-mode"
+                  title={layoutStructLocked ? layoutStructTitle : "Gap between items"}
+                  disabled={layoutStructLocked}
+                  onClick={() => {
+                    const modes = SPACING_MODES.map((m) => m.id);
+                    const at = modes.indexOf((n.layout!.spacing ?? "between") as never);
+                    engine.dispatch({
+                      type: "autoLayout",
+                      id: n.id,
+                      layout: { ...n.layout!, spacing: modes[(at + 1) % modes.length] },
+                    });
+                  }}
+                >
+                  Auto &middot; {SPACING_MODES.find((m) => m.id === (n.layout!.spacing ?? "between"))?.label}
+                </button>
+              ) : (
+                <Field
+                  icon="gap"
+                  aria="Gap between items"
+                  bind={<BindControl engine={engine} snap={snap} targets={[n]} prop="layoutGap" onOpenVariables={onOpenVariables} />}
+                  value={n.layout.gap}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  onChange={(v) =>
+                    dispatchAutoLayoutWithWasmFallback(engine, n.id, { ...n.layout!, gap: v })
+                  }
+                />
+              )}
+              {/* A wrapping flow has a second gap: `gap` spaces the objects
+                  within a line, and this one spaces the lines themselves. */}
+              {wrapOn && !autoGap && (
+                <Field
+                  icon="gap"
+                  aria="Gap between lines"
+                  value={n.layout.gapCross ?? n.layout.gap ?? 0}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  onChange={(v) =>
+                    engine.dispatch({ type: "autoLayout", id: n.id, layout: { ...n.layout!, gapCross: v } })
+                  }
+                />
+              )}
+              <button
+                className={`icon-btn${autoGap ? " on" : ""}`}
+                title={layoutStructLocked ? layoutStructTitle : autoGap ? "Use a fixed gap" : "Set the gap to Auto"}
+                disabled={layoutStructLocked}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: {
+                      ...n.layout!,
+                      gapMode: autoGap ? "fixed" : "auto",
+                      spacing: n.layout!.spacing ?? "between",
+                    },
+                  })
+                }
+              >
+                <Icon name="distribute-h" size={14} />
+              </button>
+            </div>
+            )}
+            <div className="insp-group-title">Padding</div>
+            {padOpen ? (
+              <div className="grid2">
+                {(["L", "R", "T", "B"] as const).map((lab, i) => (
+                  <PadField
+                    key={lab}
+                    label={lab}
+                    disabled={layoutMemberLocked}
+                    disabledTitle={layoutMemberTitle}
+                    value={n.layout!.padding[i]}
+                    onCommit={(v) => {
+                      const p = [...n.layout!.padding] as [number, number, number, number];
+                      p[i] = v;
+                      dispatchAutoLayoutWithWasmFallback(engine, n.id, { ...n.layout!, padding: p });
+                    }}
+                  />
+                ))}
+              </div>
+            ) : (
+              // Padding is kept as a horizontal and a vertical
+              // value by default - "Padding controls in the right panel are
+              // separated into vertical (top and bottom) and horizontal (left
+              // and right) by default" - and reads Mixed when the two sides of
+              // a pair disagree. The four individual fields are one click away.
+              <div className="grid2">
+                <PadField
+                  icon="padding-horizontal"
+                  aria="Horizontal padding"
+                  bind={<BindControl engine={engine} snap={snap} targets={[n]} prop="layoutPadding" onOpenVariables={onOpenVariables} />}
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  value={n.layout.padding[0]}
+                  mixed={n.layout.padding[0] !== n.layout.padding[1] ? "Mixed" : undefined}
+                  onCommit={(v) => {
+                    const p = [...n.layout!.padding] as [number, number, number, number];
+                    p[0] = v;
+                    p[1] = v;
+                    dispatchAutoLayoutWithWasmFallback(engine, n.id, { ...n.layout!, padding: p });
+                  }}
+                  onShorthand={(p) =>
+                    dispatchAutoLayoutWithWasmFallback(engine, n.id, { ...n.layout!, padding: p })
+                  }
+                />
+                <PadField
+                  icon="padding-vertical"
+                  aria="Vertical padding"
+                  disabled={layoutMemberLocked}
+                  disabledTitle={layoutMemberTitle}
+                  value={n.layout.padding[2]}
+                  mixed={n.layout.padding[2] !== n.layout.padding[3] ? "Mixed" : undefined}
+                  onCommit={(v) => {
+                    const p = [...n.layout!.padding] as [number, number, number, number];
+                    p[2] = v;
+                    p[3] = v;
+                    dispatchAutoLayoutWithWasmFallback(engine, n.id, { ...n.layout!, padding: p });
+                  }}
+                  onShorthand={(p) =>
+                    dispatchAutoLayoutWithWasmFallback(engine, n.id, { ...n.layout!, padding: p })
+                  }
+                />
+              </div>
+            )}
+            <button
+              className={`icon-btn${padOpen ? " on" : ""}`}
+              title="Independent padding (top, right, bottom, left)"
+              onClick={() => setPadOpen((v) => !v)}
+            >
+              <Icon name="independent" size={14} />
+            </button>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
+              <div className="insp-group-title" style={{ gridColumn: "1 / -1" }}>Positioning</div>
+              <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
+              <button
+                className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
+                style={{ fontSize: 10, padding: "2px 8px", width: "auto", height: 22 }}
+                title={
+                  layoutStructLocked
+                    ? layoutStructTitle
+                    : n.layout.itemReverseZIndex
+                      ? "First on top (earlier children overlap later ones)"
+                      : "Last on top (standard CSS/DOM order)"
+                }
+                disabled={layoutStructLocked}
+                onClick={() =>
+                  engine.dispatch({
+                    type: "autoLayout",
+                    id: n.id,
+                    layout: { ...n.layout!, itemReverseZIndex: !n.layout!.itemReverseZIndex },
+                  })
+                }
+              >
+                {n.layout.itemReverseZIndex ? "First on top" : "Last on top"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+      </Section>
+
+      {n.kind === "frame" && (
+        <>
+          <div className="hr" />
+          <Section
+            id="layoutGrid"
+            title="Layout grid"
+            actions={
+              <button
+                className="plus"
+                title="Add layout grid"
+                onClick={() => {
+                  const current = n.layoutGrids ?? [];
+                  const newGrid: LayoutGrid = {
+                    id: `grid-${Date.now()}`,
+                    pattern: "columns",
+                    count: 12,
+                    gutter: 20,
+                    margin: 20,
+                    alignment: "stretch",
+                    color: "rgba(255, 0, 0, 0.1)",
+                    visible: true,
+                  };
+                  engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { layoutGrids: [...current, newGrid] },
+                  });
+                }}
+              >
+                <Icon name="plus" size={14} />
+              </button>
+            }
+          >
+            {(n.layoutGrids ?? []).length > 0 && (
+              <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
+                {(n.layoutGrids ?? []).map((g, gi) => {
+                  const setGrid = (patch: Partial<LayoutGrid>) => {
+                    const next = [...n.layoutGrids!];
+                    next[gi] = { ...g, ...patch };
+                    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                  };
+                  // The swatch edits hue; grid paint keeps its own translucency.
+                  const alphaOf = (c: string | undefined) => {
+                    const m = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(c ?? "");
+                    return m ? parseFloat(m[1]) : 0.1;
+                  };
+                  const hexOf = (c: string | undefined) => {
+                    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
+                    if (!m) return "#ff0000";
+                    const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
+                    return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
+                  };
+                  return (
+                  <div
+                    key={g.id}
+                    style={{
+                      background: "var(--bg-subtle)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      padding: "6px 8px",
+                      display: "grid",
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <select
+                        style={{ fontSize: 11, fontWeight: 500 }}
+                        aria-label="Grid pattern"
+                        value={g.pattern}
+                        onChange={(e) => {
+                          const next = [...n.layoutGrids!];
+                          next[gi] = { ...g, pattern: e.target.value as GridPattern };
+                          engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                        }}
+                      >
+                        <option value="columns">Columns</option>
+                        <option value="rows">Rows</option>
+                        <option value="grid">Grid</option>
+                      </select>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <button
+                          className="icon-btn"
+                          title={g.visible !== false ? "Hide layout grid" : "Show layout grid"}
+                          onClick={() => {
+                            const next = [...n.layoutGrids!];
+                            next[gi] = { ...g, visible: g.visible === false ? true : false };
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        >
+                          <Icon name={g.visible !== false ? "eye" : "eye-off"} size={rowIconSize()} />
+                        </button>
+                        <button
+                          className="icon-btn"
+                          title="Delete layout grid"
+                          onClick={() => {
+                            const next = n.layoutGrids!.filter((_, j) => j !== gi);
+                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                          }}
+                        >
+                          <Icon name="minus" size={rowIconSize()} />
+                        </button>
+                      </div>
+                    </div>
+                    {g.pattern === "grid" ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Size</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={g.sectionSize ?? 10}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
+                              setGrid({ sectionSize: sz });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.offset ?? 0}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Color</span>
+                          <input
+                            type="color"
+                            aria-label="Grid color"
+                            value={hexOf(g.color)}
+                            style={{ width: "100%", height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
+                            onChange={(e) => {
+                              const r = parseInt(e.target.value.slice(1, 3), 16);
+                              const b = parseInt(e.target.value.slice(3, 5), 16);
+                              const bl = parseInt(e.target.value.slice(5, 7), 16);
+                              setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Count</span>
+                          <input
+                            type="number"
+                            min={1}
+                            value={g.count ?? (g.pattern === "columns" ? 12 : 8)}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const cnt = Math.max(1, parseInt(e.target.value, 10) || 1);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, count: cnt };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Gutter</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.gutter ?? 20}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const gut = Math.max(0, parseInt(e.target.value, 10) || 0);
+                              const next = [...n.layoutGrids!];
+                              next[gi] = { ...g, gutter: gut };
+                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Margin</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.margin ?? 20}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const mg = Math.max(0, parseInt(e.target.value, 10) || 0);
+                              setGrid({ margin: mg });
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Type</span>
+                          <select
+                            aria-label="Grid alignment"
+                            value={g.alignment ?? "stretch"}
+                            style={{ fontSize: 11, padding: "2px 4px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const a = e.target.value as GridAlignment;
+                              // Stretch fills the frame, so a fixed width no
+                              // longer applies; a fixed type without a width
+                              // falls back to stretch in paint.
+                              setGrid(a === "stretch"
+                                ? { alignment: a, cell: undefined }
+                                : { alignment: a });
+                            }}
+                          >
+                            <option value="stretch">Stretch</option>
+                            <option value="min">{g.pattern === "columns" ? "Left" : "Top"}</option>
+                            <option value="center">Center</option>
+                            <option value="max">{g.pattern === "columns" ? "Right" : "Bottom"}</option>
+                          </select>
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>{g.pattern === "columns" ? "Width" : "Height"}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            disabled={(g.alignment ?? "stretch") === "stretch"}
+                            placeholder="Auto"
+                            value={g.cell ?? ""}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10);
+                              const fixed = Number.isFinite(v) ? Math.max(1, v) : undefined;
+                              setGrid({ cell: fixed });
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "grid", gap: 2 }}>
+                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={g.offset ?? 0}
+                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                            onChange={(e) => {
+                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Color</span>
+                        <input
+                          type="color"
+                          aria-label="Grid color"
+                          value={hexOf(g.color)}
+                          style={{ width: 60, height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
+                          onChange={(e) => {
+                            const r = parseInt(e.target.value.slice(1, 3), 16);
+                            const b = parseInt(e.target.value.slice(3, 5), 16);
+                            const bl = parseInt(e.target.value.slice(5, 7), 16);
+                            setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
+                          }}
+                        />
+                      </div>
+                      </>
+                    )}
+                  </div>
+                  );
+                })}
+              </div>
+            )}
+          </Section>
+        </>
+      )}
+
+      <div className="hr" />
+      <Section id="appearance" title="Appearance">
+      <div className="insp-pad">
+        <div className="grid2">
+          <div className="field">
+            <select
+              aria-label="Blend mode"
+              value={mixedProp((m) => m.blendMode) ? "mixed" : n.blendMode}
+              onChange={(e) => {
+                if (e.target.value === "mixed") return;
+                if (multi) patchMany({ blendMode: e.target.value });
+                else engine.dispatch({ type: "patch", id: n.id, patch: { blendMode: e.target.value } });
+              }}
+            >
+              {mixedProp((m) => m.blendMode) && <option value="mixed">Mixed</option>}
+              {(n.kind === "frame" || n.kind === "group"
+                ? ["Pass through", ...BLENDS]
+                : BLENDS
+              ).map((m) => (
+                <option
+                  key={m}
+                  value={m === "Pass through" ? "pass-through" : m.toLowerCase().replace(/\s+/g, "-")}
+                >
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Field
+            label="%"
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="opacity" onOpenVariables={onOpenVariables} />}
+            value={Math.round(n.opacity * 100)}
+            disabled={boolChild}
+            onChange={(v) => num("opacity", v / 100)}
+            mixed={mixedProp((m) => m.opacity)}
+            values={multi ? manyVals((m) => Math.round(m.opacity * 100)) : undefined}
+            onChangeMany={multi ? (vs) => patchNumMany("opacity", vs.map((v) => v / 100)) : undefined}
+          />
+        </div>
+      </div>
+      <div className="insp-pad" style={{ marginTop: 4, display: "grid", gap: 4 }}>
+        {cornersOpen && inInstance && (
+          <span className="corner-lock">Individual corners are set on the component</span>
+        )}
+        {cornersOpen ? (
+          <div className="grid2">
+            {/* An instance cannot carry its own corner radii; they
+                come from the component. The fields say so instead of no-op'ing. */}
+            {(["TL", "TR", "BL", "BR"] as const).map((lab, i) => (
+              <Field
+                key={lab}
+                label={lab}
+                bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="cornerRadii" onOpenVariables={onOpenVariables} />}
+                disabled={inInstance}
+                value={n.cornerRadii[i]}
+                onChange={(v) => {
+                  const r = [...n.cornerRadii] as [number, number, number, number];
+                  r[i] = v;
+                  patch({ cornerRadii: r, cornerIndependent: true });
+                }}
+                mixed={mixedProp((m) => m.cornerRadii[i])}
+                values={multi ? manyVals((m) => m.cornerRadii[i]) : undefined}
+                onChangeMany={
+                  multi
+                    ? (vs) =>
+                        patchMany((m, j) => {
+                          const r = [...m.cornerRadii] as [number, number, number, number];
+                          const v = vs[j];
+                          if (v != null && Number.isFinite(v)) r[i] = v;
+                          return { cornerRadii: r, cornerIndependent: true };
+                        })
+                    : undefined
+                }
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="grid3">
+            <Field
+              icon="radius"
+              aria="Corner radius"
+              bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="cornerRadii" onOpenVariables={onOpenVariables} />}
+              value={n.cornerRadii[0]}
+              mixed={
+                (multi
+                  ? new Set(selNodes.flatMap((m) => m.cornerRadii)).size > 1
+                  : new Set(n.cornerRadii).size > 1)
+                  ? "Mixed"
+                  : undefined
+              }
+              onChange={(v) => patch({ cornerRadii: [v, v, v, v], cornerIndependent: false })}
+              values={multi ? manyVals((m) => m.cornerRadii[0]) : undefined}
+              onChangeMany={
+                multi
+                  ? (vs) =>
+                      patchMany((m, i) => {
+                        const v = vs[i] ?? m.cornerRadii[0];
+                        return {
+                          cornerRadii: [v, v, v, v] as [number, number, number, number],
+                          cornerIndependent: false,
+                        };
+                      })
+                  : undefined
+              }
+            />
+            <span />
+            <button
+              className={`icon-btn${cornersOpen ? " on" : ""}`}
+              disabled={inInstance}
+              title="Independent corners"
+              onClick={() => {
+                setCornersOpen(true);
+                if (multi) patchMany({ cornerIndependent: true });
+                else patch({ cornerIndependent: true });
+              }}
+            >
+              <Icon name="independent" size={14} />
+            </button>
+          </div>
+        )}
+        {cornersOpen && (
+          <button
+            className="icon-btn on"
+            title="Uniform corners"
+            onClick={() => {
+              setCornersOpen(false);
+              if (multi)
+                patchMany((m) => ({
+                  cornerIndependent: false,
+                  cornerRadii: [m.cornerRadii[0], m.cornerRadii[0], m.cornerRadii[0], m.cornerRadii[0]] as [
+                    number,
+                    number,
+                    number,
+                    number,
+                  ],
+                }));
+              else patch({ cornerIndependent: false, cornerRadii: [n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0], n.cornerRadii[0]] });
+            }}
+          >
+            <Icon name="independent" size={14} />
+          </button>
+        )}
+        {/* Corner smoothing in the corner details panel: one value for the
+            whole shape, a slider, and an iOS preset at 60%. */}
+        <div className="smooth-row">
+          <input
+            type="range"
+            className="smooth-slider"
+            aria-label="Corner smoothing"
+            min={0}
+            max={100}
+            step={1}
+            value={Math.round((n.cornerSmoothing ?? 0) * 100)}
+            onChange={(e) => patch({ cornerSmoothing: Number(e.target.value) / 100 })}
+          />
+          <Field
+            label="%"
+            aria="Corner smoothing percent"
+            value={Math.round((n.cornerSmoothing ?? 0) * 100)}
+            onChange={(v) => patch({ cornerSmoothing: Math.max(0, Math.min(100, v)) / 100 })}
+          />
+          <button
+            className="mini"
+            title="iOS corner smoothing (60%)"
+            onClick={() => patch({ cornerSmoothing: 0.6 })}
+          >
+            iOS
+          </button>
+        </div>
+      </div>
+      {n.kind === "frame" && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={n.showName !== false}
+            onChange={(e) => patch({ showName: e.target.checked })}
+          />
+          Show name
+        </label>
+      )}
+      {n.kind === "frame" && (
+        <div className="field" style={{ marginTop: 6 }}>
+          <label style={{ fontSize: 11, color: "var(--muted)" }}>Frame</label>
+          <select
+            aria-label="Frame preset"
+            title="Swap this frame to a preset size"
+            value={PRESET_GROUPS.flatMap((g) => g.items).find((p) => p.w === Math.round(n.w) && p.h === Math.round(n.h))?.name ?? ""}
+            onChange={(e) => {
+              const p = PRESET_GROUPS.flatMap((g) => g.items).find((q) => q.name === e.target.value);
+              if (p) patch({ w: p.w, h: p.h, name: p.name });
+            }}
+          >
+            <option value="">Custom size</option>
+            {PRESET_GROUPS.map((g) => (
+              <optgroup key={g.category} label={g.category}>
+                {g.items.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name} ({p.w} × {p.h})
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </div>
+      )}
+      </Section>
+
+      <div className="hr" />
+      <Section id="fill" title="Fill" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
+        <button
+          className="plus"
+          title="Add fill"
+          disabled={boolChild}
+          onClick={() => {
+            openSection("fill");
+            if (multi) {
+              patchMany((m) =>
+                isNone(m.fill) && !m.fillVisible
+                  ? { fill: "#d9d9d9", fillVisible: true, fillOpacity: m.fillOpacity ?? 1 }
+                  : {
+                      fills: [
+                        ...(m.fills ?? []),
+                        { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                      ],
+                    },
+              );
+              return;
+            }
+            // First press turns the base fill back on; after that each press
+            // stacks another fill on top, the way Fill "+" behaves.
+            if (isNone(n.fill) && !n.fillVisible) {
+              engine.dispatch({
+                type: "patch",
+                id: n.id,
+                patch: { fill: "#d9d9d9", fillVisible: true, fillOpacity: n.fillOpacity ?? 1 },
+              });
+              return;
+            }
+            engine.dispatch({
+              type: "patch",
+              id: n.id,
+              patch: {
+                fills: [
+                  ...(n.fills ?? []),
+                  { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                ],
+              },
+            });
+          }}
+        >
+          <Icon name="plus" size={14} />
+        </button>
+      }>
+      {/* Fill stack is listed top-most first, and the base fill is the
+          bottom of the stack, so it sits last in the list. */}
+      {(n.fills ?? [])
+        .map((p, i) => ({ p, i }))
+        .reverse()
+        .map(({ p, i }) => {
+        const setPaint = (patch: Partial<typeof p>) =>
+          engine.dispatch({
+            type: "patch",
+            id: n.id,
+            patch: { fills: (n.fills ?? []).map((q, j) => (j === i ? { ...q, ...patch } : q)) },
+          });
+        return (
+          <div
+            className={`insp-pad paint-row${fillDrag === i ? " dragging" : ""}${fillOver === i ? " drop" : ""}`}
+            key={i}
+            onDragOver={(e) => {
+              if (fillDrag === null) return;
+              e.preventDefault();
+              setFillOver(i);
+            }}
+            onDragLeave={() => setFillOver((v) => (v === i ? null : v))}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (fillDrag !== null) moveFill(fillDrag, i);
+              setFillDrag(null);
+              setFillOver(null);
+            }}
+          >
+            <div className="paint-tools">
+              <span
+                className="grip"
+                draggable
+                title="Drag to reorder this fill"
+                aria-label="Drag to reorder this fill"
+                onDragStart={(e) => {
+                  setFillDrag(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  setFillDrag(null);
+                  setFillOver(null);
+                }}
+              />
+              <button className="mini" title="Bring forward" aria-label="Bring forward" onClick={() => moveFill(i, i + 1)}>
+                <Icon name="chevron-up" size={caretSize()} />
+              </button>
+              <button className="mini" title="Send backward" aria-label="Send backward" onClick={() => moveFill(i, i - 1)}>
+                <Icon name="chevron-down" size={caretSize()} />
+              </button>
+            </div>
+            <ColorRow
+              value={p.color}
+              opacity={Math.round((p.opacity ?? 1) * 100)}
+              visible={p.visible}
+              exportVisible={p.exportVisible !== false}
+              type={p.type}
+              stops={p.stops}
+              gx={p.gx}
+              gy={p.gy}
+              hx={p.hx}
+              hy={p.hy}
+              blend={p.blend}
+              image={p.image}
+              imageFit={p.imageFit}
+              imageRot={p.imageRot}
+              imageExposure={p.imageExposure}
+              imageContrast={p.imageContrast}
+              imageSaturation={p.imageSaturation}
+              imageTemperature={p.imageTemperature}
+              imageTint={p.imageTint}
+              imageHighlights={p.imageHighlights}
+              imageShadows={p.imageShadows}
+              imageTile={p.imageTile}
+              pattern={p.pattern}
+              patternSources={patternSourcesFor(snap, n)}
+              recents={collectColors(snap.pages[snap.page].root)}
+              background={fillBackground(snap.pages[snap.page].root, n)}
+              largeText={isLargeText(n)}
+              onChange={(color) => setPaint({ color, visible: true })}
+              onOpacity={(v) => setPaint({ opacity: v / 100 })}
+              onVisible={(v) => setPaint({ visible: v })}
+              onExportVisible={(v) => setPaint({ exportVisible: v })}
+              onRemove={() =>
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { fills: (n.fills ?? []).filter((_, j) => j !== i) },
+                })
+              }
+              onMeta={(meta) =>
+                setPaint({
+                  gx: meta.fillGX,
+                  gy: meta.fillGY,
+                  hx: meta.fillHX,
+                  hy: meta.fillHY,
+                  blend: meta.fillBlend,
+                })
+              }
+              onValueChange={(v) => {
+                const patch = fillValuePatch(v);
+                setPaint({
+                  type: patch.fillType,
+                  color: patch.fill,
+                  stops: patch.gradientStops,
+                  blend: patch.fillBlend,
+                  gx: patch.fillGX,
+                  gy: patch.fillGY,
+                  hx: patch.fillHX,
+                  hy: patch.fillHY,
+                  image: patch.imageSrc,
+                  imageFit: patch.imageFit,
+                  imageRot: patch.imageRot,
+                  imageTile: patch.imageTile,
+                  imageExposure: patch.imageExposure,
+                  imageContrast: patch.imageContrast,
+                  imageSaturation: patch.imageSaturation,
+                  imageTemperature: patch.imageTemperature,
+                  imageTint: patch.imageTint,
+                  imageHighlights: patch.imageHighlights,
+                  imageShadows: patch.imageShadows,
+                  pattern: patch.pattern,
+                });
+              }}
+            />
+          </div>
+        );
+      })}
+      {(!isNone(n.fill) || n.fillVisible) && (
+        <div className="insp-pad">
+          <ColorRow
+            value={rangeStyle?.fill ?? n.fill}
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="fill" onOpenVariables={onOpenVariables} />}
+            mixed={!!mixedProp((m) => `${m.fillType}:${m.fill}`)}
+            opacity={Math.round((n.fillOpacity ?? 1) * 100)}
+            visible={n.fillVisible}
+            exportVisible={n.fillExportVisible !== false}
+            type={n.fillType}
+            second={n.fillB}
+            blend={n.fillBlend}
+            image={n.imageSrc || undefined}
+            imageFit={n.imageFit}
+            imageRot={n.imageRot}
+            imageExposure={n.imageExposure}
+            imageContrast={n.imageContrast}
+            imageSaturation={n.imageSaturation}
+            imageTemperature={n.imageTemperature}
+            imageTint={n.imageTint}
+            imageHighlights={n.imageHighlights}
+            imageShadows={n.imageShadows}
+            imageTile={n.imageTile}
+            pattern={n.pattern}
+            patternSources={patternSourcesFor(snap, n)}
+            onCrop={() => window.dispatchEvent(new CustomEvent("x-native-crop-image", { detail: { id: n.id } }))}
+            gx={n.fillGX}
+            gy={n.fillGY}
+            hx={n.fillHX}
+            hy={n.fillHY}
+            stops={n.gradientStops}
+            recents={collectColors(snap.pages[snap.page].root)}
+            background={fillBackground(snap.pages[snap.page].root, n)}
+            largeText={isLargeText(n)}
+            onEyedropBinding={(source) => applySampledEyedropBinding(source, "fill")}
+            onCreateEyedrop={(hex) => createSampledEyedropToken(hex, "fill")}
+            onChange={(fill) =>
+              multi
+                ? patchMany({ fill, fillVisible: true })
+                : !patchSelectedSpan({ fill }) && engine.dispatch({ type: "patch", id: n.id, patch: { fill, fillVisible: true } })
+            }
+            onOpacity={(v) =>
+              multi
+                ? patchMany({ fillOpacity: v / 100 })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillOpacity: v / 100 } })
+            }
+            onVisible={(v) =>
+              multi
+                ? patchMany({ fillVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillVisible: v } })
+            }
+            onExportVisible={(v) =>
+              multi
+                ? patchMany({ fillExportVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { fillExportVisible: v } })
+            }
+            onRemove={() => {
+              // Minus removes the base fill outright (same none+hidden pair
+              // the stroke row uses), leaving the section empty; Fill "+"
+              // then re-adds the default fill instead of stacking over a
+              // hidden one.
+              if (multi) patchMany({ fill: "#00000000", fillVisible: false });
+              else
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { fill: "#00000000", fillVisible: false },
+                });
+            }}
+            onMeta={(p) =>
+              multi
+                ? patchMany(p)
+                : engine.dispatch({ type: "patch", id: n.id, patch: p })
+            }
+            onValueChange={(v) =>
+              multi
+                ? patchMany(fillValuePatch(v))
+                : engine.dispatch({ type: "patch", id: n.id, patch: fillValuePatch(v) })
+            }
+          />
+        </div>
+      )}
+      </Section>
+
+      <Section id="stroke" title="Stroke" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
+        <button
+          className="plus"
+          title="Add stroke"
+          disabled={boolChild}
+          onClick={() => addStroke()}
+        >
+          <Icon name="plus" size={14} />
+        </button>
+      }>
+      {!(n.strokeWidth > 0) && (
+        <div className="insp-pad">
+          <div className="empty-add">
+            <span className="muted">No stroke</span>
+            <button className="empty-add-btn" onClick={addStroke}>
+              <Icon name="plus" size={12} /> Add stroke
+            </button>
+          </div>
+        </div>
+      )}
+      {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
+        <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+          <ColorRow
+            title="Stroke"
+            stroke
+            type={n.strokeType ?? "solid"}
+            pattern={n.strokePattern}
+            patternSources={patternSourcesFor(snap, n)}
+            value={n.strokePaint}
+            bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="strokePaint" onOpenVariables={onOpenVariables} />}
+            mixed={!!mixedProp((m) => m.strokePaint)}
+            opacity={Math.round((n.strokeOpacity ?? 1) * 100)}
+            visible={n.strokeVisible}
+            recents={collectColors(snap.pages[snap.page].root)}
+            background={fillBackground(snap.pages[snap.page].root, n)}
+            largeText={isLargeText(n)}
+            onEyedropBinding={(source) => applySampledEyedropBinding(source, "strokePaint")}
+            onCreateEyedrop={(hex) => createSampledEyedropToken(hex, "strokePaint")}
+            onChange={(strokePaint) =>
+              multi
+                ? patchMany({ strokePaint, strokeType: "solid", strokeVisible: true })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokePaint, strokeType: "solid", strokeVisible: true } })
+            }
+            onValueChange={(v) => {
+              const type =
+                v.type === "pattern" || v.type === "brush" || v.type === "dynamic" ? v.type : ("solid" as const);
+              const switching = type !== (n.strokeType ?? "solid");
+              const centreOnly = switching && (type === "brush" || type === "dynamic");
+              const stroke = {
+                strokePaint: v.color,
+                strokeType: type,
+                strokePattern: type === "pattern" ? v.pattern : undefined,
+                strokeOpacity: v.opacity / 100,
+                strokeVisible: true,
+                // Run 24 — becoming brush/dynamic lands centre-aligned and
+                // undashed in the SAME patch, so one undo leaves the old style.
+                ...(centreOnly
+                  ? { strokeAlign: "center" as const, strokeDash: 0, strokeGap: 0, strokeDashPattern: [] as number[] }
+                  : {}),
+                ...(switching && type === "dynamic"
+                  ? { strokeDynFreq: n.strokeDynFreq ?? 4, strokeDynWiggle: n.strokeDynWiggle ?? 6, strokeDynSmooth: n.strokeDynSmooth ?? 50 }
+                  : {}),
+              };
+              if (multi) patchMany(stroke);
+              else engine.dispatch({ type: "patch", id: n.id, patch: stroke });
+            }}
+            onOpacity={(v) =>
+              multi
+                ? patchMany({ strokeOpacity: v / 100 })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokeOpacity: v / 100 } })
+            }
+            onVisible={(v) =>
+              multi
+                ? patchMany({ strokeVisible: v })
+                : engine.dispatch({ type: "patch", id: n.id, patch: { strokeVisible: v } })
+            }
+            onRemove={() =>
+              multi
+                ? patchMany({ strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 })
+                : engine.dispatch({
+                    type: "patch",
+                    id: n.id,
+                    patch: { strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 },
+                  })
+            }
+          />
+          <div className="stroke-width">
+            <Field
+              label="W"
+              aria="Stroke weight"
+              bind={<BindControl engine={engine} snap={snap} targets={selNodes} prop="strokeWidth" onOpenVariables={onOpenVariables} />}
+              value={n.strokeWidth}
+              onChange={(strokeWidth) => {
+                // In Custom mode the four fields carry the weight, so typing a
+                // new one sets all four.
+                if ((n.strokeSides ?? "all") === "custom") patch({ strokeWidth, strokeSideW: [strokeWidth, strokeWidth, strokeWidth, strokeWidth] });
+                else patch({ strokeWidth });
+              }}
+              mixed={mixedProp((m) => m.strokeWidth)}
+              values={multi ? manyVals((m) => m.strokeWidth) : undefined}
+              onChangeMany={
+                multi
+                  ? (vs) =>
+                      patchNumMany("strokeWidth", vs, selNodes, (m, v) =>
+                        (m.strokeSides ?? "all") === "custom" ? { strokeSideW: [v, v, v, v] } : {},
+                      )
+                  : undefined
+              }
+            />
+            {(n.kind !== "line" && n.kind !== "arrow") && (
+            <XSelect
+              ariaLabel="Stroke alignment"
+              value={mixedProp((m) => m.strokeAlign) ? "mixed" : n.strokeAlign}
+              options={[
+                ...(mixedProp((m) => m.strokeAlign) ? [{ value: "mixed", label: "Mixed" }] : []),
+                { value: "inside", label: "Inside" },
+                { value: "center", label: "Center" },
+                { value: "outside", label: "Outside" },
+              ]}
+              disabled={brushish}
+              title={brushish ? "Brush and dynamic strokes are centre-only" : undefined}
+              onFocus={() => pvStroke({ align: n.strokeAlign })}
+              onBlur={pvStrokeClear}
+              onOptionPreview={(v) => {
+                if (!v) pvStrokeClear();
+                else if (v === "inside" || v === "center" || v === "outside") pvStroke({ align: v });
+              }}
+              onChange={(value) => {
+                if (value !== "inside" && value !== "center" && value !== "outside") return;
+                if (multi) patchMany((m) => m.kind === "line" || m.kind === "arrow" ? {} : { strokeAlign: value });
+                else patch({ strokeAlign: value });
+              }}
+            />
+            )}
+          </div>
+          {sidesSupported(n.kind) && (
+            <div className="stroke-sides">
+              <div className="seg sides">
+                {SIDES.map((side) => (
+                  <button
+                    key={side.id}
+                    className={(n.strokeSides ?? "all") === side.id ? "on" : ""}
+                    title={side.label}
+                    aria-label={side.label}
+                    aria-pressed={(n.strokeSides ?? "all") === side.id}
+                    onClick={() => {
+                      if (side.id === "custom") {
+                        // Seeds the four fields with the current weight.
+                        const w = n.strokeWidth;
+                        patch({ strokeSides: "custom", strokeSideW: [w, w, w, w] });
+                      } else {
+                        patch({ strokeSides: side.id });
+                      }
+                    }}
+                  >
+                    {side.id === "all" ? "All" : side.id === "custom" ? "Custom" : side.id[0].toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {(n.strokeSides ?? "all") === "custom" && (
+            <div className="grid4">
+              {(["T", "R", "B", "L"] as const).map((lab, i) => (
+                <Field
+                  key={lab}
+                  label={lab}
+                  value={sideWidths("custom", n.strokeSideW, n.strokeWidth)[i]}
+                  onChange={(v) => {
+                    const w = [...(n.strokeSideW ?? [n.strokeWidth, n.strokeWidth, n.strokeWidth, n.strokeWidth])] as [
+                      number,
+                      number,
+                      number,
+                      number,
+                    ];
+                    w[i] = v;
+                    patch({ strokeSideW: w });
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          <div className="stroke-ends">
+          <div className="seg icons caps">
+            {(["none", "round", "square", "arrow", "circle", "triangle", "reverse-triangle", "diamond"] as StrokeCap[]).map((c) => (
+              <button
+                key={c}
+                className={n.strokeCap === c ? "on" : ""}
+                title={
+                  c === "none"
+                    ? "Cap butt"
+                    : c === "arrow"
+                      ? "Line arrow"
+                      : c === "triangle"
+                        ? "Triangle arrow"
+                        : c === "reverse-triangle"
+                          ? "Reverse triangle"
+                          : c === "diamond"
+                            ? "Diamond tip"
+                            : `Cap ${c}`
+                }
+                onMouseEnter={() => pvStroke({ cap: c })}
+                onMouseLeave={pvStrokeClear}
+                onFocus={() => pvStroke({ cap: c })}
+                onBlur={pvStrokeClear}
+                onClick={() => {
+                  pvStrokeClear();
+                  patch({ strokeCap: c, strokeCapEnd: c });
+                }}
+              >
+                <Icon name={c === "arrow" ? "arrow" : c === "triangle" ? "poly" : `cap-${c}`} size={14} />
+              </button>
+            ))}
+          </div>
+          <div
+            className="seg icons"
+            title={
+              n.kind === "line"
+                ? "Lines have no joins"
+                : n.kind === "ellipse" && !ellipseArced(n)
+                  ? "Ellipses have joins only once arced"
+                  : "Join"
+            }
+          >
+            {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
+              <button
+                key={j}
+                className={n.strokeJoin === j ? "on" : ""}
+                title={`Join ${j}`}
+                disabled={n.kind === "line" || (n.kind === "ellipse" && !ellipseArced(n))}
+                onMouseEnter={() => pvStroke({ join: j })}
+                onMouseLeave={pvStrokeClear}
+                onFocus={() => pvStroke({ join: j })}
+                onBlur={pvStrokeClear}
+                onClick={() => {
+                  pvStrokeClear();
+                  patch({ strokeJoin: j });
+                }}
+              >
+                <Icon name={`join-${j}`} size={14} />
+              </button>
+            ))}
+          </div>
+          <button
+            className={`icon-btn${strokeMore ? " on" : ""}`}
+            title="Advanced stroke settings"
+            aria-label="Advanced stroke settings"
+            aria-expanded={strokeMore}
+            onClick={() => setStrokeMore((v) => !v)}
+          >
+            <Icon name="dash" size={14} />
+          </button>
+          </div>
+          <div className="seg stroke-style" role="group" aria-label="Stroke style">
+            {STROKE_STYLES.map((st) => (
+              <button
+                key={st.id}
+                className={strokeStyleOf(n) === st.id ? "on" : ""}
+                disabled={brushish}
+                title={brushish ? "Brush and dynamic strokes cannot be dashed" : st.label}
+                onMouseEnter={() =>
+                  pvStroke({
+                    dash: {
+                      strokeDash: st.patch.strokeDash,
+                      strokeGap: st.patch.strokeGap,
+                      strokeDashPattern: st.patch.strokeDashPattern,
+                      strokeDashCap: st.patch.strokeDashCap,
+                    },
+                  })
+                }
+                onMouseLeave={pvStrokeClear}
+                onFocus={() =>
+                  pvStroke({
+                    dash: {
+                      strokeDash: st.patch.strokeDash,
+                      strokeGap: st.patch.strokeGap,
+                      strokeDashPattern: st.patch.strokeDashPattern,
+                      strokeDashCap: st.patch.strokeDashCap,
+                    },
+                  })
+                }
+                onBlur={pvStrokeClear}
+                onClick={() => {
+                  pvStrokeClear();
+                  patch({
+                    strokeDash: st.patch.strokeDash,
+                    strokeGap: st.patch.strokeGap,
+                    strokeDashPattern: st.patch.strokeDashPattern,
+                    ...(st.patch.strokeDashCap ? { strokeDashCap: st.patch.strokeDashCap } : {}),
+                  });
+                }}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
+          {n.strokeType === "brush" && (
+            <Field
+              label="dir"
+              aria="Brush direction"
+              hint="Bristle direction, degrees"
+              value={n.strokeBrushAngle ?? 0}
+              onChange={(v) => patch({ strokeBrushAngle: ((Math.round(v) % 360) + 360) % 360 })}
+            />
+          )}
+          {n.strokeType === "dynamic" && (
+            <>
+              <Field
+                label="freq"
+                aria="Dynamic frequency"
+                hint="Waves per 100px"
+                value={n.strokeDynFreq ?? 4}
+                onChange={(v) => patch({ strokeDynFreq: Math.max(0, Math.min(50, v)) })}
+              />
+              <Field
+                label="wiggle"
+                aria="Dynamic wiggle"
+                hint="Amplitude in px"
+                value={n.strokeDynWiggle ?? 6}
+                onChange={(v) => patch({ strokeDynWiggle: Math.max(0, Math.min(100, v)) })}
+              />
+              <Field
+                label="smooth"
+                aria="Dynamic smooth"
+                hint="0 = triangle wave, 100 = sine"
+                value={n.strokeDynSmooth ?? 50}
+                onChange={(v) => patch({ strokeDynSmooth: Math.max(0, Math.min(100, Math.round(v))) })}
+              />
+            </>
+          )}
+          {((n.kind === "line" || n.kind === "arrow" || n.kind === "vector") && !n.closed) && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 6, marginTop: 4, alignItems: "end" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <span style={{ fontSize: 9, color: "var(--dim)" }}>Start point</span>
+                <select
+                  aria-label="Start cap"
+                  value={n.strokeCapStart ?? "none"}
+                  style={{
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    color: "inherit",
+                    fontSize: 11,
+                    padding: "2px 4px",
+                    height: 24,
+                  }}
+                  onChange={(e) => patch({ strokeCapStart: e.target.value as StrokeCap })}
+                >
+                  <option value="none">None</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                  <option value="arrow">Line arrow</option>
+                  <option value="triangle">Triangle arrow</option>
+                  <option value="reverse-triangle">Reverse triangle</option>
+                  <option value="diamond">Diamond arrow</option>
+                  <option value="circle">Circle tip</option>
+                </select>
+              </div>
+              <button
+                className="icon-btn"
+                title="Swap start and end points"
+                aria-label="Swap start and end points"
+                style={{ marginBottom: 1 }}
+                onClick={() =>
+                  patch({ strokeCapStart: n.strokeCapEnd ?? "none", strokeCapEnd: n.strokeCapStart ?? "none" })
+                }
+              >
+                <Icon name="flip-h" size={14} />
+              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <span style={{ fontSize: 9, color: "var(--dim)" }}>End point</span>
+                <select
+                  aria-label="End cap"
+                  value={n.strokeCapEnd ?? n.strokeCap}
+                  style={{
+                    background: "var(--bg)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 4,
+                    color: "inherit",
+                    fontSize: 11,
+                    padding: "2px 4px",
+                    height: 24,
+                  }}
+                  onChange={(e) => {
+                    const cap = e.target.value as StrokeCap;
+                    patch({ strokeCapEnd: cap, strokeCap: cap });
+                  }}
+                >
+                  <option value="none">None</option>
+                  <option value="round">Round</option>
+                  <option value="square">Square</option>
+                  <option value="arrow">Line arrow</option>
+                  <option value="triangle">Triangle arrow</option>
+                  <option value="reverse-triangle">Reverse triangle</option>
+                  <option value="diamond">Diamond arrow</option>
+                  <option value="circle">Circle tip</option>
+                </select>
+              </div>
+            </div>
+          )}
+          {(n.kind === "vector" || n.kind === "line" || n.kind === "arrow") &&
+            n.strokeWidth > 0 && <WidthProfileEditor node={n} patch={patch} />}
+          {strokeMore && (
+            <div className="adv-stroke" title={brushish ? "Brush and dynamic strokes cannot be dashed" : undefined}>
+              <div className="grid2">
+                <Field
+                  label="–"
+                  value={n.strokeDash}
+                  disabled={brushish}
+                  disabledTitle="Brush and dynamic strokes cannot be dashed"
+                  onChange={(strokeDash) => patch({ strokeDash })}
+                />
+                <Field
+                  label="gap"
+                  value={n.strokeGap || n.strokeDash}
+                  disabled={brushish}
+                  disabledTitle="Brush and dynamic strokes cannot be dashed"
+                  onChange={(strokeGap) => patch({ strokeGap })}
+                />
+              </div>
+              <DashPatternField
+                value={n.strokeDashPattern ?? []}
+                disabled={brushish}
+                disabledTitle="Brush and dynamic strokes cannot be dashed"
+                onCommit={(pattern) => patch({ strokeDashPattern: pattern })}
+              />
+              <div className="seg caps small">
+                {(["butt", "round", "square"] as const).map((c) => (
+                  <button
+                    key={c}
+                    className={(n.strokeDashCap ?? "butt") === c ? "on" : ""}
+                    title={`Dash cap ${c}`}
+                    aria-label={`Dash cap ${c}`}
+                    disabled={brushish}
+                    onClick={() => patch({ strokeDashCap: c })}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+              <Field
+                label="miter"
+                hint="Miter angle: joins sharper than this angle will bevel"
+                value={n.strokeMiterAngle ?? 0}
+                onChange={(v) => patch({ strokeMiterAngle: Math.max(0, Math.min(180, v)) })}
+              />
+            </div>
+          )}
+        </div>
+      )}
+      {(n.strokes ?? []).map((sk, i) => {
+        const setStroke = (p: Partial<typeof sk>) =>
+          engine.dispatch({
+            type: "patch",
+            id: n.id,
+            patch: { strokes: (n.strokes ?? []).map((q, j) => (j === i ? { ...q, ...p } : q)) },
+          });
+        return (
+          <div
+            className={`insp-pad paint-row stroke-paint-row${strokeDrag === i ? " dragging" : ""}${strokeOver === i ? " drop" : ""}`}
+            key={i}
+            style={{ display: "grid", gap: 4 }}
+            onDragOver={(e) => {
+              if (strokeDrag === null) return;
+              e.preventDefault();
+              setStrokeOver(i);
+            }}
+            onDragLeave={() => setStrokeOver((v) => (v === i ? null : v))}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (strokeDrag !== null) moveStroke(strokeDrag, i);
+              setStrokeDrag(null);
+              setStrokeOver(null);
+            }}
+          >
+            <div className="paint-tools">
+              <span
+                className="grip"
+                draggable
+                title={`Drag to reorder stroke ${i + 2}`}
+                aria-label={`Drag to reorder stroke ${i + 2}`}
+                onDragStart={(e) => {
+                  setStrokeDrag(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  setStrokeDrag(null);
+                  setStrokeOver(null);
+                }}
+              />
+              <button
+                className="mini"
+                title={`Bring stroke ${i + 2} forward`}
+                aria-label={`Bring stroke ${i + 2} forward`}
+                disabled={i === (n.strokes?.length ?? 0) - 1}
+                onClick={() => moveStroke(i, i + 1)}
+              >
+                <Icon name="chevron-up" size={caretSize()} />
+              </button>
+              <button
+                className="mini"
+                title={`Send stroke ${i + 2} backward`}
+                aria-label={`Send stroke ${i + 2} backward`}
+                disabled={i === 0}
+                onClick={() => moveStroke(i, i - 1)}
+              >
+                <Icon name="chevron-down" size={caretSize()} />
+              </button>
+            </div>
+            <ColorRow
+              title="Stroke"
+              stroke
+              value={sk.color}
+              opacity={Math.round((sk.opacity ?? 1) * 100)}
+              visible={sk.visible}
+              recents={collectColors(snap.pages[snap.page].root)}
+              onChange={(color) => setStroke({ color, visible: true })}
+              onOpacity={(v) => setStroke({ opacity: v / 100 })}
+              onVisible={(v) => setStroke({ visible: v })}
+              onRemove={() =>
+                engine.dispatch({
+                  type: "patch",
+                  id: n.id,
+                  patch: { strokes: (n.strokes ?? []).filter((_, j) => j !== i) },
+                })
+              }
+            />
+            <div className="grid2">
+              <Field
+                label="W"
+                aria={`Stroke ${i + 2} width`}
+                value={sk.width}
+                onChange={(width) => setStroke({ width: Math.max(0, width) })}
+              />
+              {(n.kind !== "line" && n.kind !== "arrow") && (
+              <div className="seg icons" title="Stroke position">
+                {(["inside", "center", "outside"] as StrokeAlign[]).map((a) => (
+                  <button
+                    key={a}
+                    className={sk.align === a ? "on" : ""}
+                    title={a}
+                    onClick={() => setStroke({ align: a })}
+                  >
+                    <Icon name={`stroke-${a}`} size={14} />
+                  </button>
+                ))}
+              </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      </Section>
+
+      {(n.kind === "star" || n.kind === "poly") && (
+        <>
+          <div className="hr" />
+          <Section id="polygon" title={n.kind === "star" ? "Star" : "Polygon"}>
+          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+            <Field
+              label="#"
+              value={n.count || (n.kind === "star" ? 5 : 3)}
+              onChange={(count) => patch({ count: Math.max(3, Math.min(60, Math.round(count))) })}
+            />
+            {n.kind === "star" && (
+              <Field
+                label="%"
+                value={Math.round((n.starRatio || 0.4) * 100)}
+                onChange={(v) => patch({ starRatio: Math.max(0.05, Math.min(0.95, v / 100)) })}
+              />
+            )}
+            <Field
+              label="r"
+              value={n.cornerRadii[0] || 0}
+              onChange={(r) => patch({ cornerRadii: [Math.max(0, r), Math.max(0, r), Math.max(0, r), Math.max(0, r)] })}
+            />
+          </div>
+          </Section>
+        </>
+      )}
+
+      {n.kind === "ellipse" && (
+        <>
+          <div className="hr" />
+          <div className="insp-pad" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+            <Field
+              label="Sweep"
+              hint="°"
+              value={Math.round(((n.arcData?.endingAngle ?? Math.PI * 2) * 180) / Math.PI)}
+              onChange={(deg) => {
+                const rad = Math.max(0, Math.min(360, deg)) * (Math.PI / 180);
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, endingAngle: rad } });
+              }}
+            />
+            <Field
+              label="Start"
+              hint="°"
+              value={Math.round(((n.arcData?.startingAngle ?? 0) * 180) / Math.PI)}
+              onChange={(deg) => {
+                const rad = Math.max(0, Math.min(360, deg)) * (Math.PI / 180);
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, startingAngle: rad } });
+              }}
+            />
+            <Field
+              label="Ratio"
+              hint="%"
+              value={Math.round((n.arcData?.innerRadius ?? 0) * 100)}
+              onChange={(pct) => {
+                const ratio = Math.max(0, Math.min(99, pct)) / 100;
+                const cur = n.arcData ?? { startingAngle: 0, endingAngle: Math.PI * 2, innerRadius: 0 };
+                patch({ arcData: { ...cur, innerRadius: ratio } });
+              }}
+            />
+          </div>
+        </>
+      )}
+
+      <div className="hr" />
+      <Effects n={n} engine={engine} locked={boolChild} root={dRoot} ids={snap.selection} />
+      <ModifiersSection n={n} engine={engine} />
+      <ExpressionsSection n={n} engine={engine} />
+      <SelectionColors
+        n={n}
+        nodes={snap.selection
+          .map((id) => find(snap.pages[snap.page].root, id))
+          .filter((m): m is XNode => !!m)}
+        engine={engine}
+        snap={snap}
+      />
+      <ExportBlock
+        n={n}
+        engine={engine}
+        root={snap.pages[snap.page].root}
+        ids={snap.selection}
+      />
+    </>
+  );
+}
+
+/**
+ * "Selection colors", widened to every selection instead of only
+ * multi-select, and walking the whole subtree so a frame reports the colours
+ * inside it. Two click targets per row, one per app: the swatch opens the
+ * picker and recolors every layer sharing that colour (
+ * click-to-update-all, one undo step), the hex selects them ("Select
+ * all with same fill").
+ */
+function SelectionColors({
+  n,
+  nodes,
+  engine,
+  snap,
+}: {
+  n: XNode;
+  nodes: XNode[];
+  engine: Engine;
+  snap: Snapshot;
+}) {
+  // The selected layers, not the page: a row is a claim about the selection.
+  const usage = colorUsageAll(nodes.length ? nodes : [n]);
+  const [picking, setPicking] = useState<{ key: string; rect: DOMRect } | null>(null);
+  // Show the section for any selection, single colour included — the
+  // count and the select-all affordance are the point, not the list length.
+  if (!usage.length) return null;
+  const root = snap.pages[snap.page].root;
+  return (
+    <>
+      <Section id="scolors" title={`Selection colors · ${usage.length}`} defaultOpen={false}>
+        <div className="insp-pad scolors">
+          {usage.map((u) => {
+            const key = `${u.bucket}:${u.hex}`;
+            return (
+              <div className="scolor-row" key={key}>
+                <button
+                  className="scolor-sw"
+                  style={{ background: u.hex }}
+                  title={`Change every ${u.bucket.toLowerCase()} ${u.hex.toUpperCase()} on this page`}
+                  aria-label={`Change ${u.hex}`}
+                  onClick={(e) =>
+                    setPicking({ key, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() })
+                  }
+                />
+                <button
+                  className="scolor-hex"
+                  onClick={(e) => selectByColor(engine, snap, u, e.shiftKey || e.altKey)}
+                  title="Select all layers with this colour · ⇧ adds to the selection"
+                >
+                  {u.hex.replace("#", "").toUpperCase()}
+                  <span className="scolor-kind">{u.bucket}</span>
+                </button>
+                <input
+                  className="scolor-op"
+                  aria-label={`Opacity of all ${u.hex.toUpperCase()} ${u.bucket.toLowerCase()}`}
+                  title={`Opacity of the selected layers using ${u.hex.toUpperCase()} · 0-100`}
+                  defaultValue={u.opacity == null ? "" : String(Math.round(u.opacity * 100))}
+                  placeholder="Mixed"
+                  onFocus={(e) => e.target.select()}
+                  // An uncontrolled field only knows what you typed, not what
+                  // landed, so mark the edit and let Escape drop it untouched -
+                  // blurring a field you never changed must not cost an undo step.
+                  onInput={(e) => e.currentTarget.dataset.edited = "1"}
+                  onBlur={(e) => {
+                    const el = e.currentTarget;
+                    if (el.dataset.edited !== "1") return;
+                    delete el.dataset.edited;
+                    const raw = parseFloat(el.value);
+                    if (Number.isNaN(raw)) {
+                      el.value = u.opacity == null ? "" : String(Math.round(u.opacity * 100));
+                      return;
+                    }
+                    const v = Math.max(0, Math.min(100, raw));
+                    // Snap the field back to what was applied, so a typo never
+                    // leaves the row reading a value the document does not have.
+                    if (String(v) !== el.value) el.value = String(v);
+                    setOpacityMatches(engine, root, u, v);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const el = e.target as HTMLInputElement;
+                      delete el.dataset.edited;
+                      el.value = u.opacity == null ? "" : String(Math.round(u.opacity * 100));
+                      el.blur();
+                    }
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                />
+                <span className="scolor-pct">%</span>
+                <span className="scolor-count" title={`${u.count} layers`}>
+                  {u.count}
+                </span>
+                <button
+                  className="mini"
+                  title="Copy hex"
+                  onClick={() => {
+                    copyText(u.hex.toUpperCase());
+                    toast(`Copied ${u.hex.toUpperCase()}`);
+                  }}
+                >
+                  <Icon name="copy" size={12} />
+                </button>
+                {picking?.key === key && (
+                  <FillPicker
+                    title={`${u.bucket} colours`}
+                    anchor={picking.rect}
+                    recents={collectColors(root)}
+                    value={{ color: u.hex, opacity: 100, type: "solid", second: "#ffffff", blend: "normal" }}
+                    onChange={(v) => {
+                      recolorMatches(engine, root, u, v.color);
+                      setPicking(null);
+                    }}
+                    onClose={() => setPicking(null)}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Section>
+      <div className="hr" />
+    </>
+  );
+}
+
+/**
+ * One effect's controls, shown in a popover anchored to its row.
+ *
+ * Inline these cost ~148px each — three shadows pushed the inspector 314px past
+ * its viewport (measured). Keeps the list scannable and puts the detail
+ * behind a click, which is what this does: the row stays one line, the editing
+ * surface opens next to it.
+ */
+function EffectPopover({
+  fx,
+  anchor,
+  layer,
+  onChange,
+  onDuplicate,
+  onClose,
+}: {
+  fx: Effect;
+  anchor: DOMRect;
+  /** The layer the effect sits on: whether it can show a shadow through itself
+   *  depends on the layer's own fills and strokes. */
+  layer: XNode;
+  onChange: (p: Partial<Effect>) => void;
+  onDuplicate: () => void;
+  onClose: () => void;
+}) {
+  const [blendOpen, setBlendOpen] = useState(false);
+  useEffect(() => {
+    // Dismissal (outside click, Escape) belongs to XPopover, which knows its own
+    // element. This used to run its own guard against a `.fx-pop` class that the
+    // shared popover replaced, so the guard matched nothing and every click
+    // *inside* the popover closed it — the shadow fields could be opened, but
+    // not used. What is left here is the one binding XPopover must not own:
+    // ⌘D with an effect open duplicates the effect, not the layer (capture
+    // phase, or the app's own ⌘D clones the layer underneath).
+    const key = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        e.stopPropagation();
+        onDuplicate();
+      }
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, [onDuplicate]);
+
+  const shadow = fx.kind === "drop-shadow" || fx.kind === "inner-shadow";
+  const blur = fx.kind === "layer-blur" || fx.kind === "background-blur";
+  return (
+    <XPopover anchor={anchor} title={`${EFFECT_LABEL[fx.kind]} settings`} onClose={onClose} ariaLabel={`${EFFECT_LABEL[fx.kind]} settings`}>
+      {shadow && (
+        <ColorRow
+          title="Shadow"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#000000", "#00000040", "#ffffff"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
+      {shadow && (
+        <div className="grid2">
+          <Field label="X" aria="Shadow X" value={fx.x} onChange={(x) => onChange({ x })} />
+          <Field label="Y" aria="Shadow Y" value={fx.y} onChange={(y) => onChange({ y })} />
+        </div>
+      )}
+      {fx.kind === "noise" && (
+        <ColorRow
+          title="Noise"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#ffffff", "#000000", "#00000040"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
+      <div className="grid2">
+        {(shadow || blur) && (
+          <Field label="Blur" aria="Blur" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+        )}
+        {shadow && (
+          <Field
+            label="Spread"
+            aria="Spread"
+            value={fx.spread}
+            onChange={(v) => onChange({ spread: v })}
+            hint={spreadApplies(layer) ? undefined : "Renders on rectangles, ellipses, frames and components"}
+          />
+        )}
+        {fx.kind === "noise" && (
+          <>
+            <Field label="Density" aria="Noise density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+            <Field label="Size" aria="Noise size" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+          </>
+        )}
+      </div>
+      {fx.kind === "glass" && (
+        <ColorRow
+          title="Tint"
+          value={fx.color}
+          opacity={Math.round(parseHex(fx.color).a * 100)}
+          visible
+          recents={["#ffffff", "#000000"]}
+          onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+          onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+        />
+      )}
+      {fx.kind === "texture" && (
+        <div className="grid2">
+          <Field label="Density" aria="Texture density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+          <Field label="Scale" aria="Texture scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+        </div>
+      )}
+      {effectCanBlend(fx.kind) && (
+        <>
+          <button className="blend-row" onClick={() => setBlendOpen((v) => !v)}>
+            Apply blend mode
+            <span>
+              {fx.blend ?? "Normal"}
+              <Icon name="chevron" size={caretSize()} />
+            </span>
+          </button>
+          {blendOpen && (
+            <div className="type-menu blend-menu">
+              {BLENDS.map((b) => (
+                <button
+                  key={b}
+                  className={(fx.blend ?? "Normal") === b ? "on" : ""}
+                  onClick={() => {
+                    onChange({ blend: b });
+                    setBlendOpen(false);
+                  }}
+                >
+                  {b}
+                  {(fx.blend ?? "Normal") === b && <span className="sc">✓</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      {effectCanShowBehind(fx.kind) && (
+        <label
+          className={`fx-check${canShowBehindTransparent(layer) ? "" : " off"}`}
+          title={
+            canShowBehindTransparent(layer)
+              ? "Show this shadow through the layer's transparent areas"
+              : "Needs a translucent fill, a stroke with no fill, a blended fill or stroke, or a centre or outside stroke under 100% opacity"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={!!fx.showBehind}
+            disabled={!canShowBehindTransparent(layer)}
+            onChange={(e) => onChange({ showBehind: e.target.checked })}
+          />
+          Show behind transparent areas
+        </label>
+      )}
+    </XPopover>
+  );
+}
+
+const EFFECT_LABEL: Record<string, string> = {
+  "drop-shadow": "Drop shadow",
+  "inner-shadow": "Inner shadow",
+  "layer-blur": "Layer blur",
+  "background-blur": "Background blur",
+  noise: "Noise",
+  glass: "Glass",
+  texture: "Texture",
+};
+
+function Effects({
+  n,
+  engine,
+  locked,
+  root,
+  ids,
+}: {
+  n: XNode;
+  engine: Engine;
+  locked?: boolean;
+  root: XNode;
+  /** The whole selection: Add lands on every layer with room, the listed
+   *  rows stay the first layer's (the Export block's compromise). */
+  ids?: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<{ i: number; rect: DOMRect } | null>(null);
+  const kinds: { id: EffectKind; label: string }[] = [
+    { id: "drop-shadow", label: "Drop shadow" },
+    { id: "inner-shadow", label: "Inner shadow" },
+    { id: "layer-blur", label: "Layer blur" },
+    { id: "background-blur", label: "Background blur" },
+    { id: "noise", label: "Noise" },
+    { id: "glass", label: "Glass" },
+    { id: "texture", label: "Texture" },
+  ];
+  const effects = n.effects ?? [];
+  // One layer takes eight drop shadows, eight inner shadows, one blur of each
+  // kind, two noise rows and a single glass or texture, and
+  // the menu says so instead of silently piling on more.
+  const room = (kind: EffectKind) => canAddEffect(effects, kind);
+  // Hovering a kind previews it on the canvas; anything without room, or the
+  // pointer leaving the menu, clears the preview again.
+  const preview = (kind: EffectKind | null) => {
+    if (kind && room(kind)) engine.dispatch({ type: "previewEffect", id: n.id, kind });
+    else engine.dispatch({ type: "previewEffect", id: null });
+  };
+  const addKind = (kind: EffectKind) => {
+    openSection("effects");
+    engine.dispatch({ type: "previewEffect", id: null });
+    const targets = (ids ?? [n.id])
+      .map((id) => (id === n.id ? n : find(root, id)))
+      .filter((t): t is XNode => !!t);
+    const fits = targets.filter((t) => canAddEffect(t.effects ?? [], kind));
+    if (!fits.length) {
+      toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
+      setOpen(false);
+      return;
+    }
+    engine.dispatch({ type: "begin" });
+    for (const t of fits)
+      engine.dispatch({ type: "patch", id: t.id, patch: { effects: [...(t.effects ?? []), defaultEffect(kind)] } });
+    engine.dispatch({ type: "end" });
+    if (fits.length < targets.length)
+      toast(limitMessage(kind, EFFECT_LIMITS[kind] ?? 1));
+    setOpen(false);
+  };
+  const [drag, setDrag] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const reorder = (from: number, to: number) => {
+    const next = moveEffect(effects, from, to);
+    if (next.length !== effects.length || next.every((e, i) => e === effects[i])) return;
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: next } });
+  };
+  const set = (i: number, p: Partial<Effect>) => {
+    const next = effects.map((e2, j) => (j === i ? { ...e2, ...p } : e2));
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: next } });
+  };
+  // A removed row must not leave its popover open over the wrong effect.
+  const remove = (i: number) => {
+    setEditing(null);
+    engine.dispatch({ type: "patch", id: n.id, patch: { effects: effects.filter((_, j) => j !== i) } });
+  };
+  // ⌘D from the popover: the copy lands next to the original.
+  const duplicate = (i: number) => {
+    const fx = effects[i];
+    if (!fx) return;
+    if (!room(fx.kind)) {
+      toast(limitMessage(fx.kind, EFFECT_LIMITS[fx.kind] ?? 1));
+      return;
+    }
+    engine.dispatch({
+      type: "patch",
+      id: n.id,
+      patch: { effects: [...effects.slice(0, i + 1), { ...fx }, ...effects.slice(i + 1)] },
+    });
+  };
+  return (
+    <>
+      <Section
+        id="effects"
+        title="Effects"
+        defaultOpen={effects.length > 0}
+        disabled={locked}
+        disabledTitle="Controlled by the boolean group"
+        actions={
+          <div style={{ position: "relative", display: "flex" }}>
+            <button
+              className="plus"
+              title="Add effect"
+              disabled={locked}
+              onClick={() => {
+                if (!effects.length) openSection("effects");
+                if (open) preview(null);
+                setOpen((v) => !v);
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            {open && (
+              <div
+                className="type-menu"
+                style={{ right: 8, top: 28, left: "auto", width: 180 }}
+                onMouseLeave={() => preview(null)}
+              >
+                {kinds.map((k) => (
+                  <button
+                    key={k.id}
+                    disabled={!room(k.id)}
+                    title={room(k.id) ? undefined : limitMessage(k.id, EFFECT_LIMITS[k.id] ?? 1)}
+                    onClick={() => addKind(k.id)}
+                    onMouseEnter={() => preview(k.id)}
+                    onFocus={() => preview(k.id)}
+                    onBlur={() => preview(null)}
+                  >
+                    {k.label}
+                    <span className="fx-count">
+                      {countKind(effects, k.id)}/{EFFECT_LIMITS[k.id] ?? 0}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        }
+      >
+        {!effects.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No effects</span>
+              <div className="empty-add-menu" onMouseLeave={() => preview(null)}>
+                {kinds.map((k) => (
+                  <button
+                    key={k.id}
+                    onClick={() => addKind(k.id)}
+                    onMouseEnter={() => preview(k.id)}
+                    onFocus={() => preview(k.id)}
+                    onBlur={() => preview(null)}
+                  >
+                    {k.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+        {effects.map((fx, i) => (
+          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
+            <div
+              className={`color-row fx-row${over === i && drag !== null && drag !== i ? " drop" : ""}`}
+              onDragOver={(e) => {
+                if (drag === null) return;
+                e.preventDefault();
+                setOver(i);
+              }}
+              onDragLeave={() => setOver((v) => (v === i ? null : v))}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (drag !== null) reorder(drag, i);
+                setDrag(null);
+                setOver(null);
+              }}
+            >
+              <span
+                className="grip"
+                draggable
+                title="Drag to reorder this effect"
+                aria-label="Drag to reorder this effect"
+                onDragStart={(e) => {
+                  setDrag(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragEnd={() => {
+                  setDrag(null);
+                  setOver(null);
+                }}
+              />
+              {(fx.kind === "drop-shadow" || fx.kind === "inner-shadow" || fx.kind === "glass") && (
+                <span className="swatch" style={{ background: fx.color }} />
+              )}
+              <button
+                className="hex"
+                style={{
+                  flex: 1,
+                  textAlign: "left",
+                  background: "none",
+                  border: 0,
+                  padding: 0,
+                  cursor: "pointer",
+                  color: "inherit",
+                }}
+                title={
+                  (fx.kind === "background-blur" || fx.kind === "glass") &&
+                  !bgBlurSeesThrough(fillCompositeAlpha(n))
+                    ? "Needs a fill between 0.1% and 99.99% opacity to show through"
+                    : `${EFFECT_LABEL[fx.kind]} settings`
+                }
+                aria-label={`Edit ${EFFECT_LABEL[fx.kind]}`}
+                aria-expanded={editing?.i === i}
+                onClick={(e) => {
+                  // Read the rect before the state updater runs: inside the
+                  // updater `e.currentTarget` is already null, which threw
+                  // "getBoundingClientRect of null" and left the popover shut.
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setEditing((cur) => (cur?.i === i ? null : { i, rect }));
+                }}
+              >
+                {EFFECT_LABEL[fx.kind]}
+              </button>
+              <button
+                className="mini"
+                title={fx.visible ? "Hide" : "Show"}
+                aria-label={`${fx.visible ? "Hide" : "Show"} ${EFFECT_LABEL[fx.kind]}`}
+                onClick={() => set(i, { visible: !fx.visible })}
+              >
+                <Icon name={fx.visible ? "eye" : "eye-off"} size={14} />
+              </button>
+              <button
+                className="mini minus"
+                title="Remove"
+                aria-label={`Remove ${EFFECT_LABEL[fx.kind]}`}
+                onClick={() => remove(i)}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Section>
+      {editing && effects[editing.i] && (
+        <EffectPopover
+          fx={effects[editing.i]}
+          anchor={editing.rect}
+          layer={n}
+          onChange={(p) => set(editing.i, p)}
+          onDuplicate={() => duplicate(editing.i)}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
+  const [open, setOpen] = useState(false);
+  const modifiers = n.modifiers ?? [];
+
+  const addModifier = (type: Modifier["type"]) => {
+    openSection("modifiers");
+    let mod: Modifier;
+    if (type === "roundedCorners") {
+      mod = { type: "roundedCorners", radius: 8 };
+    } else if (type === "offset") {
+      mod = { type: "offset", distance: 10, join: "miter" };
+    } else if (type === "simplify") {
+      mod = { type: "simplify", tolerance: 1.0 };
+    } else if (type === "stroke") {
+      mod = { type: "stroke", width: 4, join: "miter", cap: "none" };
+    } else {
+      mod = { type: "roundedCorners", radius: 8 };
+    }
+    engine.dispatch({ type: "applyModifier", id: n.id, modifier: mod });
+    setOpen(false);
+  };
+
+  const removeModifier = (index: number) => {
+    engine.dispatch({ type: "removeModifier", id: n.id, index });
+  };
+
+  const updateModifier = (index: number, patch: Partial<Modifier>) => {
+    const next = modifiers.map((m, i) => (i === index ? ({ ...m, ...patch } as Modifier) : m));
+    engine.dispatch({ type: "patch", id: n.id, patch: { modifiers: next } });
+  };
+
+  return (
+    <>
+      <Section
+        id="modifiers"
+        title={`Modifiers · ${modifiers.length}`}
+        defaultOpen={modifiers.length > 0}
+        actions={
+          <div style={{ position: "relative", display: "flex" }}>
+            <button
+              className="plus"
+              title="Add non-destructive procedural modifier"
+              onClick={() => {
+                if (!modifiers.length) openSection("modifiers");
+                setOpen((v) => !v);
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+            {open && (
+              <div
+                className="type-menu"
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: 28,
+                  left: "auto",
+                  width: 170,
+                  zIndex: 200,
+                }}
+              >
+                <button onClick={() => addModifier("roundedCorners")}>
+                  Rounded corners
+                </button>
+                <button onClick={() => addModifier("offset")}>
+                  Offset path
+                </button>
+                <button onClick={() => addModifier("simplify")}>
+                  Simplify path
+                </button>
+                <button onClick={() => addModifier("stroke")}>
+                  Stroke outline
+                </button>
+              </div>
+            )}
+          </div>
+        }
+      >
+        {!modifiers.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No modifiers</span>
+              <div className="empty-add-menu">
+                <button onClick={() => addModifier("roundedCorners")}>Corners</button>
+                <button onClick={() => addModifier("offset")}>Offset</button>
+                <button onClick={() => addModifier("simplify")}>Simplify</button>
+                <button onClick={() => addModifier("stroke")}>Stroke</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {modifiers.map((m, i) => (
+          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
+              <button
+                className="mini"
+                title={m.enabled === false ? "Enable modifier" : "Disable modifier"}
+                onClick={() => updateModifier(i, { enabled: m.enabled === false ? true : false })}
+                style={{ opacity: m.enabled === false ? 0.35 : 1 }}
+              >
+                <Icon name={m.enabled === false ? "eye-off" : "eye"} size={14} />
+              </button>
+              <span style={{ flex: 1, fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {m.type === "roundedCorners"
+                  ? "Rounded Corners"
+                  : m.type === "offset"
+                  ? "Offset Path"
+                  : m.type === "simplify"
+                  ? "Simplify Path"
+                  : m.type === "stroke"
+                  ? "Stroke Outline"
+                  : m.type}
+              </span>
+              {m.type === "roundedCorners" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.radius}
+                  onChange={(e) => updateModifier(i, { radius: parseFloat(e.target.value) || 0 })}
+                />
+              )}
+              {m.type === "offset" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.distance}
+                  onChange={(e) => updateModifier(i, { distance: parseFloat(e.target.value) || 0 })}
+                />
+              )}
+              {m.type === "simplify" && (
+                <input
+                  type="number"
+                  step="0.5"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.tolerance}
+                  onChange={(e) => updateModifier(i, { tolerance: parseFloat(e.target.value) || 0.1 })}
+                />
+              )}
+              {m.type === "stroke" && (
+                <input
+                  type="number"
+                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  value={m.width}
+                  onChange={(e) => updateModifier(i, { width: parseFloat(e.target.value) || 1 })}
+                />
+              )}
+              <button
+                className="mini minus"
+                title="Remove modifier"
+                onClick={() => removeModifier(i)}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Section>
+    </>
+  );
+}
+
+function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
+  const [propSelect, setPropSelect] = useState<string>("w");
+  const expressions = n.expressions ?? {};
+  const entries = Object.entries(expressions);
+
+  const addExpr = () => {
+    openSection("expressions");
+    if (!propSelect) return;
+    engine.dispatch({
+      type: "setExpression",
+      id: n.id,
+      property: propSelect,
+      expression: propSelect === "w" ? "parent.w * 0.5" : propSelect === "h" ? "parent.h * 0.5" : "0",
+    });
+  };
+
+  const removeExpr = (prop: string) => {
+    engine.dispatch({ type: "removeExpression", id: n.id, property: prop });
+  };
+
+  const updateExpr = (prop: string, expr: string) => {
+    engine.dispatch({ type: "setExpression", id: n.id, property: prop, expression: expr });
+  };
+
+  return (
+    <>
+      <Section
+        id="expressions"
+        title={`Expressions · ${entries.length}`}
+        defaultOpen={entries.length > 0}
+        actions={
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <select
+              style={{
+                background: "var(--input-bg)",
+                border: "1px solid var(--border)",
+                color: "var(--fg)",
+                fontSize: 11,
+                borderRadius: 3,
+                padding: "2px 4px",
+              }}
+              aria-label="Property to bind"
+              value={propSelect}
+              onChange={(e) => setPropSelect(e.target.value)}
+            >
+              <option value="w">W</option>
+              <option value="h">H</option>
+              <option value="x">X</option>
+              <option value="y">Y</option>
+              <option value="rotation">Rot</option>
+              <option value="fillOpacity">Opacity</option>
+            </select>
+            <button
+              className="plus"
+              title="Bind property expression"
+              onClick={addExpr}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </div>
+        }
+      >
+        {!entries.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No expressions bound</span>
+              <div className="empty-add-menu">
+                <button onClick={() => { setPropSelect("w"); addExpr(); }}>ƒ(w)</button>
+                <button onClick={() => { setPropSelect("h"); addExpr(); }}>ƒ(h)</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {entries.map(([prop, expr]) => (
+          <div className="insp-pad" key={prop} style={{ marginBottom: 4 }}>
+            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
+              <span style={{ fontWeight: 600, fontSize: 11, color: "var(--accent, #10b981)", minWidth: 28 }}>
+                ƒ({prop})
+              </span>
+              <input
+                type="text"
+                style={{
+                  flex: 1,
+                  background: "var(--input-bg)",
+                  border: "1px solid var(--border)",
+                  color: "var(--fg)",
+                  borderRadius: 3,
+                  padding: "2px 6px",
+                  fontSize: 11,
+                  fontFamily: "var(--font-mono, monospace)",
+                }}
+                value={expr}
+                onChange={(e) => updateExpr(prop, e.target.value)}
+                placeholder="e.g. parent.w * 0.5 + 20"
+              />
+              <button
+                className="mini minus"
+                title="Remove expression"
+                onClick={() => removeExpr(prop)}
+              >
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </Section>
+    </>
+  );
+}
+
+/**
+ * The grid flow's own panel: the picker, the automatic-positioning switch and
+ * the two track lists.
+ *
+ * "Choose the desired number of rows and columns by
+ * clicking on the grid picker in the right sidebar. Enter a value in the Number
+ * of columns and Number of rows fields, or use the interactive selector." The
+ * picker here is that selector - a small grid of squares, click one to set the
+ * counts - with the two fields beside it, and rows reads `Auto` when they follow
+ * their contents.
+ */
+/** What the Number of rows field's `Auto` stands for: not a count but a rule,
+ *  Auto mode - rows appear as the objects need them. */
+const AUTO_ROWS = 0;
+
+/**
+ * The word a track field was given, if it was given one.
+ *
+ * "Tip: Typing `Auto` or `A` for a track will automatically set it to fill
+ * container at one fractional unit (1fr)." `Hug` is the other mode that has no
+ * size to type, so both words are read here; anything else is a number.
+ */
+function trackWord(raw: string): Partial<GridTrack> | null {
+  const word = raw.trim().toLowerCase();
+  if (word === "auto" || word === "a" || word === "fill") return { mode: "fill", fr: 1 };
+  if (word === "hug" || word === "h") return { mode: "hug" };
+  return null;
+}
+
+function GridPanel({
+  node,
+  layout,
+  onChange,
+  disabled,
+  disabledTitle,
+}: {
+  node: XNode;
+  layout: AutoLayout;
+  onChange: (patch: Partial<AutoLayout>) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
+}) {
+  const cols = Math.max(1, Math.floor(layout.columns ?? 2));
+  const rowsAuto = layout.rows === "auto" || layout.rows == null;
+  const declaredRows = rowsAuto ? 0 : Math.max(1, Math.floor(layout.rows as number));
+  const [pick, setPick] = useState<{ c: number; r: number } | null>(null);
+  // The plan is the engine's own, so the sidebar and the canvas agree. It also
+  // gives the track list the sizes the frame really has: a track switched to
+  // Fixed before a size is typed reads as what it is currently hugging, instead
+  // of a zero that the frame is not actually using.
+  const { used, plan } = useMemo(() => {
+    const cells = [...(node.children ?? [])].filter((c) => c.visible && !c.absolutePosition);
+    // The track list shows what the frame actually has, so the rows it counts
+    // are the ones the objects need when the count is Auto.
+    const need = cells.reduce((max, c) => Math.max(max, (c.gridRow ?? 0) + (c.rowSpan ?? 1)), 0);
+    // Tracks resolve inside the frame's own inside stroke, like the engine's.
+    const sw = insideStrokeWidth(node);
+    const li =
+      sw > 0 && Array.isArray(layout.padding)
+        ? { ...layout, padding: [layout.padding[0] + sw, layout.padding[1] + sw, layout.padding[2] + sw, layout.padding[3] + sw] as [number, number, number, number] }
+        : layout;
+    return {
+      used: { rows: Math.max(need, declaredRows, 1), cols },
+      plan: planGrid(node, cells, li, hugsMain(li, node, cells), hugsCross(li, node, cells)),
+    };
+  }, [node, layout, declaredRows, cols]);
+  const trackRow = (axis: "col" | "row", i: number) => {
+    const list = (axis === "col" ? layout.colTracks : layout.rowTracks) ?? [];
+    const t = list[i] ?? { mode: "fill" as const };
+    const set = (patch: Partial<GridTrack>) => {
+      const next = [...list];
+      // A track that has never been touched is Auto, so the filler for the
+      // tracks before this one has to be Auto too - filling with Hug would
+      // silently change the tracks the user never touched.
+      while (next.length < i) next.push({ mode: "fill" });
+      next[i] = { ...t, ...patch };
+      onChange(axis === "col" ? { colTracks: next } : { rowTracks: next });
+    };
+    return (
+      <div className="track-row" key={`${axis}${i}`}>
+        <span className="track-name">
+          {axis === "col" ? "Column" : "Row"} {i + 1}
+        </span>
+        <button
+          className="track-mode"
+          title={disabled ? disabledTitle : "Auto shares the free space out by fractional unit, Hug wraps the objects in the track, Fixed holds a size"}
+          disabled={disabled}
+          onClick={() => set({ mode: t.mode === "fill" ? "hug" : t.mode === "hug" ? "fixed" : "fill" })}
+        >
+          {t.mode === "fixed" ? "Fixed" : t.mode === "hug" ? "Hug" : (t.fr ?? 1) === 1 ? "Auto" : `${t.fr}fr`}
+        </button>
+        {t.mode === "fixed" ? (
+          <input
+            className="track-size"
+            aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} size`}
+            disabled={disabled}
+            title={disabled ? disabledTitle : undefined}
+            defaultValue={String(Math.round(t.size ?? (axis === "col" ? plan.colW[i] : plan.rowH[i]) ?? 0))}
+            onBlur={(e) => {
+              const word = trackWord(e.target.value);
+              if (word) return set(word);
+              const v = parseFloat(e.target.value);
+              if (Number.isFinite(v)) set({ size: Math.max(1, Math.round(v)) });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />
+        ) : t.mode === "fill" ? (
+          <input
+            className="track-size"
+            aria-label={`${axis === "col" ? "Column" : "Row"} ${i + 1} fraction`}
+            disabled={disabled}
+            title={disabled ? disabledTitle : undefined}
+            defaultValue={String(t.fr ?? 1)}
+            onBlur={(e) => {
+              const word = trackWord(e.target.value);
+              if (word) return set(word);
+              const v = parseFloat(e.target.value);
+              if (Number.isFinite(v) && v > 0) set({ fr: v });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />
+        ) : (
+          <span className="track-hint" />
+        )}
+        {!rowsAuto || axis === "col" ? (
+          <button
+            className="track-del"
+            title={disabled ? disabledTitle : `Delete this ${axis === "col" ? "column" : "row"}`}
+            disabled={disabled}
+            aria-label={`Delete ${axis === "col" ? "column" : "row"} ${i + 1}`}
+            onClick={() => {
+              const next = [...list];
+              while (next.length < i) next.push({ mode: "fill" });
+              next.splice(i, 1);
+              if (axis === "col") onChange({ colTracks: next, columns: Math.max(1, cols - 1) });
+              // Rows on Auto keep following their objects: deleting a track
+              // takes the row out and the objects below it move up. A count
+              // that was typed is lowered with it.
+              else
+                onChange({
+                  rowTracks: next,
+                  ...(rowsAuto ? {} : { rows: Math.max(1, declaredRows - 1) }),
+                });
+            }}
+          >
+            <Icon name="trash" size={12} />
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+  return (
+    <div className="grid-panel">
+      <div className="grid-pick-row">
+        <div
+          className="grid-pick"
+          role="group"
+          aria-label="Grid"
+          onMouseLeave={() => setPick(null)}
+        >
+          {Array.from({ length: 6 * 6 }, (_, i) => {
+            const c = (i % 6) + 1;
+            const r = Math.floor(i / 6) + 1;
+            const on = pick ? c <= pick.c && r <= pick.r : c <= used.cols && r <= used.rows;
+            return (
+              <button
+                key={i}
+                className={on ? "on" : ""}
+                aria-label={`${c} columns by ${r} rows`}
+                title={disabled ? disabledTitle : undefined}
+                disabled={disabled}
+                onMouseEnter={() => setPick({ c, r })}
+                onClick={() => onChange({ columns: c, rows: r })}
+              />
+            );
+          })}
+        </div>
+        <div className="grid-counts">
+          <Field
+            label="Cols"
+            value={used.cols}
+            disabled={disabled}
+            disabledTitle={disabledTitle}
+            onChange={(v) => onChange({ columns: Math.max(1, Math.round(v)) })}
+          />
+          <Field
+            label="Rows"
+            disabled={disabled}
+            disabledTitle={disabledTitle}
+            mixed={rowsAuto ? "Auto" : undefined}
+            hint="Auto"
+            hintNote="as many rows as the objects need"
+            value={rowsAuto ? used.rows : declaredRows}
+            token={{ auto: AUTO_ROWS, a: AUTO_ROWS }}
+            // `Auto` (or `A`) is the article's own shorthand for a row count
+            // that follows the objects; anything else is a count of rows, and
+            // a count is a floor - the grid still adds rows to fit.
+            onChange={(v) =>
+              onChange(v === AUTO_ROWS ? { rows: "auto" } : { rows: Math.max(1, Math.round(v)) })
+            }
+          />
+        </div>
+      </div>
+      <label className="check grid-auto" title={disabled ? disabledTitle : undefined}>
+        <input
+          type="checkbox"
+          disabled={disabled}
+          checked={layout.autoPosition !== false}
+          onChange={(e) =>
+            // Turning it back on also sets the row count to Auto, per the
+            // article: "Doing so will also set Number of rows to Auto."
+            onChange(e.target.checked ? { autoPosition: true, rows: "auto" } : { autoPosition: false })
+          }
+        />
+        Automatic positioning
+      </label>
+      <div className="track-list">
+        {Array.from({ length: used.cols }, (_, i) => trackRow("col", i))}
+        {Array.from({ length: used.rows }, (_, i) => trackRow("row", i))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The alignment box.
+ *
+ * "Select the box and use arrow keys to switch between the
+ * different alignment settings. Select the box and press W/A/S/D to set
+ * alignment to the edge of the frame" - so the box takes focus, arrows step the
+ * position along an axis, the letters jump to an edge, `B` toggles baseline
+ * alignment and `X` switches the gap between a number and Auto. The cells
+ * themselves come from `alignmentCells`, which drops the box to the three
+ * cross-axis options once the gap is Auto, as the article describes.
+ */
+function Nine({
+  layout,
+  onChange,
+  disabled,
+  disabledTitle,
+}: {
+  layout: AutoLayout;
+  onChange: (p: Partial<AutoLayout>) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
+}) {
+  const cells = alignmentCells(layout);
+  const jj = layout.justify === "between" ? "min" : layout.justify;
+  const horizontal = layout.direction === "horizontal";
+  const reduced = cells.length === 3;
+  // A baseline position is a cross-axis setting of its own, so it gets its own
+  // name rather than being folded in with the three edges.
+  const crossName = (a: LayoutAlign) =>
+    a === "baseline"
+      ? "Baseline"
+      : a === "min"
+        ? horizontal
+          ? "Top"
+          : "Left"
+        : a === "center"
+          ? "Center"
+          : horizontal
+            ? "Bottom"
+            : "Right";
+  const mainName = (j: LayoutJustify) =>
+    j === "min" ? "" : j === "center" ? " · centered" : j === "between" ? " · space between" : " · packed to the end";
+  const titleOf = (c: AlignCell) =>
+    reduced ? crossName(c.a) : `${crossName(c.a)}${mainName(c.j)}`;
+  return (
+    // The attribute is how the app-wide key handlers know to stand down: while
+    // this box has focus the keys above are the box's, not the canvas's.
+    <div
+      className={`nine${reduced ? " nine-reduced" : ""}${layout.align === "baseline" ? " baseline" : ""}`}
+      title={
+        disabled && disabledTitle
+          ? disabledTitle
+          : "Alignment — arrows step, W/A/S/D jump to an edge, B toggles baseline, X switches the gap"
+      }
+      data-align-box="1"
+      tabIndex={0}
+      role="group"
+      aria-label="Alignment"
+      onKeyDown={(e) => {
+        if (disabled) return;
+        // Modifier chords are left to the app: ⌘A, ⌘S and friends still work.
+        if (e.metaKey || e.ctrlKey) return;
+        const key = alignKey(e.key);
+        if (!key) return;
+        const patch = layoutKeyPatch(layout, key);
+        if (!patch) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onChange(patch);
+      }}
+    >
+      {cells.map((c, i) => (
+        <button
+          key={i}
+          title={disabled ? disabledTitle : titleOf(c)}
+          className={jj === c.j && layout.align === c.a ? "on" : ""}
+          aria-label={titleOf(c)}
+          disabled={disabled}
+          onClick={() => onChange({ justify: c.j, align: c.a })}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Custom dash syntax: one text field holding `dash, gap, dash, gap…`.
+ * Anything that is not a list of non-negative numbers is refused and the field
+ * snaps back to what the layer actually has, rather than clearing the dashes.
+ */
+/**
+ * Variable-width profile strip: the stroke's width envelope with draggable
+ * control points. Click the strip to add a point at the width sampled there,
+ * drag a point sideways to move it along the path or up/down to change its
+ * width, double-click (or Alt-click) a point to delete it. Every gesture is
+ * a `patch`, so a drag coalesces into one undo step.
+ */
+function WidthProfileEditor({
+  node: n,
+  patch,
+}: {
+  node: XNode;
+  patch: (p: Partial<XNode>) => void;
+}) {
+  const reason = variableWidthBlockReason(n);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{ t: number } | null>(null);
+  const W = 208;
+  const H = 52;
+  const PAD = 8;
+  const prof = normalizeWidthProfile(n.strokeWidthProfile);
+  const active = prof.length >= 2 && prof.some((q) => Math.abs(q.widthMultiplier - prof[0].widthMultiplier) > 1e-6);
+  // Display scale: fixed at 4x so the envelope does not jump while dragging,
+  // widened only to fit an existing hotter profile.
+  const scale = Math.max(4, ...prof.map((q) => q.widthMultiplier));
+  const xOf = (t: number) => PAD + t * (W - 2 * PAD);
+  const yOf = (m: number) => H / 2 - Math.min(m, scale) / scale * (H / 2 - PAD);
+  const tOfX = (px: number) => Math.min(1, Math.max(0, (px - PAD) / (W - 2 * PAD)));
+  const mOfY = (py: number) => Math.min(8, Math.max(0, ((H / 2 - py) / (H / 2 - PAD)) * scale));
+  // Envelope from the sampler (65 stations), mirrored about the centerline.
+  const top: string[] = [];
+  const bot: string[] = [];
+  for (let i = 0; i <= 64; i++) {
+    const t = i / 64;
+    const m = sampleVariableWidth(prof, t);
+    const x = xOf(t).toFixed(1);
+    top.push(`${i ? "L" : "M"} ${x} ${yOf(m).toFixed(1)}`);
+    bot.push(`L ${x} ${(H - yOf(m)).toFixed(1)}`);
+  }
+  const envelope = `${top.join(" ")} ${bot.reverse().join(" ")} Z`;
+  const commit = (next: VariableWidthPoint[]) => {
+    if (!reason) patch({ strokeWidthProfile: normalizeWidthProfile(next) });
+  };
+  const local = (e: React.PointerEvent) => {
+    const box = svgRef.current?.getBoundingClientRect();
+    if (!box || box.width <= 0 || box.height <= 0) return { x: 0, y: 0 };
+    return { x: ((e.clientX - box.left) / box.width) * W, y: ((e.clientY - box.top) / box.height) * H };
+  };
+  return (
+    <fieldset className="width-profile" disabled={!!reason} aria-label="Variable width" title={reason ?? undefined}>
+      {reason && <p className="width-profile-reason">{reason}</p>}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+        <span style={{ fontSize: 10, color: "var(--dim)" }}>Variable width</span>
+        <span style={{ flex: 1 }} />
+        {active && (
+          <button
+            className="link"
+            title="Remove the width profile (uniform stroke)"
+            disabled={!!reason}
+            onClick={() => { if (!reason) patch({ strokeWidthProfile: undefined }); }}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        style={{
+          width: "100%",
+          height: "auto",
+          display: "block",
+          background: "var(--bg-subtle)",
+          borderRadius: 4,
+          cursor: "crosshair",
+          touchAction: "none",
+        }}
+        role="img"
+        aria-disabled={!!reason}
+        aria-label="Stroke width profile. Click to add a width point, drag to move it, double-click to delete."
+        onPointerDown={(e) => {
+          if (reason || e.button !== 0 || e.altKey) return;
+          const { x } = local(e);
+          const t = tOfX(x);
+          const next = normalizeWidthProfile([...prof, { position: t, widthMultiplier: sampleVariableWidth(prof, t) }]);
+          commit(next);
+          dragRef.current = { t };
+          (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const d = dragRef.current;
+          if (reason || !d) return;
+          const { x, y } = local(e);
+          // The dragged point is the one nearest the drag's last position.
+          let bi = 0;
+          let bd = Infinity;
+          prof.forEach((q, i) => {
+            const dd = Math.abs(q.position - d.t);
+            if (dd < bd) {
+              bd = dd;
+              bi = i;
+            }
+          });
+          const t = tOfX(x);
+          const m = mOfY(y);
+          dragRef.current = { t };
+          commit(prof.map((q, i) => (i === bi ? { position: t, widthMultiplier: m } : q)));
+        }}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+        onPointerCancel={() => {
+          dragRef.current = null;
+        }}
+      >
+        <line x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2} stroke="var(--border)" strokeWidth={1} />
+        <path d={envelope} fill="var(--accent)" opacity={active ? 0.35 : 0.15} />
+        {prof.map((q, i) => (
+          <circle
+            key={i}
+            cx={xOf(q.position)}
+            cy={H / 2}
+            r={4}
+            fill={active ? "var(--accent)" : "var(--dim)"}
+            stroke="#ffffff"
+            strokeWidth={1}
+            style={{ cursor: "move" }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (reason || e.button !== 0) return;
+              if (e.altKey) {
+                commit(prof.filter((_, j) => j !== i));
+                return;
+              }
+              dragRef.current = { t: q.position };
+              (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              dragRef.current = null;
+              commit(prof.filter((_, j) => j !== i));
+            }}
+          >
+            <title>{`pos ${q.position.toFixed(2)} · ×${q.widthMultiplier.toFixed(2)} · ${(q.widthMultiplier * n.strokeWidth).toFixed(1)}px`}</title>
+          </circle>
+        ))}
+      </svg>
+    </fieldset>
+  );
+}
+
+function DashPatternField({
+  value,
+  onCommit,
+  disabled = false,
+  disabledTitle,
+}: {
+  value: number[];
+  onCommit: (pattern: number[]) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
+}) {
+  const text = value.length ? value.join(", ") : "";
+  const [draft, setDraft] = useState(text);
+  const [bad, setBad] = useState(false);
+  useEffect(() => {
+    setDraft(value.length ? value.join(", ") : "");
+    setBad(false);
+  }, [text]);
+  const commit = () => {
+    const parsed = parseDashPattern(draft);
+    if (parsed === null) {
+      setBad(true);
+      setDraft(text);
+      return;
+    }
+    setBad(false);
+    if (parsed.length !== value.length || parsed.some((v, i) => v !== value[i])) onCommit(parsed);
+    setDraft(parsed.length ? parsed.join(", ") : "");
+  };
+  return (
+    <div className="field">
+      <label title={disabled && disabledTitle ? disabledTitle : "Custom dash pattern · dash, gap, dash, gap…"}>dashes</label>
+      <input
+        aria-label="Dash pattern"
+        value={draft}
+        placeholder="10, 20, 80, 20"
+        disabled={disabled}
+        title={disabled ? disabledTitle : undefined}
+        className={bad ? "bad" : ""}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * A padding field.
+ *
+ * "To set uniform padding or to use CSS shorthand, hold ⌘ Command or
+ * Control and click into any padding field... entering 1,2,3,4 sets the top,
+ * right, bottom, and left to 1, 2, 3, and 4 respectively." So a plain click
+ * commits one number, and a ⌘/Ctrl click turns the same field into a shorthand
+ * entry - `1`, `1,2`, `1,2,3` or `1,2,3,4` - parsed by `parsePaddingShorthand`.
+ * Anything that is not a list of numbers is refused and the field snaps back,
+ * exactly as the other numeric fields in the panel do.
+ */
+function PadField({
+  label,
+  icon,
+  aria,
+  value,
+  mixed,
+  onCommit,
+  onShorthand,
+  disabled,
+  disabledTitle,
+  bind,
+}: {
+  label?: string;
+  icon?: IconName;
+  aria?: string;
+  value: number;
+  mixed?: string;
+  onCommit: (v: number) => void;
+  /** Only the H/V fields accept shorthand: with four separate fields there is
+   *  no single entry to spell four sides out in. */
+  onShorthand?: (p: [number, number, number, number]) => void;
+  disabled?: boolean;
+  disabledTitle?: string;
+  /** Property-first binding affordance (BindControl) trailing the value. */
+  bind?: ReactNode;
+}) {
+  const [shorthand, setShorthand] = useState(false);
+  const [draft, setDraft] = useState("");
+  const shown = shorthand ? draft : mixed ?? String(Math.round(value * 100) / 100);
+  const commit = (raw: string) => {
+    if (shorthand && onShorthand) {
+      const parsed = parsePaddingShorthand(raw);
+      if (parsed) onShorthand(parsed);
+      else if (!/[0-9]/.test(raw)) onCommit(value);
+      setShorthand(false);
+      return;
+    }
+    const n = parseFloat(raw);
+    if (Number.isFinite(n)) onCommit(n);
+  };
+  return (
+    <div className={`field${shorthand ? " shorthand" : ""}`} data-pname={aria ?? label}>
+      {icon ? <Icon name={icon} size={14} /> : <label title={label}>{label}</label>}
+      <input
+        value={shown}
+        aria-label={aria ?? label}
+        disabled={disabled}
+        title={
+          disabled && disabledTitle
+            ? disabledTitle
+            : shorthand
+              ? "CSS shorthand: 1 · 1,2 · 1,2,3 · 1,2,3,4 (top, right, bottom, left)"
+              : "⌘-click to set all sides, or type 1,2,3,4"
+        }
+        onMouseDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && onShorthand) {
+            // The click that starts the shorthand is also the click that would
+            // have placed the caret: swallow it and put the caret at the end.
+            setShorthand(true);
+            setDraft("");
+            e.preventDefault();
+            (e.target as HTMLInputElement).focus();
+            (e.target as HTMLInputElement).select();
+          }
+        }}
+        onFocus={() => {
+          if (shorthand) setDraft("");
+        }}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          // Shorthand is only read once the entry is finished - part-way
+          // through `1,2,3,4` every prefix is a different set of sides.
+          if (shorthand) return;
+          const n = parseFloat(next);
+          if (Number.isFinite(n)) onCommit(n);
+        }}
+        onBlur={(e) => {
+          commit(e.target.value);
+          setDraft("");
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setShorthand(false);
+            setDraft("");
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+      />
+      {!shorthand && mixed && <span className="hint">{mixed[0].toUpperCase()}</span>}
+      {bind}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  icon,
+  value,
+  onChange,
+  hint,
+  hintNote,
+  onLabelClick,
+  aria,
+  mixed,
+  token,
+  disabled,
+  disabledTitle,
+  values,
+  onChangeMany,
+  bind,
+  invalidValue,
+}: {
+  label?: string;
+  icon?: IconName;
+  value: number;
+  onChange: (v: number) => void;
+  /** Per-layer currents for a multi-selection. With `onChangeMany` the draft
+   *  evaluates once per layer — a plain number lands on every layer, `+10`
+   *  adds 10 to each — and scrubbing shifts every layer by the same delta. */
+  values?: number[];
+  /** Applies one committed number per entry of `values`, in order. */
+  onChangeMany?: (vals: number[]) => void;
+  hint?: string;
+  /** Why the hint is what it is, e.g. a hug that a filling child turned into a
+   *  Fixed frame. Shown on the label, next to the value. */
+  hintNote?: string;
+  onLabelClick?: () => void;
+  /** Accessible name for icon-only fields, which otherwise expose no label
+   *  at all to assistive tech or to keyboard users reading focus. */
+  aria?: string;
+  /** Shows "Mixed" instead of a number when the selection - or, for
+   *  corner radii, the four corners - disagrees. Typing still applies. */
+  mixed?: string;
+  /** Words this field also accepts, each standing for a number: a grid's
+   *  Number of rows takes `Auto` (or `A`), which means "as many as the objects
+   *  need" rather than a count. */
+  token?: Record<string, number>;
+  /** A property the layer cannot own here, e.g. a corner radius on an instance. */
+  disabled?: boolean;
+  /** Why the field is disabled, shown on hover instead of the usual hint. */
+  disabledTitle?: string;
+  /** Property-first binding affordance (BindControl) trailing the value. */
+  bind?: ReactNode;
+  /** Opt-in empty/invalid input fallback for clearable text limits. */
+  invalidValue?: number;
+}) {
+  const [draft, setDraft] = useState(() => mixed ?? fmt(value));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setDraft(mixed ?? fmt(value));
+  }, [value, mixed]);
+  // Reads these fields as arithmetic, not just digits: `120/3`, `2^3`,
+  // `(40+8)*2`, and `+10` to nudge against whatever is already there. Only the
+  // commit evaluates, so typing `12/` mid-expression does not move the layer.
+  // Over a multi-selection the same draft evaluates once per layer, each
+  // against its own current value, so `Mixed+100` adds 100 to every layer.
+  const commit = () => {
+    if (onChangeMany && values) {
+      const word = token?.[draft.trim().toLowerCase()];
+      if (word != null) {
+        onChangeMany(values.map(() => word));
+        setDraft(fmt(word));
+        return;
+      }
+      const parsed = evalFieldMany(draft, values);
+      if (parsed) {
+        onChangeMany(parsed);
+        setDraft(
+          parsed.length > 0 && parsed.every((p) => p === parsed[0])
+            ? fmt(parsed[0])
+            : (mixed ?? fmt(value)),
+        );
+      } else {
+        setDraft(mixed ?? fmt(value));
+      }
+      return;
+    }
+    const word = token?.[draft.trim().toLowerCase()];
+    const parsed =
+      word != null
+        ? word
+        : mixed && !hasExpression(draft) && !/[0-9]/.test(draft)
+          ? null
+          : hasExpression(draft)
+            ? evalField(draft, value)
+            : invalidValue != null ? (draft.trim() ? Number(draft) : null) : parseFloat(draft);
+    if (parsed != null && Number.isFinite(parsed)) {
+      onChange(parsed);
+      setDraft(fmt(parsed));
+    } else {
+      if (invalidValue != null) onChange(invalidValue);
+      setDraft(invalidValue != null ? fmt(invalidValue) : mixed ?? fmt(value));
+    }
+  };
+  // Dragging a field's label or icon scrubs its value, 1 unit per pixel and
+  // 10 with ⇧ held. Sliding the pointer above the start row runs at ×2 for
+  // long hauls, below it at ×1/2 then ×1/4 for fine work; a toast names the
+  // speed on every change. A press that never moves stays a click, so labels
+  // that cycle a mode on click keep working. The burst coalescer in the
+  // engine folds the drag's patches into one undo step.
+  const startScrub = (e: React.MouseEvent) => {
+    if (disabled || e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startV = value;
+    const startVs = values;
+    let dragging = false;
+    let speed = 1;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      if (!dragging && Math.abs(dx) < 3) return;
+      dragging = true;
+      const dy = ev.clientY - startY;
+      const nextSpeed = dy < -48 ? 2 : dy < 40 ? 1 : dy < 120 ? 0.5 : 0.25;
+      if (nextSpeed !== speed) {
+        speed = nextSpeed;
+        toast(`Scrub speed ×${speed}`);
+      }
+      const rate = (ev.shiftKey ? 10 : 1) * speed;
+      if (onChangeMany && startVs) {
+        onChangeMany(startVs.map((sv) => Math.round((sv + dx * rate) * 100) / 100));
+      } else {
+        onChange(Math.round((startV + dx * rate) * 100) / 100);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      if (!dragging && onLabelClick) onLabelClick();
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+  return (
+    <div
+      className="field"
+      // View > Property labels reads this: with labels on, an icon-only field
+      // prints the property's own name instead of leaving the icon to be
+      // decoded. The name lives in a data attribute so the sidebar does not
+      // have to thread a boolean through every field in the file.
+      data-pname={icon ? (aria ?? label ?? icon) : undefined}
+    >
+      {icon ? (
+        <span
+          title={disabled && disabledTitle ? disabledTitle : `${aria ?? label ?? icon} · drag to scrub (⇧ = ×10, ↑↓ = speed)`}
+          onMouseDown={startScrub}
+          style={disabled ? undefined : { cursor: "ew-resize", display: "inline-flex" }}
+        >
+          <Icon name={icon} size={14} />
+        </span>
+      ) : (
+        <label
+          title={
+            disabled && disabledTitle
+              ? disabledTitle
+              : `${hint ? `${label} · ${hintNote ?? hint}` : (label ?? "")}${disabled ? "" : " · drag to scrub (⇧ = ×10, ↑↓ = speed)"}`
+          }
+          onMouseDown={startScrub}
+          style={disabled ? undefined : { cursor: "ew-resize" }}
+        >
+          {label}
+        </label>
+      )}
+      <input
+        value={draft}
+        disabled={disabled}
+        aria-label={aria ?? label}
+        title={
+          disabled && disabledTitle
+            ? disabledTitle
+            : (aria && !label ? aria : "") || "Number or equation · + - * / ^ ( ) · ⌥-drag to scrub"
+        }
+        // Figma also scrubs from the input itself with ⌥ held; a plain press
+        // still focuses and selects as usual.
+        onMouseDown={(e) => {
+          if (e.altKey) startScrub(e);
+        }}
+        onFocus={() => {
+          focused.current = true;
+        }}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          if (hasExpression(next)) return;
+          const parsed = parseFloat(next);
+          // Live typing is always an absolute number, so over a
+          // multi-selection it lands on every layer at once; equations wait
+          // for the commit, which evaluates them once per layer.
+          if (!Number.isNaN(parsed)) {
+            if (onChangeMany && values) onChangeMany(values.map(() => parsed));
+            else onChange(parsed);
+          }
+        }}
+        onBlur={() => {
+          focused.current = false;
+          commit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+      />
+      {hint && hint !== "fixed" && <span className="hint">{hint[0].toUpperCase()}</span>}
+      {bind}
+    </div>
+  );
+}
+
+function cycleSizing(s: Sizing | undefined): Sizing {
+  if (s === "fixed") return "hug";
+  if (s === "hug") return "fill";
+  return "fixed";
+}
+
+function Constraints({
+  h,
+  v,
+  onChange,
+}: {
+  h: Constraint;
+  v: Constraint;
+  onChange: (axis: "h" | "v", value: Constraint) => void;
+}) {
+  const opts: { id: Constraint; label: string }[] = [
+    { id: "min", label: "Left / Top" },
+    { id: "center", label: "Center" },
+    { id: "max", label: "Right / Bottom" },
+    { id: "stretch", label: "Left & right / Top & bottom" },
+    { id: "scale", label: "Scale" },
+  ];
+  return (
+    <div className="cons-pop">
+      <div className="cons-grid">
+        <select aria-label="Horizontal constraint" value={h} onChange={(e) => onChange("h", e.target.value as Constraint)}>
+          {opts.map((o) => (
+            <option key={o.id} value={o.id}>
+              H: {o.label.split(" / ")[0]}
+            </option>
+          ))}
+        </select>
+        <select aria-label="Vertical constraint" value={v} onChange={(e) => onChange("v", e.target.value as Constraint)}>
+          {opts.map((o) => (
+            <option key={o.id} value={o.id}>
+              V: {o.label.split(" / ")[1] ?? o.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="muted-inline" style={{ padding: "4px 0 0" }}>
+        Pin this layer to its parent when the parent resizes.
+      </p>
+    </div>
+  );
+}
+
+/* Formats, scales and the per-format capability table live in ./exportModel, so
+   the panel and the exporter read one source. */
+const SCALES = SCALE_PRESETS;
+
+/* Every format's optional settings live behind one "Export settings" button, as
+   and the list is built from the capability table rather than written
+   out per format - so a control cannot appear for something the exporter does
+   not do. */
+function hasSettings(format: ExportFormat): boolean {
+  // Every format supports an output color profile, even when it has no other
+  // format-specific options.
+  return Object.prototype.hasOwnProperty.call(FORMAT_CAPS, format);
+}
+
+/** Export format settings for the current row format. */
+function ExportSettings({
+  preset,
+  textLayer,
+  onChange,
+}: {
+  preset: ExportPreset;
+  textLayer: boolean;
+  onChange: (next: ExportPreset) => void;
+}) {
+  const caps = FORMAT_CAPS[preset.format];
+  const settings = resolveSettings(preset);
+  const flip = (key: "ignoreOverlap" | "boundingBox" | "includeId" | "outlineText" | "simplifyStroke") =>
+    onChange({ ...preset, [key]: !settings[key] });
+  /** A caret-down menu, because a native select cannot be styled to match and
+   *  writes its own option list. */
+  const pick = (key: "quality" | "resampling", values: readonly string[]) => {
+    const at = values.indexOf(String(settings[key]));
+    onChange({ ...preset, [key]: values[(at + 1) % values.length] });
+  };
+  return (
+    <div className="export-settings insp-pad">
+      <label className="export-color-profile" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <span>Color profile</span>
+        <select
+          aria-label="Export color profile"
+          value={preset.colorProfile ?? "file"}
+          onChange={(e) => onChange({ ...preset, colorProfile: e.target.value === "file" ? undefined : e.target.value as "srgb" | "display-p3" })}
+        >
+          <option value="file">File profile</option>
+          <option value="srgb">sRGB</option>
+          <option value="display-p3">Display P3</option>
+        </select>
+      </label>
+      {caps.ignoreOverlap && (
+        <label className="check" title="Export the selected layers only, ignoring anything overlapping them">
+          <input type="checkbox" checked={settings.ignoreOverlap} onChange={() => flip("ignoreOverlap")} />
+          Ignore overlapping layers
+        </label>
+      )}
+      {caps.boundingBox && textLayer && (
+        <label className="check" title="Text layers only: keep the layer's bounding box, empty space and all">
+          <input type="checkbox" checked={settings.boundingBox} onChange={() => flip("boundingBox")} />
+          Include bounding box
+        </label>
+      )}
+      {caps.includeId && (
+        <label className="check" title="Write an id, taken from the layer's name, onto the svg element">
+          <input type="checkbox" checked={settings.includeId} onChange={() => flip("includeId")} />
+          Include &ldquo;id&rdquo; attribute
+        </label>
+      )}
+      {caps.outlineText && (
+        <label className="check" title="Convert text to vector outlines so the file needs no fonts">
+          <input type="checkbox" checked={settings.outlineText} onChange={() => flip("outlineText")} />
+          Outline text
+        </label>
+      )}
+      {caps.simplifyStroke && (
+        <label className="check" title="Draw strokes as filled outlines instead of clipped strokes">
+          <input type="checkbox" checked={settings.simplifyStroke} onChange={() => flip("simplifyStroke")} />
+          Simplify strokes
+        </label>
+      )}
+      {caps.resampling && (
+        <button className="set-row" onClick={() => pick("resampling", ["detailed", "basic"])}>
+          Image resampling
+          <span className="set-val">
+            {settings.resampling === "basic" ? "Basic" : "Detailed"}
+            <Icon name="chevron" size={caretSize()} />
+          </span>
+        </button>
+      )}
+      {caps.quality && (
+        <button className="set-row" onClick={() => pick("quality", ["low", "medium", "high"])}>
+          Image quality
+          <span className="set-val">
+            {settings.quality[0].toUpperCase() + settings.quality.slice(1)}
+            <Icon name="chevron" size={caretSize()} />
+          </span>
+        </button>
+      )}
+      {caps.resampling && (
+        <p className="hint">
+          {settings.resampling === "basic"
+            ? "Basic picks the nearest pixel: best for icons, logos and pixel art."
+            : "Detailed averages the surrounding pixels: best for gradients, shadows and photographs."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Scale field: type `2x`, `500w` or `300h`, or click for the presets. */
+function ScaleField({
+  preset,
+  locked,
+  onCommit,
+}: {
+  preset: ExportPreset;
+  locked: boolean;
+  onCommit: (scale: number | string) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatScale(preset.scale));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setDraft(formatScale(preset.scale));
+  }, [preset.scale]);
+  if (locked) {
+    return (
+      <span className="fmt locked" title="SVGs and PDFs export at 1x only">
+        1x
+      </span>
+    );
+  }
+  return (
+    <input
+      className="scale"
+      aria-label="Scale"
+      title="Scale: a multiplier such as 2x, or a size such as 500w or 300h"
+      value={draft}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onChange={(e) => {
+        const next = e.target.value;
+        setDraft(next);
+        // Commit as you type once the text is a complete spec, so the preview
+        // follows the field rather than waiting for a blur.
+        if (/^\d*\.?\d+\s*[xwh]?$/i.test(next.trim()) && /\d/.test(next)) onCommit(next.trim());
+      }}
+      onBlur={() => {
+        focused.current = false;
+        setDraft(formatScale(preset.scale));
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+    />
+  );
+}
+
+function ExportBlock({
+  n,
+  engine,
+  root,
+  ids,
+  page,
+}: {
+  n: XNode;
+  engine: Engine;
+  root: XNode;
+  /** The whole selection: with several layers every edit applies to all of
+   *  them, and the listed presets are the first layer's. */
+  ids?: string[];
+  /** True for the page-level block, which exports the content box. */
+  page?: boolean;
+}) {
+  const presets = n.exports ?? [];
+  const [preview, setPreview] = useState<Record<number, boolean>>({});
+  const [settingsOpen, setSettingsOpen] = useState<number | null>(null);
+  const multi = (ids ?? [n.id]).length > 1;
+  const targets = (): XNode[] => {
+    const list = (ids ?? [n.id])
+      .map((id) => (id === n.id ? n : find(root, id)))
+      .filter((t): t is XNode => !!t);
+    return list.length ? list : [n];
+  };
+  const scope = { root, page };
+  const add = () => {
+    openSection("export");
+    engine.dispatch({ type: "begin" });
+    for (const t of targets())
+      engine.dispatch({ type: "patch", id: t.id, patch: { exports: [...(t.exports ?? []), newPreset("PNG")] } });
+    engine.dispatch({ type: "end" });
+  };
+  const set = (i: number, p: ExportPreset) => {
+    engine.dispatch({ type: "begin" });
+    for (const t of targets()) {
+      const cur = t.exports ?? [];
+      // A layer with fewer presets than the first one gains the setting
+      // rather than silently dropping the edit.
+      const next = i < cur.length ? cur.map((e, j) => (j === i ? p : e)) : [...cur, p];
+      engine.dispatch({ type: "patch", id: t.id, patch: { exports: next } });
+    }
+    engine.dispatch({ type: "end" });
+  };
+  const remove = (i: number) => {
+    engine.dispatch({ type: "begin" });
+    for (const t of targets()) {
+      const cur = t.exports ?? [];
+      if (i < cur.length)
+        engine.dispatch({ type: "patch", id: t.id, patch: { exports: cur.filter((_, j) => j !== i) } });
+    }
+    engine.dispatch({ type: "end" });
+  };
+  return (
+    <>
+      <Section
+        id="export"
+        title="Export"
+        defaultOpen={false}
+        actions={
+          <>
+            <button
+              className="link"
+              title="Export settings for the whole page (⇧⌘E)"
+              onClick={() => window.dispatchEvent(new CustomEvent("x-native-export-dialog"))}
+            >
+              All…
+            </button>
+            <button
+              className="plus"
+              title="Add export"
+              onClick={() => {
+                openSection("export");
+                add();
+              }}
+            >
+              <Icon name="plus" size={14} />
+            </button>
+          </>
+        }
+      >
+        {presets.map((p, i) => (
+          <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
+            <div className="export-row">
+              {/* Preview the export before download — the thumbnail
+                  is the real render (SVG source, so it scales with the preset). */}
+              {/* No per-row preview for a multi-selection: the row shows the
+                  first layer's preset, and a thumbnail of one layer would
+                  read as the whole selection. */}
+              {!multi && (
+              <button
+                className={`export-thumb${preview[i] ? " on" : ""}`}
+                title={preview[i] ? "Hide preview" : "Preview"}
+                aria-pressed={!!preview[i]}
+                onClick={() => setPreview((v) => ({ ...v, [i]: !v[i] }))}
+              >
+                {preview[i] ? <img src={previewUrl(n, p, scope)} alt="" /> : <Icon name="image" size={12} />}
+              </button>
+              )}
+              <button
+                className="fmt"
+                title="Format"
+                onClick={() => {
+                  const format = FORMATS[(FORMATS.indexOf(p.format) + 1) % FORMATS.length];
+                  // Switching format keeps the settings that still apply and
+                  // drops the rest: a JPG has no "id attribute" to remember, and
+                  // a 2x silently ignored on an SVG would read as a lie.
+                  const keep = FORMAT_CAPS[format];
+                  set(i, {
+                    format,
+                    suffix: p.suffix,
+                    scale: keep.oneToOne ? 1 : p.scale,
+                    colorProfile: p.colorProfile,
+                    includeId: keep.includeId ? p.includeId : undefined,
+                    outlineText: keep.outlineText ? p.outlineText : undefined,
+                    simplifyStroke: keep.simplifyStroke ? p.simplifyStroke : undefined,
+                    ignoreOverlap: keep.ignoreOverlap ? p.ignoreOverlap : undefined,
+                    boundingBox: keep.boundingBox ? p.boundingBox : undefined,
+                    quality: keep.quality ? p.quality : undefined,
+                    resampling: keep.resampling ? p.resampling : undefined,
+                  });
+                }}
+              >
+                {p.format}
+              </button>
+              {/* The scale field takes a multiplier or a size with a unit:
+                  `2x`, `500w`, `300h`. Vector formats are pinned at 1x,
+                  so the field shows 1x rather than quietly ignoring what you type. */}
+              <ScaleField
+                preset={p}
+                locked={FORMAT_CAPS[p.format].oneToOne}
+                onCommit={(scale) => set(i, { ...p, scale })}
+              />
+              <input
+                className="suffix"
+                placeholder="suffix"
+                title="Appended to the file name"
+                value={p.suffix}
+                onChange={(e) => set(i, { ...p, suffix: e.target.value })}
+              />
+              <button
+                className={`mini settings${settingsOpen === i ? " on" : ""}`}
+                title="Export settings"
+                aria-expanded={settingsOpen === i}
+                disabled={!hasSettings(p.format)}
+                onClick={() => setSettingsOpen((v) => (v === i ? null : i))}
+              >
+                <Icon name="more" size={14} />
+              </button>
+              <button className="mini minus" title="Remove" onClick={() => remove(i)}>
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+            {settingsOpen === i && <ExportSettings preset={p} textLayer={n.kind === "text"} onChange={(next) => set(i, next)} />}
+            {!multi && preview[i] && (
+              <div className="export-checker">
+                <img src={previewUrl(n, p, scope)} alt={`Preview of ${n.name}${p.suffix} at ${p.scale}×`} />
+              </div>
+            )}
+          </div>
+        ))}
+        {!!presets.length && (
+          <div className="insp-pad">
+            <button
+              className="export-run"
+              onClick={() => {
+                const jobs: { t: XNode; p: ExportPreset }[] = [];
+                for (const t of targets()) for (const p of t.exports ?? []) jobs.push({ t, p });
+                if (!jobs.length) {
+                  toast("No export settings on the selected layers");
+                  return;
+                }
+                // Browsers throttle simultaneous downloads, so each file gets
+                // its own turn.
+                jobs.forEach(({ t, p }, i) => window.setTimeout(() => runExport(t, p, scope), i * 220));
+              }}
+            >
+              Export{multi ? ` ${targets().length}` : ""}
+            </button>
+          </div>
+        )}
+        {!presets.length && (
+          <div className="insp-pad">
+            <div className="empty-add">
+              <span className="muted">No export settings</span>
+              <button className="empty-add-btn" onClick={add}>
+                <Icon name="plus" size={12} /> Add image export
+              </button>
+            </div>
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}
+
+/** A data URL of the exact SVG this preset would write, used by the preview. */
+function previewUrl(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
+  const colorProfile = p.colorProfile ?? getRenderColorProfile();
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(exportSvg(n, { ...p, colorProfile }, scope))}`;
+}
+
+function downloadBlob(blob: Blob, name: string) {
+  const a = document.createElement("a");
+  a.download = name;
+  a.href = URL.createObjectURL(blob);
+  a.click();
+  window.setTimeout(() => URL.revokeObjectURL(a.href), 0);
+}
+
+function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
+  // A page sizes from its content box, not from the root's canvas-sized frame.
+  const box = scope?.page ? contentBox(n) : null;
+  const { width, height } = exportSize(box ?? n, p);
+  const settings = resolveSettings(p);
+  const colorProfile = p.colorProfile ?? getRenderColorProfile();
+  // The suffix is appended straight onto the layer's name, with no separator:
+  // the article's own example is "HomePage" + "draft" -> "HomePagedraft.png".
+  const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
+  const svg = exportSvg(n, { ...p, colorProfile }, scope);
+  if (p.format === "SVG") {
+    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
+    return;
+  }
+  const image = new Image();
+  image.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = width;
+    c.height = height;
+    const ctx = getCanvas2dContext(c, { colorSpace: colorProfile });
+    if (!ctx) return;
+    // "Image resampling": Detailed is a weighted average of the surrounding
+    // pixels (what the browser does by default, at high quality); Basic is
+    // nearest neighbour, which keeps a hard edge hard - the right choice for an
+    // icon or pixel art, and the wrong one for a gradient.
+    if (settings.resampling === "basic") {
+      ctx.imageSmoothingEnabled = false;
+    } else {
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+    }
+    // PDF keeps transparency via a soft mask, so it must not be flattened.
+    if (p.format === "JPG") {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+    if (p.format === "PDF") {
+      const rgba = new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer.slice(0));
+      const jpegCanvas = document.createElement("canvas");
+      jpegCanvas.width = width;
+      jpegCanvas.height = height;
+      const jpegCtx = getCanvas2dContext(jpegCanvas, { colorSpace: colorProfile });
+      if (!jpegCtx) return;
+      // JPEG has no alpha channel. Encode the RGB samples at the selected PDF
+      // quality, then pass the original alpha to the PDF writer as a lossless
+      // soft mask so transparent designs remain transparent.
+      const rgb = jpegCtx.createImageData(width, height);
+      const source = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
+      for (let i = 0; i < source.length; i += 4) {
+        rgb.data[i] = source[i];
+        rgb.data[i + 1] = source[i + 1];
+        rgb.data[i + 2] = source[i + 2];
+        rgb.data[i + 3] = 255;
+      }
+      jpegCtx.putImageData(rgb, 0, 0);
+      jpegCanvas.toBlob((blob) => {
+        if (!blob) {
+          toast("Could not encode the PDF image");
+          return;
+        }
+        void blob.arrayBuffer()
+          .then((bytes) => buildPdf(
+            rgba,
+            width,
+            height,
+            Math.max(1, box?.w ?? n.w),
+            Math.max(1, box?.h ?? n.h),
+            n.name,
+            new Uint8Array(bytes),
+          ))
+          .then((pdf) => downloadBlob(pdf, name))
+          .catch(() => toast("Could not build the PDF"));
+      }, "image/jpeg", qualityValue(settings.quality));
+      return;
+    }
+    c.toBlob(
+      (blob) => {
+        if (!blob) return;
+        void setRasterExportDpi(blob, p.format as "PNG" | "JPG", width / Math.max(1, box?.w ?? n.w))
+          .then((tagged) => downloadBlob(tagged, name))
+          .catch(() => toast("Could not prepare the raster export"));
+      },
+      p.format === "JPG" ? "image/jpeg" : "image/png",
+      qualityValue(settings.quality),
+    );
+  };
+  image.onerror = () => toast(`Could not render ${n.name} for export`);
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** The inspect-panel code for one layer, without touching the clipboard, so a
+ *  multi-selection can join several blocks into a single copy. */
+export function layerCode(n: XNode, format?: DevFormat, snap?: Snapshot): string {
+  const prefs = getDevPrefs();
+  const fmt = format ?? prefs.format;
+  const scope = prefs.scope ?? "layer";
+  // Copy-as-SVG of a slice renders the region's content, like the export does.
+  if (fmt === "svg" && n.isSlice === true && snap)
+    return exportSvg(n, { format: "SVG", scale: 1, suffix: "", colorProfile: snap.colorProfile }, { root: snap.pages[snap.page].root });
+  return snap
+    ? renderDevCodeScoped(n, fmt, fmt === "css" || scope === "subtree" ? prefs.unit : "px", scope, snap)
+    : renderDevCode(n, fmt, fmt === "css" ? prefs.unit : "px");
+}
+
+/** Copy the layer's snippet in the given language — the very renderer the panel
+ *  uses, so a copied answer and a shown answer cannot disagree. Omit `format`
+ *  to take the developer's current preference. */
+export function copyLayerCode(n: XNode, format?: DevFormat, snap?: Snapshot): void {
+  const prefs = getDevPrefs();
+  const fmt = format ?? prefs.format;
+  copyText(layerCode(n, format, snap));
+  toast(`Copied ${devLangLabel(fmt)} \u00b7 ${n.name}`);
+}
+
+/** Rasterise an SVG string and put the PNG on the clipboard. A clipboard that
+ *  will not take images (older Safari, denied permission) still gets the user
+ *  the pixels, just as a file. Shared by single- and multi-layer copy. */
+function rasterizeSvgToClipboard(svg: string, width: number, height: number, label: string) {
+  const colorProfile = getRenderColorProfile();
+  const image = new Image();
+  image.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = width;
+    c.height = height;
+    const ctx = getCanvas2dContext(c, { colorSpace: colorProfile });
+    if (!ctx) {
+      toast("Could not render this layer");
+      return;
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+    c.toBlob(async (blob) => {
+      if (!blob) {
+        toast(`Could not render ${label} for copying`);
+        return;
+      }
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        toast(`Copied ${label} as PNG`);
+      } catch {
+        downloadBlob(blob, `${label}.png`);
+        toast("Clipboard cannot take images · downloaded the PNG instead");
+      }
+    }, "image/png");
+  };
+  image.onerror = () => toast(`Could not render ${label} for copying`);
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** Put a PNG of the layer on the clipboard. It reuses the export renderer, so
+ *  what lands in Slack is what the downloaded file would have contained. */
+export function copyPng(n: XNode, root?: XNode) {
+  const preset: ExportPreset = { format: "PNG", scale: 2, suffix: "", colorProfile: getRenderColorProfile() };
+  const { width, height } = exportSize(n, preset);
+  rasterizeSvgToClipboard(
+    exportSvg(n, preset, root ? { root } : undefined),
+    width,
+    height,
+    n.name,
+  );
+}
+
+/** Put a PNG of several layers on the clipboard, at their relative positions.
+ *  The nodes must already carry export coordinates in x/y (see `worldClones`:
+ *  nested layers arrive frame-local and would collapse onto the origin). */
+export function copyPngNodes(nodes: XNode[]) {
+  if (!nodes.length) return;
+  if (nodes.length === 1) {
+    copyPng(nodes[0]);
+    return;
+  }
+  const minX = Math.min(...nodes.map((n) => n.x));
+  const minY = Math.min(...nodes.map((n) => n.y));
+  const w = Math.max(1, Math.max(...nodes.map((n) => n.x + Math.max(1, n.w))) - minX);
+  const h = Math.max(1, Math.max(...nodes.map((n) => n.y + Math.max(1, n.h))) - minY);
+  rasterizeSvgToClipboard(
+    exportClipSvg(nodes, getRenderColorProfile()),
+    Math.max(1, Math.round(w * 2)),
+    Math.max(1, Math.round(h * 2)),
+    `${nodes.length} layers`,
+  );
+}
+
+/** Every layer across the file a Pattern fill on `n` may repeat: not `n`,
+ *  nothing inside it, none of its ancestors, and not the page roots. */
+function patternSourcesFor(snap: Snapshot, n: XNode): PatternSourceOption[] {
+  const out: PatternSourceOption[] = [];
+  const walk = (m: XNode) => {
+    for (const c of m.children ?? []) {
+      if (containsId(n, c.id)) continue;
+      // An ancestor would contain the pattern itself: repeatable only below it.
+      if (c.w > 0 && c.h > 0 && !containsId(c, n.id)) out.push({ id: c.id, name: c.name || c.kind, node: c });
+      walk(c);
+    }
+  };
+  for (const pg of snap.pages) walk(pg.root);
+  return out;
+}
+
+function fillValuePatch(v: FillValue): Partial<XNode> {
+  const type = v.type || "solid";
+  const handles = handlesForFill(type);
+  return {
+    fill: v.color,
+    fillOpacity: Math.max(0, Math.min(1, (v.opacity ?? 100) / 100)),
+    fillVisible: true,
+    fillType: type,
+    fillB: v.second,
+    gradientStops: v.stops ?? [],
+    fillBlend: v.blend,
+    imageSrc: type === "image" ? v.image || "" : "",
+    imageFit: v.imageFit || "fill",
+    imageRot: v.imageRot || 0,
+    imageExposure: v.imageExposure || 0,
+    imageContrast: v.imageContrast || 0,
+    imageSaturation: v.imageSaturation || 0,
+    imageTemperature: v.imageTemperature || 0,
+    imageTint: v.imageTint || 0,
+    imageHighlights: v.imageHighlights || 0,
+    imageShadows: v.imageShadows || 0,
+    imageTile: v.imageTile ?? 100,
+    pattern: type === "pattern" ? v.pattern ?? {} : undefined,
+    ...(v.gx != null
+      ? { fillGX: v.gx, fillGY: v.gy, fillHX: v.hx, fillHY: v.hy }
+      : handles
+        ? { fillGX: handles.fillGX, fillGY: handles.fillGY, fillHX: handles.fillHX, fillHY: handles.fillHY }
+        : {}),
+  };
+}
+
+/** Collapsible inspector section.
+ *
+ *  The panel runs past the viewport on a text layer (1043px of content in
+ *  912px), so the lower sections — Effects, Export — are below the fold and
+ *  easy to miss. Rather than hide controls behind an "Advanced" bucket, which
+ *  makes real properties harder to find, each section can be folded away and
+ *  remembers that choice. Nothing is removed, and everything stays one click
+ *  from view.
+ *
+ *  `id` keys the persisted open/closed state; `defaultOpen` false starts a
+ *  section folded for layers that rarely need it.
+ */
+const SECTION_KEY = "x-native-inspector-sections";
+
+function readSections(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(SECTION_KEY);
+    const v: unknown = raw ? JSON.parse(raw) : null;
+    return v && typeof v === "object" ? (v as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Ask a section to reveal itself. Adding a fill/stroke/export while its
+ *  section is collapsed used to write state the user could not see, which read
+ *  as "Export does nothing". Expands and scrolls to the new row. */
+export function openSection(id: string) {
+  window.dispatchEvent(new CustomEvent("x-native-open-section", { detail: id }));
+}
+
+function Section({
+  id,
+  title,
+  defaultOpen = true,
+  actions,
+  children,
+  disabled,
+  disabledTitle,
+}: {
+  id: string;
+  title: string;
+  defaultOpen?: boolean;
+  actions?: ReactNode;
+  children: ReactNode;
+  /** Locks every control in the body, e.g. a boolean member's fill. */
+  disabled?: boolean;
+  disabledTitle?: string;
+}) {
+  const [open, setOpen] = useState(() => readSections()[id] ?? defaultOpen);
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent).detail !== id) return;
+      setOpen(true);
+      try {
+        localStorage.setItem(SECTION_KEY, JSON.stringify({ ...readSections(), [id]: true }));
+      } catch {
+        /* preference only */
+      }
+      requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    };
+    window.addEventListener("x-native-open-section", on);
+    return () => window.removeEventListener("x-native-open-section", on);
+  }, [id]);
+  const toggle = () => {
+    setOpen((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(SECTION_KEY, JSON.stringify({ ...readSections(), [id]: next }));
+      } catch {
+        /* preference only; not worth surfacing */
+      }
+      return next;
+    });
+  };
+  return (
+    <>
+      <div className="h-row" ref={rowRef}>
+        <button className="sec-toggle" aria-expanded={open} onClick={toggle}>
+          <Icon name={open ? "chevron" : "chevron-right"} size={12} />
+          <h2>{title}</h2>
+        </button>
+        {actions}
+      </div>
+      {open &&
+        (disabled ? (
+          <fieldset
+            disabled
+            title={disabledTitle}
+            style={{ border: 0, margin: 0, padding: 0, minWidth: 0, opacity: 0.55 }}
+          >
+            {children}
+          </fieldset>
+        ) : (
+          children
+        ))}
+    </>
+  );
+}
+
+/** Short labels for the bind picker, one per bindable prop. */
+const BIND_PROP_LABELS: Record<string, string> = {
+  fill: "Fill",
+  strokePaint: "Stroke",
+  strokeWidth: "Stroke width",
+  opacity: "Opacity",
+  fontSize: "Font size",
+  fontWeight: "Font weight",
+  fontFamily: "Font family",
+  letterSpacing: "Letter spacing",
+  lineHeight: "Line height",
+  paragraphSpacing: "Paragraph spacing",
+  paragraphIndent: "Paragraph indent",
+  cornerRadii: "Corner radius",
+  w: "Width",
+  h: "Height",
+  layoutGap: "Gap",
+  layoutPadding: "Padding",
+  visible: "Visibility",
+  text: "Text content",
+};
+
+/** The variable picker behind every BindControl: same-type variables with
+ *  their live resolved values, plus an unbind footer when bound. */
+function VariablePickerPopover({
+  anchor,
+  prop,
+  label,
+  snap,
+  currentId,
+  someBound,
+  onPick,
+  onUnbind,
+  onClose,
+  onOpenVariables,
+}: {
+  anchor: DOMRect;
+  prop: string;
+  label: string;
+  snap: Snapshot;
+  currentId?: string;
+  someBound: boolean;
+  onPick: (variableId: string) => void;
+  onUnbind: () => void;
+  onClose: () => void;
+  onOpenVariables?: () => void;
+}) {
+  const need = BINDABLE_PROPS[prop];
+  const all = snap.variables ?? [];
+  // Numbers render as text content too (the Figma tip) — the engine's
+  // bindVariable accepts them, so the picker lists them.
+  const vars = all.filter((x) => x.type === need || (prop === "text" && x.type === "number"));
+  return (
+    <XPopover anchor={anchor} title={`Bind ${label}`} onClose={onClose} ariaLabel={`Bind ${label} to a variable`}>
+      {vars.length === 0 ? (
+        <div className="bind-empty">
+          <p>No {need} variables yet.</p>
+          {onOpenVariables ? (
+            <button
+              className="link"
+              onClick={() => {
+                onClose();
+                onOpenVariables();
+              }}
+            >
+              Open Variables to create one
+            </button>
+          ) : (
+            <p>Create one in the Variables tab.</p>
+          )}
+        </div>
+      ) : (
+        <div className="bind-list" role="listbox" aria-label={`${label} variables`}>
+          {vars.map((x) => {
+            const res = resolveVariable(all, snap.variableCollections ?? [], snap.activeModes ?? {}, x.id);
+            const val = !res || res.broken ? "⚠ broken" : String(res.value);
+            return (
+              <button
+                key={x.id}
+                role="option"
+                aria-selected={x.id === currentId}
+                className={`bind-row${x.id === currentId ? " on" : ""}`}
+                onClick={() => onPick(x.id)}
+              >
+                {x.type === "color" && val.startsWith("#") && <span className="bind-swatch" style={{ background: val }} />}
+                <span className="bind-row-name">{x.name}</span>
+                <span className="bind-row-val">{val}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {someBound && (
+        <button className="bind-unbind" title="Remove binding (keeps the current value)" onClick={onUnbind}>
+          <Icon name="link-broken" size={12} />
+          Remove binding
+        </button>
+      )}
+    </XPopover>
+  );
+}
+
+/** Property-first variable binding: one control for every bindable row.
+ *  Bound shows the variable pill (re-pick or unbind); unbound shows a ghost
+ *  button; a multi-selection with divergent bindings shows the ghost lit.
+ *  Refusals reuse the engine's table so they always say why. Unbinding keeps
+ *  the current value — it only stops future variable updates. */
+function BindControl({
+  engine,
+  snap,
+  targets,
+  prop,
+  onOpenVariables,
+}: {
+  engine: Engine;
+  snap: Snapshot;
+  /** Every layer the bind acts on: the selection on rows that edit the
+   *  selection, the row's own subset (text, movers) where narrower. */
+  targets: XNode[];
+  prop: string;
+  onOpenVariables?: () => void;
+}) {
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const need = BINDABLE_PROPS[prop];
+  const label = BIND_PROP_LABELS[prop] ?? prop;
+  const root = snap.pages[snap.page].root;
+  const vars = snap.variables ?? [];
+  const boundIds = targets.map((t) => t.variableBindings?.[prop]);
+  const sameId =
+    boundIds.length > 0 && boundIds.every((id) => id != null && id === boundIds[0]) ? boundIds[0]! : undefined;
+  const someBound = boundIds.some((id) => id != null);
+  const mixed = targets.length > 1 && someBound && !sameId;
+  const blockedEverywhere = targets.length > 0 && targets.every((t) => bindBlockReason(root, t.id, prop) != null);
+  const what = label.charAt(0).toLowerCase() + label.slice(1);
+  const pick = (variableId: string) => {
+    const v = vars.find((x) => x.id === variableId);
+    if (!v) return;
+    const fits = targets.filter((t) => bindBlockReason(root, t.id, prop) == null);
+    if (!fits.length) {
+      toast(bindBlockReason(root, targets[0].id, prop) ?? `Cannot bind ${what} here`);
+      return;
+    }
+    engine.dispatch({ type: "begin" });
+    for (const t of fits) dispatchBindVariableWithWasmFallback(engine, t.id, prop, variableId);
+    engine.dispatch({ type: "end" });
+    toast(
+      targets.length > 1
+        ? `Bound ${v.name} to ${what} on ${fits.length} of ${targets.length} layers`
+        : `Bound ${v.name} to ${what}`,
+    );
+    setAnchor(null);
+  };
+  const unbind = () => {
+    engine.dispatch({ type: "begin" });
+    for (const t of targets) engine.dispatch({ type: "unbindVariable", id: t.id, prop });
+    engine.dispatch({ type: "end" });
+    toast(
+      targets.length > 1 ? `Removed ${what} bindings from ${targets.length} layers` : `Removed ${what} binding`,
+    );
+    setAnchor(null);
+  };
+  if (!need || !targets.length) return null;
+  if (blockedEverywhere && !someBound) {
+    const reason = targets.length ? bindBlockReason(root, targets[0].id, prop) : null;
+    const title = reason ? `${label}: ${reason}` : label;
+    return (
+      <button className="icon-btn bind-btn" disabled title={title} aria-label={title}>
+        <Icon name="variable" size={12} />
+      </button>
+    );
+  }
+  const v = sameId ? vars.find((x) => x.id === sameId) : undefined;
+  return (
+    <>
+      {sameId ? (
+        <span className="bind-pill">
+          <button
+            className="bind-pill-btn"
+            title={
+              v
+                ? `Bound to variable "${v.name}" — editing the value directly unbinds it`
+                : "Bound variable is missing"
+            }
+            aria-label={`Change ${what} variable (bound to ${v ? v.name : "a missing variable"})`}
+            onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+          >
+            <Icon name="variable" size={12} />
+            <span className="bind-pill-name">{v ? v.name : "Missing"}</span>
+          </button>
+          <button
+            className="icon-btn bind-x"
+            title="Remove binding (keeps the current value)"
+            aria-label={`Remove ${what} binding`}
+            onClick={unbind}
+          >
+            <Icon name="link-broken" size={12} />
+          </button>
+        </span>
+      ) : (
+        <button
+          className={`icon-btn bind-btn${mixed ? " on" : ""}`}
+          title={mixed ? `Mixed bindings — bind ${what} to one variable` : `Bind ${what} to a variable`}
+          aria-label={mixed ? `Mixed bindings — bind ${what} to one variable` : `Bind ${what} to a variable`}
+          onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+        >
+          <Icon name="variable" size={12} />
+        </button>
+      )}
+      {anchor && (
+        <VariablePickerPopover
+          anchor={anchor}
+          prop={prop}
+          label={label}
+          snap={snap}
+          currentId={sameId}
+          someBound={someBound}
+          onPick={pick}
+          onUnbind={unbind}
+          onClose={() => setAnchor(null)}
+          onOpenVariables={onOpenVariables}
+        />
+      )}
+    </>
+  );
+}
+
+function ColorRow({
+  title = "Fill",
+  value,
+  opacity = 100,
+  visible = true,
+  exportVisible = true,
+  type = "solid",
+  second = "#ffffff",
+  blend = "Normal",
+  image,
+  imageFit = "fill",
+  imageRot = 0,
+  imageExposure = 0,
+  imageContrast = 0,
+  imageSaturation = 0,
+  imageTemperature = 0,
+  imageTint = 0,
+  imageHighlights = 0,
+  imageShadows = 0,
+  imageTile = 100,
+  pattern,
+  patternSources,
+  gx,
+  gy,
+  hx,
+  hy,
+  stops,
+  recents = [],
+  background,
+  largeText,
+  noImage,
+  stroke,
+  mixed,
+  onChange,
+  onOpacity,
+  onVisible,
+  onExportVisible,
+  onRemove,
+  onMeta,
+  onValueChange,
+  onCrop,
+  bind,
+  onEyedropBinding,
+  onCreateEyedrop,
+}: {
+  title?: string;
+  value: string;
+  opacity?: number;
+  visible?: boolean;
+  /** "Show in exports": the toggle only renders when `onExportVisible` is
+   *  passed, so stroke rows never grow one. */
+  exportVisible?: boolean;
+  type?: FillValue["type"];
+  second?: string;
+  blend?: string;
+  image?: string;
+  imageFit?: FillValue["imageFit"];
+  imageRot?: number;
+  imageExposure?: number;
+  imageContrast?: number;
+  imageSaturation?: number;
+  imageTemperature?: number;
+  imageTint?: number;
+  imageHighlights?: number;
+  imageShadows?: number;
+  imageTile?: number;
+  pattern?: FillValue["pattern"];
+  patternSources?: PatternSourceOption[];
+  onCrop?: () => void;
+  /** Property-first binding affordance (BindControl) after the row buttons. */
+  bind?: ReactNode;
+  onEyedropBinding?: (source: EyedropSource) => boolean;
+  onCreateEyedrop?: (hex: string) => void | Promise<void>;
+  gx?: number;
+  gy?: number;
+  hx?: number;
+  hy?: number;
+  stops?: FillValue["stops"];
+  recents?: string[];
+  /** Passed to the picker's contrast check: what this paint is actually over. */
+  background?: string;
+  largeText?: boolean;
+  noImage?: boolean;
+  /** Stroke paint: solid or pattern (other paint types remain unavailable). */
+  stroke?: boolean;
+  /** Multi-select disagreement: the swatch splits between this layer's
+   *  colour and grey, the hex reads Mixed, and a commit applies to every
+   *  selected layer (the call site wires the apply-to-all). */
+  mixed?: boolean;
+  onChange: (v: string) => void;
+  onOpacity?: (v: number) => void;
+  onVisible?: (v: boolean) => void;
+  onExportVisible?: (v: boolean) => void;
+  onRemove?: () => void;
+  onMeta?: (p: Partial<XNode>) => void;
+  onValueChange?: (v: FillValue) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const isImage = type === "image" || !!image;
+  const isPattern = type === "pattern";
+  const hidden = !isImage && !isPattern && (!visible || isNone(value));
+  const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
+  // The hex field keeps its own draft while typing. Committing on every
+  // keystroke meant an in-progress value like "f" was parsed as an invalid
+  // colour and normalised to black, which wiped the field mid-entry and made
+  // the control impossible to type into. Commit only complete hex values,
+  // matching how FillPicker already handles the same input.
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = mixed ? "Mixed" : hidden ? "" : isImage ? "Image" : isPattern ? "Pattern" : hex.replace("#", "");
+  return (
+    <div className="color-row">
+      <button
+        type="button"
+        className="swatch"
+        style={
+          isImage && image
+            ? { backgroundImage: `url(${image})`, backgroundSize: "cover", backgroundPosition: "center" }
+            : mixed
+              ? { background: `linear-gradient(135deg, ${hex} 50%, var(--dim) 50%)` }
+              : isPattern
+                ? { background: `repeating-conic-gradient(${hex} 0% 25%, transparent 0% 50%) 0 / 8px 8px` }
+                : { background: hidden ? "transparent" : hex }
+        }
+        title="Color picker"
+        onClick={(e) => {
+          setAnchor((e.currentTarget as HTMLElement).getBoundingClientRect());
+          setOpen(true);
+        }}
+      />
+      <input
+        className="hex"
+        aria-label={title ? `${title} colour hex` : "Colour hex"}
+        value={draft ?? shown}
+        placeholder="None"
+        title={mixed ? "Mixed — a typed colour applies to every selected layer" : undefined}
+        spellCheck={false}
+        readOnly={isImage || isPattern}
+        onChange={(e) => {
+          if (isImage || isPattern) return;
+          const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
+          setDraft(v);
+          if (v.length === 3 || v.length === 4 || v.length === 6 || v.length === 8) {
+            onChange("#" + v);
+          }
+        }}
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={() => setDraft(null)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            setDraft(null);
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setDraft(null);
+            e.currentTarget.blur();
+          }
+        }}
+      />
+      {onOpacity && (
+        <input
+          className="op"
+          aria-label={title ? `${title} opacity` : "Opacity"}
+          value={`${opacity}%`}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value);
+            if (!Number.isNaN(v)) onOpacity(Math.max(0, Math.min(100, v)));
+          }}
+        />
+      )}
+      <button
+        className="mini"
+        title={hidden ? "Show" : "Hide"}
+        onClick={() => onVisible?.(!visible)}
+      >
+        <Icon name={hidden ? "eye-off" : "eye"} size={14} />
+      </button>
+      {onExportVisible && (
+        <button
+          className="mini"
+          style={exportVisible ? undefined : { opacity: 0.35 }}
+          title={exportVisible ? "Show in exports" : "Hidden from exports"}
+          aria-pressed={exportVisible}
+          onClick={() => onExportVisible(!exportVisible)}
+        >
+          <Icon name="export" size={14} />
+        </button>
+      )}
+      {onRemove && (
+        <button className="mini minus" title="Remove" onClick={onRemove}>
+          <Icon name="minus" size={14} />
+        </button>
+      )}
+      {bind}
+      {open && anchor && (
+        <FillPicker
+          title={title}
+          value={{
+            color: hex,
+            opacity,
+            type: isImage ? "image" : type,
+            second,
+            blend,
+            image,
+            imageFit,
+            imageRot,
+            imageExposure,
+            imageContrast,
+            imageSaturation,
+            imageTemperature,
+            imageTint,
+            imageHighlights,
+            imageShadows,
+            imageTile,
+            pattern,
+            gx,
+            gy,
+            hx,
+            hy,
+            stops,
+          }}
+          recents={recents}
+          anchor={anchor}
+          background={background}
+          largeText={largeText}
+          noImage={noImage}
+          stroke={stroke}
+          onCrop={onCrop}
+          patternSources={patternSources}
+          onChange={(v) => {
+            if (onValueChange) {
+              onValueChange(v);
+              return;
+            }
+            onChange(v.color);
+            onOpacity?.(v.opacity);
+            onMeta?.(fillValuePatch(v));
+          }}
+          onClose={() => setOpen(false)}
+          onEyedropBinding={onEyedropBinding}
+          onCreateEyedrop={onCreateEyedrop}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * What a paint is actually drawn over, for the contrast check: the nearest
+ * ancestor with a visible solid fill, falling back to the white paper the
+ * canvas sits on. Resolves the background the same way and always treats
+ * the selected layer as the foreground.
+ */
+function fillBackground(root: XNode, n: XNode): string {
+  for (let p = findParent(root, n.id); p; p = findParent(root, p.id)) {
+    if (p.kind === "text") continue;
+    if (p.fillVisible !== false && !isNone(p.fill) && p.fillType === "solid") return p.fill.slice(0, 7);
+    for (const q of p.fills ?? []) {
+      if (q.visible !== false && q.type === "solid" && !isNone(q.color)) return q.color.slice(0, 7);
+    }
+  }
+  return "#ffffff";
+}
+
+/** WCAG large-text exemption: 24px, or 19px and bold. */
+function isLargeText(n: XNode): boolean {
+  return n.kind === "text" && (n.fontSize >= 24 || (n.fontSize >= 19 && n.fontWeight >= 700));
+}
+
+function fmt(v: number) {
+  const r = Math.round(v);
+  if (Math.abs(v - r) < 0.001) return String(r);
+  return String(Math.round(v * 100) / 100);
+}
+
+function setDir(engine: Engine, snap: Snapshot, n: XNode, direction: "horizontal" | "vertical") {
+  setFlow(engine, snap, n.id, direction);
+}
+
+/** Human labels and shortcuts for the align row. */
+/** Zoom control + view options.
+ *
+ *  The top-right of the right sidebar shows the
+ *  current percentage, the field itself takes typed input, and the caret opens
+ *  the zoom presets and the canvas view toggles. The previous button cycled
+ *  100%→50%→100% and could never reach 200%.
+ */
+function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
+  const [open, setOpen] = useState(false);
+  // PM-U3: the zoom menu joins the one Escape cascade (it listened for itself
+  // in the bubble phase, which the app's capture handler could starve).
+  useEscape(open ? "zoom" : null, () => setOpen(false));
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const btn = useRef<HTMLButtonElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (editing) input.current?.focus();
+    if (editing) input.current?.select();
+  }, [editing]);
+
+  const go = (fn: () => void) => () => {
+    fn();
+    setOpen(false);
+  };
+  const commit = () => {
+    const z = parseZoomInput(draft);
+    if (z != null) zoomAboutCentre(engine, z);
+    setEditing(false);
+  };
+  const page = snap.pages[snap.page];
+  const near = (z: number) => Math.abs(snap.zoom - z) < 0.005 * Math.max(1, z);
+
+  return (
+    <div className="zoom-ctl" ref={root}>
+      {editing ? (
+        <input
+          ref={input}
+          className="zoom-input"
+          aria-label="Zoom percentage"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setEditing(false);
+              e.stopPropagation();
+            }
+          }}
+        />
+      ) : (
+        <button
+          className="zoom"
+          title="Zoom · type a percentage"
+          onClick={() => {
+            setEditing(true);
+            setDraft(String(Math.round(snap.zoom * 100)));
+          }}
+        >
+          {zoomLabel(snap.zoom)}
+        </button>
+      )}
+      <button
+        ref={btn}
+        className="zoom-caret"
+        title="Zoom and view options"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon name="chevron-down" size={caretSize()} />
+      </button>
+      {open && (
+        <div className="ctx zoom-menu" role="menu">
+          <button role="menuitem" onClick={go(() => zoomTo(engine, "fit"))}>
+            Zoom to fit<span className="sc">⇧1</span>
+          </button>
+          <button
+            role="menuitem"
+            disabled={!snap.selection.length}
+            onClick={go(() => zoomTo(engine, "selection"))}
+          >
+            Zoom to selection<span className="sc">⇧2</span>
+          </button>
+          <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, 1))}>
+            Zoom to 100%<span className="sc">⇧0</span>
+          </button>
+          <hr />
+          <div className="menu-label">Presets</div>
+          <div className="zoom-grid">
+            {ZOOM_STEPS.map((z) => (
+              <button
+                key={z}
+                role="menuitemradio"
+                aria-checked={near(z)}
+                className={near(z) ? "on" : ""}
+                onClick={go(() => zoomAboutCentre(engine, z))}
+              >
+                {Math.round(z * 100)}%
+              </button>
+            ))}
+          </div>
+          <div className="zoom-grid">
+            <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, 1)))}>
+              <Icon name="zoom-in" size={12} /> Zoom in<span className="sc">⇧=</span>
+            </button>
+            <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, -1)))}>
+              <Icon name="zoom-out" size={12} /> Zoom out<span className="sc">⇧−</span>
+            </button>
+          </div>
+          <hr />
+          <div className="menu-label">Canvas</div>
+          <button role="menuitemcheckbox" aria-checked={snap.showRulers} onClick={go(() => engine.dispatch({ type: "toggleRulers" }))}>
+            Rulers<span className="sc">⇧R</span>
+            {snap.showRulers && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button
+            role="menuitemcheckbox"
+            aria-checked={page.pixelGrid}
+            onClick={go(() => engine.dispatch({ type: "patchPage", patch: { pixelGrid: !page.pixelGrid } }))}
+          >
+            Pixel grid
+            {snap.zoom < 4 && <span className="hint">visible at 400%+</span>}
+            <span className="sc">⌘&apos;</span>
+            {page.pixelGrid && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button
+            role="menuitemcheckbox"
+            aria-checked={page.pixelSnap ?? true}
+            onClick={go(() => engine.dispatch({ type: "patchPage", patch: { pixelSnap: !(page.pixelSnap ?? true) } }))}
+          >
+            Snap to pixel grid<span className="sc">⌘⇧&apos;</span>
+            {page.pixelSnap ?? true ? <Icon name="check" size={12} className="tick" /> : null}
+          </button>
+          <div className="menu-label">Pixel preview</div>
+          {(["off", "1x", "2x"] as const).map((pv) => (
+            <button
+              key={pv}
+              role="menuitemradio"
+              aria-checked={snap.pixelPreview === pv}
+              onClick={go(() => engine.dispatch({ type: "setPixelPreview", preview: pv }))}
+            >
+              {pv === "off" ? "Off" : `${pv[0]}× device pixels`}
+              <span className="sc">{pv === "1x" ? "⌃P" : pv === "2x" ? "⌃⌥P" : ""}</span>
+              {snap.pixelPreview === pv && <Icon name="check" size={12} className="tick" />}
+            </button>
+          ))}
+          <button role="menuitemcheckbox" aria-checked={snap.viewLayoutGuides} onClick={go(() => engine.dispatch({ type: "toggleLayoutGuides" }))}>
+            Layout guides<span className="sc">⇧G</span>
+            {snap.viewLayoutGuides && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.propertyLabels} onClick={go(() => engine.dispatch({ type: "togglePropertyLabels" }))}>
+            Property labels
+            {snap.propertyLabels && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.showMinimap} onClick={go(() => engine.dispatch({ type: "toggleMinimap" }))}>
+            Minimap
+            {snap.showMinimap && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.showComments} onClick={go(() => engine.dispatch({ type: "toggleComments" }))}>
+            Comments
+            {snap.showComments && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={!!snap.outlineMode} onClick={go(() => engine.dispatch({ type: "toggleOutlines" }))}>
+            Layer outlines<span className="sc">⇧O</span>
+            {snap.outlineMode && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={!!snap.showMaskOutlines} onClick={go(() => engine.dispatch({ type: "toggleMaskOutlines" }))}>
+            Mask outlines
+            {snap.showMaskOutlines && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <button role="menuitemcheckbox" aria-checked={snap.showFlows !== false} onClick={go(() => engine.dispatch({ type: "toggleFlows" }))}>
+            Prototype flows<span className="sc">⇧F</span>
+            {snap.showFlows !== false && <Icon name="check" size={12} className="tick" />}
+          </button>
+          <hr />
+          <button role="menuitem" onClick={go(() => window.dispatchEvent(new CustomEvent("x-native-hide-ui")))}>
+            Hide UI<span className="sc">⌘\</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ALIGN_LABEL: Record<string, string> = {
+  "align-left": "Align left",
+  "align-hcenter": "Align horizontal centers",
+  "align-right": "Align right",
+  "align-top": "Align top",
+  "align-vcenter": "Align vertical centers",
+  "align-bottom": "Align bottom",
+};
+const ALIGN_SHORTCUT: Record<string, string> = {
+  "align-left": "⌥A",
+  "align-hcenter": "⌥H",
+  "align-right": "⌥D",
+  "align-top": "⌥W",
+  "align-vcenter": "⌥V",
+  "align-bottom": "⌥S",
+};
+
+/** The vector card's point-alignment row. Same six directions and the same
+ *  glyphs as `ALIGN_LABEL` above, named for what they move here — anchor points,
+ *  not layers — and with no chord, because `vectorAlign` has none (⌥A and
+ *  friends belong to the layer row). Two groups of three, the panel's `.align`
+ *  layout, so the row reads as the same control it looks like. */
+type PointAlign = "left" | "center" | "right" | "top" | "middle" | "bottom";
+const POINT_ALIGN: Record<PointAlign, { label: string; icon: IconName }> = {
+  left: { label: "Align points left", icon: "align-left" },
+  center: { label: "Align points to horizontal center", icon: "align-hcenter" },
+  right: { label: "Align points right", icon: "align-right" },
+  top: { label: "Align points top", icon: "align-top" },
+  middle: { label: "Align points to vertical center", icon: "align-vcenter" },
+  bottom: { label: "Align points bottom", icon: "align-bottom" },
+};
+const POINT_ALIGN_ROWS: [PointAlign[], PointAlign[]] = [
+  ["left", "center", "right"],
+  ["top", "middle", "bottom"],
+];
+
+export function align(
+  engine: Engine,
+  snap: Snapshot,
+  mode:
+    | "align-left"
+    | "align-hcenter"
+    | "align-right"
+    | "align-top"
+    | "align-vcenter"
+    | "align-bottom",
+  toParent = false,
+) {
+  const root = snap.pages[snap.page].root;
+  if (toParent && snap.selection.length) {
+    // ⇧-align plants the selection on its parent's edge as one rigid group:
+    // members that share a frame move by the same delta, so their offsets
+    // survive, and members of different frames form one group per frame, each
+    // against its own parent. Locked layers and instance members sit out
+    // before the union is measured, so they neither move nor anchor the rest.
+    const groups = new Map<string, { parent: XNode; members: XNode[] }>();
+    for (const id of snap.selection) {
+      const n = find(root, id);
+      const p = n ? findParent(root, n.id) : null;
+      if (!n || !p || p === root) continue;
+      if (isEffectivelyLocked(root, n.id) || isInstanceMember(root, n.id)) continue;
+      const g = groups.get(p.id);
+      if (g) g.members.push(n);
+      else groups.set(p.id, { parent: p, members: [n] });
+    }
+    engine.dispatch({ type: "begin" });
+    for (const { parent, members } of groups.values()) {
+      const union = {
+        x: Math.min(...members.map((m) => m.x)),
+        y: Math.min(...members.map((m) => m.y)),
+        w: 0,
+        h: 0,
+      };
+      union.w = Math.max(...members.map((m) => m.x + m.w)) - union.x;
+      union.h = Math.max(...members.map((m) => m.y + m.h)) - union.y;
+      const { dx, dy } = parentAlignDelta(mode, union, parent.w, parent.h);
+      if (dx || dy)
+        engine.dispatch({ type: "move", ids: members.map((m) => m.id), dx, dy });
+    }
+    engine.dispatch({ type: "end" });
+    return;
+  }
+  if (snap.selection.length === 1) {
+    const n = find(root, snap.selection[0]);
+    const p = n ? findParent(root, n.id) : null;
+    if (!n || !p || p === root) return;
+    // Children of an auto-layout frame are positioned by the layout engine, so a
+    // raw `move` is recomputed away on the next pass and the button looks dead.
+    // Retargets the alignment onto the parent's layout axes, which
+    // is the only thing that can actually move the child. Mirror that.
+    if (p.layout?.direction === "grid") {
+      // "Within a grid auto layout frame, a child object can be aligned to its
+      // cell. Select a child object and use the alignment buttons in the
+      // Position section" - so on a grid the buttons set the object's own
+      // alignment inside its cell, not the parent's packing.
+      const isX = mode.startsWith("align-left") || mode.startsWith("align-h") || mode.startsWith("align-r");
+      const value = mode.endsWith("center")
+        ? "center"
+        : mode === "align-left" || mode === "align-top"
+          ? "min"
+          : "max";
+      engine.dispatch({
+        type: "patch",
+        id: n.id,
+        patch: isX ? { constraintH: value } : { constraintV: value },
+      });
+      return;
+    }
+    if (p.layout) {
+      const horizontal = p.layout.direction === "horizontal";
+      const axis: Record<string, LayoutAlign | LayoutJustify> = {
+        "align-left": "min",
+        "align-hcenter": "center",
+        "align-right": "max",
+        "align-top": "min",
+        "align-vcenter": "center",
+        "align-bottom": "max",
+      };
+      const value = axis[mode];
+      const isX = mode.startsWith("align-left") || mode.startsWith("align-h") || mode.startsWith("align-r");
+      // On a horizontal stack the main axis is X (justify) and the cross axis is
+      // Y (align); on a vertical stack it is the other way around.
+      const key = isX === horizontal ? "justify" : "align";
+      engine.dispatch({
+        type: "patch",
+        id: p.id,
+        patch: { layout: { ...p.layout, [key]: value } },
+      });
+      return;
+    }
+    let dx = 0;
+    let dy = 0;
+    if (mode === "align-left") dx = -n.x;
+    if (mode === "align-right") dx = p.w - n.w - n.x;
+    if (mode === "align-hcenter") dx = (p.w - n.w) / 2 - n.x;
+    if (mode === "align-top") dy = -n.y;
+    if (mode === "align-bottom") dy = p.h - n.h - n.y;
+    if (mode === "align-vcenter") dy = (p.h - n.h) / 2 - n.y;
+    if (dx || dy) engine.dispatch({ type: "move", ids: [n.id], dx, dy });
+    return;
+  }
+  // On a grid a multi-selection is not one group to align with itself: "If you
+  // have multiple child objects selected, each one will align to its respective
+  // cell." So every object sets its own alignment inside its own cell, which is
+  // the same patch the single-object case sends.
+  if (snap.selection.length > 1) {
+    const parents = new Set<string>();
+    let allGrid = true;
+    for (const id of snap.selection) {
+      const n = find(root, id);
+      const p = n ? findParent(root, n.id) : null;
+      if (!n || !p?.layout || p.layout.direction !== "grid") allGrid = false;
+      else parents.add(p.id);
+    }
+    if (allGrid && parents.size === 1) {
+      const isX = mode === "align-left" || mode === "align-hcenter" || mode === "align-right";
+      const value = mode.endsWith("center")
+        ? "center"
+        : mode === "align-left" || mode === "align-top"
+          ? "min"
+          : "max";
+      engine.dispatch({ type: "begin" });
+      for (const id of snap.selection)
+        engine.dispatch({ type: "patch", id, patch: isX ? { constraintH: value } : { constraintV: value } });
+      engine.dispatch({ type: "end" });
+      return;
+    }
+  }
+  const items = snap.selection
+    .map((id) => worldPos(root, id))
+    .filter((x): x is NonNullable<typeof x> => !!x);
+  if (items.length < 2) return;
+  const minX = Math.min(...items.map((i) => i.x));
+  const maxX = Math.max(...items.map((i) => i.x + i.node.w));
+  const minY = Math.min(...items.map((i) => i.y));
+  const maxY = Math.max(...items.map((i) => i.y + i.node.h));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  engine.dispatch({ type: "begin" });
+  for (const it of items) {
+    let dx = 0;
+    let dy = 0;
+    if (mode === "align-left") dx = minX - it.x;
+    if (mode === "align-right") dx = maxX - (it.x + it.node.w);
+    if (mode === "align-hcenter") dx = cx - (it.x + it.node.w / 2);
+    if (mode === "align-top") dy = minY - it.y;
+    if (mode === "align-bottom") dy = maxY - (it.y + it.node.h);
+    if (mode === "align-vcenter") dy = cy - (it.y + it.node.h / 2);
+    if (dx || dy) engine.dispatch({ type: "move", ids: [it.node.id], dx, dy });
+  }
+  engine.dispatch({ type: "end" });
+}
