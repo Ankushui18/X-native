@@ -265,7 +265,9 @@ mod bindings {
         let state = POC_ENGINE.with(|slot| {
             let mut slot = slot.borrow_mut();
             *slot = Some(super::PocEngine::new());
-            slot.as_ref().expect("POC engine was just initialized").snapshot()
+            slot.as_ref()
+                .expect("POC engine was just initialized")
+                .snapshot()
         });
         serde_wasm_bindgen::to_value(&state).map_err(|error| js_error(error.to_string()))
     }
