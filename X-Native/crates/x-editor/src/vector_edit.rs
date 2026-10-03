@@ -1123,7 +1123,10 @@ fn rotate_vector_point(
     let world = vector_local_to_world(chain, point);
     let dx = world.0 - pivot.0;
     let dy = world.1 - pivot.1;
-    vector_world_to_local(chain, (pivot.0 + dx * cos - dy * sin, pivot.1 + dx * sin + dy * cos))
+    vector_world_to_local(
+        chain,
+        (pivot.0 + dx * cos - dy * sin, pivot.1 + dx * sin + dy * cos),
+    )
 }
 
 impl Editor {
@@ -1443,7 +1446,8 @@ impl Editor {
         }
         let hits = self.lasso_select_points(node_id, boundary);
         if subtractive {
-            self.vector_edit_selected_points.retain(|index| !hits.contains(index));
+            self.vector_edit_selected_points
+                .retain(|index| !hits.contains(index));
         } else if additive {
             self.vector_edit_selected_points.extend(hits);
             self.vector_edit_selected_points.sort_unstable();
@@ -1458,7 +1462,11 @@ impl Editor {
     /// to those anchors in page space. The node's frame stays fixed; subsequent
     /// normalization can fit the path bounds without moving its geometry. One
     /// ReplaceNode command makes the operation fully undoable.
-    pub fn rotate_selected_vector_points(&mut self, delta_radians: f64, pivot_world: (f64, f64)) -> bool {
+    pub fn rotate_selected_vector_points(
+        &mut self,
+        delta_radians: f64,
+        pivot_world: (f64, f64),
+    ) -> bool {
         if !delta_radians.is_finite()
             || !pivot_world.0.is_finite()
             || !pivot_world.1.is_finite()
@@ -2457,16 +2465,20 @@ mod tests {
             PathCmd::LineTo(50.0, 50.0),
             PathCmd::LineTo(90.0, 90.0),
         ];
-        let mut parent = Node::frame("parent", 200.0, 200.0).child(Node::vector(
-            "v", 20.0, 10.0, 100.0, 100.0, path,
-        ));
+        let mut parent = Node::frame("parent", 200.0, 200.0)
+            .child(Node::vector("v", 20.0, 10.0, 100.0, 100.0, path));
         parent.transform.x = 50.0;
         parent.transform.y = 30.0;
         let mut e = Editor::new(Node::frame("page", 800.0, 600.0).child(parent));
         assert!(e.enter_vector_edit_mode("v"));
         // The vector's anchors are page-space (80,50), (120,90), (160,130).
         let first = vec![(80.0, 40.0), (125.0, 40.0), (125.0, 95.0), (80.0, 95.0)];
-        let second = vec![(150.0, 120.0), (175.0, 120.0), (175.0, 145.0), (150.0, 145.0)];
+        let second = vec![
+            (150.0, 120.0),
+            (175.0, 120.0),
+            (175.0, 145.0),
+            (150.0, 145.0),
+        ];
         assert_eq!(e.lasso_select_points("v", &first), vec![0, 1]);
         assert_eq!(
             e.select_vector_points_lasso("v", &first, false, false),
