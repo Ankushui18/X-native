@@ -2550,18 +2550,34 @@ mod tests {
 
         let depth = e.undo_depth();
         assert!(e.rotate_selected_vector_points(std::f64::consts::FRAC_PI_2, pivot));
-        assert_eq!(e.undo_depth(), depth + 1, "one point-box rotation is one undo step");
+        assert_eq!(
+            e.undo_depth(),
+            depth + 1,
+            "one point-box rotation is one undo step"
+        );
         let chain_after = vector_transform_chain(&e.root, "v").unwrap();
         let rotated = path_of(&e, "v");
         let after_anchors = anchors(&rotated);
         let after0 = vector_local_to_world(&chain_after, (after_anchors[0].x, after_anchors[0].y));
         let after1 = vector_local_to_world(&chain_after, (after_anchors[1].x, after_anchors[1].y));
         let after2 = vector_local_to_world(&chain_after, (after_anchors[2].x, after_anchors[2].y));
-        let out = match &rotated[1] { PathCmd::CurveTo(x, y, ..) => vector_local_to_world(&chain_after, (*x, *y)), _ => panic!() };
-        let incoming = match &rotated[1] { PathCmd::CurveTo(_, _, x, y, ..) => vector_local_to_world(&chain_after, (*x, *y)), _ => panic!() };
+        let out = match &rotated[1] {
+            PathCmd::CurveTo(x, y, ..) => vector_local_to_world(&chain_after, (*x, *y)),
+            _ => panic!(),
+        };
+        let incoming = match &rotated[1] {
+            PathCmd::CurveTo(_, _, x, y, ..) => vector_local_to_world(&chain_after, (*x, *y)),
+            _ => panic!(),
+        };
         let near = |actual: (f64, f64), expected: (f64, f64)| {
-            assert!((actual.0 - expected.0).abs() < 1e-8, "x: {actual:?} != {expected:?}");
-            assert!((actual.1 - expected.1).abs() < 1e-8, "y: {actual:?} != {expected:?}");
+            assert!(
+                (actual.0 - expected.0).abs() < 1e-8,
+                "x: {actual:?} != {expected:?}"
+            );
+            assert!(
+                (actual.1 - expected.1).abs() < 1e-8,
+                "y: {actual:?} != {expected:?}"
+            );
         };
         near(after0, expected0);
         near(after1, expected1);
@@ -2570,7 +2586,10 @@ mod tests {
         near(incoming, expected_in);
         assert!(e.undo());
         assert_eq!(path_of(&e, "v"), original);
-        assert!(!e.rotate_selected_vector_points(0.0, pivot), "zero-angle rotation is a no-op");
+        assert!(
+            !e.rotate_selected_vector_points(0.0, pivot),
+            "zero-angle rotation is a no-op"
+        );
     }
 
     #[test]
