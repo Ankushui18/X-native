@@ -10,10 +10,10 @@ import { decodeRustImport } from "./wasmImportAdapter";
 import { auditDecision, auditRustAsyncCall, auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 export const IMPORT_BRIDGE_VERSION = 1;
-// V7 adds Phase 9: Rust raster/PDF export pipeline and vector editing
-// operations (add point to segment, corner↔smooth conversion). Older bindgen
-// classes cannot access the new export and vector editing methods.
-export const SESSION_BRIDGE_VERSION = 7;
+// V8 adds Phase 10: advanced drawing tools (pen commit, pencil smoothing,
+// eraser geometry splitting). Older bindgen classes cannot create or smooth
+// paths via the Rust pipeline.
+export const SESSION_BRIDGE_VERSION = 8;
 export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
 /** wasm-bindgen owns this stateful instance; JS never mirrors its document or
  * undo stack. The only large payload is an explicit open/export of native .x. */
@@ -39,6 +39,12 @@ export interface WasmDocumentSession {
   vectorAddPoint?: (id: string, segmentIdx: number, x: number, y: number) => string;
   /** Phase 9: Convert a corner point to smooth or vice versa. */
   vectorConvertPoint?: (id: string, anchorIdx: number) => string;
+  /** Phase 10: Commit a pen-drawn path as a vector node with bezier curves. */
+  commitPenPath?: (parentId: string, pointsJson: string) => string;
+  /** Phase 10: Commit a pencil stroke with RDP simplification and smooth fitting. */
+  smoothPencilPath?: (parentId: string, pointsJson: string, tolerance: number) => string;
+  /** Phase 10: Erase geometry from a vector node along a stroke path. */
+  eraseGeometry?: (targetId: string, erasePointsJson: string, radius: number) => string;
   free: () => void;
 }
 export type WasmPocCommand = {

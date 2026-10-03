@@ -837,6 +837,41 @@ export function Canvas({
   } | null>(null);
   const pencil = useRef<PathPoint[] | null>(null);
   const penDrag = useRef<{ i: number; x: number; y: number } | null>(null);
+  /** Phase 10: eraser stroke collector for WASM finalization. */
+  const eraserPath = useRef<{ points: [number, number][]; targetId: string | null } | null>(null);
+
+  /** Phase 10: Commit a pen/pencil path through WASM first, fall back to TS.
+   *  Called on pen draft finalization (Enter/Escape/close-click). */
+  const commitPathWasm = useCallback(
+    (points: PathPoint[], closed: boolean) => {
+      const rawPoints: [number, number][] = points.map((p) => [p.x, p.y]);
+      if (rawPoints.length < 2) {
+        engine.dispatch({ type: "addPath", points, closed });
+        return;
+      }
+      const parentId = engine.snapshot().pages[engine.snapshot().page].root.id;
+      void (async () => {
+        try {
+          const { wasmCommitPenPath, wasmSmoothPencilPath, serializeToX } = await import("../engine/wasmDrawing");
+          const root = engine.snapshot().pages[engine.snapshot().page].root;
+          const xDoc = serializeToX(root);
+          if (xDoc) {
+            // Use commitPenPath for pen tool (click-defined), smoothPencilPath for pencil (drag-defined)
+            const isPencil = snap.tool === "pencil";
+            const result = isPencil
+              ? await wasmSmoothPencilPath(xDoc, parentId, rawPoints, PENCIL_TOLERANCE_PX / snap.zoom)
+              : await wasmCommitPenPath(xDoc, parentId, rawPoints);
+            if (result?.success) return;
+          }
+        } catch {
+          // WASM path unavailable
+        }
+        // Fallback to TS path creation
+        engine.dispatch({ type: "addPath", points, closed });
+      })();
+    },
+    [engine, snap.tool, snap.zoom],
+  );
   /**
    * Set while the pen is drawing a branch into an existing vector network: the
    * node to keep adding to and the vertex index the next click connects from.
@@ -1231,7 +1266,7 @@ export function Canvas({
       if (e.type === "keydown" && (e.key === "Escape" || e.key === "Enter") && (draft.length >= 2 || penBranch.current)) {
         e.stopImmediatePropagation();
         e.preventDefault();
-        if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+        if (draft.length >= 2) commitPathWasm(draft, false);
         setDraft([]);
         setCloseHint(null);
         penBranch.current = null;
@@ -1660,7 +1695,7 @@ export function Canvas({
       return undefined;
     }
     registerPenFinisher(() => {
-      if (draft.length >= 2) engine.dispatch({ type: "addPath", points: draft, closed: false });
+      if (draft.length >= 2) commitPathWasm(draft, false);
       setDraft([]);
       setCloseHint(null);
       penBranch.current = null;
@@ -1672,7 +1707,7 @@ export function Canvas({
   useEffect(() => {
     if (snap.tool !== "pen" && snap.tool !== "pencil" && snap.tool !== "brush" && draft.length) {
       if (draft.length >= 2) {
-        engine.dispatch({ type: "addPath", points: draft, closed: false });
+        commitPathWasm(draft, false);
       }
       setDraft([]);
       setCloseHint(null);
@@ -4896,6 +4931,14 @@ export function Canvas({
     }
     if (snap.tool === "eraser") {
       const wpt = toWorld(e.clientX, e.clientY);
+      // Phase 10: Collect the eraser stroke path for WASM finalization on up.
+      // Find the target node first so we can hand it to Rust on pointer-up.
+      const eraseRoot = snap.pages[snap.page].root;
+      const hit = hitTest(eraseRoot, wpt.x, wpt.y, { deep: true });
+      if (hit && !hit.locked && allowTopologyEdit(engine, hit.id)) {
+        eraserPath.current = { points: [[wpt.x, wpt.y]], targetId: hit.id };
+      }
+      // Also fire the immediate TS erase for visual feedback during the drag
       engine.dispatch({ type: "begin" });
       eraseAt(wpt.x, wpt.y);
       drag.current = { mode: "marquee", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: "erase" };
@@ -5074,7 +5117,7 @@ export function Canvas({
       if (draft.length >= 2) {
         const a = draft[0];
         if (Math.hypot(wpt.x - a.x, wpt.y - a.y) < 14 / snap.zoom) {
-          engine.dispatch({ type: "addPath", points: draft, closed: true });
+          commitPathWasm(draft, true);
           setDraft([]);
           setCloseHint(null);
           penDrag.current = null;
@@ -6551,6 +6594,10 @@ export function Canvas({
       }
     } else if (d.mode === "marquee" && d.id === "erase") {
       const wpt = toWorld(e.clientX, e.clientY);
+      // Phase 10: collect the eraser stroke for WASM finalization
+      if (eraserPath.current) {
+        eraserPath.current.points.push([wpt.x, wpt.y]);
+      }
       eraseAt(wpt.x, wpt.y);
     } else if (d.mode === "create" || d.mode === "marquee") {
       let x = Math.min(d.sx, e.clientX) - box.left;
@@ -7133,13 +7180,30 @@ export function Canvas({
       const pts = pencil.current;
       pencil.current = null;
       if (pts.length >= 2) {
-        // Raw pointer samples are dense and jagged: thin them with RDP, then
-        // fit bezier handles so the stroke reads as a smooth curve. Tolerance
-        // is in world units so it is consistent at any zoom.
+        // Phase 10: Attempt Rust pipeline for pencil smoothing (RDP + Catmull-Rom).
+        // Points were collected in TS during the drag for 60fps; this is the
+        // single WASM call on pointer-up that creates the final smooth geometry.
+        const rawPoints: [number, number][] = pts.map((p) => [p.x, p.y]);
         const tol = PENCIL_TOLERANCE_PX / snap.zoom;
-        const thinned = simplifyPath(pts, tol);
-        const smoothed = snap.tool === "pencil" ? smoothPath(thinned, false) : thinned;
-        engine.dispatch({ type: "addPath", points: smoothed, closed: false });
+        const root = snap.pages[snap.page].root;
+        const parentId = root.id;
+        void (async () => {
+          try {
+            const { wasmSmoothPencilPath } = await import("../engine/wasmDrawing");
+            const { serializeToX } = await import("../engine/wasmDrawing");
+            const xDoc = serializeToX?.(root);
+            if (xDoc) {
+              const result = await wasmSmoothPencilPath(xDoc, parentId, rawPoints, tol);
+              if (result?.success) return;
+            }
+          } catch {
+            // WASM path unavailable — fall through to TS
+          }
+          // Fallback: existing TS smoothing pipeline
+          const thinned = simplifyPath(pts, tol);
+          const smoothed = snap.tool === "pencil" ? smoothPath(thinned, false) : thinned;
+          engine.dispatch({ type: "addPath", points: smoothed, closed: false });
+        })();
       }
       setDraft([]);
       return;
@@ -7361,6 +7425,30 @@ export function Canvas({
       (d.mode === "marquee" && d.id === "erase")
     )
       engine.dispatch({ type: "end" });
+    // Phase 10: Finalize eraser via WASM when a stroke path was collected.
+    // The TS erase already ran during the drag for visual feedback; the WASM
+    // call here produces the mathematically correct geometry splitting as
+    // ONE atomic undo step (replacing the multiple TS dispatches).
+    if (d.mode === "marquee" && d.id === "erase" && eraserPath.current) {
+      const ep = eraserPath.current;
+      eraserPath.current = null;
+      if (ep.targetId && ep.points.length >= 2) {
+        const ERASER_RADIUS = ERASER_PX / snap.zoom;
+        void (async () => {
+          try {
+            const { wasmEraseGeometry, serializeToX } = await import("../engine/wasmDrawing");
+            const root = engine.snapshot().pages[engine.snapshot().page].root;
+            const xDoc = serializeToX(root);
+            if (xDoc) {
+              const result = await wasmEraseGeometry(xDoc, ep.targetId!, ep.points, ERASER_RADIUS);
+              if (result?.success) return;
+            }
+          } catch {
+            // WASM path unavailable — TS erase already applied during drag
+          }
+        })();
+      }
+    }
     if ((d.mode === "crop" || d.mode === "cropMove" || d.mode === "cropRotate" || d.mode === "cropScale") && d.id) {
       const fresh = engine.snapshot();
       const cn = find(fresh.pages[fresh.page].root, d.id);
@@ -9518,7 +9606,7 @@ export function Canvas({
             className={`tool-btn ${snap.tool === "select" && vecSubTool === "select" ? "on" : ""}`}
             onClick={() => {
               if (draft.length >= 2) {
-                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                commitPathWasm(draft, false);
                 setDraft([]);
                 setCloseHint(null);
                 penBranch.current = null;
@@ -9653,7 +9741,7 @@ export function Canvas({
             className="dock-done"
             onClick={() => {
               if (draft.length >= 2) {
-                engine.dispatch({ type: "addPath", points: draft, closed: false });
+                commitPathWasm(draft, false);
                 setDraft([]);
                 setCloseHint(null);
                 penBranch.current = null;

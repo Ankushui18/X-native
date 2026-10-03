@@ -479,6 +479,39 @@ export class RustSessionClient {
     return stateValue(this.native("vectorConvertPoint", () => binding.vectorConvertPoint!(id, anchorIdx)));
   }
 
+  /** Phase 10: Commit a pen-drawn path as a vector node with smooth bezier
+   *  curves. ONE atomic undo step. Points is an array of [x, y] pairs. */
+  commitPenPath(parentId: string, points: [number, number][]): RustStateChange {
+    const binding = this.current();
+    if (!binding.commitPenPath) {
+      throw new Error("Rust pen commit not available in this bridge version");
+    }
+    const json = JSON.stringify(points);
+    return stateValue(this.native("commitPenPath", () => binding.commitPenPath!(parentId, json)));
+  }
+
+  /** Phase 10: Commit a pencil stroke with RDP simplification and Catmull-Rom
+   *  bezier fitting. ONE atomic undo step. */
+  smoothPencilPath(parentId: string, points: [number, number][], tolerance: number): RustStateChange {
+    const binding = this.current();
+    if (!binding.smoothPencilPath) {
+      throw new Error("Rust pencil smoothing not available in this bridge version");
+    }
+    const json = JSON.stringify(points);
+    return stateValue(this.native("smoothPencilPath", () => binding.smoothPencilPath!(parentId, json, tolerance)));
+  }
+
+  /** Phase 10: Erase geometry from a vector node along a stroke path.
+   *  ONE atomic undo step. */
+  eraseGeometry(targetId: string, erasePoints: [number, number][], radius: number): RustStateChange {
+    const binding = this.current();
+    if (!binding.eraseGeometry) {
+      throw new Error("Rust eraser not available in this bridge version");
+    }
+    const json = JSON.stringify(erasePoints);
+    return stateValue(this.native("eraseGeometry", () => binding.eraseGeometry!(targetId, json, radius)));
+  }
+
   close(): void {
     const binding = this.binding;
     this.binding = null;
