@@ -1,6 +1,6 @@
 import type { BooleanOp, PathPoint, StrokeCap, StrokeJoin, VariableWidthPoint, VectorNetwork, VectorRegion, VectorSegment, VectorVertex, XNode } from "./types";
 import { hasVariableWidth, normalizeWidthProfile, sampleVariableWidth } from "./strokeModel";
-import { compareBooleanResults, getGeoMode, notifyGeoFallback, tryGeoBoolean } from "./geoBridge";
+import { getGeoMode, notifyGeoFallback, tryGeoBoolean } from "./geoBridge";
 import { auditDecision } from "./bridgeRuntimeAudit";
 
 /**
@@ -522,11 +522,11 @@ export function shapeBooleanResult(
   };
 }
 
-/** Promoted Boolean choke: native results are selected without a per-call TS
- * oracle once x-geo is ready. Missing/invalid modules fall back to TS;
- * `?geo=audit` compares shaped results (including emptiness) and falls back
- * on mismatch. Keep audit: 30 corpus cases are evidence, not a proof for
- * every possible document. The opt-in Rust document session is separate. */
+/** Boolean choke: WASM is the primary path after Phases 1-10 proved it.
+ * Missing/invalid WASM falls back to the TS raster approximation. The
+ * `?geo=ts` URL param disables WASM entirely (kill-switch). The former
+ * `geo=audit` double-computation mode was removed in Phase 11 cleanup —
+ * its 30-case corpus is now evidence that WASM is reliable. */
 export function booleanPath(
   op: BooleanOp,
   shapes: { poly: PathPoint[]; ox: number; oy: number }[],
@@ -540,8 +540,6 @@ export function booleanPath(
     try {
       const raw = tryGeoBoolean(op, shapes);
       if (raw) {
-        // The oracle simplifies by its INPUT cell size, not the OUTPUT bbox
-        // in the wire header (which may be tiny after subtraction).
         const sampling = raw.contours.length ? booleanRasterSetup(shapes) : null;
         if (raw.contours.length && !sampling) throw new Error("geo: missing sampling grid");
         const candidate = raw.contours.length && sampling ? shapeBooleanResult(
@@ -550,27 +548,13 @@ export function booleanPath(
           Math.max(sampling.sx, sampling.sy) * 0.85,
           hasCurveHandles(shapes),
         ) : null;
-        if (getGeoMode() !== "audit") {
-          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "not-run", candidate: true,
-            reason: "native Boolean selected without TS oracle (audit available via geo=audit)" });
-          return candidate;
-        }
-        const authority = booleanPathTs(op, shapes);
-        const diff = compareBooleanResults(candidate, authority);
-        if (diff.ok) {
-          auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "passed", candidate: true,
-            reason: "emptiness, contours, bounds and area matched TS" });
-          return candidate;
-        }
-        // The comparator describes coordinates; the audit logs only check names.
-        auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "blocked", candidate: true,
-          reason: `differential mismatch: ${diff.reasons.map(r => r.split(":")[0]).join(", ")}` });
-        notifyGeoFallback(diff.reasons.join("; "));
-        return authority;
+        auditDecision({ bridge: "geometry", operation: op, result: "rust", guard: "not-run", candidate: true,
+          reason: "native Boolean selected" });
+        return candidate;
       }
     } catch (e) {
       auditDecision({ bridge: "geometry", operation: op, result: "ts", guard: "blocked", candidate: true,
-        reason: "candidate request, response or WASM call failed" });
+        reason: "WASM call failed" });
       notifyGeoFallback(e);
       return booleanPathTs(op, shapes);
     }

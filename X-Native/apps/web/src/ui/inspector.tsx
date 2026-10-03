@@ -9295,33 +9295,20 @@ function downloadBlob(blob: Blob, name: string) {
 }
 
 function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boolean }) {
-  // A page sizes from its content box, not from the root's canvas-sized frame.
   const box = scope?.page ? contentBox(n) : null;
   const { width, height } = exportSize(box ?? n, p);
   const settings = resolveSettings(p);
   const colorProfile = p.colorProfile ?? getRenderColorProfile();
-  // The suffix is appended straight onto the layer's name, with no separator:
-  // the article's own example is "HomePage" + "draft" -> "HomePagedraft.png".
   const name = `${n.name}${p.suffix}.${p.format.toLowerCase()}`;
   const svg = exportSvg(n, { ...p, colorProfile }, scope);
   if (p.format === "SVG") {
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
   }
-  // Phase 9: Attempt Rust render pipeline for PNG/JPG/PDF. The Rust path
-  // uses tiny-skia (CPU) for raster and a native PDF writer — it bypasses
-  // the canvas.toDataURL intermediate and produces output at full fidelity
-  // with no lossy canvas artifacts. Falls back to the SVG->canvas path
-  // when the WASM bridge is not available (e.g. older deployed artifacts).
-  if (p.format === "PNG" || p.format === "JPG" || p.format === "PDF") {
-    void tryWasmExport(n, p, scope, name, width, height, box).then((handled) => {
-      if (handled) return;
-      // WASM path not available — fall through to the canvas path below
-      canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
-    });
-    return;
-  }
-  canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
+  // Phase 9+: Rust pipeline (PNG/JPG/PDF) is primary; canvas.toBlob is fallback.
+  void tryWasmExport(n, p, scope, name, width, height, box).then((handled) => {
+    if (!handled) canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
+  });
 }
 
 /** Phase 9: Try the Rust render pipeline first. Returns true if it handled
@@ -9337,9 +9324,6 @@ async function tryWasmExport(
 ): Promise<boolean> {
   try {
     const { wasmExportNode } = await import("../engine/wasmExport");
-    // Build a minimal .x document from the node for the Rust exporter.
-    // The RustDocumentSession needs a full .x to open; we synthesize one
-    // with a single page containing the target node.
     const xDoc = buildMinimalXDoc(n, box);
     if (!xDoc) return false;
     const scale = typeof p.scale === "number" ? p.scale : 1;

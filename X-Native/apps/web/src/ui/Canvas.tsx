@@ -844,33 +844,33 @@ export function Canvas({
    *  Called on pen draft finalization (Enter/Escape/close-click). */
   const commitPathWasm = useCallback(
     (points: PathPoint[], closed: boolean) => {
-      const rawPoints: [number, number][] = points.map((p) => [p.x, p.y]);
-      if (rawPoints.length < 2) {
+      if (points.length < 2) {
         engine.dispatch({ type: "addPath", points, closed });
         return;
       }
-      const parentId = engine.snapshot().pages[engine.snapshot().page].root.id;
+      const rawPoints: [number, number][] = points.map((p) => [p.x, p.y]);
+      const snap = engine.snapshot();
+      const parentId = snap.pages[snap.page].root.id;
+      const root = snap.pages[snap.page].root;
       void (async () => {
         try {
           const { wasmCommitPenPath, wasmSmoothPencilPath, serializeToX } = await import("../engine/wasmDrawing");
-          const root = engine.snapshot().pages[engine.snapshot().page].root;
           const xDoc = serializeToX(root);
           if (xDoc) {
-            // Use commitPenPath for pen tool (click-defined), smoothPencilPath for pencil (drag-defined)
-            const isPencil = snap.tool === "pencil";
+            const isPencil = engine.snapshot().tool === "pencil";
+            const tol = PENCIL_TOLERANCE_PX / engine.snapshot().zoom;
             const result = isPencil
-              ? await wasmSmoothPencilPath(xDoc, parentId, rawPoints, PENCIL_TOLERANCE_PX / snap.zoom)
+              ? await wasmSmoothPencilPath(xDoc, parentId, rawPoints, tol)
               : await wasmCommitPenPath(xDoc, parentId, rawPoints);
             if (result?.success) return;
           }
         } catch {
-          // WASM path unavailable
+          // WASM unavailable — fall through to TS
         }
-        // Fallback to TS path creation
         engine.dispatch({ type: "addPath", points, closed });
       })();
     },
-    [engine, snap.tool, snap.zoom],
+    [engine],
   );
   /**
    * Set while the pen is drawing a branch into an existing vector network: the
@@ -7180,30 +7180,9 @@ export function Canvas({
       const pts = pencil.current;
       pencil.current = null;
       if (pts.length >= 2) {
-        // Phase 10: Attempt Rust pipeline for pencil smoothing (RDP + Catmull-Rom).
-        // Points were collected in TS during the drag for 60fps; this is the
-        // single WASM call on pointer-up that creates the final smooth geometry.
-        const rawPoints: [number, number][] = pts.map((p) => [p.x, p.y]);
-        const tol = PENCIL_TOLERANCE_PX / snap.zoom;
-        const root = snap.pages[snap.page].root;
-        const parentId = root.id;
-        void (async () => {
-          try {
-            const { wasmSmoothPencilPath } = await import("../engine/wasmDrawing");
-            const { serializeToX } = await import("../engine/wasmDrawing");
-            const xDoc = serializeToX?.(root);
-            if (xDoc) {
-              const result = await wasmSmoothPencilPath(xDoc, parentId, rawPoints, tol);
-              if (result?.success) return;
-            }
-          } catch {
-            // WASM path unavailable — fall through to TS
-          }
-          // Fallback: existing TS smoothing pipeline
-          const thinned = simplifyPath(pts, tol);
-          const smoothed = snap.tool === "pencil" ? smoothPath(thinned, false) : thinned;
-          engine.dispatch({ type: "addPath", points: smoothed, closed: false });
-        })();
+        // Phase 10+: Delegate to Rust (RDP + Catmull-Rom) via commitPathWasm.
+        // TS smoothing is the fallback inside commitPathWasm when WASM fails.
+        commitPathWasm(pts, false);
       }
       setDraft([]);
       return;
