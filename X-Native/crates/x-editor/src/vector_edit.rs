@@ -1045,7 +1045,8 @@ fn translate_only(t: &Transform) -> bool {
         && t.skew_y.abs() < 1e-9
 }
 
-/// Ray-cast point-in-polygon test (even-odd), used by the lasso.
+/// Ray-cast point-in-polygon test (even-odd), used by the lasso. Polygon
+/// edges are inclusive so a point touched by the drag boundary is not missed.
 pub fn point_in_polygon(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
     if poly.len() < 3 {
         return false;
@@ -1055,12 +1056,74 @@ pub fn point_in_polygon(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
     for i in 0..poly.len() {
         let (xi, yi) = poly[i];
         let (xj, yj) = poly[j];
-        if (yi > p.1) != (yj > p.1) && p.0 < (xj - xi) * (p.1 - yi) / (yj - yi) + xi {
+        let (dx, dy) = (xj - xi, yj - yi);
+        let (px, py) = (p.0 - xi, p.1 - yi);
+        let cross = px * dy - py * dx;
+        let dot = px * dx + py * dy;
+        if cross.abs() <= 1e-9 && dot >= -1e-9 && dot <= dx * dx + dy * dy + 1e-9 {
+            return true;
+        }
+        if (yi > p.1) != (yj > p.1) && p.0 < dx * (p.1 - yi) / (dy) + xi {
             inside = !inside;
         }
         j = i;
     }
     inside
+}
+
+/// A target-to-root chain of transforms. `local_to_world` maps a node into
+/// its parent space, so applying the target first and each ancestor afterward
+/// gives the full page-space point, including rotated/scaled parent frames.
+fn vector_transform_chain<'a>(root: &'a Node, id: &str) -> Option<Vec<&'a Node>> {
+    fn collect<'a>(node: &'a Node, id: &str, path: &mut Vec<&'a Node>) -> bool {
+        path.push(node);
+        if node.id.as_str() == id {
+            return true;
+        }
+        for child in &node.children {
+            if collect(child, id, path) {
+                return true;
+            }
+        }
+        path.pop();
+        false
+    }
+    let mut root_to_target = Vec::new();
+    if !collect(root, id, &mut root_to_target) {
+        return None;
+    }
+    if id == root.id.as_str() {
+        Some(root_to_target.into_iter().rev().collect())
+    } else {
+        Some(root_to_target.into_iter().skip(1).rev().collect())
+    }
+}
+
+fn vector_local_to_world(chain: &[&Node], mut point: (f64, f64)) -> (f64, f64) {
+    for node in chain {
+        point = crate::transformed_resize::local_to_world(node, point.0, point.1);
+    }
+    point
+}
+
+fn vector_world_to_local(chain: &[&Node], mut point: (f64, f64)) -> (f64, f64) {
+    for node in chain.iter().rev() {
+        point = crate::transformed_resize::local_point(node, point.0, point.1);
+    }
+    point
+}
+
+fn rotate_vector_point(
+    chain: &[&Node],
+    point: (f64, f64),
+    pivot: (f64, f64),
+    cos: f64,
+    sin: f64,
+) -> (f64, f64) {
+    let world = vector_local_to_world(chain, point);
+    let dx = world.0 - pivot.0;
+    let dy = world.1 - pivot.1;
+    vector_world_to_local(chain, (pivot.0 + dx * cos - dy * sin, pivot.1 + dx * sin + dy * cos))
 }
 
 impl Editor {
@@ -1325,23 +1388,152 @@ impl Editor {
         Some(a.to_string())
     }
 
-    /// Lasso-select anchors (: drag a marquee in node edit mode). The
-    /// boundary is in WORLD space, the same space [`crate::vector_handles`] hits
-    /// in, so the answer is the list of ANCHOR indices inside it. Cheap and
-    /// side-effect free: the caller decides whether to replace or extend the
-    /// selection.
+    /// Lasso-select anchors (: drag a freeform boundary in node edit mode).
+    /// Boundary and anchor coordinates are page-space, including every
+    /// ancestor transform. This query is side-effect free; use
+    /// [`Editor::select_vector_points_lasso`] to apply replace/add/subtract.
     pub fn lasso_select_points(&self, node_id: &str, boundary: &[(f64, f64)]) -> Vec<usize> {
         if boundary.len() < 3 {
             return vec![];
         }
-        let Some(n) = find(&self.root, node_id) else {
+        let Some(node) = find(&self.root, node_id) else {
             return vec![];
         };
-        crate::vector_handles::anchors_world(n)
+        let NodeKind::Vector { path } = &node.kind else {
+            return vec![];
+        };
+        let Some(chain) = vector_transform_chain(&self.root, node_id) else {
+            return vec![];
+        };
+        anchors(path)
             .into_iter()
-            .filter(|a| point_in_polygon((a.x, a.y), boundary))
-            .map(|a| a.index)
+            .enumerate()
+            .filter_map(|(index, anchor)| {
+                let world = vector_local_to_world(&chain, (anchor.x, anchor.y));
+                point_in_polygon(world, boundary).then_some(index)
+            })
             .collect()
+    }
+
+    /// Apply the point set from a vector-edit Lasso. `additive` matches
+    /// Shift-drag; `subtractive` matches Alt-drag and takes precedence if both
+    /// are supplied. Selection is ephemeral and does not add an undo entry.
+    pub fn select_vector_points_lasso(
+        &mut self,
+        node_id: &str,
+        boundary: &[(f64, f64)],
+        additive: bool,
+        subtractive: bool,
+    ) -> Vec<usize> {
+        if self.vector_edit_node.as_deref() != Some(node_id) {
+            return vec![];
+        }
+        let area = if boundary.len() >= 3 {
+            let twice = (0..boundary.len()).fold(0.0, |sum, i| {
+                let a = boundary[i];
+                let b = boundary[(i + 1) % boundary.len()];
+                sum + a.0 * b.1 - b.0 * a.1
+            });
+            twice.abs() / 2.0
+        } else {
+            0.0
+        };
+        if !area.is_finite() || area <= 1e-9 {
+            return self.vector_edit_selected_points.clone();
+        }
+        let hits = self.lasso_select_points(node_id, boundary);
+        if subtractive {
+            self.vector_edit_selected_points.retain(|index| !hits.contains(index));
+        } else if additive {
+            self.vector_edit_selected_points.extend(hits);
+            self.vector_edit_selected_points.sort_unstable();
+            self.vector_edit_selected_points.dedup();
+        } else {
+            self.vector_edit_selected_points = hits;
+        }
+        self.vector_edit_selected_points.clone()
+    }
+
+    /// Rotate the currently selected anchors and the Bézier controls attached
+    /// to those anchors in page space. The node's frame stays fixed; subsequent
+    /// normalization can fit the path bounds without moving its geometry. One
+    /// ReplaceNode command makes the operation fully undoable.
+    pub fn rotate_selected_vector_points(&mut self, delta_radians: f64, pivot_world: (f64, f64)) -> bool {
+        if !delta_radians.is_finite()
+            || !pivot_world.0.is_finite()
+            || !pivot_world.1.is_finite()
+            || delta_radians.abs() < 1e-12
+        {
+            return false;
+        }
+        let Some(id) = self.vector_edit_node.clone() else {
+            return false;
+        };
+        let selected = self.vector_edit_selected_points.clone();
+        if selected.is_empty() {
+            return false;
+        }
+        let Some(node) = find(&self.root, &id) else {
+            return false;
+        };
+        let NodeKind::Vector { path } = &node.kind else {
+            return false;
+        };
+        let anchors = anchors(path);
+        if !selected.iter().any(|&index| index < anchors.len()) {
+            return false;
+        }
+        let Some(chain) = vector_transform_chain(&self.root, &id) else {
+            return false;
+        };
+        let before = Box::new(node.clone());
+        let mut after = node.clone();
+        let (sin, cos) = delta_radians.sin_cos();
+        let NodeKind::Vector { path: updated } = &mut after.kind else {
+            return false;
+        };
+        for &index in &selected {
+            let Some(anchor) = anchors.get(index).copied() else {
+                continue;
+            };
+            let endpoint = rotate_vector_point(&chain, (anchor.x, anchor.y), pivot_world, cos, sin);
+            match &mut updated[anchor.cmd_index] {
+                PathCmd::MoveTo(x, y) | PathCmd::LineTo(x, y) => {
+                    *x = endpoint.0;
+                    *y = endpoint.1;
+                }
+                PathCmd::CurveTo(_, _, _, _, x, y) => {
+                    *x = endpoint.0;
+                    *y = endpoint.1;
+                }
+                PathCmd::Close => continue,
+            }
+            // Both controls travel with their anchor. The incoming c2 is on
+            // the command ending at this anchor; the outgoing c1 is on the
+            // next command. Read their original local positions so a two-end
+            // selected segment transforms each handle exactly once.
+            if let Some(PathCmd::CurveTo(_, _, x2, y2, _, _)) = path.get(anchor.cmd_index) {
+                let incoming = rotate_vector_point(&chain, (*x2, *y2), pivot_world, cos, sin);
+                if let PathCmd::CurveTo(_, _, nx, ny, _, _) = &mut updated[anchor.cmd_index] {
+                    *nx = incoming.0;
+                    *ny = incoming.1;
+                }
+            }
+            if let Some(PathCmd::CurveTo(x1, y1, ..)) = path.get(anchor.cmd_index + 1) {
+                let outgoing = rotate_vector_point(&chain, (*x1, *y1), pivot_world, cos, sin);
+                if let Some(PathCmd::CurveTo(nx, ny, ..)) = updated.get_mut(anchor.cmd_index + 1) {
+                    *nx = outgoing.0;
+                    *ny = outgoing.1;
+                }
+            }
+        }
+        if let NodeKind::Vector { path: updated } = &after.kind {
+            if updated == path {
+                return false;
+            }
+        }
+        self.push_replace(&id, before, after);
+        true
     }
 
     /// Drag a handle out of a corner point (: pen/node tool drag on a
@@ -2256,6 +2448,117 @@ mod tests {
             e.lasso_select_points("nope", &box_lasso).is_empty(),
             "an unknown node selects nothing"
         );
+    }
+
+    #[test]
+    fn lasso_selection_supports_replace_add_subtract_and_nested_transforms() {
+        let path = vec![
+            PathCmd::MoveTo(10.0, 10.0),
+            PathCmd::LineTo(50.0, 50.0),
+            PathCmd::LineTo(90.0, 90.0),
+        ];
+        let mut parent = Node::frame("parent", 200.0, 200.0).child(Node::vector(
+            "v", 20.0, 10.0, 100.0, 100.0, path,
+        ));
+        parent.transform.x = 50.0;
+        parent.transform.y = 30.0;
+        let mut e = Editor::new(Node::frame("page", 800.0, 600.0).child(parent));
+        assert!(e.enter_vector_edit_mode("v"));
+        // The vector's anchors are page-space (80,50), (120,90), (160,130).
+        let first = vec![(80.0, 40.0), (125.0, 40.0), (125.0, 95.0), (80.0, 95.0)];
+        let second = vec![(150.0, 120.0), (175.0, 120.0), (175.0, 145.0), (150.0, 145.0)];
+        assert_eq!(e.lasso_select_points("v", &first), vec![0, 1]);
+        assert_eq!(
+            e.select_vector_points_lasso("v", &first, false, false),
+            vec![0, 1],
+            "plain Lasso replaces the point set"
+        );
+        assert_eq!(
+            e.select_vector_points_lasso("v", &second, true, false),
+            vec![0, 1, 2],
+            "Shift-Lasso unions points without duplicates"
+        );
+        assert_eq!(
+            e.select_vector_points_lasso("v", &first, false, true),
+            vec![2],
+            "Alt-Lasso removes only the points inside its boundary"
+        );
+        assert_eq!(
+            e.select_vector_points_lasso("v", &second, false, false),
+            vec![2],
+            "plain Lasso replaces again"
+        );
+        assert_eq!(
+            e.select_vector_points_lasso("v", &[(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)], false, false),
+            vec![2],
+            "a degenerate gesture does not clear the existing selection"
+        );
+        assert!(e.lasso_select_points("missing", &first).is_empty());
+    }
+
+    #[test]
+    fn point_box_rotation_moves_selected_anchors_and_controls_in_page_space() {
+        let original = vec![
+            PathCmd::MoveTo(10.0, 10.0),
+            PathCmd::CurveTo(20.0, 10.0, 40.0, 10.0, 50.0, 10.0),
+            PathCmd::LineTo(80.0, 50.0),
+        ];
+        let mut vector = Node::vector("v", 20.0, 15.0, 100.0, 100.0, original.clone());
+        vector.transform.rotation = -0.2;
+        vector.transform.scale_x = 0.9;
+        let mut parent = Node::frame("parent", 300.0, 300.0).child(vector);
+        parent.transform.x = 40.0;
+        parent.transform.y = -10.0;
+        parent.transform.rotation = 0.37;
+        parent.transform.scale_x = 1.25;
+        parent.transform.scale_y = 0.8;
+        let mut e = Editor::new(Node::frame("page", 800.0, 600.0).child(parent));
+        assert!(e.enter_vector_edit_mode("v"));
+        assert!(e.select_vector_point(0, false));
+        assert!(e.select_vector_point(1, true));
+
+        let chain = vector_transform_chain(&e.root, "v").unwrap();
+        let before_anchors = anchors(&original);
+        let world0 = vector_local_to_world(&chain, (before_anchors[0].x, before_anchors[0].y));
+        let world1 = vector_local_to_world(&chain, (before_anchors[1].x, before_anchors[1].y));
+        let world2 = vector_local_to_world(&chain, (before_anchors[2].x, before_anchors[2].y));
+        let control_out = vector_local_to_world(&chain, (20.0, 10.0));
+        let control_in = vector_local_to_world(&chain, (40.0, 10.0));
+        // Center of the selected points' world-axis-aligned point box.
+        let pivot = ((world0.0 + world1.0) / 2.0, (world0.1 + world1.1) / 2.0);
+        let rotate_expected = |p: (f64, f64)| {
+            let dx = p.0 - pivot.0;
+            let dy = p.1 - pivot.1;
+            (pivot.0 - dy, pivot.1 + dx)
+        };
+        let expected0 = rotate_expected(world0);
+        let expected1 = rotate_expected(world1);
+        let expected_out = rotate_expected(control_out);
+        let expected_in = rotate_expected(control_in);
+
+        let depth = e.undo_depth();
+        assert!(e.rotate_selected_vector_points(std::f64::consts::FRAC_PI_2, pivot));
+        assert_eq!(e.undo_depth(), depth + 1, "one point-box rotation is one undo step");
+        let chain_after = vector_transform_chain(&e.root, "v").unwrap();
+        let rotated = path_of(&e, "v");
+        let after_anchors = anchors(&rotated);
+        let after0 = vector_local_to_world(&chain_after, (after_anchors[0].x, after_anchors[0].y));
+        let after1 = vector_local_to_world(&chain_after, (after_anchors[1].x, after_anchors[1].y));
+        let after2 = vector_local_to_world(&chain_after, (after_anchors[2].x, after_anchors[2].y));
+        let out = match &rotated[1] { PathCmd::CurveTo(x, y, ..) => vector_local_to_world(&chain_after, (*x, *y)), _ => panic!() };
+        let incoming = match &rotated[1] { PathCmd::CurveTo(_, _, x, y, ..) => vector_local_to_world(&chain_after, (*x, *y)), _ => panic!() };
+        let near = |actual: (f64, f64), expected: (f64, f64)| {
+            assert!((actual.0 - expected.0).abs() < 1e-8, "x: {actual:?} != {expected:?}");
+            assert!((actual.1 - expected.1).abs() < 1e-8, "y: {actual:?} != {expected:?}");
+        };
+        near(after0, expected0);
+        near(after1, expected1);
+        near(after2, world2);
+        near(out, expected_out);
+        near(incoming, expected_in);
+        assert!(e.undo());
+        assert_eq!(path_of(&e, "v"), original);
+        assert!(!e.rotate_selected_vector_points(0.0, pivot), "zero-angle rotation is a no-op");
     }
 
     #[test]
