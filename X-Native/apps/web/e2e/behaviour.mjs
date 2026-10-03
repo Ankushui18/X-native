@@ -149,6 +149,21 @@ const clickRowById = async (p, id, add = false) => {
   await sleep(400);
   return hit;
 };
+const clickRowByName = async (p, name, add = false) => {
+  const id = await p.evaluate((wanted, withAdd) => {
+    const row = [...document.querySelectorAll(".panel.left .row[data-row-id]")]
+      .find((r) => r.querySelector(".name")?.textContent.trim() === wanted);
+    if (!row) return null;
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: withAdd }));
+    return row.dataset.rowId ?? null;
+  }, name, add);
+  await sleep(400);
+  return id;
+};
+const designNodeCount = async (p) => p.evaluate(() => {
+  const result = window.__xNativeDesignApi?.call("getDesignVersion");
+  return result?.ok ? result.data.nodes : null;
+});
 
 // 1. rename ---------------------------------------------------------------
 {
@@ -895,14 +910,24 @@ for (const [label, payload] of [
     el && el.click();
   });
   await sleep(700);
-  // These rectangles carry only a fill, so there is no fill-or-stroke choice to
-  // make: the in-app prompt for a name comes straight up, prefilled from the
-  // layer. (A layer with both fills the choice dialog first — see §22.)
-  const nameDlg = await dlg(p);
-  t(`creating a style asks for its name in-app (${nameDlg?.title})`, nameDlg?.title === "Style name (fill)");
-  await typeDlg(p, "Brand");
-  await p.keyboard.press("Enter");
-  await sleep(700);
+  // The SVG imported above has fill-only rectangles. The paint chooser should
+  // offer Fill for the selected rectangle; the both-paints choice is covered by
+  // the separate mixed-fill-and-stroke flow below.
+  let nameDlg = await dlg(p);
+  if (nameDlg?.title === "Create style from") {
+    const fillChoiceShown = nameDlg.buttons.includes("Fill") && !nameDlg.buttons.includes("Stroke");
+    t("a fill-only layer offers only its available Fill choice", fillChoiceShown);
+    const selectedFill = await clickDlg(p, "Fill");
+    nameDlg = await dlg(p);
+    t("choosing Fill opens the in-app style-name prompt", selectedFill && nameDlg?.title === "Style name (fill)");
+  } else {
+    t(`creating a style asks for its name in-app (${nameDlg?.title})`, nameDlg?.title === "Style name (fill)");
+  }
+  if (nameDlg?.title === "Style name (fill)") {
+    await typeDlg(p, "Brand");
+    await p.keyboard.press("Enter");
+    await sleep(700);
+  }
   t("creating a style lists it", (await p.evaluate(() =>
     document.querySelectorAll('.panel.left button[aria-label^="Apply style"]').length)) === 1);
 
@@ -2210,8 +2235,8 @@ for (const [label, payload] of [
     bar?.bg === (await norm(dock)) && bar?.radius === "24px" &&
     bar?.inline.every((v) => !/background|border|color|padding/.test(v)));
   // The italic "Delete point (⌫)" comes from the button's title: it is icon-only.
-  const WANT = ["Select", "Pen", "Bend", "Paint", "Shape Builder", "Simplify path", "Clean up", "Delete point (⌫)", "Done"];
-  t(`and keeps all nine tools (${bar?.labels.join(", ")})`,
+  const WANT = ["Select", "Pen", "Bend", "Paint", "Shape Builder", "Cut", "Simplify path", "Clean up", "Delete point (⌫)", "Done"];
+  t(`and keeps all ${WANT.length} tools (${bar?.labels.join(", ")})`,
     bar?.labels.length === WANT.length && WANT.every((w) => bar.labels.includes(w)));
   t(`divider and Done use tokens (sep ${bar?.sep}, ${bar?.doneBg})`,
     bar?.sep === true && bar?.doneBg === (await norm(accent)));
@@ -2454,8 +2479,14 @@ for (const [label, payload] of [
   const layerRows = await rows(p);
   await p.evaluate(() => document.querySelector('.dock button[aria-label="Prototype"]')?.click());
   await sleep(700);
-  // View Details Button carries the sample file's interaction.
-  await clickRowById(p, "rect_5");
+  // Find the sample's connected button by its visible layer name; generated IDs
+  // depend on what else the fixture constructed before it.
+  const prototypeId = await clickRowByName(p, "View Details Button");
+  const prototypeSelected = prototypeId ? await p.evaluate((id) =>
+    [...document.querySelectorAll(".panel.left .row[data-row-id]")]
+      .some((r) => r.dataset.rowId === id && r.classList.contains("sel")), prototypeId) : false;
+  t(`the demo's connected button is selected (${prototypeId || "not found"})`,
+    !!prototypeId && prototypeSelected);
   await sleep(700);
 
   const panel = await p.evaluate(() => {
@@ -2632,8 +2663,11 @@ for (const [label, payload] of [
   await p.evaluate(() => [...document.querySelectorAll(".h-act button")]
     .find((b) => /Edit points/.test(b.textContent))?.click());
   await sleep(400);
-  const dark = await p.evaluate(() => {
+  const dark = await p.evaluate(async () => {
     document.documentElement.setAttribute("data-theme", "dark");
+    // Let the dock's background-color transition finish before comparing the
+    // endpoint token; reading immediately captured the old light accent.
+    await new Promise((resolve) => setTimeout(resolve, 160));
     const token = (name) => {
       const d = document.createElement("div");
       d.style.color = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -2650,7 +2684,9 @@ for (const [label, payload] of [
       doneBg: done ? getComputedStyle(done).backgroundColor : null,
       doneFg: done ? getComputedStyle(done).color : null,
       doneInline: done?.getAttribute("style") ?? null,
-      doneTitle: done?.getAttribute("title") ?? null,
+      // The tooltip bridge temporarily moves native titles to data-tip while
+      // the control is hovered/focused; either representation is the same hint.
+      doneTitle: done?.dataset.tip ?? done?.getAttribute("title") ?? null,
     };
     document.documentElement.removeAttribute("data-theme");
     return out;
@@ -2660,11 +2696,15 @@ for (const [label, payload] of [
     dark.doneBg === dark.accent && dark.doneFg === dark.onAccent && dark.doneInline === null &&
     (dark.doneTitle || "").startsWith("Done editing path"));
 
-  // TB-U5: the boolean menu only exists once two layers are selected, and its
-  // width is measured against a tool group's `.fly` rather than a number — the
-  // finding was that this one menu did not use the recipe the others do.
+  // TB-U5: the boolean menu is available only for a multi-layer selection and
+  // its flyout mounts only when opened. Leave point edit, select all layers, and
+  // open it before comparing the sheet recipe with the other tool groups.
+  await p.evaluate(() => document.querySelector(".hit.vec-done")?.click());
+  await sleep(250);
   await p.keyboard.down("Control"); await p.keyboard.press("a"); await p.keyboard.up("Control");
   await sleep(500);
+  await p.evaluate(() => document.querySelector('.dock .tool[data-group="bool"] .hit')?.click());
+  await sleep(250);
   const dock = await p.evaluate(() => {
     const bool = document.querySelector('.tool[data-group="bool"] .fly');
     const shape = document.querySelector('.tool[data-group="shape"] .fly');
@@ -2996,10 +3036,12 @@ for (const [label, payload] of [
   const cssColor = (name) =>
     p.evaluate((n) => {
       const raw = getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-      const c = document.createElement("canvas").getContext("2d");
-      c.fillStyle = "#000000";
-      c.fillStyle = raw;
-      return c.fillStyle;
+      const el = document.createElement("div");
+      el.style.color = raw;
+      document.body.appendChild(el);
+      const canonical = getComputedStyle(el).color;
+      el.remove();
+      return canonical;
     }, name);
   const countNear = (rgb, tol) =>
     p.evaluate((r, g, b, t2) => {
@@ -3076,12 +3118,15 @@ for (const [label, payload] of [
     enabled.length > 0 && enabled.every((r) => r.color === ink));
   t("none of them explains itself with a native title", pane.rows.every((r) => r.title === null));
   const why = pane.muted.at(-1) || "";
+  const whyFolded = why.toLowerCase();
   t(`and the pane says why, in words (${why})`,
-    disabled.every((r) => why.includes(r.label)) && enabled.every((r) => !why.includes(r.label)));
+    disabled.every((r) => whyFolded.includes(r.label.toLowerCase())) &&
+    enabled.every((r) => !whyFolded.includes(r.label.toLowerCase())));
 
-  // A dead row stays dead: clicking it changes nothing.
-  const rowsBefore = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
-  await navTo("File");
+  // A dead row stays dead: test the disabled command in the Tools pane itself,
+  // and measure the document through the app's read-only design API rather than
+  // querying a layer tree that the Tools pane intentionally replaces.
+  const nodesBefore = await designNodeCount(p);
   const dupBtn = await p.evaluate(() => {
     const b = [...document.querySelectorAll(".panel.left .presets button")]
       .find((x) => x.textContent.includes("Duplicate"));
@@ -3092,11 +3137,12 @@ for (const [label, payload] of [
       .find((x) => x.textContent.includes("Duplicate"))?.click();
   });
   await sleep(400);
-  const rowsAfter = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
-  t(`clicking a dimmed row does nothing (${rowsBefore} → ${rowsAfter} layers, disabled=${dupBtn?.disabled})`,
-    dupBtn?.disabled === true && rowsAfter === rowsBefore);
+  const nodesAfter = await designNodeCount(p);
+  t(`clicking a dimmed row does nothing (${nodesBefore} → ${nodesAfter} nodes, disabled=${dupBtn?.disabled})`,
+    dupBtn?.disabled === true && nodesAfter === nodesBefore);
 
   // Pick a layer and the selection-bound rows come back to life.
+  await navTo("File");
   await p.evaluate(() => document.querySelector(".panel.left .tree [data-row-id]")?.dispatchEvent(
     new MouseEvent("click", { bubbles: true })));
   await sleep(400);
@@ -3176,7 +3222,7 @@ for (const [label, payload] of [
     reply.turns.filter((x) => x.who === "you").every((x) => x.nameColor !== mutedInk));
 
   // An ask it cannot answer still gets an answer, and changes nothing.
-  const layersBefore = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  const layersBefore = await designNodeCount(p);
   await navTo("File");
   await navTo("Agent");
   await ask("make me a sandwich");
@@ -3185,7 +3231,7 @@ for (const [label, payload] of [
     return { last: turns.at(-1), count: turns.length };
   });
   await navTo("File");
-  const layersAfter = await p.evaluate(() => document.querySelectorAll(".panel.left .tree [data-row-id]").length);
+  const layersAfter = await designNodeCount(p);
   t(`an ask it cannot answer says so (${void_.last?.slice(0, 40)}…)`,
     /nothing/i.test(void_.last || "") && /changed nothing/i.test(void_.last || ""));
   t(`and changes nothing (${layersBefore} → ${layersAfter} layers)`, layersAfter === layersBefore);
@@ -3321,13 +3367,29 @@ for (const [label, payload] of [
     // still reports its full rect. Ask the browser what is actually painted at
     // the menu's centre.
     const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return { h: Math.round(r.height), w: Math.round(r.width), above: Math.round(dock.top - r.top), painted: !!el?.closest(".fly") };
+    const trigger = document.querySelector('.dock .tool[data-group="bool"] .hit').getBoundingClientRect();
+    return { h: Math.round(r.height), w: Math.round(r.width), above: Math.round(trigger.top - r.top), painted: !!el?.closest(".fly") };
   });
-  t(`the tool menu escapes the strip and is painted there (${fly ? `${fly.h}px tall, ${fly.above}px above the dock` : "no bool tool"})`,
+  t(`the tool menu opens above its trigger and is painted there (${fly ? `${fly.h}px tall, ${fly.above}px above the trigger` : "no bool tool"})`,
     !opened || (!!fly && fly.h > 40 && fly.above > 10 && fly.painted));
   await p.keyboard.press("Escape");
   await p.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 });
   await sleep(500);
+
+  // The bulk-export sheet lists layers with saved export settings, not every
+  // layer. Configure one through the inspector so the modal/filter assertions
+  // exercise real rows instead of an empty-state fixture.
+  const exportLayerId = await clickRowByName(p, "View Details Button");
+  const exportPresetAdded = await p.evaluate(() => {
+    const button = [...document.querySelectorAll(".inspector button")]
+      .find((b) => (b.getAttribute("title") ?? b.dataset.tip) === "Add export");
+    if (!button) return false;
+    button.click();
+    return true;
+  });
+  await sleep(500);
+  t(`the export-sheet fixture has a saved layer preset (${exportLayerId || "no layer"})`,
+    !!exportLayerId && exportPresetAdded && !!(await p.$(".inspector .export-row")));
 
   /* ── PM-U6: the export sheet opens with the keyboard already inside it ── */
   await p.keyboard.down("Control"); await p.keyboard.press("k"); await p.keyboard.up("Control");
@@ -3372,7 +3434,11 @@ for (const [label, payload] of [
   // focus is on a menu item). Escape must close the overlay opened last, which
   // is the sheet, and only it; before the registry, the press was answered by
   // registration order, and the sheet could be starved outright.
-  const flyOpen = () => p.evaluate(() => !!document.querySelector('.dock .tool[data-group="shape"] .fly'));
+  const flyOpen = () => p.evaluate(() => {
+    const group = document.querySelector('.dock .tool[data-group="shape"]');
+    return !!group?.classList.contains("open") &&
+      group.querySelector(".hit")?.getAttribute("aria-expanded") === "true";
+  });
   await p.evaluate(() => document.querySelector('.dock .tool[data-group="shape"] .hit')?.focus());
   await p.keyboard.press("ArrowDown");
   await sleep(350);
@@ -3402,8 +3468,12 @@ for (const [label, payload] of [
   await sleep(450);
   const afterTwo = await p.evaluate(() => {
     const a = document.activeElement;
-    return { fly: !!document.querySelector('.tool[data-group="shape"] .fly'), active: a?.className || a?.tagName,
-             onTrigger: !!a?.closest?.('.tool[data-group="shape"] .hit') };
+    const group = document.querySelector('.tool[data-group="shape"]');
+    return {
+      fly: !!group?.classList.contains("open") && group.querySelector(".hit")?.getAttribute("aria-expanded") === "true",
+      active: a?.className || a?.tagName,
+      onTrigger: !!a?.closest?.('.tool[data-group="shape"] .hit'),
+    };
   });
   t(`the next Escape closes the menu itself (${afterTwo.fly ? "still open" : "closed"})`, !afterTwo.fly);
   t(`with the caret on the control that opened it (${afterTwo.active})`, afterTwo.onTrigger);
@@ -3426,7 +3496,10 @@ for (const [label, payload] of [
   t("and the caret goes back to its caret button", zoomNow.caret);
 
   const target = await p.evaluate(() => {
-    const input = [...document.querySelectorAll(".inspector .field input")].find((i) => i.getAttribute("aria-label"));
+    // The zoom menu can cover the inspector's first coordinate field. Use the
+    // layer-search control in the other panel so the outside click really lands
+    // on the control it claims to focus.
+    const input = document.querySelector('.panel.left .search input[aria-label="Find layers"]');
     if (!input) return null;
     const r = input.getBoundingClientRect();
     return { label: input.getAttribute("aria-label"), x: Math.round(r.left + 10), y: Math.round(r.top + r.height / 2) };
@@ -3443,6 +3516,9 @@ for (const [label, payload] of [
     t(`a click on another control still focuses it (${won.focused} · menu ${won.menu ? "open" : "closed"})`,
       !won.menu && won.focused === target.label);
   }
+  // Keep later shortcut and focus-restoration checks independent of the search
+  // field used above to prove the pointer's outside-click default action.
+  await p.evaluate(() => document.querySelector(".canvas-col")?.focus());
 
   // The export sheet opened from the palette: the row that ran the command is
   // gone by the time the sheet closes, so the caret cannot go back to it. It
@@ -3761,15 +3837,13 @@ for (const [label, payload] of [
   // The scope proof: the guard is modality, not a freeze. With the sheet gone the
   // same keys must work again — Delete deletes, and says so. Select a layer first,
   // since the deletable thing is whatever the layer list has selected.
-  await p.evaluate(() => document.querySelector(".panel.left .row")?.dispatchEvent(
-    new MouseEvent("click", { bubbles: true })));
-  await sleep(400);
+  const deletableLayer = await clickRowByName(p, "Title");
   const beforeDelete = await snapshot();
   await p.keyboard.press("Delete");
   await sleep(500);
   const afterDelete = await snapshot();
-  t(`and Delete deletes again once it is gone (${beforeDelete.rows} → ${afterDelete.rows} rows)`,
-    afterDelete.rows === beforeDelete.rows - 1 && /delet/i.test(afterDelete.toast));
+  t(`and Delete deletes the selected leaf once it is gone (${beforeDelete.rows} → ${afterDelete.rows} rows, ${deletableLayer || "no layer"})`,
+    !!deletableLayer && afterDelete.rows === beforeDelete.rows - 1 && /delet/i.test(afterDelete.toast));
 
   await p.close();
 }
@@ -3785,7 +3859,9 @@ for (const [label, payload] of [
       toast: (document.querySelector(".toast")?.textContent || "").trim(),
       bendOn: !!document.querySelector('.vector-edit-toolbar .tool-btn.on[title^="Bend"]'),
       toolbar: !!document.querySelector(".vector-edit-toolbar"),
-      active: document.querySelector(".radial-menu .on, .radial-menu text")?.textContent?.trim() ?? null,
+      // Slice labels are the first eight SVG text nodes; the direct-child text
+      // is the center readout for the currently hovered slice.
+      active: document.querySelector(".radial-menu svg > text")?.textContent?.trim() ?? null,
     }));
 
   // ── nothing in play: the slice must say what it needs ──
@@ -3796,9 +3872,9 @@ for (const [label, payload] of [
   await sleep(400);
   t("the radial menu opens on Q", (await state()).radial);
 
-  // Eight slices, 45° each, slice 0 at the top: Bend is index 4, i.e. straight
-  // left of the centre at the radius the hit test uses (100px).
-  await p.mouse.move(cx - 100, cy);
+  // Eight slices, 45° each, slice 0 centered at the top: Bend is index 4,
+  // centered at the bottom of the menu at the hit test radius (100px).
+  await p.mouse.move(cx, cy + 100);
   await sleep(250);
   const hovered = await state();
   await p.mouse.down(); await p.mouse.up();
@@ -3835,7 +3911,7 @@ for (const [label, payload] of [
   await sleep(500);
   t(`the palette offers Marking / Radial menu (${ran ? "run" : "not found"})`, ran && (await state()).radial);
 
-  await p.mouse.move(cx - 100, cy);
+  await p.mouse.move(cx, cy + 100);
   await sleep(250);
   await p.mouse.down(); await p.mouse.up();
   await sleep(600);

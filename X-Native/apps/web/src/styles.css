@@ -5396,6 +5396,13 @@ html[data-theme="dark"] .x-btn-danger {
      panels become overlays, opened from the minimize chip. The app already
      auto-minimizes here, so this only styles the restored state. */
   .app:not(.min-ui) { grid-template-columns: var(--rail) 0 1fr 0; }
+  /* The sidebars above are absolutely positioned overlays, so they leave the
+     grid's auto-placement sequence. Keep the canvas in its intended 1fr track
+     instead of letting it slide into the zero-width left-panel track. */
+  .app:not(.min-ui) > .canvas-col { grid-column: 3; }
+  /* The dock belongs to the canvas but its tools must stay usable above the
+     restored side-panel overlays at the bottom edge of a narrow viewport. */
+  .app:not(.min-ui) .dock { z-index: 75; }
   .app:not(.min-ui) > .panel.left {
     position: absolute; z-index: 70; top: 0; bottom: 0; left: 52px;
     width: min(300px, 78vw);
