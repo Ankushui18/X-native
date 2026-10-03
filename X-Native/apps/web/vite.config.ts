@@ -1,0 +1,28 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    strictPort: true,
+    allowedHosts: true,
+  },
+  preview: {
+    host: "0.0.0.0",
+    port: 5173,
+    allowedHosts: true,
+  },
+  build: {
+    outDir: "dist",
+    assetsDir: "assets",
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/x-native-[hash].js",
+        chunkFileNames: "assets/x-native-[hash].js",
+        assetFileNames: "assets/x-native-[hash].[ext]",
+      },
+    },
+  },
+});

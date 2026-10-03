@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="graphite">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Every screen — X-Native design sheet</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="screens.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="mark" href="index.html">
+    <span class="logo" id="logo"></span>
+    <span><b>X-Native</b><em>design sheet</em></span>
+  </a>
+  <nav class="tabs">
+    <a href="index.html">Tokens &amp; audit</a>
+    <a href="screens.html" aria-current="page">Every screen</a>
+    <a href="shots.html">Captures</a>
+  </nav>
+  <span class="grow"></span>
+  <span class="seg" id="themes" role="group" aria-label="Palette"></span>
+  <span class="scale" id="scales" role="group" aria-label="Zoom"></span>
+</header>
+
+<main class="wrap">
+  <aside class="nav">
+    <p class="lede" id="lede"></p>
+    <div id="nav-list"></div>
+    <p class="fine">Screens are drawn at <b id="dim"></b> from the geometry <code>build_audit.mjs</code>
+    reads out of the Rust sources. Layout and wording are real; the artwork on the canvas and the
+    exact glyph positions inside panels are stand-ins. Open the app for pixels.</p>
+  </aside>
+
+  <section class="stack" id="stack"></section>
+</main>
+
+<script src="tokens.js"></script>
+<script src="audit.js"></script>
+<script src="icons.js"></script>
+<script src="screens.js"></script>
+<script src="screens_app.js"></script>
+</body>
+</html>

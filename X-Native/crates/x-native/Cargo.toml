@@ -1,0 +1,21 @@
+[package]
+name = "x-native"
+version = "0.34.0"
+edition = "2021"
+[lib]
+name = "x_native"
+[dependencies]
+x-core = { path = "../x-core" }
+x-components = { path = "../x-components" }
+x-render = { path = "../x-render" }
+x-text = { path = "../x-text" }
+x-editor = { path = "../x-editor" }
+x-format = { path = "../x-format" }
+x-ui = { path = "../x-ui" }
+vello = "0.10"
+
+[dev-dependencies]
+tiny-skia = "0.12"
+
+[lints]
+workspace = true

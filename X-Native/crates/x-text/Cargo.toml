@@ -1,0 +1,13 @@
+[package]
+name = "x-text"
+version = "0.34.0"
+edition = "2021"
+[dependencies]
+vello = { version = "0.10", default-features = false }
+ttf-parser = "0.21"
+rustybuzz = "0.14"
+unicode-bidi = "0.3"
+x-core = { path = "../x-core" }
+
+[lints]
+workspace = true

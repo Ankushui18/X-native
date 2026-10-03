@@ -1,0 +1,332 @@
+# Rust / TypeScript boundary
+
+> **2026-09-28 update:** the x-geo Boolean bridge returns Rust geometry by
+> default after a genuine-WASM 30/30 corpus pass; `?geo=audit` retains an
+> opt-in TS comparator and invalid/missing WASM still falls back safely.
+> A separate, stateful Rust `.x` command session is **not** the production web
+> editor. Its V3 ABI adds atomic Union/Subtract/Intersect/Exclude, small
+> changed-layer deltas, and the existing Rust undo/redo stack. The strict V1
+> web-document gate still admits only plain rectangles at open; the explicit
+> `#/file/<id>?engine=rust` preview can display and explicitly export their
+> Rust-owned vector results. The ordinary editor, its history, Auto Layout
+> and persistence remain TypeScript-owned. See
+> [WASM bridge implementation and gates](WASM_BRIDGES_2026-09-27.md).
+> The baseline inventory below is historical, not a claim that bridges are inert.
+
+Status: **provisional by design.** This document describes what the repository
+does today, not what earlier audits assumed it did.
+
+## The rule
+
+> There must be one authoritative production implementation of each engine
+> capability. The Rust ↔ TypeScript boundary remains provisional until Rust can
+> be built, connected, and equivalence-tested.
+
+The **target** is a Rust-owned engine, shared by web (through WASM) and native
+(through direct Rust calls). That is not the **current production claim**:
+TypeScript still owns live web document edits, Auto Layout and undo. Removing it
+before a lossless document boundary and behavior parity would lose user work.
+
+## Agreed destination and the first command boundary
+
+| Part | Target | Current checkpoint |
+| --- | --- | --- |
+| `x-core` model, `x-editor` commands/undo, Rust layout | Engine authority shared across hosts | One-page native `.x` command session; live web engine not migrated |
+| TypeScript / UI | Application state, input and presentation only | `MemoryEngine` drives the default web editor; the explicit Rust preview is UI-only |
+| WASM | Web boundary | Promoted Rust Boolean geometry (opt-in audit), guarded imports, and an optional Rust document session; strict rectangle-only admission at open |
+| Native desktop | Direct Rust boundary | Direct Rust session API and native-host test; no desktop UI yet |
+| Document, Auto Layout, undo duplicated in TS | **Avoid** in the destination | Existing duplication must be removed one proven slice at a time; no new TS engine in the bridge |
+| Rust ↔ TS per-frame full JSON | **Avoid** | Native `.x` read at open / written on explicit export; normal replies are one-node deltas, Boolean edits send affected nodes/IDs only |
+| Thin command/state bridge | **Use** | Version-3 `renameNode`, `moveNode`, `resizeNode`, `booleanNode`, `undo`, `redo`, node/status queries, revision + history flags |
+
+`x-editor::DocumentSession` holds an `x-core::Document` and the existing Rust
+`Editor` history. `x-wasm` only exposes it; `apps/web/src/engine/rustSession.ts`
+only decodes its small deltas. The native facade re-exports the **same** session.
+The session currently admits **exactly one native `.x` page** with unique node
+IDs, and commands target individual layers. The persisted web `Page.root` tree
+is **not** native `.x`. `webDocumentSession.ts` now supplies an independent,
+opt-in **V1 format gate** for exactly one page, a transparent root and direct
+solid/opaque rectangles. It rejects unknown node/document fields, comments,
+variables, styled/nested layers and unsupported features *as a whole file*;
+uses the existing native session ABI; compares the complete web document after
+Rust open → export; and throws if any explicit checkpoint cannot be decoded
+without dropping native data. It retains only web application/page metadata and
+the root ID, **not** a shadow node tree or TS undo stack. A full document crosses
+only at open/checkpoint, never per command or frame. This is a bounded
+format contract, **not** production behavior, rendering or layout parity.
+Do not run two histories against the same document or silently rehydrate one
+from the other. The web UI continues using `MemoryEngine` until commands,
+layout, undo, persistence and rendering agree on observable behavior.
+The shared Rust/native and real generated-WASM session tests passed
+[CI 36338707226](https://github.com/Ankushui18/X-native/actions/runs/36338707226);
+the web-document V1 open/checkpoint smoke passed
+[CI 36340690212](https://github.com/Ankushui18/X-native/actions/runs/36340690212).
+The opt-in preview uses that same session to paint admitted rectangles and
+bounded Boolean vectors; it can rename/move layers, resize rectangles, combine
+exactly two plain rectangles, and use Rust undo/redo for all edits. Vector resize
+is deliberately withheld pending separate contour-transform evidence. The
+first shape supplies the result fill. `App.tsx` closes the preview synchronously
+before any other editor owner mounts; dirty navigation/browser unload prompts.
+It has **no autosave**: vector checkpoint/download is an explicit copy, and the
+stored file is unchanged. Failed admission or unavailable WASM offers the
+standard editor, never a silent engine swap. This is not a production editor,
+rendering or Auto Layout promotion. V1 web format admission is independent of
+the V3 command ABI: an old WASM asset can still serve guarded imports but
+cannot open the newer preview.
+See §§20–23 in the WASM implementation record for the bounded scope and tests.
+
+## Historical TypeScript baseline (before the bridge integration)
+
+**TypeScript is the production runtime engine for the web application. Rust is
+an unconnected headless codebase whose future role has not yet been proven.**
+
+```
+TypeScript                      Rust
+    ↓                            ↓
+production web engine       headless / unconnected
+  document model                 ↓
+  undo                      future candidate engine
+  Auto Layout
+  snapping
+  persistence
+  import / export
+```
+
+Checked on this branch, not inferred:
+
+| Claim | Reality |
+| --- | --- |
+| Rust is the production engine | **No.** Nothing in `apps/web` calls it |
+| The web app is a thin UI over the engine | **No.** `apps/web/src/engine/` is ~4,900 lines and owns the document model, undo, Auto Layout, snapping, hit-testing and persistence |
+| A native UI exists | **No.** All six `x-designer` binaries are headless CLIs; the GPU window was removed |
+| Rust reaches production | **No.** No build step compiles Rust into the shipped bundle — no wasm, no IPC, no network calls |
+
+Searching the web app for every engine entry point — `import_fig`,
+`import_sketch`, `load_x`, `apply_layout`, `export_pdf` — returns **zero**
+calls. The single textual hit is a comment in `pdf.ts` pointing at the Rust
+equivalent.
+
+### The TypeScript engine predates this branch
+
+At the branch base commit (`de232fe`, before any change in this session)
+`memory.ts` was already 1,536 lines and already contained Auto Layout. The
+duplication is pre-existing architecture, not drift introduced by the recent
+import ports.
+
+This matters for how the situation is described: there *are* already two Auto
+Layout implementations (`crates/x-components/src/layout.rs` and `memory.ts`),
+and the TypeScript one is the one that runs.
+
+## What TypeScript owns today
+
+All of it, in practice. Listed so that "one authoritative implementation" can be
+checked per capability rather than argued in the abstract.
+
+| Capability | TypeScript (authoritative today) | Rust counterpart (unconnected) |
+| --- | --- | --- |
+| Document model, commands, undo | `memory.ts` (~1,764 lines) | `x-core`, `x-editor` |
+| Auto Layout | `memory.ts` `relayout()` | `x-components/src/layout.rs` |
+| Snapping | `snapping.ts` | `x-editor/src/snapping.rs` |
+| Boolean / simplify / erase | `geometry.ts` | `x-editor/src/booleans.rs`, `eraser.rs` |
+| SVG import | `svgImport.ts` | `x-format/src/svg_import.rs` |
+| Sketch import | `sketchImport.ts` | `x-format/src/sketch.rs` |
+| `.fig` import | `kiwi.ts`, `figImport.ts` | `x-format/src/kiwi.rs`, `figbinary.rs` |
+| PDF export | `pdf.ts` (raster) | `x-render` `export_pdf` (vector) |
+| Persistence | `persist.ts` (localStorage) | `x-format` `.x` |
+
+Browser-only concerns with no native counterpart — `clipboard.ts`, `zip.ts`,
+`toast`, theming, view state, the canvas painter and all UI — are not
+duplication and are not in scope for migration.
+
+The three import ports each name their Rust counterpart in a header comment, so
+the relationship is recorded in the source and not only here.
+
+## Two tracks, running in parallel
+
+A local Rust toolchain would make migration work comfortable, but it is not a
+prerequisite: CI already builds and tests the workspace. Neither track blocks
+the other, and freezing product work around an architecture that has not yet
+been demonstrated would be the wrong trade.
+
+```
+TYPESCRIPT PRODUCT              RUST MIGRATION TRACK
+   UI / UX maturity                provision toolchain
+   behaviour tests (59+)           build
+   strokes[]                       connect narrow bridge
+   shared styles                   equivalence tests
+   effects popover                 CI artifact
+   draggable guides                migrate incrementally
+   minimap
+```
+
+Both tracks are live. Neither waits on the other.
+
+## Bridge status (2026-09-27)
+
+The existing `x-wasm` import crate now has a generated-bindgen loader, explicit
+native `.x` → web import adapter, dashboard/editor preload, and UI routing.
+`x-geo` implements the previously specified binary boundary over the existing
+`x-core::booleans::boolean_with(RasterGuided)`; it introduces no geometry engine.
+Both bridge crates are leaves in the dependency graph.
+
+`npm run build:wasm` packages optional public assets; `npm run test:wasm` requires
+real generated artifacts (no mock/replay substitution). CI is configured to run
+both. **The current import-only continuation and real modules passed CI at
+`acb24b3`** ([run 36336138062](https://github.com/Ankushui18/X-native/actions/runs/36336138062));
+the local sandbox still cannot run Cargo. The separate native geometry promotion
+diagnostic failed 29 of 30 cases; auto retains its per-call TS guard, as requested.
+
+Import follow-ups preserve FIG source coordinates and text-box metrics, literal
+typography, layer locks/alignment, stroke options, basic effects and explicit layer
+blends. Versioned source appearance facts now distinguish absent fills and defaults
+from native rendering fallbacks. **Basic FIG, effects and source-effects fixtures
+pass complete native candidate equivalence and select WASM**; FIG state,
+stroke-options and coordinate fixtures do too. Simple SVG shapes, plain text
+(with and without an id), explicit numeric text `font-weight`, viewport-only
+and unsized SVGs also select WASM when the complete import agrees with TS.
+Standalone translated SVG groups (including nested offsets and a tested child
+matrix) now do too; `</text>` no longer discards following siblings. Sketch
+fixtures, rotated/compound SVG groups, rich text and resources still fall back
+to the complete TS result. Unsupported partial-numeric text weight remains
+behind that guard. Unknown document-level fields now decline instead of silently
+disappearing. This is not broad native import parity.
+
+Metadata growth exposed a shared-lowering stack overflow in the existing 64-level
+SVG test. Single-node construction is now separated from recursive traversal;
+that test and an explicit 2 MiB-stack metadata regression pass without relaxing
+limits or changing native defaults. See §§7–13 of the implementation record.
+
+TypeScript remains authoritative **for live web document edits**. Imports use a
+native result only after the whole converted contract agrees with TS; unsupported
+resources/typography/styles fall back, never partially import. Geometry `auto`
+compares against TS using the existing §8 comparator; `?geo=wasm` exposes native
+results for differential tests. Native equivalence across the corpus failed; no
+speedup is claimed. The new **opt-in** Rust command session is deliberately not
+wired to `MemoryEngine`: the new rectangle-only document round-trip does not
+cover general files, and the editor still needs a single history, layout and
+persistence owner. See the linked implementation record for gates.
+
+## Migration sequence
+
+```
+TypeScript production
+        │  59 E2E checks pin observable behaviour
+        ↓
+  bridge ONE slice in Rust
+        ↓
+  build + run + equivalence test
+        ↓
+   ┌────┴────┐
+ PASS       FAIL
+   │          │
+   ↓          ↓
+migrate   investigate
+   │
+   ↓
+remove the TS duplicate
+   │
+   ↓
+repeat
+```
+
+Suggested first slice: `.fig` / `.sketch` import. The behaviour suite already
+pins the expected output, so equivalence can be proven before anything is
+removed.
+
+**Remove the TypeScript implementation only after the Rust one passes the same
+checks.** The e2e suite must keep passing across the swap; that is what it is
+for.
+
+## Historical classification of the 88k lines of Rust (before the bridges)
+
+The status at that checkpoint was **unreachable in the verified web product**.
+That was not the same as unnecessary; import and command-session boundaries
+have since been added. The original classification was:
+
+- **Used by the current app** — nothing. No call path exists.
+- **Real future use** — `x-core`, `x-editor`, `x-components`, `x-format`,
+  `x-render`, `x-text`. The engine a bridge would expose.
+- **Duplicated by TypeScript** — the table above. TypeScript is authoritative
+  in the running product; Rust is a candidate, not yet an authority.
+- **Dead / obsolete** — **cannot be determined.** Reachability analysis needs
+  an entry point and there is none. Anything that compiles and is referenced by
+  another crate is live as far as this repository can tell.
+- **Old / experimental** — the removed GPU window is already gone; no other
+  candidate identified.
+
+**Do not delete Rust before a slice has been bridged and proven.** It is
+currently the only implementation of `.fig` binary parsing, Sketch
+round-tripping, PDF *vector* export, HTML export and `.x` persistence that has
+ever been exercised by its own test suite.
+
+## Historical toolchain investigation (before integration)
+
+An environment limit, not a decision. Every route to a toolchain was probed;
+the results are recorded here so nobody repeats the search.
+
+**Reachable:** `registry.npmjs.org`, `pypi.org`, `github.com` (API + `git
+clone`).
+
+**Blocked:** `static.rust-lang.org`, `sh.rustup.rs`, `forge.rust-lang.org`,
+`crates.io`, `static.crates.io`, `index.crates.io`, the tuna and rsproxy
+mirrors, `cdn.jsdelivr.net`, `unpkg.com`, and — decisively —
+`objects.githubusercontent.com`, `raw.githubusercontent.com` and
+`release-assets.githubusercontent.com`.
+
+Routes tried and why each fails:
+
+| Route | Result |
+| --- | --- |
+| `rustup` / official installer | host blocked |
+| `apt install rustc` | needs root |
+| npm `wasm-pack` | installs, then fetches its binary from a blocked host |
+| PyPI `maturin`, `setuptools-rust` | install fine, but both are *drivers*: neither bundles a compiler |
+| GitHub release assets (`gh release download`) | API lists them, download fails — the asset CDN returns EOF |
+| Build rustc from source | needs a bootstrap rustc, which comes from the blocked host |
+| Bootstrap via `mrustc` (gcc/g++/make are present) | would still need crates.io for dependencies |
+
+The dependency problem is independent of the compiler problem: `Cargo.lock`
+pins **218 packages** and the workspace declares **37 direct** external crates
+including `wgpu` and `vello`. There is no `vendor/` directory and no `.cargo/`
+config, so a build would have to fetch all of them from crates.io. Even a
+working rustc would not produce a build here.
+
+**What would unblock local work**, in order of preference:
+
+1. Allowlist `static.rust-lang.org` and `crates.io` (plus `index.crates.io`,
+   `static.crates.io`) in the sandbox egress rules.
+2. Or bake `cargo`/`rustc` into the dev image and commit a `vendor/` directory
+   (`cargo vendor`) so builds are offline-capable.
+
+Neither is needed to *begin*. CI already compiles and tests the workspace, so
+the first slice can be proven there. Local access decides whether the work is
+comfortable, not whether it is possible.
+
+No Rust in this repository has been compiled or executed **in this sandbox**.
+
+**CI is a different story, and it changes the plan.**
+`.github/workflows/ci.yml` installs the pinned 1.98.1 toolchain and runs
+`scripts/check.sh`, which does `cargo fmt --check`, `cargo clippy --workspace
+--all-targets` and `cargo test --workspace --locked`. Those runs pass on this
+branch. So the Rust does compile and its tests do run — just not here.
+
+The toolchain is therefore not a blocker for *evaluating* the Rust
+architecture. It only blocks doing that work interactively. The first bridge
+slice can be built and proven in CI today.
+
+## Enforcement
+
+This is a review rule rather than a build gate, because no CI job yet compares
+the two implementations:
+
+- A new file in `apps/web/src/engine/` should say which capability it owns and
+  whether a Rust counterpart exists.
+- Anything duplicating existing Rust must name its counterpart in a header
+  comment, as the three import ports do.
+- Prefer extending the behaviour suite over adding engine logic anywhere.
+- Adding a *second* implementation of a capability that already has an
+  authoritative one requires a migration plan, not just a patch.
+
+The migration track should add a CI job that builds the wasm artifact and runs
+the equivalence checks, so the boundary becomes mechanically checkable instead
+of social. CI already has the toolchain, so this is buildable now.

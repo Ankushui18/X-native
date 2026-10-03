@@ -1,0 +1,9 @@
+[package]
+name = "x-components"
+version = "0.40.0"
+edition = "2021"
+[dependencies]
+x-core = { path = "../x-core" }
+
+[lints]
+workspace = true
