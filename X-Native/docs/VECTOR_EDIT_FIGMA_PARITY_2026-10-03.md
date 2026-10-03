@@ -38,7 +38,7 @@ Web:
 Core:
 
 - `crates/x-editor/src/vector_edit.rs` now applies nested transforms when finding Lasso hits and exposes selection and point-rotation APIs. The rotation preserves the layer transform and rewrites selected anchors plus their own incoming/outgoing controls as a single `ReplaceNode` undo step.
-- Rust validation is not currently available in this environment (`cargo`/`rustc` are absent); the new Rust tests are present but could not be executed here.
+- `cargo`/`rustc` are absent locally. GitHub CI at `60d5573` compiled the core, passed Clippy, and ran the workspace tests: 1,057 passed, 2 ignored. That run failed the aggregate gate only on `cargo fmt --check`; formatting corrections are pushed in follow-up commits and the final-commit CI rerun is pending.
 
 Initial baseline before edits: `npm run build` passed; the five focused baseline files passed 334 tests. After this pass, the production build passed, the mounted vector-edit tests passed 23/23, and Batch 3 passed 131/131. The first full run exposed an unnecessary duplicate paint: the sub-tool reset effect created a fresh empty Lasso array on mount, so `frameInteraction.dom.test.mjs` observed the idle “Outer” frame label twice. The effect now preserves state when already reset; that suite passed 65/65, and the final full web suite passed 3,715 checks across 70 summarized suites with 0 failures.
 
@@ -46,7 +46,7 @@ Initial baseline before edits: `npm run build` passed; the five focused baseline
 
 - The web Lasso operates on the editable `node.path` walk (or `shapePoly` fallback), matching the current point-index selection and overlay. It does not expose branch-only vertices in an arbitrary `VectorNetwork`; branch-wide vector editing is a separate model/UI gap.
 - Path selection is represented by selecting segment endpoint anchors. The web uses a majority-inside curve-sampling rule rather than a native segment-selection object, so exact edge/boundary semantics may differ from Figma.
-- The new core APIs and Rust tests are present, but `cargo`/`rustc` are unavailable here so their compilation and execution remain unverified. The current web editor is driven by `MemoryEngine`; these Rust methods are not the Canvas runtime’s command path.
+- The current web editor is driven by `MemoryEngine`; these Rust APIs are editor-core behavior and are not the Canvas runtime’s command path.
 - Vector-edit Eraser and Variable-width subtools remain a separate parity gap. The main Eraser is not the same as Figma’s vector-edit Eraser, and its current partial-erase path can split retained runs into separate layers. This pass did not change eraser output semantics.
 - Only point-box rotation is covered here. Multi-node transform, simultaneous edits across several vector layers, and every possible graph/region topology still need their own parity pass.
 
