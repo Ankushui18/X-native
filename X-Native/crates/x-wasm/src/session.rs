@@ -332,6 +332,107 @@ impl CommandBridge {
     pub fn export_x(&self) -> String {
         save_x(&self.session.snapshot())
     }
+
+    /// Phase 9: Raster/PDF export of a single node through the Rust render
+    /// pipeline. Returns a JSON envelope `{ "ok": true, "bytes": "<base64>",
+    /// "width": N, "height": N, "format": "png"|"jpg"|"pdf" }`. PNG and JPG
+    /// use `x_render::export_raster` (tiny-skia, deterministic, no GPU);
+    /// PDF uses `x_render::export_pdf`. The TS caller decodes the base64
+    /// into a downloadable Blob — never the lossy canvas.toDataURL path.
+    pub fn export_node(&self, id: &str, format: &str, scale: f64) -> Result<String, String> {
+        use base64::Engine;
+        use x_render::{
+            build_render_tree, export_pdf, export_raster, encode_png, encode_jpg,
+            RasterFormat,
+        };
+        if !scale.is_finite() || scale <= 0.0 || scale > 64.0 {
+            return Err("export scale must be a finite number between 0 and 64".into());
+        }
+        let snapshot = self.session.snapshot();
+        // Find the node anywhere in the document
+        let node = snapshot
+            .pages
+            .iter()
+            .find_map(|page| find_node(page, id))
+            .ok_or_else(|| format!("node '{id}' not found"))?;
+        let (w, h) = (node.w.max(1.0), node.h.max(1.0));
+        let tree = build_render_tree(node, &x_core::Variables::default());
+        match format {
+            "png" => {
+                let (bytes, pw, ph) = export_raster(
+                    &tree, w, h, RasterFormat::Png, scale, None, None, None,
+                )?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(format!(
+                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"png"}}"#
+                ))
+            }
+            "jpg" | "jpeg" => {
+                let quality = 92u8; // high quality default
+                let (bytes, pw, ph) = export_raster(
+                    &tree, w, h, RasterFormat::Jpg(quality), scale,
+                    Some(x_core::Color::WHITE), None, None,
+                )?;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(format!(
+                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"jpg"}}"#
+                ))
+            }
+            "pdf" => {
+                let bytes = export_pdf(&tree, w, h);
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(format!(
+                    r#"{{"ok":true,"bytes":"{b64}","width":{},"height":{},"format":"pdf"}}"#,
+                    w as u32, h as u32
+                ))
+            }
+            _ => Err(format!("unsupported export format: {format}")),
+        }
+    }
+
+    /// Phase 9: Add a point to an existing vector path segment. The point is
+    /// inserted at the midpoint of the segment ending at `anchor_idx` (the
+    /// segment_hit result from the UI). ONE undoable command.
+    pub fn vector_add_point(
+        &mut self,
+        id: &str,
+        segment_idx: usize,
+        x: f64,
+        y: f64,
+    ) -> Result<String, String> {
+        self.session
+            .editor_mut()
+            .add_vector_point_on(id, segment_idx, (x, y))
+            .map(|_| delta_json(self.session.state()))
+            .ok_or_else(|| "could not add point: invalid node or segment".into())
+    }
+
+    /// Phase 9: Convert a corner point to smooth (or vice versa). Toggles a
+    /// LineTo ↔ CurveTo at the given anchor index. ONE undoable command.
+    pub fn vector_convert_point(
+        &mut self,
+        id: &str,
+        anchor_idx: usize,
+    ) -> Result<String, String> {
+        self.session
+            .editor_mut()
+            .convert_anchor(id, anchor_idx)
+            .then(|| delta_json(self.session.state()))
+            .ok_or_else(|| "could not convert point: invalid node or anchor".into())
+    }
+}
+
+/// Walk the node tree to find a node by id.
+fn find_node<'a>(node: &'a x_core::Node, id: &str) -> Option<&'a x_core::Node> {
+    if node.id == id {
+        return Some(node);
+    }
+    for child in &node.children {
+        if let Some(found) = find_node(child, id) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -658,5 +759,123 @@ mod tests {
         );
         let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
         assert_eq!(undone["node"], Value::Null);
+    }
+
+    // Phase 9: export and vector editing tests
+
+    #[test]
+    fn export_node_png_produces_valid_base64_png() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let result = bridge.export_node("box", "png", 1.0).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["format"], "png");
+        let bytes_b64 = parsed["bytes"].as_str().unwrap();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        assert_eq!(&bytes[1..4], b"PNG", "valid PNG signature");
+        assert!(bytes.len() > 8);
+    }
+
+    #[test]
+    fn export_node_jpg_produces_valid_jpeg() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let result = bridge.export_node("box", "jpg", 2.0).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["format"], "jpg");
+        let bytes_b64 = parsed["bytes"].as_str().unwrap();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        assert_eq!(&bytes[0..2], &[0xFF, 0xD8], "JPEG SOI marker");
+    }
+
+    #[test]
+    fn export_node_pdf_produces_valid_pdf() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let result = bridge.export_node("box", "pdf", 1.0).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["format"], "pdf");
+        let bytes_b64 = parsed["bytes"].as_str().unwrap();
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.starts_with("%PDF-1.4"));
+        assert!(text.contains("%%EOF"));
+    }
+
+    #[test]
+    fn export_node_unknown_format_returns_error() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        assert!(bridge.export_node("box", "gif", 1.0).is_err());
+    }
+
+    #[test]
+    fn export_node_missing_id_returns_error() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        assert!(bridge.export_node("nonexistent", "png", 1.0).is_err());
+    }
+
+    #[test]
+    fn export_node_invalid_scale_returns_error() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        assert!(bridge.export_node("box", "png", 0.0).is_err());
+        assert!(bridge.export_node("box", "png", -1.0).is_err());
+        assert!(bridge.export_node("box", "png", f64::NAN).is_err());
+    }
+
+    #[test]
+    fn vector_add_point_inserts_anchor_and_is_undoable() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0).child(Node::vector(
+                "v",
+                10.0,
+                10.0,
+                100.0,
+                50.0,
+                vec![
+                    PathCmd::MoveTo(0.0, 0.0),
+                    PathCmd::LineTo(100.0, 0.0),
+                    PathCmd::LineTo(100.0, 50.0),
+                    PathCmd::Close,
+                ],
+            ))],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        let result = bridge.vector_add_point("v", 2, 100.0, 25.0).unwrap();
+        let delta: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(delta["revision"], 1);
+        assert_eq!(delta["canUndo"], true);
+        let undone: Value = serde_json::from_str(&bridge.undo().unwrap()).unwrap();
+        assert_eq!(undone["revision"], 2);
+    }
+
+    #[test]
+    fn vector_convert_point_toggles_corner_and_smooth() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0).child(Node::vector(
+                "v",
+                0.0,
+                0.0,
+                100.0,
+                50.0,
+                vec![
+                    PathCmd::MoveTo(0.0, 0.0),
+                    PathCmd::LineTo(100.0, 0.0),
+                    PathCmd::LineTo(100.0, 50.0),
+                ],
+            ))],
+            ..Default::default()
+        });
+        let mut bridge = CommandBridge::open(&doc).unwrap();
+        let result = bridge.vector_convert_point("v", 1).unwrap();
+        let delta: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(delta["revision"], 1);
+        let result2 = bridge.vector_convert_point("v", 1).unwrap();
+        let delta2: Value = serde_json::from_str(&result2).unwrap();
+        assert_eq!(delta2["revision"], 2);
+        assert!(bridge.undo().is_ok());
     }
 }

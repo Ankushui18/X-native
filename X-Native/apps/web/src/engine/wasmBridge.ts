@@ -10,9 +10,10 @@ import { decodeRustImport } from "./wasmImportAdapter";
 import { auditDecision, auditRustAsyncCall, auditRustCall, registerAuditProbe } from "./bridgeRuntimeAudit";
 
 export const IMPORT_BRIDGE_VERSION = 1;
-// V6 adds reversible bounded Outline Stroke deltas to V5's signed offsets.
-// Older bindgen classes cannot acknowledge or undo this filled-vector rewrite safely.
-export const SESSION_BRIDGE_VERSION = 6;
+// V7 adds Phase 9: Rust raster/PDF export pipeline and vector editing
+// operations (add point to segment, corner↔smooth conversion). Older bindgen
+// classes cannot access the new export and vector editing methods.
+export const SESSION_BRIDGE_VERSION = 7;
 export const IMPORT_GLUE_URL = wasmAssetUrl("wasm/x_wasm.js");
 /** wasm-bindgen owns this stateful instance; JS never mirrors its document or
  * undo stack. The only large payload is an explicit open/export of native .x. */
@@ -31,6 +32,13 @@ export interface WasmDocumentSession {
   undo: () => string;
   redo: () => string;
   exportX: () => string;
+  /** Phase 9: Export a node to PNG/JPG/PDF via Rust render pipeline.
+   *  Returns JSON: `{ ok: true, bytes: "<base64>", width, height, format }` */
+  exportNode?: (id: string, format: string, scale: number) => string;
+  /** Phase 9: Add a point to an existing vector segment. */
+  vectorAddPoint?: (id: string, segmentIdx: number, x: number, y: number) => string;
+  /** Phase 9: Convert a corner point to smooth or vice versa. */
+  vectorConvertPoint?: (id: string, anchorIdx: number) => string;
   free: () => void;
 }
 export type WasmPocCommand = {

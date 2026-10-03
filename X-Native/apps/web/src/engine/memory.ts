@@ -4257,6 +4257,61 @@ export class MemoryEngine implements Engine {
         }
         break;
       }
+      case "convertAnchor": {
+        // Phase 9: Toggle corner↔smooth for a path point.
+        // Corner: no handles (ix/iy/ox/oy absent or 0) → Smooth: auto handles at 1/3 of adjacent segments
+        // Smooth: has handles → Corner: clear all handles
+        const n = find(this.root(), cmd.id);
+        if (!n || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;
+        const src = n.path.length >= 2 ? n.path : shapePoly(n);
+        if (!src[cmd.anchorIndex]) break;
+        if (hasExtraNetworkGeometry(n.vectorNetwork)) break;
+        const pt = src[cmd.anchorIndex];
+        const hasHandles = (pt.ix && pt.ix !== 0) || (pt.iy && pt.iy !== 0) || (pt.ox && pt.ox !== 0) || (pt.oy && pt.oy !== 0);
+        if (hasHandles) {
+          // Smooth → Corner: clear handles
+          delete pt.ix; delete pt.iy; delete pt.ox; delete pt.oy;
+        } else {
+          // Corner → Smooth: auto-place handles at 1/3 of adjacent segments
+          const prev = src[(cmd.anchorIndex - 1 + src.length) % src.length];
+          const next = src[(cmd.anchorIndex + 1) % src.length];
+          const effClosed = n.path.length ? !!n.closed : n.kind !== "line" && n.kind !== "arrow";
+          // If not closed and at an endpoint, only set one handle direction
+          if (!effClosed && cmd.anchorIndex === 0) {
+            // First point of open path: only outgoing handle
+            const dx = next.x - pt.x;
+            const dy = next.y - pt.y;
+            pt.ox = dx / 3;
+            pt.oy = dy / 3;
+          } else if (!effClosed && cmd.anchorIndex === src.length - 1) {
+            // Last point of open path: only incoming handle
+            const dx = prev.x - pt.x;
+            const dy = prev.y - pt.y;
+            pt.ix = dx / 3;
+            pt.iy = dy / 3;
+          } else {
+            // Interior point or closed path: both handles, mirrored
+            const dx = next.x - prev.x;
+            const dy = next.y - prev.y;
+            const len = Math.hypot(dx, dy);
+            if (len > 0.01) {
+              const scale = Math.min(len / 3, Math.hypot(pt.x - prev.x, pt.y - prev.y) * 0.4);
+              const nx = dx / len;
+              const ny = dy / len;
+              pt.ox = nx * scale;
+              pt.oy = ny * scale;
+              pt.ix = -nx * scale;
+              pt.iy = -ny * scale;
+            }
+          }
+          pt.mirrorMode = "angleAndLength";
+        }
+        n.path = src;
+        n.kind = "vector";
+        n.vectorNetwork = (n.vectorNetwork && patchNetworkPath(n.vectorNetwork, n.path)) || pathToVectorNetwork(n.path, n.closed);
+        this.publishIfMasterEdit(cmd.id);
+        break;
+      }
       case "setPointMirror": {
         const n = find(this.root(), cmd.id);
         if (!n || !n.path[cmd.pointIndex] || isEffectivelyLocked(this.root(), cmd.id) || isInstanceMember(this.root(), cmd.id)) break;

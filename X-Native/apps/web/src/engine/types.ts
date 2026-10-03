@@ -1323,6 +1323,7 @@ export type Command =
   | { type: "addVectorBranch"; id: string; fromVertexIndex: number; to: VectorVertex; tangentStart?: { x: number; y: number }; tangentEnd?: { x: number; y: number } }
   | { type: "bendSegment"; id: string; segIndex: number; dragX: number; dragY: number }
   | { type: "insertPointOnPath"; id: string; x: number; y: number; maxDist?: number }
+  | { type: "convertAnchor"; id: string; anchorIndex: number }
   | { type: "setPointMirror"; id: string; pointIndex: number; mode: "none" | "angle" | "angleAndLength" }
   | { type: "setPointCornerRadius"; id: string; pointIndex: number; radius: number }
   | { type: "flatten"; id?: string }

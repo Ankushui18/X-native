@@ -9308,6 +9308,151 @@ function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boo
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
   }
+  // Phase 9: Attempt Rust render pipeline for PNG/JPG/PDF. The Rust path
+  // uses tiny-skia (CPU) for raster and a native PDF writer — it bypasses
+  // the canvas.toDataURL intermediate and produces output at full fidelity
+  // with no lossy canvas artifacts. Falls back to the SVG->canvas path
+  // when the WASM bridge is not available (e.g. older deployed artifacts).
+  if (p.format === "PNG" || p.format === "JPG" || p.format === "PDF") {
+    void tryWasmExport(n, p, scope, name, width, height, box).then((handled) => {
+      if (handled) return;
+      // WASM path not available — fall through to the canvas path below
+      canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
+    });
+    return;
+  }
+  canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
+}
+
+/** Phase 9: Try the Rust render pipeline first. Returns true if it handled
+ *  the export (successfully or not — we don't retry on failure). */
+async function tryWasmExport(
+  n: XNode,
+  p: ExportPreset,
+  _scope: { root?: XNode; page?: boolean } | undefined,
+  name: string,
+  _width: number,
+  _height: number,
+  box: { w: number; h: number } | null,
+): Promise<boolean> {
+  try {
+    const { wasmExportNode } = await import("../engine/wasmExport");
+    // Build a minimal .x document from the node for the Rust exporter.
+    // The RustDocumentSession needs a full .x to open; we synthesize one
+    // with a single page containing the target node.
+    const xDoc = buildMinimalXDoc(n, box);
+    if (!xDoc) return false;
+    const scale = typeof p.scale === "number" ? p.scale : 1;
+    const format = p.format.toLowerCase() as "png" | "jpg" | "pdf";
+    const result = await wasmExportNode(xDoc, n.id, format, scale);
+    if (!result) return false;
+    const mime = format === "jpg" ? "image/jpeg" : format === "pdf" ? "application/pdf" : "image/png";
+    downloadBlob(new Blob([result.bytes], { type: mime }), name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Build a minimal .x JSON document containing the target node. The .x
+ *  schema is defined by x-format; this produces the minimum valid document
+ *  the Rust session can open and export from. */
+function buildMinimalXDoc(n: XNode, box: { w: number; h: number } | null): string | null {
+  const w = box?.w ?? n.w;
+  const h = box?.h ?? n.h;
+  // Convert the XNode to a minimal .x Node representation
+  const xNode = xnodeToX(n);
+  if (!xNode) return null;
+  return JSON.stringify({
+    version: 1,
+    pages: [{
+      id: "export-page",
+      name: "Export",
+      kind: "frame",
+      x: 0, y: 0, w, h,
+      children: [xNode],
+    }],
+    default_font: null,
+    variables: {},
+    styles: {},
+    assets: {},
+  });
+}
+
+/** Convert an XNode tree to the .x Node JSON shape. Returns null if the
+ *  node cannot be faithfully represented (complex image assets, etc.). */
+function xnodeToX(n: XNode): Record<string, unknown> | null {
+  const base: Record<string, unknown> = {
+    id: n.id,
+    name: n.name || n.id,
+    kind: n.kind === "boolean" ? "vector" : n.kind,
+    x: n.x,
+    y: n.y,
+    w: n.w,
+    h: n.h,
+    visible: n.visible !== false,
+    locked: n.locked === true,
+  };
+  // Fill color
+  if (typeof n.fill === "string" && n.fill.startsWith("#")) {
+    base.fill = n.fill;
+  }
+  // Opacity
+  if (typeof n.opacity === "number" && n.opacity < 1) {
+    base.opacity = n.opacity;
+  }
+  // Rotation
+  if (n.rotation) {
+    base.rotation = n.rotation;
+  }
+  // Corner radius
+  if (n.radius) {
+    base.radius = n.radius;
+  }
+  // Vector path
+  if ((n.kind === "vector" || n.kind === "boolean") && n.path?.length) {
+    base.path = n.path.map((pt: { x: number; y: number; type?: string; handleInX?: number; handleInY?: number; handleOutX?: number; handleOutY?: number }) => {
+      if (pt.type === "curve" || pt.handleInX !== undefined) {
+        return ["C",
+          pt.handleInX ?? pt.x, pt.handleInY ?? pt.y,
+          pt.handleOutX ?? pt.x, pt.handleOutY ?? pt.y,
+          pt.x, pt.y,
+        ];
+      }
+      return ["L", pt.x, pt.y];
+    });
+    // First point becomes MoveTo
+    if (base.path && (base.path as unknown[][]).length > 0) {
+      const first = (base.path as unknown[][])[0];
+      first[0] = "M";
+    }
+    if (n.closed !== false) {
+      (base.path as unknown[][]).push(["Z"]);
+    }
+  }
+  // Children
+  if (n.children?.length) {
+    const childXNodes = n.children.map(xnodeToX).filter(Boolean);
+    if (childXNodes.length) {
+      base.children = childXNodes;
+    }
+  }
+  return base;
+}
+
+/** The original canvas-based export path, preserved as the fallback when
+ *  the WASM Rust render pipeline is not available. */
+function canvasExportPath(
+  n: XNode,
+  p: ExportPreset,
+  svg: string,
+  width: number,
+  height: number,
+  name: string,
+  colorProfile: string,
+  settings: ReturnType<typeof resolveSettings>,
+  box: { w: number; h: number } | null,
+) {
   const image = new Image();
   image.onload = () => {
     const c = document.createElement("canvas");

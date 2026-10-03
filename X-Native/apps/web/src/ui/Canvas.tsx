@@ -4914,6 +4914,41 @@ export function Canvas({
       let wpt = toWorld(e.clientX, e.clientY);
       const rootForPen = snap.pages[snap.page].root;
       const near = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by) < 8 / snap.zoom;
+      // Phase 9: Alt/Option-click on an existing anchor converts corner↔smooth.
+      // This works in both vector-edit mode and when a vector is selected with
+      // the pen tool. The conversion toggles between a straight segment (LineTo)
+      // and a curved one (CurveTo with auto-placed handles at 1/3rds).
+      if (e.altKey && !penBranch.current && !draft.length) {
+        const targetId = vecEdit ?? (snap.selection.length === 1 ? snap.selection[0] : null);
+        if (targetId) {
+          const loc = worldPos(rootForPen, targetId);
+          if (loc && !loc.node.locked && (loc.node.kind === "vector" || loc.node.kind === "boolean")) {
+            const epts = loc.node.path.length ? loc.node.path : shapePoly(loc.node);
+            const elocal = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, loc.node);
+            // Find the nearest anchor
+            let bestIdx = -1;
+            let bestDist = Infinity;
+            for (let i = 0; i < epts.length; i++) {
+              const v = epts[i];
+              const d = Math.hypot(elocal.x - v.x, elocal.y - v.y);
+              if (d < bestDist) {
+                bestDist = d;
+                bestIdx = i;
+              }
+            }
+            if (bestIdx >= 0 && bestDist < 12 / snap.zoom) {
+              // Dispatch corner↔smooth conversion
+              engine.dispatch({
+                type: "convertAnchor",
+                id: targetId,
+                anchorIndex: bestIdx,
+              });
+              toast(bestDist < 6 / snap.zoom ? "Point converted (corner↔smooth)" : "Point converted");
+              return;
+            }
+          }
+        }
+      }
       // A branch is anchored on a vertex of the selected vector, so the pen can
       // keep drawing in that shape instead of starting a second one.
       // In vector edit, a pen click on the edited path inserts an anchor
@@ -4946,6 +4981,44 @@ export function Canvas({
               setVecEdit(loc.node.id, res.insertedIndex);
               toast("Point added on path");
               return;
+            }
+          }
+        }
+      }
+      // Phase 9: Click on a segment of a selected vector adds a point (pen re-edit).
+      // Works even outside vector-edit mode: the pen tool directly inserts a
+      // new anchor on the hit segment when no draft is in progress.
+      if (!vecEdit && !penBranch.current && !draft.length && snap.selection.length === 1) {
+        const sel = find(rootForPen, snap.selection[0]);
+        if (sel && !sel.locked && (sel.kind === "vector" || sel.kind === "boolean")) {
+          const src = sel.path.length ? sel.path : shapePoly(sel);
+          if (src.length >= 2) {
+            const elocal = nodeLocalPoint(wpt.x, wpt.y, sel.x, sel.y, sel);
+            // Check it's not too close to a vertex (that would be a branch start)
+            let tooCloseToVertex = false;
+            for (const v of src) {
+              if (Math.hypot(elocal.x - v.x, elocal.y - v.y) < 10 / snap.zoom) {
+                tooCloseToVertex = true;
+                break;
+              }
+            }
+            if (!tooCloseToVertex) {
+              const closed = sel.path.length ? !!sel.closed : sel.kind !== "line" && sel.kind !== "arrow";
+              const res = insertPointOnPath(src, elocal.x, elocal.y, closed, 10 / snap.zoom);
+              if (res) {
+                if (!allowTopologyEdit(engine, sel.id)) return;
+                engine.dispatch({
+                  type: "insertPointOnPath",
+                  id: sel.id,
+                  x: elocal.x,
+                  y: elocal.y,
+                  maxDist: 10 / snap.zoom,
+                });
+                vecPt.current = res.insertedIndex;
+                setVecEdit(sel.id, res.insertedIndex);
+                toast("Point added on segment");
+                return;
+              }
             }
           }
         }

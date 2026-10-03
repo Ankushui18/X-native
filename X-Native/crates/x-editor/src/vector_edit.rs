@@ -1230,6 +1230,28 @@ impl Editor {
         })
     }
 
+    /// Phase 9: Add a point on a segment, given the node id directly (no
+    /// vector edit mode required). ONE undo step. This is the WASM bridge
+    /// variant of [`add_vector_point`].
+    pub fn add_vector_point_on(
+        &mut self,
+        node_id: &str,
+        segment_idx: usize,
+        position: (f64, f64),
+    ) -> bool {
+        self.rewrite_path(node_id, |path| {
+            let mut p = split_segment_at(path, segment_idx)?;
+            let new_a = anchors(&p).get(segment_idx).copied()?;
+            move_anchors_by(
+                &mut p,
+                &[segment_idx],
+                position.0 - new_a.x,
+                position.1 - new_a.y,
+            );
+            Some(p)
+        })
+    }
+
     /// Simplify a path (: Edit object > Simplify): the node in vector edit
     /// mode, else the single selected node. `tolerance` is in local units; see
     /// [`simplify_path`] for what survives and what approximates.

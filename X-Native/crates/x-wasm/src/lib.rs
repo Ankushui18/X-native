@@ -288,12 +288,13 @@ mod bindings {
     }
 
     /// Independently versioned command session. V3 added Booleans, V4 added
-    /// aligned strokes, V5 added bounded single-layer signed offsets, and V6
-    /// adds reversible Outline Stroke projections. Older bindgen artifacts
-    /// cannot safely acknowledge/undo the new filled-vector rewrite.
+    /// aligned strokes, V5 added bounded single-layer signed offsets, V6
+    /// adds reversible Outline Stroke projections, and V7 adds Phase 9
+    /// export (PNG/JPG/PDF via Rust raster pipeline) and vector editing
+    /// (add point to segment, corner↔smooth conversion).
     #[wasm_bindgen(js_name = sessionBridgeVersion)]
     pub fn session_bridge_version() -> u32 {
-        6
+        7
     }
 
     #[wasm_bindgen]
@@ -406,6 +407,44 @@ mod bindings {
         #[wasm_bindgen(js_name = exportX)]
         pub fn export_x(&self) -> String {
             self.bridge.export_x()
+        }
+
+        /// Phase 9: Export a node to PNG, JPG, or PDF via the Rust render
+        /// pipeline. Returns a JSON envelope with base64-encoded bytes.
+        #[wasm_bindgen(js_name = exportNode)]
+        pub fn export_node(
+            &self,
+            id: &str,
+            format: &str,
+            scale: f64,
+        ) -> Result<String, JsValue> {
+            self.bridge.export_node(id, format, scale).map_err(js_error)
+        }
+
+        /// Phase 9: Add a point to an existing vector path segment.
+        #[wasm_bindgen(js_name = vectorAddPoint)]
+        pub fn vector_add_point(
+            &mut self,
+            id: &str,
+            segment_idx: u32,
+            x: f64,
+            y: f64,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .vector_add_point(id, segment_idx as usize, x, y)
+                .map_err(js_error)
+        }
+
+        /// Phase 9: Convert a corner point to smooth (or vice versa).
+        #[wasm_bindgen(js_name = vectorConvertPoint)]
+        pub fn vector_convert_point(
+            &mut self,
+            id: &str,
+            anchor_idx: u32,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .vector_convert_point(id, anchor_idx as usize)
+                .map_err(js_error)
         }
     }
 
