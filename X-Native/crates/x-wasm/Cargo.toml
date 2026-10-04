@@ -23,11 +23,15 @@ x-render = { path = "../x-render" }
 # Keep JavaScript bindings out of the native editor/core crates. The typed POC
 # command API uses direct JS values instead of serializing command/state JSON.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# x-render pulls uuid v4 -> getrandom, whose wasm32-unknown-unknown backend
-# must be opted into explicitly or the bundle fails to link.
+# x-render pulls uuid v4, which demands an explicit randomness source on
+# wasm32-unknown-unknown: uuid's `js` feature routes it at wasm-bindgen's
+# crypto. getrandom's wasm_js backend stays enabled for any graph member
+# that calls getrandom directly (the CI build of wgpu's dependency closure
+# reaches for it).
 getrandom = { version = "0.4", features = ["wasm_js"] }
 serde-wasm-bindgen = "0.6.5"
 wasm-bindgen = "0.2.127"
+uuid = { version = "1", features = ["js"] }
 
 [lints]
 workspace = true
