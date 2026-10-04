@@ -7,7 +7,7 @@
  * reads the same capabilities, so a control can never appear for something the
  * output does not do.
  */
-import type { ExportFormat, ExportPreset } from "../engine/types";
+import type { Effect, ExportFormat, ExportPreset, StrokeLayer, XNode } from "../engine/types";
 
 export type Resampling = "detailed" | "basic";
 export type Quality = "low" | "medium" | "high";
@@ -103,6 +103,54 @@ export interface ExportSize {
   scale: number;
 }
 
+/** Extra canvas an export needs beyond the layer's own box, per side.
+ *
+ * A drop shadow, a layer blur or an outside stroke paints PAST the bounds;
+ * the exported area grows so the effect lands in the file rather than being
+ * cut off at the box (PNG troubleshooting: an effect that "extends past
+ * the layer's bounds" enlarges the export - "your 64px icon comes out at
+ * 96px"). The blur reaches 1.5x its radius, the same inflation the Rust
+ * renderer applies to its clip bounds (crates/x-render/src/ir.rs), so the
+ * web canvas, the SVG viewBox and the native file agree on one number.
+ * Inner shadows and background blur are contained by the layer and bleed
+ * nothing; invisible effects count for nothing; several shadows take the
+ * max per side, never a sum. */
+export interface ExportBleed {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+
+export function exportBleed(
+  node: Partial<Pick<XNode, "effects" | "strokeWidth" | "strokeAlign" | "strokes">>,
+): ExportBleed {
+  let l = 0;
+  let t = 0;
+  let r = 0;
+  let b = 0;
+  for (const e of (node.effects ?? []) as Effect[]) {
+    if (!e.visible || (e.kind !== "drop-shadow" && e.kind !== "layer-blur")) continue;
+    const pad = 1.5 * Math.max(0, e.blur || 0);
+    const dx = e.kind === "drop-shadow" ? e.x || 0 : 0;
+    const dy = e.kind === "drop-shadow" ? e.y || 0 : 0;
+    l = Math.max(l, pad - dx);
+    r = Math.max(r, pad + dx);
+    t = Math.max(t, pad - dy);
+    b = Math.max(b, pad + dy);
+  }
+  // Outside strokes paint a full-width ring beyond the box; centre strokes
+  // only reach half past it and the box itself keeps them in Figma's PNG
+  // preview terms - we pad the outside case, which is the clipping bug.
+  const outsidePad = (align: string | undefined, width: number | undefined) =>
+    align === "outside" ? Math.max(0, width || 0) : 0;
+  let sw = outsidePad(node.strokeAlign, node.strokeWidth);
+  for (const st of (node.strokes ?? []) as StrokeLayer[]) {
+    if (st.visible !== false) sw = Math.max(sw, outsidePad(st.align, st.width));
+  }
+  return { l: l + sw, t: t + sw, r: r + sw, b: b + sw };
+}
+
 /**
  * The size an export will come out at.
  *
@@ -113,12 +161,15 @@ export interface ExportSize {
  * design size rather than silently scaling a "vector" file.
  */
 export function exportSize(
-  node: { w: number; h: number },
+  node: { w: number; h: number } & Partial<Pick<XNode, "effects" | "strokeWidth" | "strokeAlign" | "strokes">>,
   preset: { format: ExportFormat; scale: number | string },
 ): ExportSize {
   const caps = FORMAT_CAPS[preset.format];
-  const w = Math.max(1, node.w);
-  const h = Math.max(1, node.h);
+  // The box the file is sized from: the layer plus whatever its effects
+  // paint past it. A page/slice `box` carries no effects, so it stays exact.
+  const bl = exportBleed(node);
+  const w = Math.max(1, node.w + bl.l + bl.r);
+  const h = Math.max(1, node.h + bl.t + bl.b);
   if (caps.oneToOne) return { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)), scale: 1 };
   const spec = parseScale(preset.scale);
   if (spec.kind === "width") {

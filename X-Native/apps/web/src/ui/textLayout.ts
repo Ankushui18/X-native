@@ -76,14 +76,23 @@ export function paraWrapOf(n: XNode, pi: number): XNode["textWrap"] {
  * Effective line height in world units (360039956634 §Line height): a fixed
  * px value, a percentage of the font size ("Figma will convert the value for
  * you, to the nearest pixel" — the caller converts on unit switch; here the
- * percent simply resolves against the font size), or Auto = the font's own
- * default, which the editor approximates as 1.2em as before.
+ * percent simply resolves against the font size), or Auto = the font's OWN
+ * default line height, which "varies between typefaces". The per-node
+ * `textMetrics` stamped by the engine (measureText's font bounding box) is
+ * the Figma answer; the 1.2em constant survives only as the fallback for a
+ * layer that has never been measured (headless first paint, codegen before
+ * the fonts are loaded). Span sizes rescale the recorded box proportionally,
+ * so an override larger than the base keeps the same font's ratio.
  */
 export function effectiveLineHeight(n: XNode, fontSize?: number): number {
   const fs = Math.max(1, fontSize ?? n.fontSize);
   const unit = n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto");
   if (unit === "percent" && n.lineHeight > 0) return Math.max(1, (n.lineHeight / 100) * fs);
   if (unit === "px" && n.lineHeight > 0) return Math.max(1, n.lineHeight);
+  const m = n.textMetrics;
+  if (m && m.fontBoundingBoxAscent != null && m.fontBoundingBoxDescent != null && m.fontSize) {
+    return Math.max(1, ((m.fontBoundingBoxAscent + m.fontBoundingBoxDescent) * fs) / m.fontSize);
+  }
   return Math.max(1, fs * 1.2);
 }
 

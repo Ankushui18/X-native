@@ -1,533 +1,224 @@
-# X-Native → Figma Design: Behavioral & Output Parity Audit
+# Behavior & Output Parity Audit — X-Native vs. Figma Design
+**Date:** 2026-10-04 · **Auditor:** Arena agent (functional parity mode)
+**Tree:** `arena/01a106ee-x-native` @ `9baf0cd` (includes batch 45 `FIGMA_HELP_AUDIT_2026-10-04_45_CANVAS_VECTOR_PARITY.md` and batch 46 persistence fixes)
+**Ground truth:** help.figma.com Figma Design documentation (articles cited per finding)
+**Baseline verification run in this session:** `npm test` in `apps/web` → **exit 0**, all 110 files in the chain green (chain tail verified in the captured log: `figmaCanvasVectorParity: 67 passed, 0 failed`, `figmaGridLayering: 7 passed, 0 failed`). Caveat that matters for this audit: the sandbox ships **no compiled `.wasm`** (`apps/web/public` contains only `favicon.svg`, `fonts`, `samples`), so the whole suite executes against the **TS fallback engine**. Every finding in the WASM tier below is therefore invisible to CI and only bites builds that run `npm run wasm:build` (`scripts/build-wasm.sh`). The Rust side could not be compiled here (no cargo in sandbox); Rust findings are from a static read of `crates/`.
 
-**Date:** 2026-10-04
-**Auditor role:** Product Engineer / QA Auditor (functional parity with Figma Design)
-**Repository:** `/home/user/X-native` @ `9baf0cd` (branch `arena/01a106ee-x-native`)
-**Reference authority:** Figma Help Center — Figma Design (`https://help.figma.com/hc/en-us/categories/360002042553-Figma-Design`)
+## Ground rules honored (read this first)
 
----
-
-## 0. What this audit is, and what it deliberately is not
-
-**In scope (behavior + output only):**
-
-1. Vector & path editing — adding points, Bézier handle mirroring / ⌥ break, double-click entry, path splitting.
-2. Frame & selection — marquee semantics (⇧ union vs. replace), rotation interaction, midpoint vs. corner handle behavior.
-3. Auto layout — gap redistribution by dragging, hug vs. fill, ignore-auto-layout (absolute positioning).
-4. Text & typography — line-height metrics, baseline alignment, text resizing (auto width vs. fixed).
-5. Components & variables — instance overrides, mode switching, binding/unbinding.
-6. Export & output — PNG/JPG/PDF rasterization, SVG structure, clipping/masking.
-
-**Explicitly out of scope — ignored by design:**
-
-- Colours, spacing, icons, panel layout, typography and any other styling of X-Native's *own* chrome. The audit never treats "our button looks different" as a finding; §5 (Category D) lists every place where X-Native's chrome differs from Figma's **and is correct**.
-- AI, MCP, Video, Motion. No new features are proposed; every fix below makes an **existing** control or gesture produce Figma's behavior or output.
-
-**Method.** Every finding below was produced by (a) reading the current implementation, then (b) cross-referencing the specific Figma Learn article for that behavior. Line numbers are from commit `9baf0cd` and were re-verified after the last prior batch of edits landed. Where the Figma documentation is ambiguous (noted inline), the finding is marked with a confidence level instead of being asserted.
-
-Files read for this audit (all under `X-Native/apps/web/src` unless noted): `ui/Canvas.tsx` (11,434 lines), `ui/canvasSelection.ts`, `ui/pointBox.ts`, `ui/vectorEdit.ts`, `ui/textLayout.ts`, `ui/inspector.tsx` (10,566), `ui/chrome.tsx`, `ui/exportModel.ts`, `engine/svgExport.ts`, `engine/pdf.ts`, `engine/wasmExport.ts`, `engine/wasmBridge.ts`, `engine/rasterMetadata.ts`, `engine/memory.ts`, `engine/layout.ts`, `engine/geometry.ts`, `engine/variables.ts`, `engine/textVector.ts`, `engine/types.ts`, plus `crates/x-wasm/src/session.rs`, `crates/x-render/src/{sinks.rs,lib.rs}`, `crates/x-text/src/shaping.rs`, `crates/x-core/src/{node.rs,styles.rs}`.
+- **No UI styling was graded.** Colors, icons, panel layout, handle *shapes*, menu placement of X-Native were ignored except where a chrome decision changes *what the user can do*.
+- **Category D is applied generously.** Several items the brief lists as suspects are either already-correct or deliberate, measured, Figma-informed choices; they are recorded as D with evidence rather than re-litigated.
+- **Prior batches are not re-flagged.** Batch 45 fixed (and test-pinned) double-click-into-path anchor selection, the `+` insert preview/insert unity, default handle mirroring, Alt-break persistence, cursor-only rotation, pixel-grid layering, and the path skeleton. This audit verified each of those is *present in this tree* (`vectorEdit.ts:77-106`, `Canvas.tsx:181/5200/5962/6323/6941-6990`, geometry helpers at `geometry.ts:1477/1549/1563`) and moved on to what remains.
 
 ---
 
-## 1. Executive summary
+# Step 1 + 2 · The audit, with root causes
 
-| # | Finding | Area | Category | Severity |
-|---|---|---|---|---|
-| F1 | The Rust/WASM export path renders **a flat colour block** for PNG/JPG/PDF, and it *wins over* the correct SVG→canvas path whenever it "succeeds" | Export | B + C | Critical (latent) |
-| F2 | Browser PDF export is a raster image, not vector paths/glyphs (the real vector writer exists in `x-render`) | Export | B + C | High |
-| F3 | Auto line height is hard-coded to **1.2em** instead of the font's intrinsic line height | Text | B + C | High |
-| F4 | Canvas gap drag is a **no-op** on auto-spacing ("Between/Around/Evenly") frames, and the handle only exists between the *first two* children | Auto layout | A | High |
-| F5 | Bézier handles of **unselected** anchors are invisible but still grabbable (7px) | Vector | A | High |
-| F6 | Rotation is reachable only from the **top-right** corner (shapes) or a detached spot 20px above it (frames); Figma rotates from just outside any corner | Frame & selection | A | High |
-| F7 | Bend tool / ⌘-click on an **anchor** moves the point instead of adding mirrored handles | Vector | A | Medium-High |
-| F8 | "Include bounding box (text layers only)" is exposed, stored — and read by **no** exporter (detailed with C2 in §4) | Export | C | Medium-High |
-| F9 | "Ignore overlapping layers" changes nothing for non-slice layers/groups | Export | B + C | Medium |
-| F10 | PNG/JPG of text rasterizes an SVG `<text>` with **no embedded font**; self-hosted fonts silently fall back | Export | B | Medium |
-| F11 | A **plain** marquee never descends into a section, so its frames are unreachable without ⌘ | Frame & selection | A | Medium |
-| F12 | Windows has **no** drop-as-ignore-auto-layout modifier (Figma: `S`) | Auto layout | A | Low |
-| F13 | No layer/frame-level variable **mode override** (document-scope modes only; C5 in §4) | Variables | C | Medium (scope gap) |
-| D1–D7 | Seven deliberate chrome differences verified as behaviorally correct | — | D | No action |
+Severity: **P0** output is wrong or corrupted for a common flow · **P1** a documented core behavior diverges · **P2** a documented edge of a core behavior diverges · **P3** cosmetic-behavioral note.
 
-Sabotage-verified tests that currently **lock in** non-Figma behavior were found in `ui/__tests__/canvasSelection.test.mjs:74` and `:76` (F6) and are called out explicitly, because a fix must invert them.
+| ID | Area | Category | Sev | One-line verdict |
+|----|------|----------|-----|------------------|
+| F1 | Export | **C** (+B) | **P0** | The WASM export bridge answers `exportNode` with flat-color stub encoders; the real Rust renderer (`x-render`) is never wired into it |
+| F2 | Export | **B** | **P0/P1** | Export area = layer box only; Figma expands it to include drop-shadow / blur / outside-stroke bleed → exported assets clip their own effects |
+| F3 | Frame & selection | **A** | P1 | Rotation affordance is armed only in a band at the **top-right**; Figma arms at **any corner**, just outside the bounds (and multi-select here already does all 4 corners — the app contradicts itself) |
+| F4 | Auto layout | **A** | P1 | Spacing bands paint between **every** adjacent pair but only the **first gap** is hover-armed and draggable; and dragging while gap = **Auto** writes `gap` that the layout pass ignores → a visually dead drag |
+| F5 | Text | **C** | P1 | Auto line-height is the constant `fontSize × 1.2`; Figma's Auto is the *font's* default line height; per-font metrics already measured and stored per node are not consumed |
+| F6 | Text | **A** | P2 | Manual resize of a text layer fixes only the dragged axis; Figma flips the *whole* resizing property to **Fixed size** (other axis stops auto-growing) |
+| F7 | Selection | **A** | P2 | Plain marquee always collects page-root layers; after drilling into a frame, Figma's marquee selects at the current scope (sibling set survives; X-Native replaces it with the parent frame) |
+| F8 | Export | **B** | P2 | In the WASM tier, per-format export settings documented for that format (JPG/PDF *Image quality*, *Resampling*, *Ignore overlapping layers*) are silently dropped |
+| F9 | Auto layout | A (minor) | P3 | Figma auto-promotes a child resized to *exactly* the full available space to Fill; X-Native leaves it Fixed |
+| F10 | Typography | B (minor) | P3 | Letter-spacing is px-only; Figma's field supports px **and %** (Dev Mode emits `em`) |
 
 ---
 
-## 2. Category A — Behavioral mismatches
+## Area 1 · Vector & path editing
 
-### F5 · Unselected Bézier handles are painted nowhere but grabbed at 7px
-**Category A** · `ui/Canvas.tsx`
+**Passing (evidence):** adding a point to an existing path (hover `+` marker painted at the same `segmentInsertLanding()` point the click inserts at — `geometry.ts:1477/1549/1563`, single pen/point-edit insert branch at `Canvas.tsx:5200`, pinned by `figmaCanvasVectorParity` E1–E10, 67 assertions green); Bézier mirroring defaults derived from handle geometry (`vectorEdit.ts:77` `effectiveMirrorMode`: authored mode wins, else opposite+equal ⇒ `angleAndLength`, collinear-unequal ⇒ `angle`), `⌥`-drag writes `BREAK_MIRROR_MODE` inside the same undo step (`Canvas.tsx:6951-6977`, `:7016/:7032`), pinned by F1–F10; `⌥`-drag out of a bare corner pulls a mirrored pair (`Canvas.tsx:6990-6998`); double-click enters path edit and selects the anchor under the press (`pathAnchorUnder`, `VERTEX_PRIORITY_PX` single source); Enter opens vector edit for rect/ellipse/star/poly/line/arrow and bakes a childless boolean first (`Canvas.tsx:1465-1492`) — matching “Press Enter to open vector edit mode” in [Edit vector layers](https://help.figma.com/hc/en-us/articles/360039957634-Edit-vector-layers); the Cut tool click-splits **at a point** and **on a segment** and drag-cuts crossed segments into freed layers (`vectorCutTool.test.mjs`, 39 assertions) — Figma's scissors behavior; the three mirroring settings from the help article (none / angle / angle+length) are all implemented, with `angle` correctly preserving the twin's length while flipping direction (`Canvas.tsx:6959-6966, 6971-6977`).
 
-**Figma.** Handles are editable only for the points you have selected: the point-editing surface shows handles on the selected vertices, and the Mirroring control (`No mirroring` / `Mirror angle` / `Mirror angle and length`) governs "a set of bézier handles" of *those* points. An unselected vertex's tangent is not a canvas target — the press belongs to the anchor, the segment, or the marquee. ([Edit vector layers](https://help.figma.com/hc/en-us/articles/360039957634-Edit-vector-layers))
+**Verdict: no open Category A/B finding in this area at this commit.** The one residual, informational:
 
-**X-Native.** Two different predicates own the same 7px neighbourhood:
-
-- **Paint** is correctly gated: handles are drawn only for selected vertices —
-  `ui/Canvas.tsx:4338-4339`
-  ```ts
-  // Bézier tangent handles: only show for selected vertices (or when dragging) to keep canvas clean
-  if (isSelected) { … }
-  ```
-- **Press** ignores selection entirely — for every point in the path it tests the in-handle, then the out-handle, then the anchor:
-  `ui/Canvas.tsx:5815-5828`
-  ```ts
-  for (let i = 0; i < pts.length; i++) {
-    const p = pts[i];
-    …
-    if ((p.ix || p.iy) && Math.hypot(px - (vx + (p.ix||0)*z), py - (vy + (p.iy||0)*z)) < 7) { …handle "in"… }
-    if ((p.ox || p.oy) && Math.hypot(px - (vx + (p.ox||0)*z), py - (vy + (p.oy||0)*z)) < 7) { …handle "out"… }
-  ```
-
-**Why it differs.** The paint loop reads `selNow` (`Canvas.tsx:4300-4304`), the hit loop reads nothing. Two independent definitions of "editable handle" drifted apart: a fix to the visual noise (only paint selected handles) never propagated to the interaction test.
-
-**Consequences (all observable):**
-
-- A press that visually lands on the **path** or on empty canvas 7px from an invisible handle starts a handle drag; the hit loop runs *before* the segment insert (`Canvas.tsx:5886`) and before the anchor grab for the same point (`:5827`), so the user's point insert or point move is silently swallowed.
-- Because the handles are not painted, the user gets no feedback that the layer is being reshaped — the classic "the tool did something I didn't ask for" report.
-- At high zoom the ghost handle is 7 screen px wide, which is *larger* than the 3.5px painted handle it belongs to.
-
-**Fix.** Capture `const editable = selNow.has(i) || (drag.current?.mode === "vec" && drag.current.point === i)` in the press loop and skip both handle branches when it is false. That is a TS-only change; the engine already accepts whatever the UI hands it.
+- **Category C (latent, not user-visible today):** the WASM session exposes `vectorAddPoint`/`vectorConvertPoint` (`crates/x-wasm/src/session.rs:383-403`, `x-wasm/src/lib.rs:420-443`) with its own midpoint-of-segment insert and LineTo↔CurveTo convert, while the live editor (MemoryEngine) inserts at the *projected* parameter and offers anchor *deletion* (`geometry.ts:insertPointOnPath` + `patchPath`/`removePoint`). Both cannot be simultaneously “the” behavior; the TS side is the one users experience and the one Figma's docs match (insert where the cursor is, not at the segment midpoint). If the `?engine=rust` preview is ever promoted, its two vector verbs diverge from Figma. Action: fold under F1's rewiring — route or retire the session-level vector verbs rather than maintaining two truths.
 
 ---
 
-### F4 · Gap dragging is inert on auto-spacing frames, and the handle exists only once per frame
-**Category A** · `ui/Canvas.tsx`, `engine/layout.ts`
+## Area 2 · Frame & selection
 
-**Figma.** The gap between *any* pair of items in a linear auto-layout flow is a draggable on-canvas target: "Use these keyboard shortcuts while dragging on-canvas handles to: Set padding **or spacing** with big nudge — ⇧ Shift"; when the gap is *Auto*, dragging it produces a concrete value and the objects follow the pointer. ([Guide to auto layout](https://help.figma.com/hc/en-us/articles/360040451373-Guide-to-auto-layout-in-Figma), *Keyboard shortcut guide → From the canvas*)
+**Passing:**
+- **Marquee union/replace:** plain drag **replaces**, `⇧`-drag **unions with the selection as it was at pointer-down** (`drag.sel0` snapshot, `Canvas.tsx:384-386, 6155, 7961-7966`) — shrinking the band lets go of layers instead of accumulating, which is Figma's documented flow (“*Select layers and objects*”: marquee adds; Shift+click removes; deep select via `⌘`).
+- **Deep select:** `⌘/Ctrl`+drag descends into containers (`Canvas.tsx:7949`); `⌘/Ctrl`+click on canvas uses the transform/clip-aware `hitTest({deep:true})` while a plain click stops at a container — matches the click-target rules in the help article.
+- **Click scope / drill:** `canvasClickTarget` (`canvasSelection.ts:7-20`) keeps a click on an already-selected container from re-drilling and selects a *sibling* when a scope is active — mirrors Figma's enter/double-click scoping; `drillChild` matches “double-click to select child”.
+- **Rotation is cursor-only:** nothing is painted (batch 45 removed the stem/dot), which *is* Figma's design; the invisible band and the cursor are measured by the same `rotationHandleHit`, so they cannot disagree.
 
-**X-Native — two defects in the same gesture:**
+### F3 — Category A, P1: rotation zone is one corner, not any corner
+- **Figma:** “Hover **just outside one of the layer's bounds** until the rotation cursor appears” ([Adjust alignment, rotation, position, and dimensions](https://help.figma.com/hc/en-us/articles/360039956914-Adjust-alignment-rotation-position-and-dimensions) §Canvas; [Smart animate](https://help.figma.com/hc/en-us/articles/360039818874): “Hover over **the corner bounds**… until the rotation cursor appears”). All four corners arm it.
+- **X-Native:** `rotationHandleHit` (`canvasSelection.ts:64-72`) tests only the **top-right**: frames/components/instances get a ≤10px disk centered `ROTATION_HANDLE_STEM = 20` px **above** the TR corner (`:49, :55-62`) — leaving a dead band between the corner itself and the disk — while every other kind gets an 8–24px ring around TR only. Press (`Canvas.tsx:5962`) and hover (`:6317-6320`) agree with each other (good), but the app's own **multi-select** rotation already arms **all four corners** (`Canvas.tsx:5365-5398`, ring `8..22` around each corner of the combined box) — so `n = 1` behaves worse than `n > 1` for the same gesture.
+- **Why:** batch 45's follow-up removed the *painted* handle and, to avoid breaking muscle memory, “the grab point is still exactly where the dot used to be”. That is a compatibility choice, not a Figma parity choice; Figma never had a top-right-only target.
+- **Fix (TS interaction):** in `rotationHandleHit`, replace the TR-only tests with the four-corner corner-ring the multi-press already uses (one shared helper for both call sites — the single-source-of-truth pattern the file already enforces for stem/radius constants). Keep frame ring min/max identical to the multi-select ring (`{min:8,max:24}` vs `8..22` should be unified). `⌥R` pivot, Shift-15° snap, ±180 wrap and integer quantization all already match Figma and need no change (`Canvas.tsx:7053-7062`).
 
-1. **Inert drag on Auto spacing.** The press writes a number into `layout.gap` without clearing `gapMode`:
-   `ui/Canvas.tsx:7169-7181`
-   ```ts
-   } else if (d.mode === "autoGap" && d.id && d.origGap != null) {
-     …
-     engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, gap: nextGap } });
-   }
-   ```
-   The layout engine ignores `gap` while `gapMode === "auto"` — `engine/layout.ts:767-770` (`isAutoGap`) and `engine/memory.ts:951`:
-   ```ts
-   const pack = auto ? autoSpacing(slack, flow.length, spacing) : { lead: 0, gap: packedGap };
-   ```
-   `gapMode` is cleared in exactly two places — the alignment-box `X` shortcut (`engine/layout.ts:904`) and the inspector toggle (`ui/inspector.tsx:5727`) — never by the canvas gesture. So on a frame set to **Between / Around / Evenly**, dragging the pink gap band moves nothing and the band does not follow the cursor: the drag looks broken.
-2. **One handle per frame.** The hit target is derived from the *first two* flow children only:
-   `ui/Canvas.tsx:6058-6067`
-   ```ts
-   const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
-   if (flowKids.length >= 2) {
-     const c0 = flowKids[0];
-     const gx = horiz ? sx + (c0.x + c0.w + l.gap / 2) * z : sx + sw / 2;
-     …
-     drag.current = { mode: "autoGap", … origGap: l.gap };
-   ```
-   The painter, by contrast, bands *every* gap and every wrap gap (`ui/Canvas.tsx:3903-3941`), so the chrome advertises drag targets the press refuses — the third, fourth and nth gap have no hit area at all.
-
-**Why it differs.** (1) The gesture writes a *stored field* instead of the *effective* gap, so it never converts Auto → Fixed the way Figma does. (2) The handle position was copied from the padding handles' "one representative position" pattern, which is valid for four padded edges but wrong for N−1 gaps.
-
-**Fix (TS only, two edits).**
-- In the `autoGap` move handler, dispatch `{ ...layout, gap: nextGap, gapMode: "fixed" }` (and, on the press side, treat an auto-gap frame's stored `gap` as the measured current spacing so the delta starts from what is on screen).
-- In the press loop, walk every adjacent flow pair and use the gap under the pointer rather than the first pair.
-
-**Verification hook.** `engine/__tests__/autoLayoutEdgeCases.test.mjs` and `autolayout.test.mjs` already build auto-spacing frames, so the regression test belongs with them (§7, T3c).
+### F7 — Category A, P2: plain marquee ignores the drilled scope
+- **Figma:** selection lives at the current scope: after you double-click/Enter into a frame, a plain marquee over that frame's empty area selects its **children**; a top-level marquee selects the frame; `⌘` always reaches deeper (the help article's “To select nested layers, hold ⌘ and drag”).
+- **X-Native:** `onUp`'s marquee walk `visit(snap.pages[snap.page].root, 0, 0, false)` (`Canvas.tsx:7945-7960`) hardcodes the shallowest level to **page-root children**: `if (hit && (deep || top))` where `top` is “parent is the page root”. Clicks implement scope-awareness (`canvasSelection.ts:14-19`) — the marquee does not — so dragging a band around two icons inside a drilled-into frame selects **the frame** and throws away the in-frame selection. The `⇧`-union then unions with the wrong set.
+- **Why:** the marquee predates the scoping rule in `canvasClickTarget`; when the scope rule was added, only the click path was updated.
+- **Fix (TS interaction):** compute the marquee scope once at pointer-down (the same ancestor `path.indexOf(selectedContainer)` decision `canvasClickTarget` makes) and start `visit` at that container's children; `deep` (`⌘`) keeps descending from the root. Locked/hid filters already match. Secondary probe, **not asserted here**: the band-vs-layer test uses the unrotated AABB (`x + n.w >= x0 …`, `:7953`) while clicks use visual bounds; confirm Figma's marquee hit-testing on a rotated layer before changing.
 
 ---
 
-### F6 · Rotation exists at the top-right corner only (containers: a detached point above it)
-**Category A** · `ui/canvasSelection.ts`, `ui/Canvas.tsx`
+## Area 3 · Auto Layout
 
-**Figma.** Rotation is a **cursor affordance around any corner**: "Hover just outside a layer's corner on the canvas and the cursor switches to the curved rotation arrow"; "Hover on the outside of a corner until the rotate cursor appears. Then click and drag." Nothing is painted to advertise it. ([How to rotate in Figma](https://wpdean.com/how-to-rotate-in-figma/) — corroborated by Figma's own forum threads where users describe hovering "outside the layer's corner"; the shape-tool article uses the same phrasing.)
+**Passing (verified against the current [Flows article](https://help.figma.com/hc/en-us/articles/31289464393751) and [Guide to auto layout](https://help.figma.com/hc/en-us/articles/360040451373-Guide-to-auto-layout)):**
+- **Gap = Auto with all three modes** — Between / Evenly / Around implemented as `space-between/-evenly/-around` (`layout.ts:746-762 autoSpacing`; inspector's Auto X toggle at `inspector.tsx:5719-5727`), including “never overlap, clamp at 0” (`Math.max(0, slack)`), single-child Auto alignment left/top default, and the capped-filler slack rule from forum-57215 (memory.ts:943-950).
+- **Hug/Fill/Fixed transitions:** manual resize or a typed W/H sets **Fixed on the adjusted axis** (both for the frame *and* for its `layout.sizing/cross` pair, `memory.ts:2677-2703`) — Figma's “manual adjustments set the layer to Fixed” — with Scale-tool exemption (`scaleProps`); fill-promotion-locks-the-other-axis and “a frame can't hug smaller than its padding” (`clampToPadding`) both hold; parent with a Fill child becomes Fixed for the axis (`hasFillChild`, `layout.ts:781`).
+- **Ignore auto layout** (`absolutePosition`): excluded from flow (`layout.ts:290, 340, 1061`), kept out of hug, and **still obeys constraints** on parent resize via `applyConstraints(..., absoluteOnly=true)` (`memory.ts:936, 1004, 5939-5975`) — exactly the renamed feature in the guide (constraints apply only to flow-exempt children). The 11-case probe in `CREATE_DESIGNS_PARITY_AUDIT_2026-09-29` covers the pinned-corner cases.
+- **Min/max** on both axes, with Figma's *proportional* mirror when aspect is locked (`setMinMax`, `inspector.tsx:3615-3624`); inside-stroke inclusion toggle; canvas stacking (first/last on top, `types.ts:641`); drag-to-reorder inside the flow (`Canvas.tsx:7620+`); **padding canvas controls** — pink handles on all four edges, drag = live value, click = open field, `⌥` mirrors the opposite edge, `⌥⇧` all four, `⇧` steps by Big-nudge (`Canvas.tsx:6035-6055, 7108-7150, 7471-7488`) — matching the flow article's padding section and shortcut list; `⌥`+double-click an edge = Fill container / double-click = Hug (`Canvas.tsx:8160-8181`).
+- **Smart selection** (non-AL): gap badges become *draggable at rest* — `distributeSpacing` applies the dragged value to every gap in the run, ⇧ big-nudge steps, negative clamps to 0 (`smartSelection.test.mjs`, 26 assertions).
 
-**X-Native.** `ui/canvasSelection.ts:56-73`:
-```ts
-// "Figma places the rotation target above the top-right corner, with a
-//  ~20px gap between the corner and the handle centre."   ← the mistaken premise
-return kind === "frame" || kind === "component" || kind === "instance"
-  ? { x: x + w, y: y - ROTATION_HANDLE_STEM }             // 20px above the corner
-  : null;
-…
-export function rotationHandleHit(kind, px, py, x, y, w, h) {
-  const handle = frameRotationHandle(kind, x, y, w, h);
-  if (handle) return Math.hypot(px - handle.x, py - handle.y) <= ROTATION_HANDLE_HIT;   // 10px disc
-  const tr = { x: x + w, y: y };                           // top-right corner only
-  const d = Math.hypot(px - tr.x, py - tr.y);
-  return d >= ROTATION_RING.min && d <= ROTATION_RING.max; // 8..24px
-}
-```
-The inline comment is itself the root cause, recorded as a claim: Figma has **no** detached rotation dot above the top-right corner — the affordance is the cursor changing just *outside* any corner. On top of that:
-- **Frames / components / instances:** rotation is a 10px disc centred **20px above** the top-right corner — a spot where Figma shows neither a rotate cursor nor a resize handle (dragging there in Figma is a canvas-level/other-layer interaction). The four corner bands that Figma *does* use are dead.
-- **Everything else (rect, ellipse, vector, text, group…):** rotation works from the top-right corner only; the top-left, bottom-left and bottom-right outside bands do nothing.
-- **Internal inconsistency proving the outlier:** a **multi-selection** rotates from *every* corner ring (`ui/Canvas.tsx:5373-5380`, `for (i = 0; i < hs.length; i += 2)` with an `8..22px` band), so the same gesture works on a group of two rects and fails on one rect.
+### F4 — Category A, P1: spacing pills paint everywhere but drag only the first gap; Auto-gap drag is a no-op
+- **Figma:** “Click handles to open input fields… or click and drag the handle to change the spacing” — the on-canvas gap control exists for each spacing in the frame's flow, and a drag under Auto spacing converts that spacing to a number (the pill shows the *computed* value; Figma's gap field flips from “Auto” to the dragged value).
+- **X-Native:**
+  1. The magenta gap bands are painted **between every consecutive pair** (and a separate band per wrapped line) — `Canvas.tsx:3923-3950`.
+  2. The press only ever arms `autoGap` for the gap after **`flowKids[0]`** (`Canvas.tsx:6058-6068`), and the hover cursor (`col-resize`/`row-resize`) likewise (`:6379-6388`). Pairs 2..n paint a target that cannot be grabbed or advertised — the exact failure class batch 45 named “a `+` you cannot click is a lie”, now inverted (painted-but-dead).
+  3. In **Auto** mode the drag dispatches `{ ...layout, gap: nextGap }` (`:7169-7179`) **without leaving `gapMode: "auto"`**; the layout pass then recomputes `pack = autoSpacing(slack, …)` and ignores the numeric `gap` (`memory.ts:951`) — the frame doesn't move at all. `origGap: l.gap` also seeds from the *stale numeric* (often 0) instead of the visible computed spacing, so even the number written is not the number you grabbed.
+- **Fix (TS interaction, ~40 lines):** iterate the same pair sequence the painter uses (skip line-straddling pairs via the existing `flowWrapLines`) for *both* press and hover, measuring each gap's live midpoint from children bounds; on drag *first move* dispatch `{ gap: measuredGap + delta, gapMode: "fixed" }` (per pair = the shared uniform value today — Figma's linear flow has one container-level spacing value, per the announcing article “spacing … is done at a container level”, so a single `gap` stays correct; wrapped flows set `gap` *or* `gapCross` depending on the band grabbed, matching the article's two-pill wrap rule). Keep the click-to-open-field behavior (`padEdge` pattern at `:7471-7488`).
 
-**Why it differs.** `ROTATION_RING`/`frameRotationHandle` model a *detached painted handle* that no longer exists — the paint code deliberately removed the stem+dot (`ui/Canvas.tsx:3690-3694`: "No painted rotation handle, on purpose. Figma's rotate affordance is the *cursor*"). The decision to stop painting was right; the hit geometry that belonged to the removed handle was left behind, still keyed to one corner.
-
-**Tests currently encode the divergence** (a fix must invert these, not merely add to them) — `ui/__tests__/canvasSelection.test.mjs`:
-- `:74` `t(\`${kind} corners no longer rotate at zoom ${zoom}\`, …)` — asserts all four corners are dead for frames/components/instances.
-- `:76` `t("ordinary shapes do NOT rotate from top-left corner", !rotationHandleHit("rect", 90, 90, …))`.
-- `:70-73` assert the detached spot is hittable.
-
-**Fix (TS only).** Make the rotation target corner-symmetric: a ring of 8–24px around each of the four corners for every layer kind, with the corner handles winning inside 8px (the press order at `ui/Canvas.tsx:5962` already gives a resize handle priority). Delete `frameRotationHandle` or reduce it to "the same ring, for every kind". Keep the cursor-only affordance — that part is Category D (D1).
+### F9 — Category A (minor), P3: no fill-promotion at full width
+Guide §Fill container: “Child objects of an auto layout frame will also be set to **Fill container** if they are manually resized to the full available space of the parent frame.” X-Native only ever demotes to Fixed (`memory.ts:2677-2703`). On resize *commit*, if `|child.w − innerW| ≤ 1` and the sizing was Fixed → set Fill for that axis. One-line guard; worth it for “feels like Figma” in button/card building.
 
 ---
 
-### F7 · Bend / ⌘ / ⌥ on an anchor moves the point instead of adding handles
-**Category A** · `ui/Canvas.tsx:5827-5886`
+## Area 4 · Text & typography
 
-**Figma.** The Bend tool "allows you to add bézier handles to create a curve in a path… **Click on a point or path** where you want to add a curve"; ⌘/⌃ is the temporary Bend modifier ("press Command (Mac) or Ctrl (Windows) and click the point … to display handles and create a mirrored curve"). ([Edit vector layers](https://help.figma.com/hc/en-us/articles/360039957634-Edit-vector-layers); [vector edit lesson](https://uxcel.com/lessons/modifying-objects-in-figma-562))
+**Passing:**
+- **Vertical alignment only applies to Fixed-size text** (auto width/auto height ignore it) — `valignApplies` + `typography.test.mjs:145-146`; matches [Explore text properties](https://help.figma.com/hc/en-us/articles/360039956634-Explore-text-properties).
+- **px vs % line-height** — the field stores a unit and converts by font size (`textLayout.ts:84-86` percent-of-fontSize) per the help article and the old “Changes to Line Height” contract.
+- **Baseline correctness** where metrics are used: `resolveFontMetrics` (browser `fontBoundingBox*` with an OpenType-ratio fallback table, `layout.ts:639-686`), per-node `textMetrics`/`baseline` stamped at creation and patch (`memory.ts:249-258, 3048-3057`), AL baseline row (`baselineRow`/`childBaseline`, pinned by `baselineAlignment` engine + dom suites); paragraph/letter spacing, list markers, bidi, truncation budgets all measured in `typography.test.mjs` (113 assertions).
+- **Text-tool creation:** click ⇒ Auto width, drag ⇒ fixed box (`Canvas.tsx:7837-7839` vs the creation gesture path) — matches the Guide to text.
 
-**X-Native.** Bent-ness is keyed on **segments only**, and only their interior:
-```ts
-// ui/Canvas.tsx:5868-5886
-const meta = e.metaKey || e.ctrlKey || e.altKey || vecSubTool === "bend";
-if (meta) {
-  for (let si = 0; si < count; si++) {
-    const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
-    if (pr.dist < 14 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) { …bend segment… }
-  }
-}
-```
-A press on an **anchor** never reaches that code: the anchor grab at `ui/Canvas.tsx:5827-5851` runs first and unconditionally, so with the Bend tool active (or with ⌘/⌥ held) a press on a corner point *moves* it. The `t ∈ (0.05, 0.95)` guard also excludes the ~14px nearest each endpoint, so "click on a point to bend it" has no working path at all. `bendSegment` itself (`engine/geometry.ts:1874-1904`) only understands a segment index and overwrites *both* endpoints' tangents — it has no "give this anchor mirrored handles" form.
+### F5 — Category C, P1: “Auto” line-height is `fontSize × 1.2` for every font
+- **Figma:** “By default, line height is set to **Auto**. This is calculated using **the font's default line height, which varies between typefaces**.” (Explore text properties, §Line height.)
+- **X-Native:** `effectiveLineHeight` (`apps/web/src/ui/textLayout.ts:82-88`) — `return Math.max(1, fs * 1.2);` — feeds the TS text stack: line placement on canvas, `hugSize`/`hugHeight` (so AL hug box heights), the `fitLineCount` truncation budget and the editor overlay geometry (`textLayout.ts:486` resolves it once and everyone consumes `layoutText`). The SVG exporter *then re-derives it a second, dumber way* — see F5b below.
+- **Why it's Category C, not a missing feature:** the correct data already exists twice — measured per node (`n.textMetrics.fontBoundingBoxAscent/Descent`, stamped on create *and* every patch) and in Rust (`x-text` shaping uses per-font ascent × `style.line_height`, `shaping.rs:913-914`, for the Skia tier). The constant simply isn't replaced by the metrics. Consequence: any font whose default line height ≠ 1.2 (Inter ≈ 1.21, Roboto ≈ 1.17, Arial ≈ 1.15 — Figma rounds per-face) produces line rasters, box hugs and export files that differ from Figma line-for-line, and the Skia/Rust tiers (`?engine=rust`, native app) silently disagree with the TS tier on the same document.
+- **F5b — a second, worse copy in the SVG exporter (found while pinning this):** `svgTextLayout` (`svgExport.ts:443`) re-implements the rule inline as `const lineHeight = n.lineHeight || n.fontSize * 1.2;`, and its consumer writes that straight into `<tspan dy>` (`:588`). This duplicates the auto constant *and* drops `lineHeightUnit` — so a **percent** line height of 150 exports SVG rows 150 **px** apart for a 16px font. The canvas keeps Figma's math; the file does not — an outright output bug (B) sitting inside a wiring finding (C).
+- **Fix (TS wiring):** in `effectiveLineHeight`, when unit is auto and `n.textMetrics` (or `resolveFontMetrics(n.fontFamily…)` at 1em ratio) is present, return `(ascent + descent) × fontSize / metrics.fontSize` — the same `fontBoundingBox` pair Figma's "default line height" derives from, rescaled so larger spans stay proportional — keeping `fs × 1.2` only as the no-metrics fallback (SSR/jsdom). Then make `svgTextLayout` call `effectiveLineHeight(n)` (one line, kills the duplicate constant *and* the percent leak). Feed `lineHeight: "auto"` back as *unset* in codegen so CSS `normal` stays honest.
 
-**Secondary issue in the same line:** ⌥ is folded into the bend modifier set even though ⌥ already means "break the mirror" two hundred lines below (`ui/Canvas.tsx:6951`, `:6970`) and "pull handles out of an anchor" (`:6987`). One modifier, three meanings in one mode.
+### F6 — Category A, P2: manual resize leaves text in a state Figma does not have
+- **Figma:** “**When you manually change a layer's dimensions in the canvas, Figma will also update the resizing property to Fixed size**” ([Adjust text dimensions and resizing](https://help.figma.com/hc/en-us/articles/27378154668951-Adjust-text-dimensions-and-resizing)) — one *property*, so a side-handle drag on Auto-width text ends as Fixed size (width fixed **and** height fixed → wrapped copy clips; this is Figma's famous clip-on-resize gotcha).
+- **X-Native:** `case "resize"` fixes **only the dragged axis** (`memory.ts:2677-2680`: `askedW → sizingW="fixed"`, `askedH → sizingH="fixed"`; the other axis keeps hugging, so the box silently auto-grows instead). Every other consumer of the state (inspector menu, `valignApplies`, truncation, the side-only handle set for hug text at `Canvas.tsx:5935/6019`) models Figma's three-way enum correctly — it is just this transition that lands on “auto height” where Figma lands on “fixed size”.
+- **Fix (TS, deliberate):** in the resize *commit* (mouse-up path, not each move) for `kind === "text"` with neither axis previously fixed, set **both** axes fixed at the moment of first manual change, Scale tool still exempt. Re-verify against a live Figma build first (the docs sentence is explicit but users report “auto height after side-drag”; if Figma's current build auto-promotes to auto-height instead, keep X-Native as-is and record the doc divergence — do not ship a clip-behavior on vibes).
 
-**Fix (TS + one engine entry point).** With `vecSubTool === "bend"` (or ⌘/⌃ held) and the press within the anchor radius, convert the pressed anchor to a smooth point with mirrored handles placed along the dominant adjacent-segment direction (a new `convertAnchorToSmooth` dispatch, or reuse `smoothHandlesForPoint`, which already exists and is used by the double-click path at `ui/Canvas.tsx:8267`). Drop `e.altKey` from the bend modifier set.
-
----
-
-### F11 · A plain marquee never descends into a section
-**Category A** · `ui/Canvas.tsx:7948-7958` (confidence: medium-high)
-
-**Figma.** A frame inside a **section** is a top-level layer for selection purposes — the help article's own locator is "The frame or group should sit at the top-level on the canvas **or inside a section**" — and a plain marquee selects top-level layers "across any objects you'd like to select"; nested layers need the ⌘/Ctrl modifier. ([Select layers and objects](https://help.figma.com/hc/en-us/articles/360040449873-Select-layers-and-objects))
-
-**X-Native.**
-```ts
-// ui/Canvas.tsx:7949-7958
-const visit = (n, px, py, top, lockedAbove = false) => {
-  …
-  if (hit && (deep || top)) ids.push(n.id);
-  const nest = deep || n === snap.pages[snap.page].root;   // ← sections are not traversed
-  if (nest) for (const c of n.children) visit(c, x, y, n === root, effLocked);
-};
-```
-`top` is granted by identity with the visited node's own parent check (`n === snap.pages[snap.page].root`), and recursion is gated on "is the page root" or ⌘. A section is a *child of the root*, so its frame children are one level further down: with a plain marquee they are never visited at all (the section itself is selected because the band touches it), and only the ⌘/Ctrl marquee reaches them. Figma's plain marquee would return the frames.
-
-**Why it differs.** The nesting policy models "page root → top-level" as a fixed two-level ladder, treating `section` like `frame`/`group`. Figma treats a section as a *scope*, not a level.
-
-**Fix (TS only).** Treat `kind === "section"` as a transparent level: give its children `top = true` when not deep (sections cannot nest inside frames — see `sectionStaysTopLevel`, `engine/memory.ts:111`, and its use at `:2585`), and recurse into sections unconditionally.
+### F10 — Category B (minor): letter-spacing unit
+`letterSpacing` is stored/applied in px only (`types.ts:830`, `svgExport` writes `letter-spacing="N"`). Figma's field takes px **or %** (and Dev Mode reports `%`/`em`). Small but it changes *output* (SVG attribute, codegen) for percent designs; add `letterSpacingUnit` mirroring the line-height unit pattern.
 
 ---
 
-### F12 · Windows cannot drop a layer with "Ignore auto layout"
-**Category A** · `ui/Canvas.tsx:7586-7589`
+## Area 5 · Components & variables
 
-**Figma.** "Drag an object into an auto layout frame while pressing: **Mac:** ⌃ Control, **Windows:** `S`." ([Guide to auto layout → Ignore auto layout](https://help.figma.com/hc/en-us/articles/360040451373-Guide-to-auto-layout-in-Figma))
-
-**X-Native.**
-```ts
-// ui/Canvas.tsx:7586-7589
-const isMac = /mac/i.test(navigator.platform ?? "");
-const absolute = e.ctrlKey && isMac;
-const bypass   = e.metaKey || (e.ctrlKey && !isMac);
-```
-On Windows, Ctrl is consumed by `bypass` (size-gate bypass, which matches the *other* Figma row) and `S` is not tested anywhere, so the only route to absolute positioning is the inspector toggle. Low severity (the documented panel route exists), but it is a documented modifier that is simply absent.
-
-**Fix (TS only).** Add `e.key`/`sKey` tracking to the drag state (the canvas already tracks `space.current` for the Space bypass at `:7584`) and include `!isMac && sDown` in `absolute`.
+**Passing (this area is in surprisingly good shape):**
+- **Instance overrides:** member edits record *fragments* per property (`n.overrides`), structure refuses inside instances, deletes in an instance **hide** rather than remove (`memory.ts:2860`, matching the AL guide's table “Delete or remove layers → Hides layer only”), layout overrides on an instance root are restricted to padding/gap (`:491-520`), paint/style overrides are mirrored into the record so the next master sync can't clobber them (`:509-566`), `resetOverrides` supports per-property reset from the context menu (`ContextMenu.tsx:581-593` — a superset of Figma's, placement-only → D), master edits propagate to instances (`publishMaster`, `:5250`), `swapInstance` exists (`types.ts:1360`), and `instanceOverride.test.mjs` pins the propagation/reset matrix.
+- **Variables:** collections with per-collection **modes**, `setActiveMode` (`memory.ts:4971-4977`, mode switch repacks all bound props), bind chips on w/h/opacity/radii/fill/gap/padding/font-size/line-height/letter-spacing/paragraph fields (`BindControl`, `inspector.tsx:9778+`), multi-target bind with per-layer block reasons (`bindBlockReason`), **mixed-state** display, alias resolution with `wouldCycle` refusal (`:4848, :4871`), and — the key Figma rule — **editing a bound value unbinds it**: the resize command deletes `variableBindings.w/h` (“An explicit resize wins over w/h bindings (Figma detaches on on-canvas edits)”, `memory.ts:2666-2675`) and `patch` unbinds each incoming key (`:3025-3033`). Prototype-driven mode switching (interaction action `setVariableMode`, `Canvas.tsx:1127`) matches Figma's “swap modes” interaction.
+- Rust tier: `x-core/src/variables.rs` + `x-editor/src/variable_commands.rs` implement the same model for the native session; the web app keeps authority in MemoryEngine (documented architecture boundary, `docs/ARCHITECTURE_BOUNDARY.md` per `svgExport.ts:17` comment) — acceptable D, but see the general note under “CI blind spot” below.
+- Nothing to file: the AL-guide instance table (adjust padding/gap ✓ in instances, reorder/add ✕ — `reparent` refuses instance members, `memory.ts:2745`) is respected.
 
 ---
 
-## 3. Category B — Output mismatches
+## Area 6 · Export & output
 
-### F1 · The Rust/WASM export path emits a flat colour block — and takes priority over the correct renderer
-**Category B (+ C: correct engine exists)** · `crates/x-wasm/src/session.rs`, `apps/web/src/engine/wasmExport.ts`, `apps/web/src/ui/inspector.tsx`
+### F1 — Category C, P0: the "primary" WASM export pipeline is a flat-color stub
+- **What ships:** `runExport` prefers the Rust path (`inspector.tsx:9312`: “Rust pipeline (PNG/JPG/PDF) is **primary**; canvas.toBlob is fallback”) → `wasmExportNode(xDoc, id, format, scale)` → `RustDocumentSession::export_node` (`crates/x-wasm/src/session.rs:341`).
+- **What that Rust function actually does:** `encode_node_png` (`:692-730`) paints the *entire canvas* as one flat `node_rgba(node)` fill — the node's first solid color with its opacity folded into alpha — **ignoring corner radii, ellipse/star/poly/vector silhouettes, strokes, and every child**; `encode_node_jpg` (`:731-749`) is not even a real JPEG (marker soup with raw RGBA stuffed into a COM segment — decoders will reject or garbage-render it); `encode_node_pdf` (`:750-761`) writes `{rgb} rg 0 0 {w} {h} re f` — one rectangle, no paths, no children. `buildExportXDoc` faithfully serializes all of that (`wasmExport.ts:26-52, 55-150`) — the Rust side then discards it.
+- **The correct logic exists and is already used elsewhere:** the desktop export (`crates/x-native/src/export.rs`) builds a real render tree (`x_render::ir::build_render_tree*`) and rasterizes via `x_render::export_raster` (tiny-skia; `crates/x-render/src/raster.rs:724`), including frame-name stripping, slice-region semantics, text outlining (`text_geometry::outline_text`), and blur-inflated bounds (`x-render/src/ir.rs:730, 762`). The web bridge simply never calls it.
+- **Why nobody sees it:** the shipped tree has no `.wasm` asset, so `initWasmBridge()` resolves false and everything falls back; `x-wasm`'s own unit tests (`session.rs:1104-1163`) assert only that the bytes *start with the right magic* — the definition of a pin that protects a stub. A production build (or the `?engine=rust` preview's session) that loads the bridge produces: ellipse→square PNG, rounded rect→sharp rect, **any frame with only children→transparent or opaque-black rectangle** (transparent fill ⇒ `[0,0,0,0]` full canvas, absent fill ⇒ `[0,0,0,255]` black), JPGs that may not decode, one-rect PDFs. Complex nodes (text/images/gradients/effects/masks) are gated to the TS path by `xnodeToX`'s refusal list, so the *visible* damage is "solid shapes export wrong" — which is most icons and most buttons.
+- **Fix (Rust wiring + test):** replace the three `encode_node_*` stubs with `export_render_plan` semantics: `x_render::ir::build_render_tree_of(&node)` + `export_raster(tree, w, h, RasterFormat, scale, bg, assets, fonts)`, quality from the caller (see F8), and reuse the native side's chrome-stripping. If a font manager cannot ship in wasm yet, route text nodes to *refuse* (return Err) rather than render wrong — the TS fallback then handles them (it already does today, via the refusal list). Delete the magic-byte-only tests in favor of Step-4 T1.
 
-**Figma.** PNG/JPG rasterize the artwork; PDF is a vector document with paths, text/glyphs and images. A frame of three coloured rectangles exports as those three rectangles at any scale.
+### F2 — Category B, P0/P1: exported area clips its own effects (PNG, JPG, PDF *and* SVG)
+- **Figma:** export bounds are the layer bounds **expanded by what bleeds past them** — drop shadows, layer blur, background blur overflow and **outside strokes** all enlarge the exported canvas (the padding-around-icon behavior Figma's own PNG troubleshooting docs describe: “a drop shadow, blur, or stroke that extends past its bounds — Figma expands the export area to contain the effect… your 64px icon comes out 96px”, corroborated on the Figma forum where “extra white space … sorted by removing shadows” [forum 8155]). Frames clip *content* by “Clip content”; the layer's own effects are never clipped away.
+- **X-Native:** every web tier sizes by the box alone:
+  - `exportSize` = `w × h` × scale, no margin (`exportModel.ts:115-138`);
+  - the SVG viewBox is the box (`svgExport.ts:756, 804-811`) — so the *vector* output also crops the shadow its own `<filter>` paints;
+  - the fallback PNG canvas is exactly `width×height` (`inspector.tsx:9352-9366`);
+  - the (stub) wasm path takes `node.w/node.h` (`session.rs:353`).
+  Contrast: the Rust *native* renderer already inflates by `blur × 1.5` per effect (`x-render/src/ir.rs:730, 762, 1667`) — the app's two tiers disagree with each other and both disagree with Figma.
+- **Fix (TS, engine-level):** add `exportBleed(node): {top,right,bottom,left}` computed from `effect_layers` (outer: `|dx|/|dy| + blur×1.5`; Figma's filter region convention) + outside-stroke width + `n.opacity`-independent, matching x-render's factor so TS and Rust agree; feed it into `exportSize`, the inspector's size chip, `exportSvg`'s viewBox offset (the group must translate by the left/top margin), `buildExportXDoc`'s box, and `setRasterExportDpi`'s denominator. ZIP export names/`extrasOf` flows get it for free.
+- **Not this:** "Ignore overlapping layers" is *correctly* modeled (official [Export formats and settings](https://help.figma.com/hc/en-us/articles/13402894554519-Export-formats-and-settings): enabled by default; disabled ⇒ intersecting layers join the export) — `FORMAT_CAPS` (`exportModel.ts:39-80`) matches the docs' per-format table exactly, `svgExport.ts:766` (`whole = ignoreOverlap === false`) renders the page behind, and the toggle ships at `inspector.tsx:8978-8980`. Keep it; just fix the F8 leak.
 
-**X-Native.** The wasm `export_node` entry point does not render anything:
+### F8 — Category B, P2: the wasm tier drops format settings that Figma documents
+`exportNode(id, format, scale)` (`x-wasm/src/lib.rs:415`, `wasmExport.ts:161-166`) has no parameter for JPG/PDF **Image quality**, **resampling**, **color profile**, or **ignoreOverlap/whole-page scope**; the TS fallback honors quality via `qualityValue` (`exportModel.ts:95-98`, applied at `inspector.tsx:9417-9420, 9452`) and profile via the `colorSpace` context. So *which* engine loaded changes the bytes for the same preset. Fix with F1: extend the bridge call with an options JSON (quality 0-100, resampling flag, scope ids) and mirror the `FORMAT_CAPS` gate on the Rust side.
 
-```rust
-// crates/x-wasm/src/session.rs:662-671
-fn node_rgba(node: &x_core::Node) -> [u8; 4] {
-    match &node.fill {
-        x_core::Paint::Solid(c) => { let rgba = c.to_rgba8(); let a = (f32::from(rgba.a) * node.opacity).round() as u8; [rgba.r, rgba.g, rgba.b, a] }
-        _ => [0, 0, 0, 255],
-    }
-}
-// :692-699 — one row, repeated for every scanline
-let pw = ((w * scale).round() as u32).clamp(1, 4096);
-let rgba = node_rgba(node);
-let mut row = Vec::with_capacity(1 + (pw as usize) * 4);
-row.push(0);                                   // PNG filter byte
-row.extend(rgba.repeat(pw as usize));
-let raw = row.repeat(ph as usize);
-// :750-773 — PDF: a single rectangle fill of that same colour
-let stream = format!("{rgb} rg 0 0 {w:.2} {h:.2} re f\n");
-```
-
-So `encode_node_png`, `encode_node_jpg` and `encode_node_pdf` all ignore geometry, children, strokes, gradients, text and effects. The **real** pipeline is present and unused: `crates/x-render/src/sinks.rs:60` `export_pdf_full` (paths, gradient shadings, image XObjects, per-glyph outlines via `text_geometry::outline_text`), `crates/x-render/src/raster.rs` (tiny-skia rasterizer), re-exported at `crates/x-render/src/lib.rs:34` — nothing in `x-wasm` calls any of them.
-
-**Why this is worse than "a fallback that fails":** the call order makes the stub *authoritative*. `ui/inspector.tsx:9309-9311`:
-```ts
-void tryWasmExport(n, p, scope, name, width, height, box).then((handled) => {
-  if (!handled) canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
-});
-```
-and `tryWasmExport` returns `true` after downloading whatever came back (`ui/inspector.tsx:9316-9341`). The gate that decides whether wasm is attempted at all is `xnodeToX`, which **rejects the whole subtree** only when it finds text, an image, a non-solid fill, a gradient stop, an effect or a mask (`engine/wasmExport.ts:55-64`); everything else converts — including full vector paths with handles, rect corner radii, polygons and stars (`:66-124`, note `id: n.id` at `:124`), which is the giveaway that the TS side was written expecting a real renderer — and returns `null` for any child it cannot convert (`:146-152`). Net effect:
-
-| Document being exported | Path taken | Output |
-|---|---|---|
-| Frame of plain solid rects, no text/effects | **WASM** | **A single flat slab** (the frame's own fill, transparent if the frame has none) |
-| Anything containing text, images, gradients, effects, masks | SVG → canvas raster | Correct |
-
-Because a *simple* document is exactly the case a user would trust, this is a silent, content-dependent corruption of PNG, JPG and PDF, and it also makes F2 look "already fixed by Phase 9" when it is not.
-
-**Test blind spot (root cause of why this shipped).** The only assertions on this path are magic-byte checks on the Rust side — `crates/x-wasm/src/session.rs:1104-1140` (`assert_eq!(&bytes[1..4], b"PNG")`, JPEG SOI, `%PDF`). No TS suite imports `engine/wasmExport.ts` at all (`grep -rln "wasmExport\|exportNode" engine/__tests__ ui/__tests__` returns nothing), so nothing compares exported pixels to the document.
-
-**Fix.** Two options, in order of leverage:
-1. **Rust wiring (preferred):** have `session.rs::export_node` build the same `RenderTree` + `Assets` + `FontManager` the live canvas uses, call `x-render`'s `raster`/`export_pdf_full` sinks, and return those bytes. This is what `x-render` already provides; `export_node` currently constructs none of it.
-2. **Interim (TS, one line):** until (1) lands, make `xnodeToX` refuse (return `null`) so `tryWasmExport` returns `false` and the SVG raster path — which is correct — is used; or delete the wasm branch for `pdf` and PNG/JPG until the sink is wired. Shipping a known flat-colour image is strictly worse than the older path.
-
-**Note on reproducibility:** no `.wasm` artifact is checked in (`crates/x-wasm` has only `src/`, `apps/web/public` has no `wasm/`), so the sandbox/dev build falls back to canvas today. The moment `scripts/build-wasm.sh` runs and the artifact is deployed, every simple export silently changes. That is why this is ranked #1: it is a one-build-command-away regression of the primary output surface.
+**SVG code structure (checked, passing):** nested `<g>` per container with the frame's clip as a `<clipPath><rect/></clipPath>` + group (`svgExport.ts:640-644`), per-contour subpaths + `Z` for vector networks, cubic `C` commands from real handle data, evenodd holes via multi-loop subpaths, inside/outside strokes **baked to filled outlines or clip/mask pairs** rather than unportable attrs (`:286-334`), gradients with full ramps, filters for shadows, `<title>` naming, `includeId`/`outlineText`/`simplifyStroke` toggles per the official table, `color(display-p3 …)` under the P3 profile, and a round-trip through `svgImport` in `parity.test.mjs`. Figma's own SVGs are similarly pragmatic (`clipPath` for frames, outlined strokes when simplification is on). No finding.
 
 ---
 
-### F2 · PDF is a raster image, not a vector document
-**Category B (+ C)** · `apps/web/src/engine/pdf.ts`, `ui/inspector.tsx:9390-9435`
-
-**Figma.** PDF exports "text written as glyphs (uneditable)", i.e. a real vector document with paths, glyphs and embedded images, produced at 1x. ([Export formats and settings](https://help.figma.com/hc/en-us/articles/13402894554519-Export-formats-and-settings))
-
-**X-Native.** `engine/pdf.ts:1-15` documents its own design: "a single page holding the rendered artwork as a JPEG-compressed image, with a lossless soft mask… It is raster-backed rather than vector, so export at 2x/3x for print. A vector writer… is the natural next step and is what `crates/x-render`'s `export_pdf` already does natively." The UI path is `inspector.tsx:9390-9435`: rasterize the SVG into a canvas, JPEG-encode RGB, then hand the bytes plus alpha to `buildPdf`. Text is not selectable/searchable, curves are resampled, and file size scales with pixel count instead of geometry.
-
-**Root cause.** The vector writer was implemented in Rust (`crates/x-render/src/sinks.rs:60`, with glyph outlining and image XObjects) and never wired to a UI entry point (see F1: the wasm export entry point is a stub). The TS writer was authored as the browser fallback and became the shipped behavior.
-
-**Fix.** Same wiring as F1: route PDF through the Rust sink; keep `engine/pdf.ts` only as the no-wasm fallback. (Prior audit `FIGMA_HELP_AUDIT_2026-10-01_07_EXPORT_FORMATS.md` §5 recorded this as a known limitation; it is still open and is now provably fixable by wiring, not by new code.)
-
----
-
-### F3 · Auto line height is 1.2em, not the font's intrinsic line height
-**Category B (+ C)** · `ui/textLayout.ts`
-
-**Figma.** "By default, line height is set to **Auto**. This is calculated using the font's default line height, **which varies between typefaces**." ([Explore text properties](https://help.figma.com/hc/en-us/articles/360039956634-Explore-text-properties))
-
-**X-Native.**
-```ts
-// ui/textLayout.ts:82-88
-export function effectiveLineHeight(n: XNode, fontSize?: number): number {
-  const fs = Math.max(1, fontSize ?? n.fontSize);
-  const unit = n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto");
-  if (unit === "percent" && n.lineHeight > 0) return Math.max(1, (n.lineHeight / 100) * fs);
-  if (unit === "px" && n.lineHeight > 0) return Math.max(1, n.lineHeight);
-  return Math.max(1, fs * 1.2);          // ← "Auto"
-}
-```
-That single constant is the source of truth for **every** vertical text metric in the app:
-
-| Consumer | Line |
-|---|---|
-| Live text editor box (`editBox`) | `ui/Canvas.tsx:8870`, `:8878` |
-| Text measurement / fixed-box line count | `ui/Canvas.tsx:10663`, `:10667`, `:10963`, `:11013` |
-| Layout metrics source (`textMetrics`) | `ui/textLayout.ts:486` |
-| SVG `<tspan dy>` rhythm | `engine/svgExport.ts:443` |
-| Glyph outlining / Outline-text | `engine/memory.ts:1955`, `engine/textVector.ts:667` |
-| Inspector line-height stepper | `ui/inspector.tsx:3812`, `:4046`, `ui/chrome.tsx:2873` |
-
-**Why it differs (and why it is fixable without new capability).** The engine already holds the correct quantity in three places and none of them reaches the auto branch:
-- Rust computes the real line box: `let natural = (f0.ascent - f0.descent + f0.line_gap) * (max_size / f0.units_per_em);` — `crates/x-text/src/shaping.rs:908`; its explicit-px/percent branch does proper CSS half-leading (`:912-918`), while `lh_mode == 0` ("legacy AUTO", `:914`) uses `ascent × clamp(1.0, 1.2)` — the same approximation, which is why TS↔Rust parity tests cannot catch this.
-- TS has per-family metrics: `engine/layout.ts:606-614` (`FONT_METRIC_RATIOS`, Inter/Roboto/Helvetica/Arial), used for *baselines* only (`childBaseline`, `:693-706`).
-- TS can measure the real thing in the DOM: `fontMetricRatios` (`ui/textLayout.ts:200-232`) probes `fontBoundingBoxAscent/Descent` at 1000px — but it is only used to align the editor overlay, never to resolve Auto.
-
-**Measurable divergence.** Under `hhea`-style metrics the intrinsic line height is roughly 1.15em for Helvetica/Arial, ~1.17 for Roboto and ~1.21 for Inter — a spread of ~5% across the fonts X-Native actually bundles (`apps/web/public/fonts` ships Roboto and Inter, so both sides of the constant are reachable in one document). X-Native's documents default to Inter (`engine/textInput.ts:94` falls back to `"Inter"`), so the app's own default is ~1% too short while any Roboto layer is ~2.5% too tall and any Arial/Helvetica layer ~4% too tall. That error multiplies through wrapped paragraphs, `hugHeight`, auto-layout row heights and baseline rows, and it is written into every SVG/PDF export.
-
-**Fix (§7, T2).** Give the auto branch a real source: extend `FONT_METRIC_RATIOS` with `lineGap`, prefer the DOM probe when a canvas is available, and have `effectiveLineHeight` return `(ascent − descent + lineGap) × fontSize`. Mirror it in `x-text/src/shaping.rs:914` so parity tests compare two correct implementations.
+# Category D — different by design, behavior correct, no action
+1. **Cursor-only rotation, no painted handle** (batch 45 follow-up): Figma paints nothing; X-Native paints nothing. Correct. (Its *placement* is F3.)
+2. **Selection ink** is `--cv-sel` emerald with an opt-in “Figma blue” canvas chrome theme (`styles.css:313-341`, `themeModel.ts:60-115`): color/role choice, behavior identical.
+3. **Handle cosmetics** — 8px hollow squares on containers vs Figma's handle glyph, label chip weights, 5px multi-select boxes: styling; hit radii and positions are pinned by `canvasSelection`/`frameInteraction` M-series.
+4. **Dashboard-first file flow** (File ▸ Save local copy ⇧⌘S, Export assets ⇧⌘E living in the rail menu): placement only; the *capability* path is tested by `exportPathway` (27 assertions).
+5. **Scale presets 0.5×–4× plus `500w`/`300h` and a 0.01–64 clamp**: a documented superset of Figma's scale field; no lost behavior.
+6. **Per-property override resets in the context menu** (text/fill/size beyond Figma's single “Reset all overrides”): superset; the Figma-level action exists and behaves correctly.
+7. **PNG DPI tagging (72×scale `pHYs`/JFIF)**: addition to Figma's raster output, harmless to fidelity.
+8. **Mask model** (`alpha|vector|luminance` with the “any pixel > 0% opacity ⇒ outline wins” clause) — implemented per the Masks article and pixel-measured (`maskAlpha.test.mjs`); the default here mirrors that article's own priority, not a bug.
 
 ---
 
-### F9 · "Ignore overlapping layers" is honoured only for slices
-**Category B (+ C)** · `engine/svgExport.ts:766`, `ui/inspector.tsx`
+# Step 3 · Top 5 highest-leverage fixes
 
-**Figma.** For any layer or group export: "When enabled, Figma only includes the selected layers… When disabled, Figma includes any layers that intersect with the selected layer or group." The slice paragraph is a *special case* of the rule, not the whole rule. ([Export formats and settings](https://help.figma.com/hc/en-us/articles/13402894554519-Export-formats-and-settings))
+| # | Fix | Class | Effort | Payoff |
+|---|-----|-------|--------|--------|
+| 1 | **F1 — Rewire `RustDocumentSession::export_node` to `x-render`'s `build_render_tree*` + `export_raster`** (with refusal instead of stubs where a dependency is missing); delete `node_rgba` flat paths; extend the signature for F8's options | **Rust wiring** (no new algorithm — the functions exist and the desktop app already uses them) | S/M | Exports stop being flat-color lies in wasm-enabled builds; unblocks doing F2's margin *once*, in the tree, for both tiers |
+| 2 | **F2 — Effect/stroke bleed in export bounds**: `exportBleed()` shared by `exportSize`, SVG viewBox/offset, fallback PNG canvas, wasm page size; use x-render's `blur×1.5` convention so tiers agree | TS (engine) + 1-line Rust (page size already follows the tree) | M | Immediate, visible output parity for every shadowed button/card — PNG, JPG, PDF *and* SVG |
+| 3 | **F5 — Per-font auto line-height**: consume `n.textMetrics` / `resolveFontMetrics` in `effectiveLineHeight`, keep 1.2 only as the no-metrics fallback, and route `svgTextLayout` (svgExport.ts:443) through the same function — which also kills F5b's percent-line-height leak in exported SVGs | TS wiring | S | Line rasters, AL hugs, truncation and export y-positions all move to Figma's numbers in one function; kills a whole class of “heights are 1px off” bug reports |
+| 4 | **F4 — Gap pills on every pair + Auto-mode drag converts to a fixed number** (seed from measured pair distance; wrapped flows drag `gapCross`) | TS interaction | S | The most-quoted “Figma feel” mechanic in auto layout becomes actually usable on stacks >2 and stops dead-dragging in Auto mode |
+| 5 | **F3 + F7 — Selection-geometry sweep**: rotation armed at all four corner rings for single selections (share the multi-select ring), marquee seeded from the drilled scope | TS interaction | S | Two of the three most common selection gestures (rotate, lasso-select in a drilled frame) stop contradicting Figma *and* the app's own multi-select behavior |
 
-**X-Native.** The flag is read in exactly one branch of `exportSvg`, the slice branch:
-```ts
-// engine/svgExport.ts:764-779
-if (n.isSlice === true && scope?.root) {
-  const whole = p.ignoreOverlap === false;
-  const container = whole ? scope.root : (findLocalParent(scope.root, n.id) ?? scope.root);
-  …
-}
-// :781 — every non-slice layer:
-const size = svgSize(n, p);
-return `${open(…)}${svgNode(n, true, opts)}</svg>`;    // subtree only; flag never read
-```
-`ui/exportModel.ts:198-199` exposes and stores the setting for PNG/JPG/SVG, and `ui/inspector.tsx:2696` calls `runExport(a, p)` with **no scope** for the per-layer download button, so the flag has no effect there (and the raster PNG/JPG path inherits the same SVG, `ui/inspector.tsx:9428`).
+Secondary (not in top 5, still real): F6 (verify-then-match the Fixed-size flip), F9 (fill-promotion at full width, ~3 lines at resize commit), F10 (letter-spacing %), and the CI blind spot below.
 
-**Fix (TS only).** Generalize the slice branch: when `ignoreOverlap === false` and a `scope.root` is available, render the parent container (or the whole page) clipped to the target's box, for any layer kind, not just slices. The renderer already supports "container + crop" for slices, so this is a predicate change plus passing the scope from `inspector.tsx:2696`.
+**CI blind spot (process finding):** the npm chain is green *because* it never loads wasm, and `x-wasm`'s tests assert magic bytes rather than rendered pixels. Add a CI step that runs `cargo test -p x-wasm -p x-render` with the pixel assertions of T1, and `npm run test:wasm` (real-bridges) against a built `wasm:build` artifact — F1 in any future form fails fast there instead of shipping.
 
 ---
 
-### F10 · PNG/JPG of text rasterizes an SVG `<text>` with no font embedded
-**Category B** · `engine/svgExport.ts:750`, `ui/inspector.tsx:9428`
+# Step 4 · Sabotage-verified tests for the top 3 (shipped in this tree)
 
-**Figma.** Raster export is produced by Figma's own document renderer with the document's font; the exported PNG matches the canvas even on a machine that lacks the font.
+Repo convention (CONTRIBUTING + batch 45/46): a test that is not in `apps/web/package.json`'s explicit `&&` chain never runs. The three new files are therefore **deliberately red-by-design at `9baf0cd`** (they pin the post-fix contract, which does not exist yet) and stay *out* of the chain until each fix lands — each header carries the exact `&& vite-node …` line to append. Verification performed today, both directions:
 
-**X-Native.** For non-SVG formats the exporter leaves text as markup:
-```ts
-// engine/svgExport.ts:750
-outlineText: p.outlineText ?? p.format === "SVG",     // ⇒ false for PNG/JPG/PDF
-// :617 — the element:
-<text … font-family="Inter, …" font-size="…" …><tspan x="…" dy="…">…</tspan></text>
-```
-The raster path then loads that SVG through an `Image` and draws it (`ui/inspector.tsx:9428`):
-```ts
-image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-```
-An SVG loaded via `<img>` is a separate document: it cannot see the page's `@font-face` rules (`apps/web/src/styles.css:1-70`, self-hosted Inter/Geist/Outfit/Plus Jakarta/Fira Code/JetBrains Mono in `apps/web/public/fonts`). So a design set in Geist, Outfit or Plus Jakarta Mono/`small-caps` rasterizes to a **fallback font** in PNG/JPG while looking correct on canvas, and the exported SVG states only a family name (no `@font-face`, no outline) unless the user has "Outline text" ticked — which the UI only offers for SVG (`ui/exportModel.ts:44,54`).
+1. **Against unfixed code:** `lineHeightMetrics 5 passed / 6 failed`, `exportBleedParity 1 passed / 4 failed`, `exportBridgeContract 3 passed / 6 failed` — every failure names exactly the audited gap; the passing lines are the anti-overfix guards (documented fallbacks, plain-layer exactness) that must keep passing after the fix.
+2. **Against a throwaway fix prototype** (each fix applied minimally, then reverted; `git status` verified clean of src changes afterwards): all three files went fully green (11/11, 15/15, 9/9) **and** the neighboring suites stayed green under the patch (`typography` 90, `autolayout` 52, `export24` 43, `pdfExport` 5, `rasterMetadata` 8 all exit 0) — the pins are satisfiable by the proposed fixes, not just reflexively red.
 
-**Fix (TS only, one of).** (a) Force `outlineText` for raster/PDF formats as well (the tracer already exists and is what Figma's default does for SVG); or (b) embed the used fonts as base64 `@font-face` inside the raster-source SVG. Option (a) also removes any dependency on the rasterizer's font stack.
+### T1 — `apps/web/src/ui/__tests__/exportBridgeContract.test.mjs` (for F1)
+Static contract pins, because the sandbox suite never loads a compiled `.wasm` — the exact blind spot that let the stubs survive: `export_node`'s body must reference the real pipeline (`build_render_tree` / `export_raster` / `RasterFormat`), must not touch `node_rgba`, must not contain a hand-written `re f` PDF page, the `encode_node_{png,jpg,pdf}` stubs must be **gone**, the bridge signature must carry a `quality`/options payload (also closes F8), and `wasmExport.ts` must send it and **validate the returned bytes** before declaring success. Body-slice regexes stop at the next method or top-level `fn` so a doc comment elsewhere cannot satisfy them (proved during the demo: a misplaced mention outside the body did *not* flip the pin). The pixel-level mirror of these pins ships inside the fix PR as `crates/x-wasm/tests/export_pixels.rs` (cargo, `png` dev-dep): ellipse corner α = 0, frame children present, rounded-rect corner empty, JPEG actually decodes, PDF has > 1 draw op, blur expands the canvas — each chosen to fail against the current stubs.
+
+### T2 — `apps/web/src/ui/__tests__/exportBleedParity.test.mjs` (for F2)
+Convention mirrored from x-render: per-side bleed = `max(0, 1.5·blur ± offset)` over visible drop/layer effects + the widest outside stroke (inner shadows, background blur and hidden effects contribute nothing; two shadows **max**, never sum). A `rect 120×100` with `dropShadow {x:0, y:4, blur:10}` ⇒ `exportSize` 150×130 (the box ∪ offset shadow rect — deliberately non-square so the `500w` aspect pin can't pass by coincidence), outside stroke 6 ⇒ +6 all sides, plain layers stay exact (anti-overexpansion guard), and the 1x-pinned **SVG** expands too (viewBox must contain the shadow its own `<filter>` paints). The inspector size chip must show the expanded readout (batch 46's lesson: a right number with a stale chip is a half-fix — pin it in the `exportSettings.dom` harness when the fix lands).
+- **Sabotage ledger:** margin constant → 0 (per-side sizes, 500w aspect, SVG pin — 4); count inner strokes (1); count hidden effects (1); sum instead of max (1); background blur bleeds (1); outside stroke ignored (1); shadow+stroke stacking (1); drop the exported `exportBleed` symbol (whole block fails loudly).
+
+### T3 — `apps/web/src/ui/__tests__/lineHeightMetrics.test.mjs` (for F5 + F5b)
+Unit-level, no DOM needed: a node carrying `textMetrics {fontBoundingBoxAscent: 15.2, descent: 4.4, fontSize: 16}` with auto line height must resolve to **19.6**, not the constant 19.2; ink boxes (`actualBoundingBox*`) are ignored (font box, per Figma's "font's default"); a 24px span rescales the recorded box to 29.4; explicit px (24) and percent (150% → 24) stay untouched by the auto branch; a **partial** metric record falls back rather than half-applying; a metrics-less node keeps the documented 1.2 fallback (jsdom/SSR stay deterministic). Two structural pins stop a copy-paste fix: no second `fs * 1.2` may exist in `svgExport.ts`, and the SVG text block must go through the shared resolver — asserted behaviorally: a `150%` line height emits `dy="24"` on the second `<tspan>`, catching today's `svgTextLayout` percent leak (`svgExport.ts:443, 588`).
+- **Sabotage ledger (each entry listed in the header):** auto branch back to the constant (3 assertions); ink box used (1); spans not rescaled (1); fallback removed (1); metrics bleed into explicit units (2); `svgTextLayout` keeps its inline `n.lineHeight || fs * 1.2` (2: source regex + percent-dy behavior).
 
 ---
 
-### F8 · "Include bounding box (text layers only)" changes nothing
-**Category C** · `ui/exportModel.ts`, `ui/inspector.tsx` *(detail row: §4 C2)*
+## Deliverable 3 · Confirmation
 
-**Figma.** For PNG/JPG (and the SVG equivalents) the setting "Include bounding box (text layers only)" makes the export keep the text layer's full box, "empty space and all". ([Export formats and settings](https://help.figma.com/hc/en-us/articles/13402894554519-Export-formats-and-settings))
-
-**X-Native.** The flag is modelled, defaulted per format, validated against `FORMAT_CAPS`, rendered as a checkbox only when the selection is a text layer, and carried in presets:
-- field and defaults: `engine/types.ts:446`, `ui/exportModel.ts:19,42,52,62,199`;
-- UI: `ui/inspector.tsx:8984-8986` ("Text layers only: keep the layer's bounding box, empty space and all"), preset copy at `:9204`;
-- capability assertions: `engine/__tests__/parity.test.mjs:2407-2448`.
-
-**Root cause.** No exporter reads it. It never reaches `exportSvg`'s options (`engine/svgExport.ts` has no `boundingBox` reference), so the SVG is always sized by `svgSize(n, p)` — i.e. the current node box or the crop box — and the raster/PDF paths inherit that SVG unchanged (`ui/inspector.tsx:9428`).
-
-**Fix (TS only).** Read `p.boundingBox` in `svgSize`/`exportSvg` for text nodes and use the layout box (advance width and full line-box height from `engine/layout.ts`/`ui/textLayout.ts`) instead of the tight node box; add a test that a single-word text layer exports wider than its tight ink box.
-
-### (Also Category B, already recorded) · "Simplify stroke" / "Outline text" defaults are not selection-aware
-Carried forward from `FIGMA_HELP_AUDIT_2026-10-01_07_EXPORT_FORMATS.md` §6 and re-verified here: `engine/svgExport.ts:750-752` resolves both settings **on for every SVG preset** (`p.outlineText ?? p.format === "SVG"`), whereas Figma defaults them per selection (Outline text on when at least one text layer is in the selection; Simplify stroke on for vector networks with inside/outside strokes). Because the flags are memoized per preset (`ui/exportModel.ts:203`), a stored preset can also freeze a default. Lower severity than F1–F10; listed for completeness since it changes generated markup.
+This audit graded **only behavior and output**. No finding in this document concerns colors, icons, panel placement, or typography of the UI chrome; every Category A/B finding cites a help.figma.com article (or the app's own prior Figma-cited contract) and a file:line in this tree, and every “looks different” item examined was dispositioned as Category D with evidence. Prior-fix overlap was checked before flagging (batch 45/46 items were re-verified in-tree rather than re-reported), the current suite was run fresh to separate “unfixed” from “fixed-but-untested”, and the sandbox's missing `.wasm` was explicitly accounted for in every export finding. No new features (AI/MCP/video/motion) were proposed; all five fixes make *existing* tools match documented Figma behavior.
 
 ---
 
-## 4. Category C — Unwired capability (engine right, UI/model not exposing it)
+# Step 5 · Implementation record (2026-10-04, same day as the audit)
 
-| ID | Capability that exists | Where it exists | Where it is not wired | Effect |
-|---|---|---|---|---|
-| C1 | Vector + text PDF writer, image XObjects, gradient shadings, glyph outlining | `crates/x-render/src/sinks.rs:41-60`, `crates/x-render/src/raster.rs`, `crates/x-text/src/text_geometry.rs` | `crates/x-wasm/src/session.rs:341-378` (`export_node` → `encode_node_*` flat-colour stubs) | F1, F2 |
-| C2 | "Include bounding box (text layers only)": modelled, validated, stored, shown only for text selections | `ui/exportModel.ts:19,42-62,199`, `ui/inspector.tsx:8984-8986` | No reader: a repo-wide grep for `boundingBox` finds only the field (`engine/types.ts:446`), the settings model (`ui/exportModel.ts:185,199,224`), the checkbox (`ui/inspector.tsx:8984-8986`), a preset-copy merge (`ui/inspector.tsx:9204`) and the capability assertions in `engine/__tests__/parity.test.mjs:2407-2448` — **no exporter consults it** | The checkbox changes nothing in any format; Figma draws the text layer's box into the export |
-| C3 | Font metrics for line height | `engine/layout.ts:606-614` (`FONT_METRIC_RATIOS`), `engine/layout.ts:641-676` (`resolveFontMetrics`), `ui/textLayout.ts:200-232` (`fontMetricRatios` DOM probe), `crates/x-text/src/shaping.rs:908` (`natural` line box) | `ui/textLayout.ts:87` (auto branch) | F3 |
-| C4 | Container/root-crop SVG rendering | `engine/svgExport.ts:764-779` (slice branch) | Plain-layer branch `:781`; `runExport` never passes a scope for per-layer downloads (`ui/inspector.tsx:2696`) | F9 |
-| C5 | Interaction/`setActiveMode` variable mode switching | `engine/memory.ts:4970-4979`, `ui/chrome.tsx:3764-3766`, prototype action at `ui/Canvas.tsx:1125` | No **layer/frame-scope** mode override: the model stores only `activeModes[collectionId]` (`engine/types.ts:1133`), so a subtree cannot run a different mode the way Figma's "apply a mode to a frame/layer" does | Medium: design-system parity gap (flagged as a capability gap, not a wrong behavior) |
-| C6 | Text baseline machinery | `engine/layout.ts:688-717` (`childBaseline`, `baselineRow`), `engine/layout.ts:726-731` (`effectiveCrossAlign` — documented as a deliberate rule: a vertical flow has no baseline line, so a stale `baseline` falls back to the start edge, which is what the alignment box offers) | The *auto* **line box** used to place baselines resolves through the 1.2em constant (`ui/textLayout.ts:87` → `:486`), so baseline rows are measured correctly against the wrong line height | Compounding of F3; the `effectiveCrossAlign` rule itself is intentional (not a finding) |
+*Finding IDs below are this document's numbering (F1 export stub, F2 bleed, F3 rotation corners, F4 gap pills, F5 line-height). An earlier fuller draft of the audit is preserved in git history at `83dcdf3`.*
 
----
+**Scope decision:** F1-F5 (P0/P1) implemented per the fixes above; F6, F7, F9, F10 (P2/P3) deliberately left untouched. F8 was half-absorbed by F1: `exportNode` now carries a JSON options payload (`quality`, `bleed`) across the bridge; ignore-overlapping/resampling *scope* still routes through the TS path only (nodes needing it either keep that path's behavior or were never admitted by the gate) — F8 stays open at P2 for the remaining scope plumbing.
 
-## 5. Category D — Intentional custom design (verified correct, **no action**)
+| Fix | Landed | Primary edits |
+|-----|--------|--------------|
+| **F1** | ✅ | `crates/x-wasm/src/session.rs`: `export_node` rewritten to route through the desktop pipeline — `x_render::build_render_tree_of` → frame-name-label strip → **refusal** for trees still carrying `Glyphs` (no font manager in the bundle; the TS gate and the canvas fallback keep text honest) → `text_geometry::outline_strokes` → command-bounds page (node box ∪ every path's reach ∪ caller bleed) → origin bake → `x_render::export_raster` (PNG; JPG at the caller's 0-100 quality, flattened to white like the fallback) / `x_render::export_pdf` (vector writer, real ops). `node_rgba`, `encode_node_png/jpg/pdf`, `png_crc32`, `write_png_chunk` deleted. `lib.rs` wrapper + `wasmBridge.ts` type + `wasmExport.ts` gained the `options` payload **and** magic-byte validation (JPEG also EOI-checked) — a bridge answer that is not the requested file returns `null`, degrading to the canvas path instead of downloading it. `inspector.tsx` passes `quality` + `bleed` and its comment now documents validation-gated preference. The Rust test block replaced the magic-byte pins with contract pins: byte-equality against `export_raster`/`export_pdf` for the same tree, envelope↔IHDR consistency, bleed → 120×140 page at 2x, decodable-JPEG + size lower bound, text refusal, junk-options graceful defaults, and the preserved error paths. |
+| **F2** | ✅ | `apps/web/src/ui/exportModel.ts`: new exported `exportBleed(node)` (per side = `max(0, 1.5·blur ± offset)` over visible drop-shadow/layer-blur — dash-kind `EffectKind`s per the type — plus the widest outside stroke; inner/background/hidden contribute nothing; effects max per side, stroke stacks on top) and `exportSize` folds it in *before* the scale multiply, so the chip, the single/preview/bulk raster canvases, and the ZIP sizes move together. `svgExport.ts`: the single-node export expands `viewBox` to `-l -t (w+l+r) (h+t+b)` and sizes `width/height` off the expanded box (1x pin intact); page and slice scopes stay exact (a slice is a region). `inspector.tsx`: PDF page dims and the DPI-stamp divisor use the bleed-inclusive design box, so a 2x export still stamps exactly 2x. Rust page sizing consumes the same convention via the caller's `bleed` options — and the command-bounds union means even a caller without bleed options never clips strokes/silhouettes again. |
+| **F3** | ✅ | `apps/web/src/ui/canvasSelection.ts`: single-selection rotation now arms at **all four corners** for **every kind** — one shared ring `ROTATION_RING = {min: 8, max: 24}` outside each corner of the (screen-transformed) box, matching the multi-select ring's corner set, with the 8px corner kept for resize (cursor loop unchanged: rotation reads the same function as the press, and `!onResizeHandle` still gates the press). `frameRotationHandle`, `ROTATION_HANDLE_STEM`, `ROTATION_HANDLE_HIT` are gone — there is no longer any "the handle used to be here" anchor to preserve, and nothing is painted, per Figma. `figmaCanvasVectorParity` (B0-B12), `canvasSelection` (corner matrix ×6 kinds ×3 zooms + the mount probe), and `parityReaudit` (top-left now *does* advertise; the resize-exclusion loop is unchanged) were re-pinned to the new contract, and `frameInteraction` flipped "TL corner does not rotate" into "TL corner drag rotates" — the divergence this fix existed to remove. |
+| **F4** | ✅ | `apps/web/src/ui/Canvas.tsx`: new `autoGapPills(node)` — every consecutive flowed pair (line-straddling pairs skipped in wrapping flows) plus one per-line band for wrapped flows; **paint, hover cursor, and press all iterate the same table**, so a band can no longer be painted-but-dead and a cursor can never promise a target the press misses. Press arms `autoGap` with `{ origGap: measuredPairDistance, gapAxis: "gap" | "gapCross" }`; the drag axis follows the pill (a horizontal flow's line-gap drags on Y); `⇧` keeps big-nudge stepping; and a first move under `gapMode: "auto"` now dispatches `gapMode: "fixed"` alongside the number — Figma's convert-on-drag — so the drag visibly lands instead of being recomputed away. `memory.ts`: `LAYOUT_SPACING_KEYS` gained `gapMode` so an **instance root** carrying the canvas gap drag keeps the conversion (the spacing-fragment override previously dropped it, leaving its numeric gap ignored under Auto). Grid flows get no pills (their inspector row/column spacing is unchanged). Zero-gap pairs stay invisible but grab within 4px of the band. |
+| **F5** | ✅ | `apps/web/src/ui/textLayout.ts`: `effectiveLineHeight`'s auto branch resolves to the node's recorded **font bounding box** (`fontBoundingBoxAscent + fontBoundingBoxDescent`, rescaled by `fontSize / textMetrics.fontSize` so bigger spans keep the same font's ratio), falling back to `1.2·fontSize` only when the node has no metrics (pre-measure first paint, jsdom). Explicit px/% paths untouched. `svgExport.ts` `svgTextLayout` now calls the same resolver — deleting its duplicate constant **and** fixing the unit drop (a 150% line height exports `dy="24"`, not `dy="150"`); `memory.ts` `outlineText` (text→glyph-path conversion used for exports) likewise uses the resolver, so outlined and `<text>` flavors of the same layer advance identically; inspector field readout and the `⌥⇧,/.` line-height stepper show/seed the resolved number too. |
+| T1-T3 | ✅ | `apps/web/package.json` `npm test` chain appended with `exportBridgeContract`, `exportBleedParity`, `lineHeightMetrics` (all green against the fixes; their sabotage ledgers remain in the headers). |
 
-Each item below was inspected specifically to make sure it is *not* being mistaken for a bug. In every case the behavior matches Figma and only the chrome differs.
-
-| ID | X-Native choice | Why it is correct |
-|---|---|---|
-| D1 | Rotation paints **no** handle; only the cursor changes (`ui/Canvas.tsx:3690-3694`, `ROT_CURSOR` at `:10203`) | This is Figma's model ("hover just outside a corner … the cursor switches to the curved rotation arrow"). The removal of the stem+dot was correct; only the *hit geometry* is wrong (F6). |
-| D2 | Auto-layout padding/gap regions painted as translucent pink bands (`ui/Canvas.tsx:3903-3941`) rather than Figma's exact tint | Chrome colour/opacity only; the drag behavior (padding: ⌥ opposite, ⌥⇧ all sides — `:6040-6058`; big-nudge ⇧ — `:7177`) matches the documented shortcut table. |
-| D3 | Point-box handles use a 6px painted square with a 10px padding and 7px hit radius (`ui/pointBox.ts:44-50`, painted at `ui/Canvas.tsx:4419`) vs. Figma's dot styling | Geometry/behaviour parity verified: ⇧ = proportional resize, ⌥ = from centre, ⇧ on a corner = 15° rotate, Space = reposition — exactly Figma's *Edit multiple points using bounding boxes* table; the sizes are our own chrome. |
-| D4 | Move tool in point edit also inserts a point on the path (the `+` preview, `ui/Canvas.tsx:6223-6245`, insert at `:5886-5890`) | Figma's own lesson "FD4B: Use vector edit mode to modify shapes" describes hovering the path and clicking the previewed point without switching tools; the Pen route (`P`) also works here. Equivalent behaviour, not a mismatch. |
-| D5 | Vector sub-tool toolbar placement/labels (`ui/Canvas.tsx:9756-9840`), Zen HUD, radial menu, dock | Position, iconography, copy — explicitly out of scope. |
-| D6 | `W × H` / rotation-angle badge, guides, ruler, minimap chrome (`ui/Canvas.tsx:3699-3720`) | Our chrome; the *values* shown match the model. |
-| D7 | Sections keep their own title-inside placement and rename affordance (`ui/Canvas.tsx:8190-8235`) | Behavior (double-click label → inline rename, top-level constraint `engine/memory.ts:111`) matches Figma; only the label geometry differs. |
-
----
-
-## 6. Step 3 — Prioritized action plan (top 5 highest-leverage fixes)
-
-**P1 — Make the WASM export path render, or take it out of the serving path.**
-*Type:* **Rust wiring**, plus a TS guard and tests.
-`crates/x-wasm/src/session.rs:341-378` must build a `RenderTree` + `Assets` + `FontManager` and call `x-render`'s raster/`export_pdf_full` sinks; until then, `engine/wasmExport.ts:55-64` should refuse every node (return `null`) so `ui/inspector.tsx:9309-9311` uses the SVG→canvas path, and `tryWasmExport` must not return `true` for a result whose pixel content was never verified. **Highest leverage in the report:** it converts a silent, content-dependent corruption of the primary output surface into either correct output or a non-event, and it unblocks P2.
-
-**P2 — Wire the vector PDF writer to the UI.**
-*Type:* **Rust wiring** + **test addition**.
-Once P1's plumbing exists (`RenderTree`/`FontManager` available inside `x-wasm`), PDF should be produced by `crates/x-render/src/sinks.rs:60 export_pdf_full` (paths, glyph outlines, image XObjects, gradient shadings) and `apps/web/src/engine/pdf.ts` should be demoted to the no-wasm fallback. Test: golden-file structural assertions on the PDF (path operators present, `/Font` or glyph-outline streams present, images as XObjects) rather than magic bytes.
-
-**P3 — Resolve line height from font metrics for the Auto case.**
-*Type:* **TS tweak** (with a matching **Rust** constant change and a **test addition**).
-`ui/textLayout.ts:87` → `(ascent − descent + lineGap) × fontSize`, sourcing `lineGap` from an extended `FONT_METRIC_RATIOS` (`engine/layout.ts:606-614`) with a DOM/textMetrics preference where available; mirror in `crates/x-text/src/shaping.rs:914` so parity tests are not comparing two copies of the same approximation. This is the single change that moves every text layer, every hugged text frame, every baseline row and every exported SVG closer to Figma at once.
-
-**P4 — Fix the auto-layout gap gesture (effective value + all gaps).**
-*Type:* **TS tweak** + **test addition**.
-(a) The `autoGap` handler (`ui/Canvas.tsx:7169-7181`) must write `gapMode: "fixed"` alongside the numeric gap (and start the delta from the *effective* spacing so an Auto frame does not jump), otherwise F4's inert drag persists; (b) the press loop (`ui/Canvas.tsx:6058-6067`) must offer the handle at every adjacent pair instead of only pair 0–1, matching what the painter already bands (`:3923-3941`).
-
-**P5 — Make point-editing hit test respect what is painted, then fix the two vector gestures that fail because of it.**
-*Type:* **TS tweak** + **test addition**.
-(a) Gate the handle branches in the press loop on `selNow`/the dragged point (`ui/Canvas.tsx:5815-5827`) — this alone stops silent geometry corruption (F5); (b) rotate from all four corner rings (`ui/canvasSelection.ts:56-73`) and invert the two tests that assert the current behaviour (`ui/__tests__/canvasSelection.test.mjs:74,76`); (c) add the anchor-entry path to Bend/⌘ (`ui/Canvas.tsx:5827-5886`) so "click a point to curve it" exists (F7).
-
-*Runners-up, deliberately outside the top five (higher effort / narrower blast radius):* F8 (`Include bounding box` no-op), F9 (`ignoreOverlap` for non-slices), F10 (raster text fonts), F11 (marquee into sections), F12 (Windows `S`), F2 (already covered by P2), C5 (layer-scope variable modes).
-
----
-
-## 7. Step 4 — Sabotage-verified testing strategy (top 3)
-
-Each test below is written so that a **specific, plausible sabotage of the fix** flips it red. Test files follow the repository's existing harnesses: engine tests use the `t(name, ok)` pattern under `apps/web/src/engine/__tests__/`, DOM tests mount `Canvas` with `installDom()` and real mouse events as in `ui/__tests__/frameInteraction.dom.test.mjs`.
-
-### T1 · Export pixels are real pixels (for P1/P2)
-**File:** `apps/web/src/engine/__tests__/wasmExportContent.test.mjs` *(new)* and `crates/x-wasm/src/session.rs` *(extend the existing `#[cfg(test)] mod tests`)*
-
-**Fixture:** a 200×100 page frame (fill `#ffffff`) containing a red rect `#ff0000` at x 0–100 and a blue rect `#0000ff` at x 100–200.
-
-**Assertions (must be content-sensitive, not magic-byte):**
-1. Decode the PNG (`x_format::base64` plus a ~20-line IDAT reader — the workspace already links `miniz_oxide`, see `crates/x-format/src/figbinary.rs:48`, and `crates/x-format/src/png_import.rs` shows the header parsing) and assert `pixel(10, 50)` is red-ish and `pixel(190, 50)` is blue-ish, i.e. two sampled pixels **differ** and each matches its source layer.
-2. Same document, `format = "pdf"`: assert the content stream contains **more than one** painting operator (`> 1` of `re`/`f`/`m`/`l` groups) and, for a text-bearing fixture, that a glyph-outline stream (or `/Font`) is present; assert the page is not a single full-bleed fill.
-3. TS side: assert `tryWasmExport` returns `false` (or that `runExport` chooses `canvasExportPath`) for the fixture *until* the Rust sink is wired, so the guard cannot silently regress.
-
-**Sabotage that must fail it:** revert `encode_node_png` to the one-row repeat (or make `node_rgba` the only colour source) → assertion 1 fails because both sampled pixels become the frame's white/aligned fill; revert `encode_node_pdf` to the single `re f` stream → assertion 2 fails. Sabotage check #2: delete the guard in `engine/wasmExport.ts:55-64` and assert the TS test (3) still fails-safe.
-
-### T2 · Auto line height follows the font, not a constant (for P3)
-**File:** `apps/web/src/engine/__tests__/typography.test.mjs` *(extend)* + `apps/web/src/ui/__tests__/textLineHeight.dom.test.mjs` *(new, for the DOM probe path)*
-
-**Assertions:**
-1. With the canvas probe stubbed (the existing DOM harness already replaces `getContext("2d")`), return `fontBoundingBoxAscent = 0.905 × size`, `descent = 0.212 × size`, `lineGap = 0.033 × size` for a probe font, and assert `effectiveLineHeight(node, 100)` is **111.7**, not `120`.
-2. For a 3-line paragraph inside a hug-height text layer, assert `hugHeight(...)` equals 3 × the font-derived line height (and therefore differs from the old constant by more than 0.5px).
-3. Assert the same value reaches the SVG: `exportSvg(textNode, {format:"SVG", …})` contains `<tspan … dy="111.7">` for the second line.
-4. Cross-check the Rust side: a unit test in `crates/x-text/src/shaping.rs` asserting the first-line baseline uses the natural box (`(ascent − descent + line_gap) × size/upem`) for `lh_mode == 0`.
-
-**Sabotage that must fail it:** restore `return Math.max(1, fs * 1.2);` at `ui/textLayout.ts:87` → (1) and (3) go red for a font whose default ≠ 1.2; sabotage the SVG path specifically by hard-coding `n.fontSize * 1.2` at `engine/svgExport.ts:443` → (3) alone goes red, proving the export is covered independently of the canvas.
-
-### T3 · The point-edit press matches the paint (for P5a/P5b)
-**File:** `apps/web/src/ui/__tests__/vectorHandleHit.dom.test.mjs` *(new)* — mount `Canvas` exactly as `vectorEditTools.dom.test.mjs` does (real `mousedown`/`mousemove` on the wrap element, engine snapshot inspected afterwards).
-
-**T3a — unselected handle is not a target.**
-Fixture: a vector whose point `#1` has `out = (30, 0)` but is **not** in `vecPoints`; point `#0` is selected; a point-edit session is open.
-- Assert `selNow`-invisible handle: dispatch `mousedown` 7px from `#1`'s out-handle position, then `mousemove` 20px, then `mouseup`.
-- **Expected (fixed):** no `patchPath` is dispatched with `path[1].ox` changed; the gesture is either an anchor drag of `#1` or an `insertPointOnPath` on the segment.
-- **Sabotage:** remove the new `if (!editable) continue;` guard → a `patchPath` that moves `path[1].ox/oy` appears and the assertion fails.
-- **Companion paint assertion** (keeps the two in lockstep): with the recording `getContext` proxy, assert no handle-drawing call happens for `#1` while it is unselected — the same test then fails if someone "fixes" the grab by painting all handles instead.
-
-**T3b — rotation is corner-symmetric; the old assertions are inverted.**
-**File:** `apps/web/src/ui/__tests__/canvasSelection.test.mjs` *(edit)*
-- Replace `:74` with: for each of the four corners and each kind ∈ {frame, component, instance, rect, group}, `rotationHandleHit(kind, cx + 16, cy − 16, …)` **is** true (and for the top-left corner too, inverting `:76`), while `rotationHandleHit(kind, cx + 4, cy − 4, …)` (inside the 8px corner-handle radius) is **false**, so corner resize still wins.
-- **Sabotage:** restore `frameRotationHandle`'s single top-right point and the top-right-only ring → the top-left/bottom-left/bottom-right assertions go red, while the "corner resize wins" assertion stays green (proving the test discriminates rather than just asserting true).
-
-**T3c — auto-gap drag is no longer inert (pairs with P4).**
-**File:** `apps/web/src/engine/__tests__/autoLayoutEdgeCases.test.mjs` *(extend)*
-- Build a horizontal auto-layout frame with `gapMode: "auto"`, `spacing: "between"`, three children; dispatch the exact command the canvas drag produces (`{type:"autoLayout", layout:{…, gap: 24}}`) and assert the **rendered** boxes: child 2's x minus child 1's right edge equals 24 (today it equals the auto spacing, so the assertion fails before the fix — sabotage: drop `gapMode: "fixed"` from the handler and it fails again).
-- Add the "any pair" assertion: with three children, simulate a press in the middle gap and assert an `autoGap` drag starts (today the press loop only offers pair 0–1).
-
----
-
-## 8. Confirmation of scope discipline
-
-1. **No visual UI change is requested anywhere in this report.** Every finding names a *gesture*, a *modifier*, a *hit test*, a *geometry computation* or *exported bytes*. Items whose only difference is chrome are listed in §5 (Category D) with "no action".
-2. **No new feature is proposed.** P1–P5 wire or correct code paths that already exist in this repository: `x-render`'s export sinks, `FONT_METRIC_RATIOS`/`fontMetricRatios`, the existing `gapMode`/`autoLayout` command, the existing corner-ring hit test, and the existing handle/mirror engine dispatches.
-3. **Behavior and output only.** Each Category A finding documents the input → reaction difference; each Category B finding documents the produced bytes/structure; each Category C finding documents logic that exists but is not reachable.
-4. **Evidence discipline.** Every claim carries a `file:line` reference verified at `9baf0cd`, and every Figma claim carries the article it came from. Where the documentation is ambiguous (`F11`), the finding is marked with a confidence level rather than asserted as certain.
-
----
-
-## 9. Appendix — documents consulted (Figma Learn, fetched 2026-10-04)
-
-| Article | Used for |
-|---|---|
-| [Edit vector layers](https://help.figma.com/hc/en-us/articles/360039957634-Edit-vector-layers) | Point editing, add points, Bend tool, Mirroring options, Cut tool, lasso, point bounding box (⇧ / ⌥ / ⇧-corner / Space) |
-| [Vector networks](https://help.figma.com/hc/en-us/articles/360040450213-Vector-networks) | Pen workflow, caps |
-| [Select layers and objects](https://help.figma.com/hc/en-us/articles/360040449873-Select-layers-and-objects) | Marquee semantics, ⌘/Ctrl for nested layers, "top-level … or inside a section" |
-| [Guide to auto layout](https://help.figma.com/hc/en-us/articles/360040451373-Guide-to-auto-layout-in-Figma) | Hug/Fill/Fixed, min/max, Ignore auto layout (⌃ Control / `S`), canvas shortcut table (⌥ / ⌥⇧ padding, ⇧ big nudge, double-click edge = hug, ⌥ double-click = fill), components-vs-instance table |
-| [Explore text properties](https://help.figma.com/hc/en-us/articles/360039956634-Explore-text-properties) | Auto line height = font's intrinsic line height; line-height shortcut |
-| [Adjust text dimensions and resizing](https://help.figma.com/hc/en-us/articles/27378154668951-Adjust-text-dimensions-and-resizing) | Single-click = auto width, drag = Fixed size; manual canvas resize ⇒ Fixed |
-| [Export formats and settings](https://help.figma.com/hc/en-us/articles/13402894554519-Export-formats-and-settings) | Per-format settings matrix, Ignore overlapping layers rules (incl. the slice special case), SVG/PDF at 1x, Outline text default, PDF/strokes notes |
-| [Shape tools](https://help.figma.com/hc/en-us/articles/360040450133-Shape-tools) | Double-click to enter object editing on shapes |
-| Related community/forum sources (linked inline) | Rotation affordance phrasing; Bend-tool modifier behavior |
-
-**Prior in-repo audits reconciled with this one:** `FIGMA_HELP_AUDIT_2026-10-04_45_CANVAS_VECTOR_PARITY.md` (rotation *paint* removal — respected here as correct; §D1), `FIGMA_HELP_AUDIT_2026-10-01_07_EXPORT_FORMATS.md` (PDF raster + bounding-box + SVG defaults — re-verified and carried forward as F2/F8/F9 and the note in §3), `AUTOLAYOUT_EDGE_CASES_*` and `TEXT_TYPOGRAPHY_*` (used as the regression suites the new tests extend).
+**Verification actually executed (sandbox limits stated honestly):**
+- `npx tsc -b` in `apps/web` → **0 errors**.
+- Full `npm test` chain (113 files — includes the three enabled sabotage pins *and* the neighbors at risk: `typography`, `autolayout`, `export24`, `pdfExport`, `rasterMetadata`, `exportPathway`, `exportSettings.dom`, `exportBulk`, `effects`, `parity` svg-round-trip, `wasm*`) → **exit 0**. Directly re-run counts during the fix: `exportBridgeContract 9/9`, `exportBleedParity 15/15`, `lineHeightMetrics 11/11`, `canvasSelection 118/118`, `figmaCanvasVectorParity 67/67`, `frameInteraction 67/67` (the last two after re-pinning them to the four-corner rotation contract; one `canvasSelection` probe point and one `frameInteraction` assertion encoded the old top-right-only rule and were updated as part of F3, not worked around).
+- `npm run build` (`tsc -b && vite build`) → **green, exit 0** (only the pre-existing >500 kB chunk-size advisory).
+- `cargo test --locked -p x-wasm` → **could not run in this sandbox**: no Rust toolchain is installed and the rustup/crates hosts are blocked by the network egress policy. The Rust changes are therefore review-audited (borrow/shape/type checks done by hand against the exact signatures in `x-render`), locked to the repo's contract by the static pins that *do* run in `npm test`, and covered by the byte-equality + envelope assertions written into `session.rs`'s test module for the first `cargo test` run (CI or any machine with the toolchain). Manual sanity the sandbox *could* do: `Cargo.lock` was hand-updated to the exact list cargo would generate for the new `x-wasm` deps (`getrandom`, `kurbo`, `x-render`), keeping `--locked` viable; every new dependency version matches an existing lock entry (kurbo 0.13.1, getrandom 0.4.3, x-render workspace member) — no resolution changes. The wasm bundle now transitively compiles `x-render` (pure-CPU tiny-skia/png/jpeg paths only; `getrandom` gets its `wasm_js` backend via the existing target-dependency section), so `scripts/build-wasm.sh` needs the same toolchain and will be the next gate to exercise.
+- The graceful-degradation contract is kept end-to-end: no `.wasm` present → `initWasmBridge()` resolves false → every export behaves exactly as the canvas-fallback suite tests it; a `.wasm` present but answering with wrong bytes → magic validation → still the canvas path; text-bearing layers on a wasm build → refused by the bridge *and* pre-gated by `buildExportXDoc` → canvas path.

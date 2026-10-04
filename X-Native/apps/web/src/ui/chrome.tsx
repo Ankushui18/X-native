@@ -40,7 +40,7 @@ import { dismissSelectedConnection } from "./connSelection";
 import { CANVAS_CHROME_OPTIONS, THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align, PRESET_GROUPS } from "./inspector";
-import { hugSize } from "./textLayout";
+import { hugSize, effectiveLineHeight } from "./textLayout";
 import { stepZoom, viewportCentreWorld, zoomAboutCentre, zoomTo, zoomToRect } from "./zoom";
 import { roundToPixel } from "./round";
 import { readLocalCopy, saveLocalCopy } from "./localCopy";
@@ -2870,7 +2870,7 @@ export function bindHotkeys(
           e.preventDefault();
           const step = e.code === "Period" ? 1 : -1;
           if (e.shiftKey) {
-            const lineHeight = Math.max(1, Math.round(n.lineHeight || n.fontSize * 1.2) + step);
+            const lineHeight = Math.max(1, Math.round(n.lineHeight || effectiveLineHeight(n)) + step);
             engine.dispatch({ type: "patch", id, patch: { lineHeight } });
             rehugText(engine, id, { lineHeight });
           } else {

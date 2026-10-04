@@ -34,7 +34,7 @@ export interface WasmDocumentSession {
   exportX: () => string;
   /** Phase 9: Export a node to PNG/JPG/PDF via Rust render pipeline.
    *  Returns JSON: `{ ok: true, bytes: "<base64>", width, height, format }` */
-  exportNode?: (id: string, format: string, scale: number) => string;
+  exportNode?: (id: string, format: string, scale: number, options: string) => string;
   /** Phase 9: Add a point to an existing vector segment. */
   vectorAddPoint?: (id: string, segmentIdx: number, x: number, y: number) => string;
   /** Phase 9: Convert a corner point to smooth or vice versa. */

@@ -102,7 +102,7 @@ import {
   wraps,
   type AlignCell,
 } from "../engine/layout";
-import { hugSize } from "./textLayout";
+import { effectiveLineHeight, hugSize } from "./textLayout";
 import { resolvedTextSpans, selectedTextRange, styleTextRange, type SpanStyle } from "./textSpans";
 import { hasRtlScript, directionOf } from "../engine/textInput";
 import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
@@ -120,6 +120,7 @@ import {
   FORMAT_CAPS,
   FORMATS,
   SCALE_PRESETS,
+  exportBleed,
   exportSize,
   extrasOf,
   formatScale,
@@ -3809,7 +3810,7 @@ function Design({
               <Field
                 label={n.lineHeight ? "↑" : "Auto"}
                 bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="lineHeight" onOpenVariables={onOpenVariables} />}
-                value={n.lineHeight || n.fontSize * 1.2}
+                value={n.lineHeight || Math.round(effectiveLineHeight(n) * 100) / 100}
                 onLabelClick={() => (multi ? patchTypeMany({ lineHeight: 0 }) : num("lineHeight", 0))}
                 onChange={(v) => num("lineHeight", v)}
                 mixed={mixedProp((m) => m.lineHeight, textTargets)}
@@ -4043,7 +4044,7 @@ function Design({
                     value={n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto")}
                     onChange={(e) => {
                       const u = e.target.value as XNode["lineHeightUnit"];
-                      const cur = n.lineHeight || n.fontSize * 1.2;
+                      const cur = n.lineHeight || effectiveLineHeight(n);
                       const val =
                         u === "auto" ? 0
                           : u === "percent" ? Math.round((cur / Math.max(1, n.fontSize)) * 100)
@@ -9305,8 +9306,12 @@ function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boo
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
   }
-  // Phase 9+: Rust pipeline (PNG/JPG/PDF) is primary; canvas.toBlob is fallback.
-  void tryWasmExport(n, p, scope, name, width, height, box).then((handled) => {
+  // Phase 9+: Rust pipeline (PNG/JPG/PDF) is primary; canvas.toBlob is the
+  // fallback for anything the bridge refuses - and now also for anything the
+  // bridge answers with bytes that are not the requested file, since
+  // `wasmExportNode` validates before it resolves.
+  const bleed = box ? { l: 0, t: 0, r: 0, b: 0 } : exportBleed(n);
+  void tryWasmExport(n, p, scope, name, width, height, box, settings, bleed).then((handled) => {
     if (!handled) canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
   });
 }
@@ -9321,6 +9326,8 @@ async function tryWasmExport(
   _width: number,
   _height: number,
   box: { w: number; h: number } | null,
+  settings: ReturnType<typeof resolveSettings>,
+  bleed: { l: number; t: number; r: number; b: number },
 ): Promise<boolean> {
   try {
     const { wasmExportNode, buildExportXDoc } = await import("../engine/wasmExport");
@@ -9328,7 +9335,12 @@ async function tryWasmExport(
     if (!xDoc) return false;
     const scale = typeof p.scale === "number" ? p.scale : 1;
     const format = p.format.toLowerCase() as "png" | "jpg" | "pdf";
-    const result = await wasmExportNode(xDoc, n.id, format, scale);
+    // The documented per-format settings travel with the call (13402894554519:
+    // Image quality for JPG/PDF), and the effect/stroke bleed so the Rust page
+    // matches `exportSize` - the two tiers export the same box or the file
+    // disagrees with the panel.
+    const quality = Math.round(qualityValue(settings.quality) * 100);
+    const result = await wasmExportNode(xDoc, n.id, format, scale, { quality, bleed });
     if (!result) return false;
     const mime = format === "jpg" ? "image/jpeg" : format === "pdf" ? "application/pdf" : "image/png";
     downloadBlob(new Blob([new Uint8Array(result.bytes)], { type: mime }), name);
@@ -9351,6 +9363,12 @@ function canvasExportPath(
   settings: ReturnType<typeof resolveSettings>,
   box: { w: number; h: number } | null,
 ) {
+  // The DESIGN-space box the raster pixels cover: `exportSize` already grew
+  // it by the effect/stroke bleed, and the DPI stamp and the PDF page must
+  // divide the same box or a 2x export would stamp itself at 2x + margin.
+  const bleed = box ? { l: 0, t: 0, r: 0, b: 0 } : exportBleed(n);
+  const designW = Math.max(1, (box?.w ?? n.w) + bleed.l + bleed.r);
+  const designH = Math.max(1, (box?.h ?? n.h) + bleed.t + bleed.b);
   const image = new Image();
   image.onload = () => {
     const c = document.createElement("canvas");
@@ -9403,8 +9421,8 @@ function canvasExportPath(
             rgba,
             width,
             height,
-            Math.max(1, box?.w ?? n.w),
-            Math.max(1, box?.h ?? n.h),
+            designW,
+            designH,
             n.name,
             new Uint8Array(bytes),
           ))
@@ -9416,7 +9434,7 @@ function canvasExportPath(
     c.toBlob(
       (blob) => {
         if (!blob) return;
-        void setRasterExportDpi(blob, p.format as "PNG" | "JPG", width / Math.max(1, box?.w ?? n.w))
+        void setRasterExportDpi(blob, p.format as "PNG" | "JPG", width / designW)
           .then((tagged) => downloadBlob(tagged, name))
           .catch(() => toast("Could not prepare the raster export"));
       },

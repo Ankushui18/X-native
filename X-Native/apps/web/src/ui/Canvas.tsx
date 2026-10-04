@@ -355,6 +355,7 @@ type Drag =
       moved?: boolean;
       origPad?: [number, number, number, number];
       origGap?: number;
+      gapAxis?: "gap" | "gapCross";
       /** Smart-selection gap handle drag: the live gap value and the pointer
        *  position the drag started from (both world coordinates). */
       smartGap?: number;
@@ -3629,9 +3630,9 @@ export function Canvas({
       if (lockedSel) hs = [];
       // Handle style matches Figma: hollow white squares with a 1px outline
       // in the selection accent. Frames/components/instances get the full 8
-      // (4 corners + 4 mid-edges) plus a top-right rotation target stem; plain
-      // shapes only show the 4 corners (the rotation target sits outside the
-      // top-right corner as a separate dot with no stem — hit-tested below).
+      // (4 corners + 4 mid-edges); plain shapes show the 4 corners. Nothing
+      // is painted for rotation — the ring at the corners of the bounds is a
+      // cursor-only affordance, hit-tested below (Figma draws no handle).
       for (const [hx, hy] of hs) {
         const isCorner =
           (Math.abs(hx - sx) < 1 || Math.abs(hx - (sx + sw)) < 1) &&
@@ -3906,7 +3907,6 @@ export function Canvas({
       if (wp.node.layout) {
         const l = wp.node.layout;
         const [pl, pr, pt, pb] = l.padding;
-        const horiz = l.direction === "horizontal";
         ctx.save();
         ctx.fillStyle = "rgba(255, 45, 85, 0.14)";
         const band = (bx: number, by: number, bw: number, bh: number) => {
@@ -3917,40 +3917,17 @@ export function Canvas({
         band(sx, sy + pt * z, pl * z, Math.max(0, sh - (pt + pb) * z));
         band(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, sh - (pt + pb) * z));
 
-        // Gap band between each pair of flowed children. In a wrapping flow the
-        // pairs that straddle a line break are skipped, and the space between
-        // the lines gets a band of its own, spanning the frame's inner size.
-        const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
-        const wrapped = wraps(l);
-        for (let i = 1; i < flowKids.length; i++) {
-          const a = flowKids[i - 1];
-          const b = flowKids[i];
-          if (wrapped && Math.abs((horiz ? a.y - b.y : a.x - b.x)) >= 0.5) continue;
-          if (horiz) {
-            const x0 = sx + (a.x + a.w) * z;
-            const x1 = sx + b.x * z;
-            band(x0, sy + (b.y || 0) * z, (x1 - x0) || l.gap * z, Math.max(2, b.h * z));
-          } else {
-            const y0 = sy + (a.y + a.h) * z;
-            const y1 = sy + b.y * z;
-            band(sx + (b.x || 0) * z, y0, Math.max(2, b.w * z), (y1 - y0) || l.gap * z);
-          }
-        }
-        if (wrapped && flowKids.length >= 2) {
-          const lines = flowWrapLines(flowKids, horiz);
-          for (let i = 1; i < lines.length; i++) {
-            const prev = lines[i - 1];
-            const cur = lines[i];
-            if (horiz) {
-              const y0 = Math.max(...prev.map((c) => c.y + c.h));
-              const y1 = Math.min(...cur.map((c) => c.y));
-              band(sx + pl * z, sy + y0 * z, Math.max(0, sw - (pl + pr) * z), Math.max(0, (y1 - y0) * z));
-            } else {
-              const x0 = Math.max(...prev.map((c) => c.x + c.w));
-              const x1 = Math.min(...cur.map((c) => c.x));
-              band(sx + x0 * z, sy + pt * z, Math.max(0, (x1 - x0) * z), Math.max(0, sh - (pt + pb) * z));
-            }
-          }
+        // The gap bands are the SAME rectangles the hover cursor and the
+        // press measure (`autoGapPills`): every adjacent pair of flowed
+        // children, line-straddling pairs skipped in a wrapping flow, plus
+        // one band for the space between wrapped lines. Paint = hit target.
+        for (const pill of autoGapPills(wp.node)) {
+          band(
+            sx + pill.x0 * z,
+            sy + pill.y0 * z,
+            Math.max(2, (pill.x1 - pill.x0) * z),
+            Math.max(2, (pill.y1 - pill.y0) * z),
+          );
         }
         ctx.restore();
       }
@@ -6055,15 +6032,13 @@ export function Canvas({
             drag.current = { mode: "autoPad", padEdge: "right", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origPad: [...l.padding], padOpp: e.altKey, padAll: e.altKey && e.shiftKey, moved: false };
             return;
           }
-          const flowKids = wp.node.children.filter((c) => c.visible && !c.absolutePosition);
-          if (flowKids.length >= 2) {
-            const c0 = flowKids[0];
-            const horiz = l.direction === "horizontal";
-            const gx = horiz ? sx + (c0.x + c0.w + l.gap / 2) * z : sx + sw / 2;
-            const gy = horiz ? sy + sh / 2 : sy + (c0.y + c0.h + l.gap / 2) * z;
-            if (Math.hypot(px - gx, py - gy) < 8) {
+          for (const pill of autoGapPills(wp.node)) {
+            if (gapPillHit(pill, sx, sy, z, px, py)) {
               engine.dispatch({ type: "begin" });
-              drag.current = { mode: "autoGap", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origGap: l.gap };
+              // origGap seeds from the MEASURED pair distance, not `l.gap`:
+              // under Auto the numeric gap says nothing about what is on
+              // screen, and the first move must not teleport the spacing.
+              drag.current = { mode: "autoGap", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, origGap: pill.gap0, gapAxis: pill.axis };
               return;
             }
           }
@@ -6376,14 +6351,13 @@ export function Canvas({
             } else if (Math.hypot(hx - (sx0 + sw0 - pr * z), hy - (sy0 + sh0 / 2)) < 8) {
               next = "ew-resize";
             } else {
-              const flowKids = bb.node.children.filter((c) => c.visible && !c.absolutePosition);
-              if (flowKids.length >= 2) {
-                const c0 = flowKids[0];
-                const horiz = l.direction === "horizontal";
-                const gx = horiz ? sx0 + (c0.x + c0.w + l.gap / 2) * z : sx0 + sw0 / 2;
-                const gy = horiz ? sy0 + sh0 / 2 : sy0 + (c0.y + c0.h + l.gap / 2) * z;
-                if (Math.hypot(hx - gx, hy - gy) < 8) {
-                  next = horiz ? "col-resize" : "row-resize";
+              const horiz = l.direction === "horizontal";
+              for (const pill of autoGapPills(bb.node)) {
+                if (gapPillHit(pill, sx0, sy0, z, hx, hy)) {
+                  // The cursor points along the axis the drag changes: a line
+                  // gap drags across the flow, everything else along it.
+                  next = (pill.axis === "gap") === horiz ? "col-resize" : "row-resize";
+                  break;
                 }
               }
             }
@@ -7170,13 +7144,26 @@ export function Canvas({
       const wpt = toWorld(e.clientX, e.clientY);
       const wp = worldPos(snap.pages[snap.page].root, d.id);
       if (wp?.node.layout) {
-        const horiz = wp.node.layout.direction === "horizontal";
+        const l = wp.node.layout;
+        const horiz = l.direction === "horizontal";
+        const axis: "gap" | "gapCross" = d.gapAxis === "gapCross" ? "gapCross" : "gap";
         // ⇧ drags the gap in big-nudge steps, as it does for padding.
         const big = e.shiftKey && !e.altKey ? getNudgePrefs().big : 1;
         const ld = localDragDelta(wp, d.wx, d.wy, wpt.x, wpt.y);
-        const delta = Math.round(horiz ? ld.dx : ld.dy);
+        // A wrapped flow's line spacing moves ACROSS the flow direction.
+        const delta = Math.round(axis === "gap" ? (horiz ? ld.dx : ld.dy) : (horiz ? ld.dy : ld.dx));
         const nextGap = Math.max(0, Math.round((d.origGap + delta) / big) * big);
-        engine.dispatch({ type: "autoLayout", id: d.id, layout: { ...wp.node.layout, gap: nextGap } });
+        // Dragging an Auto spacing IS setting it: convert to a fixed number,
+        // or the layout pass would recompute `autoSpacing` from the free
+        // space and the drag would paint nothing (help 31289464393751 shows
+        // the pill carrying the computed value precisely so it can be
+        // grabbed into a number).
+        const nextLayout = {
+          ...l,
+          [axis]: nextGap,
+          ...(axis === "gap" && l.gapMode === "auto" ? { gapMode: "fixed" as const } : {}),
+        };
+        engine.dispatch({ type: "autoLayout", id: d.id, layout: nextLayout });
       }
     } else if (d.mode === "starRatio" && d.id) {
       const wpt = toWorld(e.clientX, e.clientY);
@@ -10090,6 +10077,84 @@ function unrot(px: number, py: number, cx: number, cy: number, deg: number) {
  *  drag go through the placement (own rotation/flip plus any rotated or flipped
  *  ancestor, since `wp` comes from `worldPlacement`), so "drag right" means
  *  "along the layer's +x" wherever the layer sits. */
+/** One canvas gap control of a flow frame, in the node's LOCAL space: the
+ *  rect the band paints plus the measured spacing it carries. */
+type GapPill = { axis: "gap" | "gapCross"; gap0: number; x0: number; y0: number; x1: number; y1: number };
+
+/** The gap pills of a flow frame — THE source for the painter, the hover
+ *  cursor and the press hit-test, in the node's local space.
+ *
+ *  Spacing pills exist for every consecutive pair of flowed children (and,
+ *  in a wrapping flow, for the space between the lines — that one drags
+ *  `gapCross`); pairs that straddle a line break have no pill. A painted
+ *  band that cannot be grabbed is the bug this table exists to prevent:
+ *  paint, cursor and press all iterate it, so they cannot diverge again.
+ *  Grid flows keep their inspector spacing — no canvas pills, no bands. */
+function autoGapPills(node: XNode): GapPill[] {
+  const l = node.layout;
+  if (!l || l.direction === "grid") return [];
+  const horiz = l.direction === "horizontal";
+  const kids = node.children.filter((c) => c.visible && !c.absolutePosition);
+  const wrapped = wraps(l);
+  const pills: GapPill[] = [];
+  for (let i = 1; i < kids.length; i++) {
+    const a = kids[i - 1];
+    const b = kids[i];
+    if (wrapped && Math.abs((horiz ? a.y - b.y : a.x - b.x)) >= 0.5) continue;
+    if (horiz) {
+      const x = a.x + a.w;
+      pills.push({
+        axis: "gap",
+        gap0: Math.max(0, Math.round(b.x - x)),
+        x0: x,
+        x1: Math.max(x, b.x),
+        y0: (b.y || 0),
+        y1: (b.y || 0) + b.h,
+      });
+    } else {
+      const y = a.y + a.h;
+      pills.push({
+        axis: "gap",
+        gap0: Math.max(0, Math.round(b.y - y)),
+        x0: (b.x || 0),
+        x1: (b.x || 0) + b.w,
+        y0: y,
+        y1: Math.max(y, b.y),
+      });
+    }
+  }
+  if (wrapped && kids.length >= 2) {
+    const [pl, pr, pt, pb] = l.padding;
+    const lines = flowWrapLines(kids, horiz);
+    for (let i = 1; i < lines.length; i++) {
+      const prev = lines[i - 1];
+      const cur = lines[i];
+      if (horiz) {
+        const y0 = Math.max(...prev.map((c) => c.y + c.h));
+        const y1 = Math.min(...cur.map((c) => c.y));
+        pills.push({ axis: "gapCross", gap0: Math.max(0, Math.round(y1 - y0)), x0: pl, x1: Math.max(pl, node.w - pr), y0, y1: Math.max(y0, y1) });
+      } else {
+        const x0 = Math.max(...prev.map((c) => c.x + c.w));
+        const x1 = Math.min(...cur.map((c) => c.x));
+        pills.push({ axis: "gapCross", gap0: Math.max(0, Math.round(x1 - x0)), x0, x1: Math.max(x0, x1), y0: pt, y1: Math.max(pt, node.h - pb) });
+      }
+    }
+  }
+  return pills;
+}
+
+/** Point-in-pill, in screen px: the painted band, padded to a minimum grab
+ *  so a zero-gap flow still answers on the line between its children. */
+function gapPillHit(pill: GapPill, sx: number, sy: number, z: number, px: number, py: number): boolean {
+  const pad = 4;
+  return (
+    px >= sx + pill.x0 * z - pad &&
+    px <= sx + pill.x1 * z + pad &&
+    py >= sy + pill.y0 * z - pad &&
+    py <= sy + pill.y1 * z + pad
+  );
+}
+
 function localDragDelta(wp: { x: number; y: number; node: XNode }, fromX: number, fromY: number, toX: number, toY: number) {
   // Only the linear part: a hug frame grows (and its centre moves) while its
   // padding is dragged, so a point-based conversion would drift mid-drag.

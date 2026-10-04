@@ -20,7 +20,8 @@
 import type { ColorProfile, StrokeCap, XNode } from "./types";
 import { outlineStroke, outlineVariableStroke, shapePoly } from "./geometry";
 import { directionOf, fontFamilyStack } from "./textInput";
-import { applyTextCase, valignApplies } from "../ui/textLayout";
+import { exportBleed } from "../ui/exportModel";
+import { applyTextCase, effectiveLineHeight, valignApplies } from "../ui/textLayout";
 import { miterLimitFromAngle, paintedStrokeAlign, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
 import { patternPeriod, patternSettings, patternSourceNode } from "./pattern";
@@ -440,7 +441,9 @@ function textLayout(n: XNode): {
   }
   const anchor = n.textAlign === "center" ? "middle" : n.textAlign === "right" ? "end" : "start";
   const tx = n.textAlign === "center" ? n.w / 2 : n.textAlign === "right" ? n.w : 0;
-  const lineHeight = n.lineHeight || n.fontSize * 1.2;
+  // One resolver for the whole app: Auto is the font's own box (measured
+  // metrics), and the px/% unit is honored, not dropped.
+  const lineHeight = effectiveLineHeight(n);
   const blockHeight = lines.length * lineHeight;
   // Hug axes ignore vertical alignment, like the canvas painter.
   const valign = valignApplies(n) ? n.textAlignVertical : "top";
@@ -776,8 +779,14 @@ export function exportSvg(n: XNode, p: SvgPreset, scope?: SvgScope) {
     }
     return `${open(size.width, size.height, `${round(vx)} ${round(vy)} ${round(Math.max(1, n.w))} ${round(Math.max(1, n.h))}`)}${svgNode(container, true, opts)}</svg>`;
   }
-  const size = svgSize(n, p);
-  return `${open(size.width, size.height, `0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}`)}${svgNode(n, true, opts)}</svg>`;
+  // The exported area expands for shadow/blur/outside-stroke bleed, exactly
+  // like `exportSize` does, so the file contains the effect the exporter's
+  // own <filter> paints instead of clipping it at the box.
+  const bl = exportBleed(n);
+  const vbw = Math.max(1, n.w + bl.l + bl.r);
+  const vbh = Math.max(1, n.h + bl.t + bl.b);
+  const size = svgSizeWH(vbw, vbh, p);
+  return `${open(size.width, size.height, `${round(-bl.l)} ${round(-bl.t)} ${round(vbw)} ${round(vbh)}`)}${svgNode(n, true, opts)}</svg>`;
 }
 
 /**

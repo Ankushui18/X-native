@@ -448,7 +448,7 @@ export class RustSessionClient {
     if (!binding.exportNode) {
       throw new Error("Rust export not available in this bridge version");
     }
-    const raw = this.native("exportNode", () => binding.exportNode!(id, format, scale));
+    const raw = this.native("exportNode", () => binding.exportNode!(id, format, scale, "{}"));
     const result = JSON.parse(raw) as { ok: boolean; bytes?: string; width?: number; height?: number; format?: string; error?: string };
     if (!result.ok || !result.bytes) {
       throw new Error(result.error ?? "Rust export failed");

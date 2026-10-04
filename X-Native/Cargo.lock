@@ -1997,6 +1997,8 @@ dependencies = [
 name = "x-wasm"
 version = "0.34.0"
 dependencies = [
+ "getrandom",
+ "kurbo",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -2004,6 +2006,7 @@ dependencies = [
  "x-core",
  "x-editor",
  "x-format",
+ "x-render",
 ]
 
 [[package]]

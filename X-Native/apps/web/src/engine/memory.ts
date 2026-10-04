@@ -38,6 +38,7 @@ import { clipPlainText, copyText, nativeClipHtml, writeClipboard } from "./clipb
 import { dehydrateNode } from "./assets";
 import { computeMasterHash } from "./codegen";
 import { exportClipSvg, exportSvg } from "./svgExport";
+import { effectiveLineHeight } from "../ui/textLayout";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
 import { convertColorValue, convertNodeColors, getPreferredColorProfile } from "./colorProfile";
@@ -494,7 +495,7 @@ const MEMBER_REFUSED_KEYS = new Set([
  * component. Stored as a fragment and merged over the master's layout at sync,
  * so a master direction change still flows to instances that overrode padding.
  */
-const LAYOUT_SPACING_KEYS = ["padding", "gap", "gapCross", "gapRows", "gapCols"] as const;
+const LAYOUT_SPACING_KEYS = ["padding", "gap", "gapCross", "gapRows", "gapCols", "gapMode"] as const;
 function layoutSpacingFragment(l: Partial<AutoLayout> | null | undefined): Partial<AutoLayout> | null {
   if (!l) return null;
   const frag: Partial<AutoLayout> = {};
@@ -1952,7 +1953,7 @@ export class MemoryEngine implements Engine {
     const root = this.root();
     const parent = findParent(root, n.id);
     if (!parent || isEffectivelyLocked(root, n.id) || isInstanceMember(root, n.id)) return;
-    const results = convertTextToGlyphPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || 400), n.letterSpacing, n.lineHeight || n.fontSize * 1.2);
+    const results = convertTextToGlyphPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || 400), n.letterSpacing, effectiveLineHeight(n));
     // Empty/whitespace-only text has no drawable glyphs; don't destroy it.
     if (!results.length) return;
     // Replacing one flow item with N siblings would introduce N layout gaps.

@@ -27,7 +27,8 @@
  *   - move `paintPixelGrid()` back above the layer tree   -> A1 fails
  *   - paint the grid after the chrome (never called)      -> A2 fails
  *   - repaint the rotation handle at the band               -> B1, B11 fail
- *   - widen `ROTATION_HANDLE_HIT` past the constant         -> B7, B8 fail
+ *   - widen the ring past ROTATION_RING's constants          -> B7, B8 fail
+ *   - arm only the top-right corner again (pre-F3 build)     -> B0, B7, B12 fail
  *   - bold the selected frame's label again                 -> M1, M3 fail
  *   - shrink the container handles back to 7px              -> M4, M5 fail
  *   - shrink the multi-selection boxes back to 5px          -> M8 fails
@@ -46,7 +47,7 @@ import { installDom } from "./domEnv.mjs";
 import { MemoryEngine, node, find, localToWorld } from "../../engine/memory.ts";
 import { pathToVectorNetwork } from "../../engine/geometry.ts";
 import { effectiveMirrorMode, anchorIndexAt, addPointTargetAt, VERTEX_PRIORITY_PX, ADD_POINT_TOL_PX } from "../vectorEdit.ts";
-import { frameRotationHandle, rotationHandleHit, ROTATION_HANDLE_HIT, ROTATION_RING } from "../canvasSelection.ts";
+import { rotationHandleHit, ROTATION_RING } from "../canvasSelection.ts";
 
 let pass = 0, fail = 0;
 const t = (name, ok, detail = "") => {
@@ -210,21 +211,26 @@ const tri = [
   const ui = await mount([frame]);
   await ui.dispatch({ type: "select", ids: [frame.id] });
   // zoom 1 / pan 0, so the test's "screen" and world coordinates coincide.
-  const handle = frameRotationHandle("frame", 100, 100, 300, 200);
-  t("B0 the grab band is centred above the top-right corner, not top-centre",
-    near(handle.x, 400) && near(handle.y, 80) && !near(handle.x, 100 + 150), JSON.stringify(handle));
+  // Every corner of the bounds arms the invisible band ("one of the layer's
+  // bounds", 360039956914) — top-centre never did, and top-right ONLY no
+  // longer does either: the ring below is measured at all four corners.
+  const corners = [[100, 100], [400, 100], [400, 300], [100, 300]];
+  const handle = { x: 400, y: 100 }; // the top-right corner itself, for the paint probes
+  t("B0 the grab band arms at all four corners, none of them top-centre",
+    corners.every(([cx, cy]) => rotationHandleHit("frame", cx - 14, cy - 14, 100, 100, 300, 200))
+    && !rotationHandleHit("frame", 250, 86, 100, 100, 300, 200));
   /** Arcs inside the band: the 5px dot, its 8px halo, the 2.2px glyph and the
    *  non-frame ring all used to live here. Every one of them is the regression
    *  this pins, so the filter is on position, not on a radius someone could
    *  re-tune to slip past it. */
   const arcsInBand = () => ui.ops().filter((o) =>
-    o.op === "arc" && Math.hypot(o.args[0] - handle.x, o.args[1] - handle.y) <= 26);
+    o.op === "arc" && corners.some(([cx, cy]) => Math.hypot(o.args[0] - cx, o.args[1] - cy) <= 26));
   t("B1 a selected frame paints nothing at its rotation target", arcsInBand().length === 0,
     `${arcsInBand().length} arc(s) in the band`);
   t("B2 and no stem joins the corner to the target",
     !ui.ops().some((o) => o.op === "lineTo" && near(o.args[0], handle.x, 0.01) && near(o.args[1], handle.y, 0.01)));
   const rotateCursor = () => ui.surface.style.cursor;
-  await ui.mouse("mousemove", handle.x, handle.y);
+  await ui.mouse("mousemove", 400 + 12, 100 - 12);
   t("B3 hovering the band paints nothing either", arcsInBand().length === 0);
   t("B4 the hover is sold by the cursor alone", rotateCursor().includes("url("), rotateCursor().slice(0, 28));
   ops = [];
@@ -234,12 +240,15 @@ const tri = [
   // The band stays exactly as wide as the module says, because the press and the
   // cursor read the same number; with no handle to look at, that is the only
   // promise left to keep.
-  t("B7 the band's half-width is the shared constant",
-    rotationHandleHit("frame", 400, 80 + ROTATION_HANDLE_HIT, 100, 100, 300, 200) === true
-    && rotationHandleHit("frame", 400, 80 + ROTATION_HANDLE_HIT + 1, 100, 100, 300, 200) === false);
+  t("B7 the ring's edges are the shared constants, at every corner",
+    corners.every(([cx, cy]) =>
+      rotationHandleHit("frame", cx + (ROTATION_RING.min - 1) * (cx < 250 ? -1 : 1), cy, 100, 100, 300, 200) === false
+      && rotationHandleHit("frame", cx + ROTATION_RING.min * (cx < 250 ? -1 : 1), cy, 100, 100, 300, 200) === true
+      && rotationHandleHit("frame", cx + ROTATION_RING.max * (cx < 250 ? -1 : 1), cy, 100, 100, 300, 200) === true
+      && rotationHandleHit("frame", cx + (ROTATION_RING.max + 1) * (cx < 250 ? -1 : 1), cy, 100, 100, 300, 200) === false));
   t("B8 a press inside the band rotates", (() => {
     const before = ui.node(frame.id).rotation;
-    return before === 0 && rotationHandleHit("frame", 400 - 6, 84, 100, 100, 300, 200);
+    return before === 0 && rotationHandleHit("frame", 400 - 6, 100 - 16, 100, 100, 300, 200);
   })());
   // The chrome cannot come back through a new export either: there is no
   // handle radius left for a painter to draw with.
@@ -263,6 +272,7 @@ const tri = [
     `${ringArcs.length} arc(s)`);
   t("B12 its corner band is the one the press uses",
     rotationHandleHit("rect", 400 - 14, 100 - 14, 100, 100, 300, 200) === true
+    && rotationHandleHit("rect", 100 - 14, 100 - 14, 100, 100, 300, 200) === true
     && rotationHandleHit("rect", 400 - (near.max + 1), 100 - (near.max + 1), 100, 100, 300, 200) === false);
   await ui.close();
 }

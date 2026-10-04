@@ -333,49 +333,149 @@ impl CommandBridge {
         save_x(&self.session.snapshot())
     }
 
-    /// Phase 9: Raster/PDF export of a single node through the Rust render
-    /// pipeline. Returns a JSON envelope `{ "ok": true, "bytes": "<base64>",
-    /// "width": N, "height": N, "format": "png"|"jpg"|"pdf" }`. The TS caller
-    /// decodes the base64 into a downloadable Blob — never the lossy
-    /// canvas.toDataURL path.
-    pub fn export_node(&self, id: &str, format: &str, scale: f64) -> Result<String, String> {
+    /// Phase 9: raster/PDF export of a single node — the SAME real render
+    /// pipeline the desktop app exports with (`x-render`: `build_render_tree_of`
+    /// for the tree, tiny-skia + `png`/`jpeg-encoder` for rasters, the vector
+    /// PDF writer for PDFs). The hand-painted flat-colour stubs that used to
+    /// live here produced files the canvas never showed - rounded corners,
+    /// strokes and children simply were not in them - so they are gone.
+    ///
+    /// `options` is the TS caller's JSON payload:
+    /// `{ "quality": 0..=100 (JPG), "bleed": { "l", "t", "r", "b" } }`.
+    /// The bleed is the export-area expansion Figma's files contain for
+    /// shadows/blur/outside strokes; the web side computes the same per-side
+    /// margins in `exportBleed`, and taking them from the caller is what
+    /// keeps the two tiers byte-identical in framing. Anything the bundle
+    /// cannot paint faithfully (glyph runs - there is no font manager in
+    /// wasm) is REFUSED so the caller degrades to the canvas path rather
+    /// than downloading a wrong file.
+    ///
+    /// Returns the JSON envelope `{ "ok": true, "bytes": "<base64>",
+    /// "width": N, "height": N, "format": "png"|"jpg"|"pdf" }`; the TS caller
+    /// validates the bytes' magic before trusting it.
+    pub fn export_node(
+        &self,
+        id: &str,
+        format: &str,
+        scale: f64,
+        options: &str,
+    ) -> Result<String, String> {
         if !scale.is_finite() || scale <= 0.0 || scale > 64.0 {
             return Err("export scale must be a finite number between 0 and 64".into());
         }
+        if !matches!(format, "png" | "jpg" | "jpeg" | "pdf") {
+            return Err(format!("unsupported export format: {format}"));
+        }
         let snapshot = self.session.snapshot();
-        // Find the node anywhere in the document
-        let node = snapshot
+        let page = snapshot
             .pages
             .iter()
-            .find_map(|page| find_node(page, id))
+            .find(|p| find_node(p, id).is_some())
             .ok_or_else(|| format!("node '{id}' not found"))?;
-        let (w, h) = (node.w.max(1.0), node.h.max(1.0));
-        match format {
-            "png" => {
-                let (bytes, pw, ph) = encode_node_png(node, w, h, scale);
-                let b64 = x_format::base64(&bytes);
-                Ok(format!(
-                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"png"}}"#
-                ))
-            }
-            "jpg" | "jpeg" => {
-                let (bytes, pw, ph) = encode_node_jpg(node, w, h, scale);
-                let b64 = x_format::base64(&bytes);
-                Ok(format!(
-                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"jpg"}}"#
-                ))
-            }
-            "pdf" => {
-                let bytes = encode_node_pdf(node, w, h);
-                let b64 = x_format::base64(&bytes);
-                let pw = w as u32;
-                let ph = h as u32;
-                Ok(format!(
-                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"pdf"}}"#
-                ))
-            }
-            _ => Err(format!("unsupported export format: {format}")),
+        let node = find_node(page, id).ok_or_else(|| format!("node '{id}' not found"))?;
+        let mut tree = x_render::build_render_tree_of(page, id, &snapshot.variables)
+            .ok_or_else(|| format!("node '{id}' not found"))?;
+        // A frame's name is canvas chrome, never exported artwork - strip it
+        // before the bounds pass, exactly like the desktop plan builder, so a
+        // label inflates neither the content nor the page.
+        tree.commands
+            .retain(|c| !x_render::ir::is_frame_name_label(c.key()));
+        // No font manager ships in the wasm bundle: a tree that still carries
+        // glyph runs after the label strip would rasterize wrong, so refuse
+        // it and let the caller fall back (graceful degradation, not guessing).
+        if tree
+            .commands
+            .iter()
+            .any(|c| matches!(c, x_render::RenderCommand::Glyphs { .. }))
+        {
+            return Err("wasm export has no font manager; export text layers via the canvas path".into());
         }
+        // Out-of-band strokes become filled geometry, so a stroke's reach is
+        // part of the page bounds, not painted off the edge of the canvas.
+        x_render::text_geometry::outline_strokes(&mut tree);
+        // Page = the node box, grown by every command's actual reach and by
+        // the caller's per-side margins (the same 1.5x-blur convention
+        // x-render inflates its clip bounds with, computed once in TS).
+        let (mut x0, mut y0, mut x1, mut y1) = (0.0f64, 0.0f64, node.w.max(1.0), node.h.max(1.0));
+        {
+            use x_render::RenderCommand as Cmd;
+            for command in &tree.commands {
+                let r = match command {
+                    Cmd::FillPath { path, transform, .. }
+                    | Cmd::StrokePath { path, transform, .. } => {
+                        Some(transform.transform_rect_bbox(path.bounding_box()))
+                    }
+                    Cmd::Image {
+                        transform, w, h, rotation, ..
+                    } => {
+                        let t = *transform
+                            * kurbo::Affine::translate((*w / 2.0, *h / 2.0))
+                            * kurbo::Affine::rotate(rotation.to_radians())
+                            * kurbo::Affine::translate((-*w / 2.0, -*h / 2.0));
+                        Some(t.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, *w, *h)))
+                    }
+                    _ => None,
+                };
+                if let Some(r) = r {
+                    if [r.x0, r.y0, r.x1, r.y1].iter().all(|n| n.is_finite()) {
+                        x0 = x0.min(r.x0);
+                        y0 = y0.min(r.y0);
+                        x1 = x1.max(r.x1);
+                        y1 = y1.max(r.y1);
+                    }
+                }
+            }
+        }
+        let (bl, bt, br, bb) = export_bleed(options);
+        x0 -= bl;
+        y0 -= bt;
+        x1 += br;
+        y1 += bb;
+        let (pw, ph) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
+        if !(pw.is_finite() && ph.is_finite()) || pw > 100_000.0 || ph > 100_000.0 {
+            return Err("export page is too large or non-finite".into());
+        }
+        // Re-origin to (0, 0) after sizing, so the bleed margin lands on the
+        // top/left exactly as the viewBox's negative origin does in the SVG.
+        let shift = kurbo::Affine::translate((-x0, -y0));
+        {
+            use x_render::RenderCommand as Cmd;
+            for command in &mut tree.commands {
+                match command {
+                    Cmd::FillPath { transform, .. }
+                    | Cmd::StrokePath { transform, .. }
+                    | Cmd::Image { transform, .. }
+                    | Cmd::PushClip { transform, .. } => *transform = shift * *transform,
+                    Cmd::PushLayer { bounds, .. } => *bounds = shift.transform_rect_bbox(*bounds),
+                    _ => {}
+                }
+            }
+        }
+        let (bytes, ow, oh) = if format == "pdf" {
+            let bytes = x_render::export_pdf(&tree, pw, ph);
+            (bytes, pw.round().max(1.0) as u32, ph.round().max(1.0) as u32)
+        } else {
+            let raster_format = if format == "png" {
+                x_render::RasterFormat::Png
+            } else {
+                x_render::RasterFormat::Jpg(export_quality(options))
+            };
+            // "Flatten to white" for JPEG, transparency for PNG - Figma's
+            // JPG contract, and what the canvas fallback already does.
+            let background = (format != "png").then(|| x_render::Color::from_rgb8(255, 255, 255));
+            x_render::export_raster(&tree, pw, ph, raster_format, scale, background, None, None)?
+        };
+        let b64 = x_format::base64(&bytes);
+        let tag = if format == "pdf" {
+            "pdf"
+        } else if format == "png" {
+            "png"
+        } else {
+            "jpg"
+        };
+        Ok(format!(
+            r#"{{"ok":true,"bytes":"{b64}","width":{ow},"height":{oh},"format":"{tag}"}}"#
+        ))
     }
 
     /// Phase 9: Add a point to an existing vector path segment. The point is
@@ -659,117 +759,34 @@ fn find_node<'a>(node: &'a x_core::Node, id: &str) -> Option<&'a x_core::Node> {
     None
 }
 
-fn node_rgba(node: &x_core::Node) -> [u8; 4] {
-    match &node.fill {
-        x_core::Paint::Solid(c) => {
-            let rgba = c.to_rgba8();
-            let a = (f32::from(rgba.a) * node.opacity).round() as u8;
-            [rgba.r, rgba.g, rgba.b, a]
-        }
-        _ => [0, 0, 0, 255],
-    }
+/// JPG quality from the caller's options JSON (Figma's Image quality,
+/// 0..=100). Anything unparseable degrades to the web default
+/// (`qualityValue` high = 0.92), it never fails the export.
+fn export_quality(options: &str) -> u8 {
+    serde_json::from_str::<Value>(options)
+        .ok()
+        .and_then(|v| v.get("quality").and_then(|q| q.as_f64()))
+        .filter(|q| q.is_finite())
+        .map(|q| (q.round() as i64).clamp(1, 100) as u8)
+        .unwrap_or(92)
 }
 
-fn png_crc32(tag: &[u8; 4], data: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in tag.iter().chain(data.iter()) {
-        crc ^= u32::from(b);
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
-        }
-    }
-    !crc
-}
-
-fn write_png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(tag);
-    out.extend_from_slice(data);
-    out.extend_from_slice(&png_crc32(tag, data).to_be_bytes());
-}
-
-fn encode_node_png(node: &x_core::Node, w: f64, h: f64, scale: f64) -> (Vec<u8>, u32, u32) {
-    let pw = ((w * scale).round() as u32).clamp(1, 4096);
-    let ph = ((h * scale).round() as u32).clamp(1, 4096);
-    let rgba = node_rgba(node);
-    let mut row = Vec::with_capacity(1 + (pw as usize) * 4);
-    row.push(0);
-    row.extend(rgba.repeat(pw as usize));
-    let raw = row.repeat(ph as usize);
-    let mut zlib = vec![0x78, 0x01];
-    let chunks: Vec<&[u8]> = raw.chunks(65_535).collect();
-    for (idx, chunk) in chunks.iter().enumerate() {
-        let last = u8::from(idx + 1 == chunks.len());
-        let len = chunk.len() as u16;
-        let nlen = !len;
-        zlib.push(last);
-        zlib.extend_from_slice(&len.to_le_bytes());
-        zlib.extend_from_slice(&nlen.to_le_bytes());
-        zlib.extend_from_slice(chunk);
-    }
-    let mut s1 = 1u32;
-    let mut s2 = 0u32;
-    for &b in &raw {
-        s1 = (s1 + u32::from(b)) % 65_521;
-        s2 = (s2 + s1) % 65_521;
-    }
-    let adler = (s2 << 16) | s1;
-    zlib.extend_from_slice(&adler.to_be_bytes());
-
-    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&pw.to_be_bytes());
-    ihdr.extend_from_slice(&ph.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-    write_png_chunk(&mut out, b"IHDR", &ihdr);
-    write_png_chunk(&mut out, b"IDAT", &zlib);
-    write_png_chunk(&mut out, b"IEND", &[]);
-    (out, pw, ph)
-}
-
-fn encode_node_jpg(node: &x_core::Node, w: f64, h: f64, scale: f64) -> (Vec<u8>, u32, u32) {
-    let pw = ((w * scale).round() as u32).clamp(1, 4096);
-    let ph = ((h * scale).round() as u32).clamp(1, 4096);
-    let rgba = node_rgba(node);
-    let mut out = Vec::with_capacity(64);
-    out.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]);
-    out.extend_from_slice(b"JFIF\0");
-    out.extend_from_slice(&[0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00]);
-    out.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x06]);
-    out.extend_from_slice(&rgba);
-    out.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
-    out.extend_from_slice(&(ph as u16).to_be_bytes());
-    out.extend_from_slice(&(pw as u16).to_be_bytes());
-    out.extend_from_slice(&[0x01, 0x01, 0x11, 0x00]);
-    out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00]);
-    out.extend_from_slice(&[0x00, 0x3F, 0x00, 0x00, 0xFF, 0xD9]);
-    (out, pw, ph)
-}
-
-fn encode_node_pdf(node: &x_core::Node, w: f64, h: f64) -> Vec<u8> {
-    let [r, g, b, _] = node_rgba(node);
-    let rf = f64::from(r) / 255.0;
-    let gf = f64::from(g) / 255.0;
-    let bf = f64::from(b) / 255.0;
-    let rgb = format!("{rf:.3} {gf:.3} {bf:.3}");
-    let stream = format!("{rgb} rg 0 0 {w:.2} {h:.2} re f\n");
-    let slen = stream.len();
-    let media = format!("/MediaBox [0 0 {w:.2} {h:.2}] ");
-    let len_hdr = format!("4 0 obj\n<< /Length {slen} >>\nstream\n");
-    let mut pdf = String::from("%PDF-1.4\n");
-    pdf.push_str("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
-    pdf.push_str("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n");
-    pdf.push_str("endobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R ");
-    pdf.push_str(&media);
-    pdf.push_str("/Contents 4 0 R >>\nendobj\n");
-    pdf.push_str(&len_hdr);
-    pdf.push_str(&stream);
-    pdf.push_str("endstream\nendobj\n");
-    pdf.push_str("xref\n0 5\n0000000000 65535 f \n");
-    pdf.push_str("trailer\n<< /Size 5 /Root 1 0 R >>\n");
-    pdf.push_str("startxref\n0\n%%EOF\n");
-    pdf.into_bytes()
+/// Per-side export margins from the caller's options JSON - the box
+/// `exportBleed` computed on the web side, so the wasm page and the fallback
+/// canvas frame the artwork identically. Garbage degrades to no margin.
+fn export_bleed(options: &str) -> (f64, f64, f64, f64) {
+    let side = |v: &Value, key: &str| -> f64 {
+        v.get(key)
+            .and_then(|n| n.as_f64())
+            .filter(|n| n.is_finite())
+            .map(|n| n.clamp(0.0, 100_000.0))
+            .unwrap_or(0.0)
+    };
+    serde_json::from_str::<Value>(options)
+        .ok()
+        .and_then(|v| v.get("bleed").cloned())
+        .map(|b| (side(&b, "l"), side(&b, "t"), side(&b, "r"), side(&b, "b")))
+        .unwrap_or((0.0, 0.0, 0.0, 0.0))
 }
 
 #[cfg(test)]
@@ -1098,65 +1115,181 @@ mod tests {
         assert_eq!(undone["node"], Value::Null);
     }
 
-    // Phase 9: export and vector editing tests
+    // Phase 9: the export bridge must emit the REAL pipeline's output
+    // (F1 of BEHAVIOR_OUTPUT_PARITY_AUDIT_2026-10-04.md). The old tests here
+    // asserted only magic bytes - which the flat-fill stubs satisfied by
+    // construction. These pin the output contract instead: bytes byte-equal
+    // to `x_render`'s own encoders for the same tree, caller bleed shaping
+    // the page, quality honored, text refused, junk options degraded
+    // gracefully.
 
-    #[test]
-    fn export_node_png_produces_valid_base64_png() {
-        let bridge = CommandBridge::open(&fixture()).unwrap();
-        let result = bridge.export_node("box", "png", 1.0).unwrap();
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["format"], "png");
-        let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        let bytes = x_format::debase64(bytes_b64).unwrap();
+    fn export_env(
+        bridge: &CommandBridge,
+        id: &str,
+        format: &str,
+        scale: f64,
+        options: &str,
+    ) -> Value {
+        let result = bridge.export_node(id, format, scale, options).unwrap();
+        serde_json::from_str(&result).unwrap()
+    }
+
+    fn envelope_bytes(env: &Value) -> Vec<u8> {
+        x_format::debase64(env["bytes"].as_str().unwrap()).unwrap()
+    }
+
+    fn png_dims(bytes: &[u8]) -> (u32, u32) {
         assert_eq!(&bytes[1..4], b"PNG", "valid PNG signature");
-        assert!(bytes.len() > 8);
+        (
+            u32::from_be_bytes(bytes[16..20].try_into().unwrap()),
+            u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
+        )
+    }
+
+    /// The reference form of the fixture box: node-local tree, labels
+    /// stripped, strokes outlined, 30x40 page. Whatever the bridge answers for
+    /// the same inputs must be byte-identical to this.
+    fn plan_box(format: &str, scale: f64) -> Vec<u8> {
+        let doc = load_x(&fixture()).unwrap();
+        let mut tree =
+            x_render::build_render_tree_of(&doc.pages[0], "box", &doc.variables).unwrap();
+        tree.commands
+            .retain(|c| !x_render::ir::is_frame_name_label(c.key()));
+        x_render::text_geometry::outline_strokes(&mut tree);
+        match format {
+            "png" | "jpg" | "jpeg" => {
+                let background =
+                    (format != "png").then(|| x_render::Color::from_rgb8(255, 255, 255));
+                let raster_format = if format == "png" {
+                    x_render::RasterFormat::Png
+                } else {
+                    x_render::RasterFormat::Jpg(92)
+                };
+                let (bytes, _w, _h) =
+                    x_render::export_raster(&tree, 30.0, 40.0, raster_format, scale, background, None, None)
+                        .unwrap();
+                bytes
+            }
+            _ => x_render::export_pdf(&tree, 30.0, 40.0),
+        }
     }
 
     #[test]
-    fn export_node_jpg_produces_valid_jpeg() {
+    fn export_node_png_is_the_real_pipeline_not_a_flat_fill() {
         let bridge = CommandBridge::open(&fixture()).unwrap();
-        let result = bridge.export_node("box", "jpg", 2.0).unwrap();
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["format"], "jpg");
-        let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        let bytes = x_format::debase64(bytes_b64).unwrap();
-        assert_eq!(&bytes[0..2], &[0xFF, 0xD8], "JPEG SOI marker");
+        let env = export_env(&bridge, "box", "png", 1.0, "{}");
+        assert_eq!(env["ok"], true);
+        assert_eq!(env["format"], "png");
+        let bytes = envelope_bytes(&env);
+        assert_eq!(
+            png_dims(&bytes),
+            (
+                env["width"].as_u64().unwrap() as u32,
+                env["height"].as_u64().unwrap() as u32
+            ),
+            "the envelope must describe the file it carries"
+        );
+        assert_eq!(
+            bytes,
+            plan_box("png", 1.0),
+            "the bridge must emit the encoder's bytes for the tree - the hand-rolled stub chunk writer never will"
+        );
     }
 
     #[test]
-    fn export_node_pdf_produces_valid_pdf() {
+    fn export_bleed_expands_the_page_like_the_web_export_size() {
         let bridge = CommandBridge::open(&fixture()).unwrap();
-        let result = bridge.export_node("box", "pdf", 1.0).unwrap();
-        let parsed: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["format"], "pdf");
-        let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        let bytes = x_format::debase64(bytes_b64).unwrap();
+        let env = export_env(
+            &bridge,
+            "box",
+            "png",
+            2.0,
+            r#"{"bleed":{"l":15,"t":11,"r":15,"b":19}}"#,
+        );
+        assert_eq!(env["width"], 120);
+        assert_eq!(env["height"], 140);
+        assert_eq!(png_dims(&envelope_bytes(&env)), (120, 140));
+    }
+
+    #[test]
+    fn export_node_jpg_is_a_real_jpeg_flattened_to_white() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let env = export_env(&bridge, "box", "jpg", 2.0, r#"{"quality":90}"#);
+        assert_eq!(env["format"], "jpg");
+        let bytes = envelope_bytes(&env);
+        assert_eq!(&bytes[0..3], &[0xFF, 0xD8, 0xFF], "JPEG SOI + marker");
+        assert_eq!(&bytes[bytes.len() - 2..], &[0xFF, 0xD9], "JPEG EOI");
+        // The stub was ~104 hand-painted bytes of marker soup with raw RGBA
+        // hidden in a COM comment; a real encoder at 60x80 is bigger AND
+        // decodable by the browser, which the marker layout never was.
+        assert!(bytes.len() > 150);
+    }
+
+    #[test]
+    fn export_node_pdf_carries_the_render_tree() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let env = export_env(&bridge, "box", "pdf", 1.0, "{}");
+        let bytes = envelope_bytes(&env);
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.starts_with("%PDF-1.4"));
+        assert!(text.starts_with("%PDF-1."));
         assert!(text.contains("%%EOF"));
+        assert_eq!(
+            bytes,
+            plan_box("pdf", 1.0),
+            "one flat rect is not an export; the vector writer's output for the tree is"
+        );
+    }
+
+    #[test]
+    fn export_node_refuses_text_it_cannot_shape() {
+        let doc = save_x(&Document {
+            pages: vec![Node::frame("page", 400.0, 300.0)
+                .child(Node::text("t", 10.0, 10.0, 100.0, 20.0, "hello"))],
+            ..Default::default()
+        });
+        let bridge = CommandBridge::open(&doc).unwrap();
+        // No font manager in the wasm bundle: refuse, and the caller falls
+        // back to the canvas path - never paint a text layer wrong.
+        assert!(bridge.export_node("t", "png", 1.0, "{}").is_err());
     }
 
     #[test]
     fn export_node_unknown_format_returns_error() {
         let bridge = CommandBridge::open(&fixture()).unwrap();
-        assert!(bridge.export_node("box", "gif", 1.0).is_err());
+        assert!(bridge.export_node("box", "gif", 1.0, "{}").is_err());
     }
 
     #[test]
     fn export_node_missing_id_returns_error() {
         let bridge = CommandBridge::open(&fixture()).unwrap();
-        assert!(bridge.export_node("nonexistent", "png", 1.0).is_err());
+        assert!(bridge.export_node("nonexistent", "png", 1.0, "{}").is_err());
     }
 
     #[test]
     fn export_node_invalid_scale_returns_error() {
         let bridge = CommandBridge::open(&fixture()).unwrap();
-        assert!(bridge.export_node("box", "png", 0.0).is_err());
-        assert!(bridge.export_node("box", "png", -1.0).is_err());
-        assert!(bridge.export_node("box", "png", f64::NAN).is_err());
+        assert!(bridge.export_node("box", "png", 0.0, "{}").is_err());
+        assert!(bridge.export_node("box", "png", -1.0, "{}").is_err());
+        assert!(bridge.export_node("box", "png", f64::NAN, "{}").is_err());
+    }
+
+    #[test]
+    fn junk_options_degrade_gracefully() {
+        let bridge = CommandBridge::open(&fixture()).unwrap();
+        let env = export_env(&bridge, "box", "jpg", 1.0, "not json");
+        assert_eq!(env["ok"], true);
+        let env = export_env(
+            &bridge,
+            "box",
+            "png",
+            1.0,
+            r#"{"bleed":{"l":-5,"t":1e99,"nope":1}}"#,
+        );
+        assert_eq!(
+            (env["width"].as_u64(), env["height"].as_u64()),
+            (Some(30), Some(40)),
+            "negative, infinite and unknown fields fall back to a tight page"
+        );
     }
 
     #[test]
