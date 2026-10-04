@@ -1152,13 +1152,7 @@ mod tests {
 
     #[test]
     fn rdp_simplify_removes_collinear_points() {
-        let points = vec![
-            (0.0, 0.0),
-            (1.0, 0.0),
-            (2.0, 0.0),
-            (3.0, 0.0),
-            (4.0, 0.0),
-        ];
+        let points = vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)];
         let simplified = super::rdp_simplify(&points, 0.5);
         assert_eq!(simplified.len(), 2); // Only endpoints survive
         assert_eq!(simplified[0], (0.0, 0.0));
