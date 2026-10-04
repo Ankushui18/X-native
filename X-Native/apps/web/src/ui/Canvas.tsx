@@ -14,7 +14,7 @@ import { worldPlacement as worldPos } from "../engine/memory";
 import { isPointBoxCorner, pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork, rotatePointNetwork, translatePointNetwork, type PointBounds } from "./pointBox";
 import { lassoSelectPathPoints, type LassoOperation } from "./vectorLasso";
 import { layersAt } from "./selectSame";
-import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit } from "./canvasSelection";
+import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit, ROTATION_HANDLE_RADIUS } from "./canvasSelection";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { resizeGroupMembers, rotateGroupMembers, rotateAboutOrigin, wrapRotationDeg } from "./scaleModel";
 import {
@@ -113,7 +113,7 @@ import {
   type ClipPayload,
 } from "../engine/clipboard";
 import { toast } from "./toast";
-import { bendReadiness } from "./vectorEdit";
+import { bendReadiness, BREAK_MIRROR_MODE, effectiveMirrorMode, anchorIndexAt, addPointTargetAt, ADD_POINT_TOL_PX, VERTEX_PRIORITY_PX } from "./vectorEdit";
 import { Icon } from "./icons";
 import { clampBadge, zoomAtPoint, zoomToRect } from "./zoom";
 import { modalOpen } from "./escape";
@@ -138,6 +138,68 @@ const ERASER_PX = 10;
 function effClosed(n: { path: unknown[]; closed?: boolean; kind?: string }): boolean {
   if (n.path.length) return !!n.closed;
   return n.kind !== "line" && n.kind !== "arrow";
+}
+
+/** What a "+" hover is pointing at: the node being edited and where the new
+ *  anchor would land, in that node's LOCAL space (so the painted marker rides
+ *  the node's own rotation/flip with it). */
+interface AddPointPreview {
+  id: string;
+  x: number;
+  y: number;
+  segIndex: number;
+}
+
+/**
+ * Kinds a double-click converts into an editable path — Figma's Enter gesture on
+ * a shape, where `rect`/`ellipse`/`poly`/`star` become a `vector` in place and a
+ * childless `boolean` is baked down first. The list has two readers: the entry
+ * itself, and the press-standing-on-an-anchor test that stops the selection box's
+ * edge sizing from stealing that gesture. One const, so they cannot drift.
+ */
+const PATH_ENTRY_KINDS: NodeKind[] = [
+  "vector", "boolean", "rect", "ellipse", "poly", "star", "line", "arrow",
+];
+/**
+ * The same set for the Pen tool's "+" hover. A `boolean` is left out because the
+ * pen's own click branch refuses it: the preview may never promise a wider set of
+ * layers than the click is willing to edit.
+ */
+const PEN_POINT_KINDS: NodeKind[] = [
+  "vector", "rect", "ellipse", "poly", "star", "line", "arrow",
+];
+
+/**
+ * Figma's "add an anchor to an existing path" hit rule, in one place.
+ *
+ * The preview and the click are two ends of the same gesture, so they measure it
+ * the same way: 10 screen px to the segment, a vertex inside the press's own grab
+ * radius (`VERTEX_PRIORITY_PX`, 8 in a point edit and 10 for the pen) outranks the
+ * insert, and a locked layer, an instance member or a branched network is refused
+ * because the click refuses it too — a "+" you cannot click is a lie.
+ */
+function vectorAddPointTarget(
+  root: XNode,
+  id: string,
+  local: { x: number; y: number },
+  zoom: number,
+  opts: { edited: boolean; vertexPx: number },
+): AddPointPreview | null {
+  const node = worldPos(root, id)?.node;
+  if (!node || node.locked || !node.visible) return null;
+  if (isEffectivelyLocked(root, node.id) || isInstanceMember(root, node.id)) return null;
+  if (!opts.edited) {
+    // The pen reaches an unedited path's segments the same way; a basic shape
+    // first converts to an editable path on the insert, exactly as it does on
+    // Enter, so it is armed too — but only for the kinds the click branch takes.
+    if (!PEN_POINT_KINDS.includes(node.kind)) return null;
+  }
+  // A branched/compound network's `path` is one run of it, so an insert there
+  // would drop the rest — and the click says so rather than drawing one.
+  if (topologyEditBlocked(node)) return null;
+  const pts = node.path.length ? node.path : shapePoly(node);
+  const at = addPointTargetAt(pts, local, effClosed(node), zoom, opts.vertexPx);
+  return at ? { id: node.id, ...at } : null;
 }
 /** RDP tolerance for freehand strokes, in screen pixels. */
 const PENCIL_TOLERANCE_PX = 2;
@@ -892,6 +954,13 @@ export function Canvas({
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
   /* Keeps the rotation origin out of the way until `⌥R` asks for it. */
   const [rotTarget, setRotTarget] = useState(false);
+  /** The pointer is inside the detached rotation target, so the handle paints
+   *  its hover state. Figma sells rotation with a cursor change plus an
+   *  emphasised target; one measurement drives both. */
+  const [rotHover, setRotHover] = useState(false);
+  /** Where a click would insert an anchor on the path under the pointer (Figma's
+   *  "+" pen state). Node-local coordinates, in the edited node's space. */
+  const [addPt, setAddPt] = useState<AddPointPreview | null>(null);
   /** An open padding entry, from clicking a handle on an auto layout frame. */
   const [padInput, setPadInput] = useState<{
     id: string;
@@ -1834,9 +1903,13 @@ export function Canvas({
     // read and a name you notice.
     const canvasLabel = readableLabel(themeLabel, pageFill || canvasBg, 4.5);
     const page = snap.pages[snap.page];
-    // Pixel grid paints from 400% up: below that it is grey
-    // noise rather than something you can align to.
-    if (page.pixelGrid && snap.zoom >= 4) {
+    // The pixel grid is a *view* overlay, not a layer, and Figma gives it a
+    // visibility floor: "only visible at zoom levels of 400% or higher", because
+    // below that it is grey noise rather than something you can align to. The
+    // call below is what makes it an overlay rather than a texture.
+    const paintPixelGrid = () => {
+      if (!page.pixelGrid || snap.zoom < 4) return;
+      ctx.save();
       ctx.strokeStyle = page.pixelGridColor || grid;
       ctx.lineWidth = 1;
       const step = snap.zoom;
@@ -1850,7 +1923,8 @@ export function Canvas({
         ctx.lineTo(w, y + 0.5);
       }
       ctx.stroke();
-    }
+      ctx.restore();
+    };
     const root = page.root;
     const z = snap.zoom;
     // `maskTile` marks the pass that paints a mask into its own offscreen tile,
@@ -2985,6 +3059,12 @@ export function Canvas({
       }
     }
 
+    // The document is on the canvas; the pixel grid goes over it. Everything
+    // below this line is editor chrome — names, hover outline, selection rings,
+    // point handles — and all of it stays above the grid, which is what makes
+    // the grid usable as an alignment reference instead of a texture.
+    paintPixelGrid();
+
     // A frame's name sits above its top-left corner at a constant 11px, so it
     // stays the same size as the canvas zooms. Selected or hovered, it takes
     // the accent colour indicating the name belongs to the frame you
@@ -3613,18 +3693,37 @@ export function Canvas({
         // implementation placed the handle at top-centre and drew a detached
         // arc glyph, which the tester called out as "rotation icon is in top
         // middle of frame and Figma has different style".
+        //
+        // `rotHover` is the other half of the parity: Figma tells you the target
+        // has you (cursor swap + emphasised affordance) before you press, and the
+        // state comes from the same `rotationHandleHit` measurement the press
+        // uses, so the highlight and the grab can never disagree.
+        const rHov = rotHover;
+        ctx.save();
         ctx.strokeStyle = accent;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = rHov ? 1.5 : 1;
         ctx.beginPath();
         ctx.moveTo(sx + sw, sy);
         ctx.lineTo(rotateHandle.x, rotateHandle.y);
         ctx.stroke();
-        // Hollow 9px dot with a 6px inner, stroked — Figma's rotation target.
+        if (rHov) {
+          // Halo first, so the dot sits on it.
+          ctx.beginPath();
+          ctx.arc(rotateHandle.x, rotateHandle.y, ROTATION_HANDLE_RADIUS + 3, 0, Math.PI * 2);
+          ctx.fillStyle = SEL_GLOW;
+          ctx.fill();
+        }
+        // Hollow 9px dot with a 6px inner, stroked — Figma's rotation target;
+        // hovered, it fills with the accent and the glyph flips to the ink.
         ctx.beginPath();
-        ctx.arc(rotateHandle.x, rotateHandle.y, 5, 0, Math.PI * 2);
-        ctx.fillStyle = HANDLE_FILL;
+        ctx.arc(rotateHandle.x, rotateHandle.y, ROTATION_HANDLE_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = rHov ? accent : HANDLE_FILL;
         ctx.fill();
         ctx.stroke();
+        const glyphInk = rHov ? INK : accent;
+        const prevFill = ctx.fillStyle;
+        ctx.strokeStyle = glyphInk;
+        ctx.fillStyle = glyphInk;
         // Tiny double-arrow glyph inside (∿-style arrows) to read as "rotate".
         ctx.beginPath();
         ctx.arc(rotateHandle.x - 1, rotateHandle.y, 2.2, Math.PI * 0.15, Math.PI * 1.15);
@@ -3634,14 +3733,26 @@ export function Canvas({
         ctx.lineTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15), rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15));
         ctx.lineTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15) + 1.5, rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15) - 1.5);
         ctx.stroke();
+        ctx.fillStyle = prevFill;
+        ctx.restore();
       } else if (!lockedSel && !isFrame && !isLine && !isVectorLike && !isText) {
         // Non-frame shapes: ring outside the top-right corner (no stem), hit
-        // at 8–24px by rotationHandleHit(). Matches Figma's shape rotate UX.
+        // at 8–24px by rotationHandleHit(). Matches Figma's shape rotate UX, and
+        // thickens on the same hover measurement the cursor uses.
+        ctx.save();
         ctx.strokeStyle = accent;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = rotHover ? 2 : 1;
         ctx.beginPath();
         ctx.arc(sx + sw, sy, 14, Math.PI * 0.6, Math.PI * 1.4);
         ctx.stroke();
+        if (rotHover) {
+          ctx.strokeStyle = SEL_GLOW;
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.arc(sx + sw, sy, 14, Math.PI * 0.6, Math.PI * 1.4);
+          ctx.stroke();
+        }
+        ctx.restore();
       }
       // Dynamic rotation angle readout badge when rotating
       const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
@@ -4172,6 +4283,48 @@ export function Canvas({
       ctx.restore();
     }
 
+    // Figma's insert preview: a + sitting exactly where the next click puts a
+    // new anchor. It is painted for whichever gesture is armed — point edit over
+    // a segment, or the pen over the selected path — from the one measurement the
+    // click itself uses, so what you see is where it lands. Drawn in the node's
+    // own rotated space, like the point overlay below it.
+    if (addPt) {
+      const awp = worldPos(root, addPt.id);
+      if (awp) {
+        const asw = awp.node.w * z;
+        const ash = awp.node.h * z;
+        const asx = snap.panX + awp.x * z;
+        const asy = snap.panY + awp.y * z;
+        ctx.save();
+        if (awp.node.rotation || awp.node.flipH || awp.node.flipV) {
+          ctx.translate(asx + asw / 2, asy + ash / 2);
+          if (awp.node.rotation) ctx.rotate((awp.node.rotation * Math.PI) / 180);
+          if (awp.node.flipH || awp.node.flipV) ctx.scale(awp.node.flipH ? -1 : 1, awp.node.flipV ? -1 : 1);
+          ctx.translate(-(asx + asw / 2), -(asy + ash / 2));
+        }
+        const ax = asx + addPt.x * z;
+        const ay = asy + addPt.y * z;
+        const arm = 4.5;
+        // A halo first, then the accent cross: the mark has to read on a dark
+        // fill as clearly as on the page.
+        ctx.lineCap = "round";
+        for (const [color, width] of [
+          [INK, 3.5],
+          [SEL, 1.75],
+        ] as const) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = width;
+          ctx.beginPath();
+          ctx.moveTo(ax - arm, ay);
+          ctx.lineTo(ax + arm, ay);
+          ctx.moveTo(ax, ay - arm);
+          ctx.lineTo(ax, ay + arm);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
     if (vecEdit) {
       const wp = worldPos(root, vecEdit);
       if (wp) {
@@ -4187,14 +4340,57 @@ export function Canvas({
           if (wp.node.flipH || wp.node.flipV) ctx.scale(wp.node.flipH ? -1 : 1, wp.node.flipV ? -1 : 1);
           ctx.translate(-(vsx + vsw / 2), -(vsy + vsh / 2));
         }
-        ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1;
         const vn = wp.node.vectorNetwork;
+        // ── Path skeleton (Figma's "centre line") ────────────────────────────
+        // The structure you are editing has to read as structure, not as the
+        // artwork: every edge draws over the shape in the selection hue, the
+        // edges *between two selected anchors* at full strength and 1.5px, the
+        // rest as a thinner, dimmed skeleton. Without it the network is invisible
+        // and segment selection has nothing to show; with both edges drawn alike
+        // there is no answer to "which of these would my click grab".
+        // Curved edges follow the cubic, so the skeleton is the path, not its chord.
+        // One definition of "selected" for the whole overlay — the same reading the
+        // anchor dots use two lines later, so an anchor never highlights without its
+        // edges highlighting. `vecPoints` is the multi-set, `vecPoint` the single
+        // selection, `vecPt.current` the point being dragged this frame.
+        const selNow = new Set<number>(
+          (snap.vecPoints && snap.vecPoints.length ? snap.vecPoints : vecPt.current >= 0 ? [vecPt.current] : []).concat(
+            snap.vecPoint != null ? [snap.vecPoint] : [],
+          ),
+        );
+        const skelCount = effClosed(wp.node) ? pts.length : pts.length - 1;
+        if (pts.length >= 2) {
+          for (let i = 0; i < skelCount; i++) {
+            const a = pts[i];
+            const b = pts[(i + 1) % pts.length];
+            const hot = selNow.has(i) && selNow.has((i + 1) % pts.length);
+            ctx.save();
+            ctx.strokeStyle = hot ? SEL : withAlpha(SEL, 0.45);
+            ctx.lineWidth = hot ? 1.5 : 1;
+            ctx.beginPath();
+            ctx.moveTo(snap.panX + (wp.x + a.x) * z, snap.panY + (wp.y + a.y) * z);
+            const curved = (a.ox || a.oy) && (b.ix || b.iy);
+            if (curved) {
+              ctx.bezierCurveTo(
+                snap.panX + (wp.x + a.x + (a.ox || 0)) * z,
+                snap.panY + (wp.y + a.y + (a.oy || 0)) * z,
+                snap.panX + (wp.x + b.x + (b.ix || 0)) * z,
+                snap.panY + (wp.y + b.y + (b.iy || 0)) * z,
+                snap.panX + (wp.x + b.x) * z,
+                snap.panY + (wp.y + b.y) * z,
+              );
+            } else {
+              ctx.lineTo(snap.panX + (wp.x + b.x) * z, snap.panY + (wp.y + b.y) * z);
+            }
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
         for (let i = 0; i < pts.length; i++) {
           const p = pts[i];
           const px = snap.panX + (wp.x + p.x) * z;
           const py = snap.panY + (wp.y + p.y) * z;
-          const isSelected = (snap.vecPoints && snap.vecPoints.includes(i)) || vecPt.current === i || snap.vecPoint === i;
+          const isSelected = selNow.has(i);
 
           // Bézier tangent handles: only show for selected vertices (or when dragging) to keep canvas clean
           if (isSelected) {
@@ -4266,31 +4462,6 @@ export function Canvas({
           }
         }
 
-        // Segment mid-point hover affordance (insert anchor hint)
-        if (cursorPos && !drag.current) {
-          const local = nodeLocalPoint(cursorPos.x, cursorPos.y, wp.x, wp.y, wp.node);
-          const npts = pts.length;
-          const count = effClosed(wp.node) ? npts : npts - 1;
-          for (let si = 0; si < count; si++) {
-            const p1 = pts[si];
-            const p2 = pts[(si + 1) % npts];
-            const pr = projectPointOnSegment(local.x, local.y, p1.x, p1.y, p2.x, p2.y);
-            if (pr.dist < 12 / snap.zoom && pr.t > 0.05 && pr.t < 0.95) {
-              const hx = snap.panX + (wp.x + pr.x) * z;
-              const hy = snap.panY + (wp.y + pr.y) * z;
-              ctx.save();
-              ctx.fillStyle = SEL;
-              ctx.strokeStyle = INK;
-              ctx.lineWidth = 1.5;
-              ctx.beginPath();
-              ctx.arc(hx, hy, 4, 0, Math.PI * 2);
-              ctx.fill();
-              ctx.stroke();
-              ctx.restore();
-              break;
-            }
-          }
-        }
         ctx.restore();
         const box = vecSubTool === "select" ? pointBox(root, vecEdit, snap.vecPoints ?? []) : null;
         if (box) {
@@ -4682,7 +4853,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel]);
+  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, rotHover, addPt, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -4988,79 +5159,44 @@ export function Canvas({
         }
       }
       // A branch is anchored on a vertex of the selected vector, so the pen can
-      // keep drawing in that shape instead of starting a second one.
-      // In vector edit, a pen click on the edited path inserts an anchor
-      // (Figma) instead of starting a second path — vertices still fall
-      // through to branch-drawing below.
-      if (vecEdit && !penBranch.current && !draft.length) {
-        const loc = worldPos(rootForPen, vecEdit);
-        if (loc && !loc.node.locked) {
-          const epts = loc.node.path.length ? loc.node.path : shapePoly(loc.node);
+      // keep drawing in that shape instead of starting a second one. Everywhere
+      // else on that shape's outline, a pen click adds an anchor to it (Figma),
+      // and inside a path edit it adds one to the path being edited.
+      //
+      // One measurement serves the "+" preview and this click —
+      // `vectorAddPointTarget` — so an affordance is never offered where the
+      // press would refuse to insert, and the anchor always lands on the point
+      // the preview showed. Vertices still fall through to branch-drawing below.
+      if (!penBranch.current && !draft.length) {
+        const targetId = vecEdit ?? (snap.selection.length === 1 ? snap.selection[0] : null);
+        const loc = targetId ? worldPos(rootForPen, targetId) : null;
+        if (targetId && loc) {
           const elocal = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, loc.node);
-          let onVertex = false;
-          for (const v of epts) {
-            if (Math.hypot(elocal.x - v.x, elocal.y - v.y) < 10 / snap.zoom) {
-              onVertex = true;
-              break;
-            }
-          }
-          if (!onVertex) {
-            const res = insertPointOnPath(epts, elocal.x, elocal.y, effClosed(loc.node), 10 / snap.zoom);
+          const over = vectorAddPointTarget(rootForPen, targetId, elocal, snap.zoom, {
+            edited: vecEdit === targetId,
+            vertexPx: vecEdit === targetId ? VERTEX_PRIORITY_PX.edit : VERTEX_PRIORITY_PX.pen,
+          });
+          if (over) {
+            if (!allowTopologyEdit(engine, targetId)) return;
+            const epts = loc.node.path.length ? loc.node.path : shapePoly(loc.node);
+            const res = insertPointOnPath(epts, elocal.x, elocal.y, effClosed(loc.node), ADD_POINT_TOL_PX / snap.zoom);
             if (res) {
-              if (!allowTopologyEdit(engine, loc.node.id)) return;
               engine.dispatch({
                 type: "insertPointOnPath",
-                id: loc.node.id,
+                id: targetId,
                 x: elocal.x,
                 y: elocal.y,
-                maxDist: 10 / snap.zoom,
+                maxDist: ADD_POINT_TOL_PX / snap.zoom,
               });
               vecPt.current = res.insertedIndex;
-              setVecEdit(loc.node.id, res.insertedIndex);
-              toast("Point added on path");
+              setVecEdit(targetId, res.insertedIndex);
+              toast(vecEdit ? "Point added on path" : "Point added on segment");
               return;
             }
           }
         }
       }
-      // Phase 9: Click on a segment of a selected vector adds a point (pen re-edit).
-      // Works even outside vector-edit mode: the pen tool directly inserts a
-      // new anchor on the hit segment when no draft is in progress.
-      if (!vecEdit && !penBranch.current && !draft.length && snap.selection.length === 1) {
-        const sel = find(rootForPen, snap.selection[0]);
-        if (sel && !sel.locked && (sel.kind === "vector" || sel.kind === "boolean")) {
-          const src = sel.path.length ? sel.path : shapePoly(sel);
-          if (src.length >= 2) {
-            const elocal = nodeLocalPoint(wpt.x, wpt.y, sel.x, sel.y, sel);
-            // Check it's not too close to a vertex (that would be a branch start)
-            let tooCloseToVertex = false;
-            for (const v of src) {
-              if (Math.hypot(elocal.x - v.x, elocal.y - v.y) < 10 / snap.zoom) {
-                tooCloseToVertex = true;
-                break;
-              }
-            }
-            if (!tooCloseToVertex) {
-              const closed = sel.path.length ? !!sel.closed : true;
-              const res = insertPointOnPath(src, elocal.x, elocal.y, closed, 10 / snap.zoom);
-              if (res) {
-                if (!allowTopologyEdit(engine, sel.id)) return;
-                engine.dispatch({
-                  type: "insertPointOnPath",
-                  id: sel.id,
-                  x: elocal.x,
-                  y: elocal.y,
-                  maxDist: 10 / snap.zoom,
-                });
-                vecPt.current = res.insertedIndex;
-                setVecEdit(sel.id, res.insertedIndex);
-                toast("Point added on segment");
-                return;
-              }
-            }
-          }
-        }
-      }
+
       if (!penBranch.current && !draft.length && snap.selection.length === 1) {
         const sel = find(rootForPen, snap.selection[0]);
         const branchable =
@@ -5743,7 +5879,9 @@ export function Canvas({
               drag.current = { mode: "vec", sx: e.clientX, sy: e.clientY, wx: wpt.x, wy: wpt.y, id: wp.node.id, point: i, handle: "out" };
               return;
             }
-            if (Math.hypot(px - vx, py - vy) < 8) {
+            // The same radius the "+" preview bows out at, from one constant: the
+            // press grabs a point here, so a preview must not promise an insert.
+            if (Math.hypot(px - vx, py - vy) < VERTEX_PRIORITY_PX.edit) {
               engine.dispatch({ type: "begin" });
               const multi = e.shiftKey;
               let nextSel = snap.vecPoints && snap.vecPoints.length > 0 ? [...snap.vecPoints] : (vecPt.current >= 0 ? [vecPt.current] : []);
@@ -5800,10 +5938,12 @@ export function Canvas({
               }
             }
           } else {
-            const res = insertPointOnPath(pts, local.x, local.y, effClosed(wp.node), 10 / snap.zoom);
+            // The insert uses the same tolerance as the "+" preview the pointer
+            // has been tracking, so the anchor lands on the mark that was showing.
+            const res = insertPointOnPath(pts, local.x, local.y, effClosed(wp.node), ADD_POINT_TOL_PX / snap.zoom);
             if (res) {
               if (!allowTopologyEdit(engine, wp.node.id)) return;
-              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y, maxDist: 10 / snap.zoom });
+              engine.dispatch({ type: "insertPointOnPath", id: wp.node.id, x: local.x, y: local.y, maxDist: ADD_POINT_TOL_PX / snap.zoom });
               vecPt.current = res.insertedIndex;
               setVecEdit(wp.node.id, res.insertedIndex);
               toast("Point added on path");
@@ -6132,6 +6272,40 @@ export function Canvas({
       }
       return;
     }
+    // Figma's "add an anchor here" state. Two gestures earn it: the pen over a
+    // path that is not mid-draft, and point edit hovering a segment. Both the
+    // "+" marker and the cursor come out of `vectorAddPointTarget` — the same
+    // measurement the click uses — so an affordance is never offered for a point
+    // the press would refuse (a locked layer, a branched network, a vertex).
+    const addArmed =
+      !drag.current &&
+      !penDrag.current &&
+      !pencil.current &&
+      ((snap.tool === "select" && !!vecEdit && vecSubTool === "select" && !e.altKey && !e.metaKey && !e.ctrlKey) ||
+        (snap.tool === "pen" && !draft.length && !penBranch.current && !e.altKey));
+    {
+      let nextAdd: AddPointPreview | null = null;
+      if (addArmed) {
+        const targetId = vecEdit ?? (snap.selection.length === 1 ? snap.selection[0] : null);
+        if (targetId) {
+          const awp = worldPos(snap.pages[snap.page].root, targetId);
+          if (awp) {
+            const awpt = toWorld(e.clientX, e.clientY);
+            const local = nodeLocalPoint(awpt.x, awpt.y, awp.x, awp.y, awp.node);
+            const hit = vectorAddPointTarget(snap.pages[snap.page].root, targetId, local, snap.zoom, {
+              edited: vecEdit === targetId,
+              vertexPx: vecEdit === targetId ? VERTEX_PRIORITY_PX.edit : VERTEX_PRIORITY_PX.pen,
+            });
+            if (hit) nextAdd = hit;
+          }
+        }
+      }
+      const same =
+        (nextAdd?.id ?? null) === (addPt?.id ?? null) &&
+        (nextAdd?.x ?? 0) === (addPt?.x ?? 0) &&
+        (nextAdd?.y ?? 0) === (addPt?.y ?? 0);
+      if (!same) setAddPt(nextAdd);
+    }
     if (!drag.current && !penDrag.current && !pencil.current && snap.tool === "select") {
       if (e.altKey !== altMeasure) setAltMeasure(e.altKey);
       const wpt = toWorld(e.clientX, e.clientY);
@@ -6172,6 +6346,9 @@ export function Canvas({
       const pointHandle = pointBounds ? pointBoxHit(pointBounds.bounds, wpt.x, wpt.y, snap.zoom) : -1;
       if (pointHandle >= 0)
         next = isPointBoxCorner(pointHandle) && e.shiftKey ? ROT_CURSOR : resizeCursor(pointHandle);
+      // The rotation target's hover state is measured in the same pass as its
+      // cursor (below), so the two can never disagree about where the target is.
+      let rotHoverNow = false;
       if (r0 && snap.selection.length && !vecEdit) {
         const z = snap.zoom;
         const px0 = e.clientX - r0.left;
@@ -6202,6 +6379,7 @@ export function Canvas({
           const locked = bb && isEffectivelyLocked(root0, bb.node.id);
           if (!locked && rotationHandleHit(bb?.node.kind ?? "group", hx, hy, sx0, sy0, box.w * z, box.h * z)) {
             next = ROT_CURSOR;
+            rotHoverNow = true;
           }
           for (let i = 0; i < hs.length; i++) {
             if (Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 8) {
@@ -6288,7 +6466,11 @@ export function Canvas({
         }
       }
       if (next !== hoverCursor) setHoverCursor(next);
-    } else if (hoverId && snap.tool !== "select") setHoverId("");
+      if (rotHoverNow !== rotHover) setRotHover(rotHoverNow);
+    } else {
+      if (rotHover) setRotHover(false);
+      if (hoverId && snap.tool !== "select") setHoverId("");
+    }
     if (snap.tool === "pen" && (draft.length || penBranch.current) && !penDrag.current) {
       let wpt = toWorld(e.clientX, e.clientY);
       if (e.shiftKey && draft.length) {
@@ -6819,13 +7001,23 @@ export function Canvas({
         const local = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, n);
         const lx = local.x;
         const ly = local.y;
+        // Figma's three point styles. `mirrorMode` is only written when someone
+        // states it, so a point pulled out with the pen — mirrored handles, no
+        // mode on record — has to be read as mirrored too; that is what
+        // `effectiveMirrorMode` decides from the handles themselves.
+        const mode = effectiveMirrorMode(p);
         if (d.handle === "in") {
           p.ix = lx - p.x;
           p.iy = ly - p.y;
-          if (p.mirrorMode === "angleAndLength" && !e.altKey) {
+          if (e.altKey) {
+            // ⌥ breaks the point: the twin stays where it was, and the break is
+            // *written down*, so releasing ⌥ and dragging again does not silently
+            // re-mirror the handle the user just set free.
+            p.mirrorMode = BREAK_MIRROR_MODE;
+          } else if (mode === "angleAndLength") {
             p.ox = -p.ix;
             p.oy = -p.iy;
-          } else if (p.mirrorMode === "angle" && !e.altKey && (p.ox || p.oy)) {
+          } else if (mode === "angle" && (p.ox || p.oy)) {
             const inLen = Math.hypot(p.ix, p.iy);
             const outLen = Math.hypot(p.ox || 0, p.oy || 0);
             if (inLen > 0.001) {
@@ -6836,10 +7028,12 @@ export function Canvas({
         } else if (d.handle === "out") {
           p.ox = lx - p.x;
           p.oy = ly - p.y;
-          if (p.mirrorMode === "angleAndLength" && !e.altKey) {
+          if (e.altKey) {
+            p.mirrorMode = BREAK_MIRROR_MODE;
+          } else if (mode === "angleAndLength") {
             p.ix = -p.ox;
             p.iy = -p.oy;
-          } else if (p.mirrorMode === "angle" && !e.altKey && (p.ix || p.iy)) {
+          } else if (mode === "angle" && (p.ix || p.iy)) {
             const outLen = Math.hypot(p.ox, p.oy);
             const inLen = Math.hypot(p.ix || 0, p.iy || 0);
             if (outLen > 0.001) {
@@ -6853,11 +7047,12 @@ export function Canvas({
             (p.ox || 0) !== 0 || (p.oy || 0) !== 0 || (p.ix || 0) !== 0 || (p.iy || 0) !== 0;
           if (e.altKey && movingIndices.length === 1 && !hasHandles) {
             // ⌥-drag a corner anchor pulls a Bézier handle out of it instead
-            // of moving the point; the mirror mode decides whether the other
-            // side follows.
+            // of moving the point; a mirrored point (authored or, per
+            // `effectiveMirrorMode`, one whose handles say mirrored) pulls both
+            // sides out together, which is how the gesture works in Figma.
             p.ox = lx - p.x;
             p.oy = ly - p.y;
-            if (p.mirrorMode === "angleAndLength") {
+            if (mode === "angleAndLength") {
               p.ix = -p.ox;
               p.iy = -p.oy;
             }
@@ -7957,6 +8152,28 @@ export function Canvas({
         }
       }
     }
+    /**
+     * The path point the press is standing on, resolved off the *live* tree
+     * (a childless boolean may have just been flattened into a fresh node), or
+     * null when the layer cannot enter point edit from here. One test answers two
+     * questions — which anchor a double-click selects on entry, and whether a press
+     * on an anchor outranks the selection box's edge (for a vector the chrome draws
+     * the box on the *path* bounds, so the two would otherwise fight) — at the same
+     * radius the point-edit press grabs with.
+     */
+    const pathAnchorUnder = (id: string): number | null => {
+      const live = engine.snapshot();
+      const loc = worldPos(live.pages[live.page].root, id);
+      if (!loc) return null;
+      const n = loc.node;
+      if (n.locked || n.children.length) return null;
+      if (!PATH_ENTRY_KINDS.includes(n.kind)) return null;
+      if (isInstanceMember(live.pages[live.page].root, n.id)) return null;
+      const pts = n.path.length ? n.path : shapePoly(n);
+      if (!pts.length) return null;
+      const l = nodeLocalPoint(wpt.x, wpt.y, loc.x, loc.y, n);
+      return anchorIndexAt(pts, l.x, l.y, VERTEX_PRIORITY_PX.edit / live.zoom);
+    };
     /* Double-clicking a bounding-box edge sets that axis's resizing, as the
      * guide's "From the canvas" table has it: hug contents on its own, or Fill
      * container with ⌥. This runs before the deep-select below, because the
@@ -7967,13 +8184,33 @@ export function Canvas({
       if (!id || snap.selection.length > 1 || snap.tool !== "select") return null;
       const wp = worldPos(snap.pages[snap.page].root, id);
       if (!wp) return null;
+      // …but a press on the layer's own anchor is a path click, and the path wins.
+      if (pathAnchorUnder(id) !== null) return null;
       const z = snap.zoom;
-      const x0 = wp.x * z + snap.panX;
-      const y0 = wp.y * z + snap.panY;
-      const w = wp.node.w * z;
-      const h = wp.node.h * z;
-      const px = wpt.x * z + snap.panX;
-      const py = wpt.y * z + snap.panY;
+      // Measured on the box the chrome actually paints — `nodeVisualBounds`, which
+      // follows a vector's path rather than its stale frame — and the pointer is
+      // brought into that box's own axes first, exactly as the handle and rotation
+      // hit tests do. Before, this read the raw translation-only placement, so on a
+      // rotated layer (or a path that had been dragged outside its own bounds) a
+      // double-click aimed at the path could be eaten as a hug/fill toggle.
+      const nb = nodeVisualBounds(wp);
+      const x0 = nb.x * z + snap.panX;
+      const y0 = nb.y * z + snap.panY;
+      const w = nb.w * z;
+      const h = nb.h * z;
+      let px = wpt.x * z + snap.panX;
+      let py = wpt.y * z + snap.panY;
+      {
+        const cx = x0 + w / 2;
+        const cy = y0 + h / 2;
+        if (wp.node.rotation) {
+          const u = unrot(px, py, cx, cy, wp.node.rotation);
+          px = u.x;
+          py = u.y;
+        }
+        if (wp.node.flipH) px = cx - (px - cx);
+        if (wp.node.flipV) py = cy - (py - cy);
+      }
       const near = 8;
       const withinX = px >= x0 - near && px <= x0 + w + near;
       const withinY = py >= y0 - near && py <= y0 + h + near;
@@ -8082,15 +8319,10 @@ export function Canvas({
       const loc = worldPos(snap.pages[snap.page].root, hit.id);
       if (loc) {
         const path = hit.path.map((pt) => ({ ...pt }));
-        let best = -1;
-        let bd = 8 / snap.zoom;
-        for (let i = 0; i < path.length; i++) {
-          const d = Math.hypot(wpt.x - (loc.x + path[i].x), wpt.y - (loc.y + path[i].y));
-          if (d < bd) {
-            bd = d;
-            best = i;
-          }
-        }
+        // Same vertex test the point loop uses, from the shared helper: the
+        // double-click converts the point it is on and leaves it selected, so
+        // the handles that just appeared are already grabbed.
+        const best = anchorIndexAt(path.map((pt) => ({ x: loc.x + pt.x, y: loc.y + pt.y })), wpt.x, wpt.y, VERTEX_PRIORITY_PX.edit / snap.zoom) ?? -1;
         if (best >= 0) {
           const pt = path[best];
           const has = (pt.ox && pt.ox !== 0) || (pt.oy && pt.oy !== 0);
@@ -8107,6 +8339,7 @@ export function Canvas({
             pt.oy = h.oy;
           }
           engine.dispatch({ type: "patchPath", id: hit.id, path, closed: hit.closed });
+          setVecEdit(hit.id, best, [best]);
         }
       }
     } else if (snap.tool === "select" && hit && hit.fillType === "image") {
@@ -8114,14 +8347,8 @@ export function Canvas({
       return;
     } else if (
       hit &&
-      (hit.kind === "vector" ||
-        (hit.kind === "boolean" && !hit.children.length) ||
-        hit.kind === "rect" ||
-        hit.kind === "ellipse" ||
-        hit.kind === "poly" ||
-        hit.kind === "star" ||
-        hit.kind === "line" ||
-        hit.kind === "arrow")
+      PATH_ENTRY_KINDS.includes(hit.kind) &&
+      (hit.kind !== "boolean" || !hit.children.length)
     ) {
       if (isInstanceMember(snap.pages[snap.page].root, hit.id)) {
         toast("Edit the main component to change this layer");
@@ -8130,12 +8357,14 @@ export function Canvas({
       engine.dispatch({ type: "select", ids: [hit.id] });
       // Basic shapes edit in place (first edit converts kind); only a
       // childless boolean bakes down. Booleans with children drill above.
-      if (hit.kind === "boolean") {
-        engine.dispatch({ type: "flatten" });
-        const newId = engine.snapshot().selection[0];
-        setVecEdit(newId);
-      } else {
-        setVecEdit(hit.id);
+      const id = hit.kind === "boolean" ? (engine.dispatch({ type: "flatten" }), engine.snapshot().selection[0]) : hit.id;
+      if (id) {
+        // Figma's deep-click opens the path with the vertex you aimed at already
+        // selected, so the press that follows drags the point instead of starting
+        // a rubber band. An edge click (or a press on the fill) enters with
+        // nothing selected, which is what a segment grab wants.
+        const pt = pathAnchorUnder(id);
+        setVecEdit(id, pt, pt != null ? [pt] : []);
       }
     } else if (hit) {
       engine.dispatch({ type: "select", ids: [hit.id] });
@@ -8149,6 +8378,10 @@ export function Canvas({
     hoverIx.current = "";
     cursorPosRef.current = null;
     setCursorPos(null);
+    // Nothing is hovered once the pointer is gone, and a stale "+" would keep
+    // advertising an insert the next click cannot make.
+    if (addPt) setAddPt(null);
+    if (rotHover) setRotHover(false);
   };
 
   /** SVG is a vector format, so it becomes editable layers rather than a flat
@@ -8661,6 +8894,11 @@ export function Canvas({
           : "zoom-in"
       : snap.tool === "scale"
         ? "nwse-resize"
+        : // Figma's "+" outranks every tool cursor on the canvas: the pointer is
+          // over a path it can add an anchor to, and that is the one thing the
+          // next click will do.
+          addPt
+          ? ADD_POINT_CURSOR
         : CREATE.includes(snap.tool) ||
             snap.tool === "pen" ||
             snap.tool === "pencil" ||
@@ -10023,6 +10261,12 @@ function selectionBounds(
  * node angle and snapping back to the nearest 45deg step picks the right glyph.
  */
 const ROT_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M21 12a9 9 0 1 1-3.2-6.9l2.2-2.1M20 3v6h-6' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' filter='drop-shadow(0 0 1.5px %23fff)'/%3E%3C/svg%3E\") 12 12, crosshair";
+/** Figma arms the pen with a "+" over a path it can add an anchor to. The web
+ *  has no nib to attach one to, so the plus is the cursor: a white disc (so it
+ *  reads on a dark fill), a black plus, hotspot at the centre — which is the
+ *  exact point the click will insert, because the pointer centre *is* the probe. */
+const ADD_POINT_CURSOR =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='7.5' fill='%23fff' fill-opacity='0.92' stroke='%23000' stroke-width='1.4'/%3E%3Cpath d='M12 8.2v7.6M8.2 12h7.6' stroke='%23000' stroke-width='1.9' stroke-linecap='round'/%3E%3C/svg%3E\") 12 12, crosshair";
 
 const RESIZE_CURSORS = [
   "nwse-resize", // TL
