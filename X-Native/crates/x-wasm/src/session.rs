@@ -791,8 +791,8 @@ fn export_bleed(options: &str) -> (f64, f64, f64, f64) {
     let side = |v: &Value, key: &str| -> f64 {
         v.get(key)
             .and_then(|n| n.as_f64())
-            .filter(|n| n.is_finite())
-            .map(|n| n.clamp(0.0, 100_000.0))
+            .filter(|n| n.is_finite() && *n <= 100_000.0)
+            .map(|n| n.max(0.0))
             .unwrap_or(0.0)
     };
     serde_json::from_str::<Value>(options)
