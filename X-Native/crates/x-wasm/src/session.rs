@@ -8,6 +8,7 @@ use x_editor::{
     DocumentSession, GeometryNodeDelta, NodeDelta, OffsetDelta, OffsetShapeDelta, OutlineDelta,
     OutlineShapeDelta, OutlineStrokeStyle, SessionCommand, SessionDelta,
 };
+use kurbo::Shape as _; // bounding_box() on BezPath
 use x_format::{deserialize::load_x, serialize::save_x};
 
 fn node_value(node: NodeDelta) -> Value {
@@ -388,7 +389,9 @@ impl CommandBridge {
             .iter()
             .any(|c| matches!(c, x_render::RenderCommand::Glyphs { .. }))
         {
-            return Err("wasm export has no font manager; export text layers via the canvas path".into());
+            return Err(
+                "wasm export has no font manager; export text layers via the canvas path".into(),
+            );
         }
         // Out-of-band strokes become filled geometry, so a stroke's reach is
         // part of the page bounds, not painted off the edge of the canvas.
@@ -396,7 +399,8 @@ impl CommandBridge {
         // Page = the node box, grown by every command's actual reach and by
         // the caller's per-side margins (the same 1.5x-blur convention
         // x-render inflates its clip bounds with, computed once in TS).
-        let (mut x0, mut y0, mut x1, mut y1) = (0.0f64, 0.0f64, node.w.max(1.0), node.h.max(1.0));
+        let (mut x0, mut y0, mut x1, mut y1) =
+            (0.0f64, 0.0f64, node.w.max(1.0), node.h.max(1.0));
         {
             use x_render::RenderCommand as Cmd;
             for command in &tree.commands {
