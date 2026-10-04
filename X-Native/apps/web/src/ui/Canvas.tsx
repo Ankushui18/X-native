@@ -840,34 +840,29 @@ export function Canvas({
   /** Phase 10: eraser stroke collector for WASM finalization. */
   const eraserPath = useRef<{ points: [number, number][]; targetId: string | null } | null>(null);
 
-  /** Phase 10: Commit a pen/pencil path through WASM first, fall back to TS.
-   *  Called on pen draft finalization (Enter/Escape/close-click). */
+  /** Phase 10: Commit a pen/pencil path through WASM and MemoryEngine.
+   *  Called on pen draft finalization (Enter/Escape/close-click) and pencil mouseup. */
   const commitPathWasm = useCallback(
     (points: PathPoint[], closed: boolean) => {
-      if (points.length < 2) {
-        engine.dispatch({ type: "addPath", points, closed });
-        return;
-      }
-      const rawPoints: [number, number][] = points.map((p) => [p.x, p.y]);
-      const snap = engine.snapshot();
-      const parentId = snap.pages[snap.page].root.id;
-      const root = snap.pages[snap.page].root;
+      engine.dispatch({ type: "addPath", points, closed });
+      if (points.length < 2) return;
+      const snapNow = engine.snapshot();
+      const root = snapNow.pages[snapNow.page].root;
+      const parentId = root.id;
+      const isPencil = snapNow.tool === "pencil";
+      const tol = PENCIL_TOLERANCE_PX / snapNow.zoom;
+      const xyPoints = points.map((p) => ({ x: p.x, y: p.y }));
       void (async () => {
         try {
-          const { wasmCommitPenPath, wasmSmoothPencilPath, serializeToX } = await import("../engine/wasmDrawing");
-          const xDoc = serializeToX(root);
-          if (xDoc) {
-            const isPencil = engine.snapshot().tool === "pencil";
-            const tol = PENCIL_TOLERANCE_PX / engine.snapshot().zoom;
-            const result = isPencil
-              ? await wasmSmoothPencilPath(xDoc, parentId, rawPoints, tol)
-              : await wasmCommitPenPath(xDoc, parentId, rawPoints);
-            if (result?.success) return;
+          const { wasmCommitPenPath, wasmSmoothPencilPath } = await import("../engine/wasmDrawing");
+          if (isPencil) {
+            await wasmSmoothPencilPath(root, parentId, xyPoints, tol);
+          } else {
+            await wasmCommitPenPath(root, parentId, xyPoints);
           }
         } catch {
-          // WASM unavailable — fall through to TS
+          // WASM unavailable — TS path already applied synchronously
         }
-        engine.dispatch({ type: "addPath", points, closed });
       })();
     },
     [engine],
@@ -5046,7 +5041,7 @@ export function Canvas({
               }
             }
             if (!tooCloseToVertex) {
-              const closed = sel.path.length ? !!sel.closed : sel.kind !== "line" && sel.kind !== "arrow";
+              const closed = sel.path.length ? !!sel.closed : true;
               const res = insertPointOnPath(src, elocal.x, elocal.y, closed, 10 / snap.zoom);
               if (res) {
                 if (!allowTopologyEdit(engine, sel.id)) return;
@@ -7180,9 +7175,10 @@ export function Canvas({
       const pts = pencil.current;
       pencil.current = null;
       if (pts.length >= 2) {
-        // Phase 10+: Delegate to Rust (RDP + Catmull-Rom) via commitPathWasm.
-        // TS smoothing is the fallback inside commitPathWasm when WASM fails.
-        commitPathWasm(pts, false);
+        const tol = PENCIL_TOLERANCE_PX / snap.zoom;
+        const thinned = simplifyPath(pts, tol);
+        const smoothed = snap.tool === "pencil" ? smoothPath(thinned, false) : thinned;
+        commitPathWasm(smoothed, false);
       }
       setDraft([]);
       return;
@@ -7413,15 +7409,12 @@ export function Canvas({
       eraserPath.current = null;
       if (ep.targetId && ep.points.length >= 2) {
         const ERASER_RADIUS = ERASER_PX / snap.zoom;
+        const xyPoints = ep.points.map(([x, y]) => ({ x, y }));
         void (async () => {
           try {
-            const { wasmEraseGeometry, serializeToX } = await import("../engine/wasmDrawing");
+            const { wasmEraseGeometry } = await import("../engine/wasmDrawing");
             const root = engine.snapshot().pages[engine.snapshot().page].root;
-            const xDoc = serializeToX(root);
-            if (xDoc) {
-              const result = await wasmEraseGeometry(xDoc, ep.targetId!, ep.points, ERASER_RADIUS);
-              if (result?.success) return;
-            }
+            await wasmEraseGeometry(root, ep.targetId!, xyPoints, ERASER_RADIUS);
           } catch {
             // WASM path unavailable — TS erase already applied during drag
           }

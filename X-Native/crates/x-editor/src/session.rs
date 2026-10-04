@@ -728,6 +728,7 @@ impl DocumentSession {
         let mut stroke_only = false;
         let mut offset_id: Option<String> = None;
         let mut outline_id: Option<String> = None;
+        let mut history_changed = false;
         let changed = match command {
             SessionCommand::Rename { id, name } => {
                 self.target(id)?;
@@ -864,6 +865,7 @@ impl DocumentSession {
                 };
                 let previous_size = id.as_ref().and_then(|id| self.node(id)).map(|n| (n.w, n.h));
                 if self.editor.undo() {
+                    history_changed = true;
                     boolean = structural.map(|(ids, result)| (ids, result, false));
                     outline_id = outline;
                     stroke_only = style.is_some();
@@ -901,6 +903,7 @@ impl DocumentSession {
                 };
                 let previous_size = id.as_ref().and_then(|id| self.node(id)).map(|n| (n.w, n.h));
                 if self.editor.redo() {
+                    history_changed = true;
                     boolean = structural.map(|(ids, result)| (ids, result, true));
                     outline_id = outline;
                     stroke_only = style.is_some();
@@ -934,6 +937,7 @@ impl DocumentSession {
             || stroke_id.is_some()
             || offset_id.is_some()
             || outline_id.is_some()
+            || history_changed
         {
             self.revision += 1;
         }
@@ -971,6 +975,11 @@ impl DocumentSession {
     /// operations that are not part of the session command dialect.
     pub fn editor_mut(&mut self) -> &mut Editor {
         &mut self.editor
+    }
+
+    /// Phase 9: increment revision after a direct editor_mut() command.
+    pub fn bump_revision(&mut self) {
+        self.revision += 1;
     }
 
     /// Explicit, potentially large save/checkpoint path. Never call this from
