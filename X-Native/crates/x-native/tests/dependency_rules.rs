@@ -96,10 +96,7 @@ fn dependency_direction_is_enforced() {
         // The wasm bridge deliberately sits at the edge of the graph: it may
         // depend on the engine, and nothing may depend on it. See
         // docs/ARCHITECTURE_BOUNDARY.md.
-        (
-            "x-wasm",
-            vec!["x-core", "x-editor", "x-format", "x-render"],
-        ),
+        ("x-wasm", vec!["x-core", "x-editor", "x-format", "x-render"]),
         ("x-geo", vec!["x-core"]),
         ("x-designer", vec!["x-native", "x-board"]),
     ]);

@@ -593,7 +593,11 @@ fn fit_smooth_path(points: &[(f64, f64)]) -> Vec<x_core::PathCmd> {
         let p0 = if i > 0 { points[i - 1] } else { points[i] };
         let p1 = points[i];
         let p2 = points[i + 1];
-        let p3 = if i + 2 < n { points[i + 2] } else { points[i + 1] };
+        let p3 = if i + 2 < n {
+            points[i + 2]
+        } else {
+            points[i + 1]
+        };
         let c1x = p1.0 + (p2.0 - p0.0) / 6.0;
         let c1y = p1.1 + (p2.1 - p0.1) / 6.0;
         let c2x = p2.0 - (p3.0 - p1.0) / 6.0;
