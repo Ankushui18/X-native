@@ -18,7 +18,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: write # TEMP(debug): the Gate step's failure mirror posts an issue comment; drop with the mirror.
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -92,28 +91,11 @@ jobs:
       # output when the log sink stops reading (the step log dies with a broken
       # pipe and the pipeline's status becomes tee's 0, masking the failure).
       - name: Gate
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           bash scripts/check.sh > /tmp/gate.log 2>&1
           status=$?
           cat /tmp/gate.log || true
-          if [ "$status" -ne 0 ]; then
-            # TEMP(debug): the blob-hosted step log is unreadable from some
-            # networks; mirror the tail into a PR comment so the verdict is
-            # legible everywhere. Remove once the smoke step is understood.
-            {
-              echo '### Gate log tail (debug mirror)'
-              echo '~~~'
-              tail -c 13000 /tmp/gate.log
-              echo '~~~'
-            } > /tmp/gate-tail.md
-            pr=$(jq -r '.number // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
-            if [ -n "$pr" ]; then
-              gh api --method POST "repos/${{ github.repository }}/issues/$pr/comments" -F "body=<-/tmp/gate-tail.md" || true
-            fi
-          fi
           exit $status
 
       # Sprint 3 measurement probe (crates/x-core/tests/vector_probe.rs): complex
@@ -155,10 +137,25 @@ jobs:
       - name: Package both WASM bridges (wasm-pack and matching bindgen glue)
         id: package-wasm
         run: |
-          rustup target add wasm32-unknown-unknown --toolchain 1.98.1
-          cargo install wasm-pack --version 0.15.0 --locked
-          cargo install wasm-bindgen-cli --version 0.2.127 --locked
-          bash scripts/build-wasm.sh
+          set +e
+          {
+            rustup target add wasm32-unknown-unknown --toolchain 1.98.1
+            cargo install wasm-pack --version 0.15.0 --locked
+            cargo install wasm-bindgen-cli --version 0.2.127 --locked
+            bash scripts/build-wasm.sh
+          } > /tmp/wasm-pack.log 2>&1
+          status=$?
+          cat /tmp/wasm-pack.log
+          if [ "$status" -ne 0 ]; then
+            # Same CDN note as the step below: the raw log is not reachable
+            # from every tool, so surface the actual cargo errors as
+            # annotations before failing.
+            grep -aE '^error|error\[E|^warning: unused|^ *--> ' /tmp/wasm-pack.log |
+              head -14 | while IFS= read -r line; do
+                printf '::error::%s\n' "${line//%/%25}"
+              done
+            exit "$status"
+          fi
 
       - name: Real WASM bridge smoke tests (no mocks or replay)
         id: wasm-smoke
