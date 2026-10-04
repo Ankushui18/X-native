@@ -1,6 +1,7 @@
 //! Thin serialization edge for the shared x-editor::DocumentSession.
 //! Commands and undo live in Rust; only one changed node is encoded here.
 
+use kurbo::Shape as _; // bounding_box() on BezPath
 use serde_json::{json, Value};
 use x_core::booleans::BoolOp;
 use x_core::{parse_hex_color, PathCmd, StrokeAlign, StrokeCap, StrokeJoin};
@@ -8,7 +9,6 @@ use x_editor::{
     DocumentSession, GeometryNodeDelta, NodeDelta, OffsetDelta, OffsetShapeDelta, OutlineDelta,
     OutlineShapeDelta, OutlineStrokeStyle, SessionCommand, SessionDelta,
 };
-use kurbo::Shape as _; // bounding_box() on BezPath
 use x_format::{deserialize::load_x, serialize::save_x};
 
 fn node_value(node: NodeDelta) -> Value {
@@ -399,18 +399,23 @@ impl CommandBridge {
         // Page = the node box, grown by every command's actual reach and by
         // the caller's per-side margins (the same 1.5x-blur convention
         // x-render inflates its clip bounds with, computed once in TS).
-        let (mut x0, mut y0, mut x1, mut y1) =
-            (0.0f64, 0.0f64, node.w.max(1.0), node.h.max(1.0));
+        let (mut x0, mut y0, mut x1, mut y1) = (0.0f64, 0.0f64, node.w.max(1.0), node.h.max(1.0));
         {
             use x_render::RenderCommand as Cmd;
             for command in &tree.commands {
                 let r = match command {
-                    Cmd::FillPath { path, transform, .. }
-                    | Cmd::StrokePath { path, transform, .. } => {
-                        Some(transform.transform_rect_bbox(path.bounding_box()))
+                    Cmd::FillPath {
+                        path, transform, ..
                     }
+                    | Cmd::StrokePath {
+                        path, transform, ..
+                    } => Some(transform.transform_rect_bbox(path.bounding_box())),
                     Cmd::Image {
-                        transform, w, h, rotation, ..
+                        transform,
+                        w,
+                        h,
+                        rotation,
+                        ..
                     } => {
                         let t = *transform
                             * kurbo::Affine::translate((*w / 2.0, *h / 2.0))
@@ -457,7 +462,11 @@ impl CommandBridge {
         }
         let (bytes, ow, oh) = if format == "pdf" {
             let bytes = x_render::export_pdf(&tree, pw, ph);
-            (bytes, pw.round().max(1.0) as u32, ph.round().max(1.0) as u32)
+            (
+                bytes,
+                pw.round().max(1.0) as u32,
+                ph.round().max(1.0) as u32,
+            )
         } else {
             let raster_format = if format == "png" {
                 x_render::RasterFormat::Png
@@ -1169,9 +1178,17 @@ mod tests {
                 } else {
                     x_render::RasterFormat::Jpg(92)
                 };
-                let (bytes, _w, _h) =
-                    x_render::export_raster(&tree, 30.0, 40.0, raster_format, scale, background, None, None)
-                        .unwrap();
+                let (bytes, _w, _h) = x_render::export_raster(
+                    &tree,
+                    30.0,
+                    40.0,
+                    raster_format,
+                    scale,
+                    background,
+                    None,
+                    None,
+                )
+                .unwrap();
                 bytes
             }
             _ => x_render::export_pdf(&tree, 30.0, 40.0),
