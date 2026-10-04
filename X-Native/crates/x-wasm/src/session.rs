@@ -693,14 +693,10 @@ fn encode_node_png(node: &x_core::Node, w: f64, h: f64, scale: f64) -> (Vec<u8>,
     let pw = ((w * scale).round() as u32).clamp(1, 4096);
     let ph = ((h * scale).round() as u32).clamp(1, 4096);
     let rgba = node_rgba(node);
-    let row_len = 1 + (pw as usize) * 4;
-    let mut raw = Vec::with_capacity(row_len * (ph as usize));
-    for _ in 0..ph {
-        raw.push(0); // filter type 0 (None)
-        for _ in 0..pw {
-            raw.extend_from_slice(&rgba);
-        }
-    }
+    let mut row = Vec::with_capacity(1 + (pw as usize) * 4);
+    row.push(0);
+    row.extend(rgba.repeat(pw as usize));
+    let raw = row.repeat(ph as usize);
     let mut zlib = vec![0x78, 0x01];
     let chunks: Vec<&[u8]> = raw.chunks(65_535).collect();
     for (idx, chunk) in chunks.iter().enumerate() {
