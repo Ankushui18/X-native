@@ -3859,7 +3859,7 @@ function Design({
                   onClick={() => setSizing("hug", "hug")}
                 >
                   <Icon name="text-auto-width" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
+                  <span className="auto-tag">Auto W</span>
                 </button>
               </Tooltip>
               <Tooltip label="Auto height" shortcut="">
@@ -3868,7 +3868,7 @@ function Design({
                   onClick={() => setSizing("fixed", "hug")}
                 >
                   <Icon name="text-auto-height" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
+                  <span className="auto-tag">Auto H</span>
                 </button>
               </Tooltip>
               <Tooltip label="Fixed size" shortcut="">
@@ -3877,7 +3877,7 @@ function Design({
                   onClick={() => setSizing("fixed", "fixed")}
                 >
                   <Icon name="text-fixed" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
+                  <span className="auto-tag">Fixed</span>
                 </button>
               </Tooltip>
             </div>
@@ -4696,7 +4696,7 @@ function Design({
           )}
         </div>
       }>
-      <div className="insp-group-title flush" style={{ marginBottom: 6 }}>Flow</div>
+      <div className="insp-group-title flush">Flow</div>
       <div className="dir-row">
         <div className="seg icons">
           <button

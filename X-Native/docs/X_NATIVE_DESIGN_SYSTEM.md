@@ -52,22 +52,32 @@ fallbacks to the light column of this table, key for key.
 
 - **Space**: `--sp-0…--sp-24`, a strict 4px ladder (0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 32, 40,
   48, 56, 64, 72, 80, 96). No gap, pad or margin in the chrome is off it.
-- **Height**: `--h-sm` 22, `--h-md` 26 (row and field), `--h-lg` 30, `--h-section` 26, `--h-dock` 44.
+- **Height**: one control rhythm — `--h-control` 28, and `--h-field` / `--h-row` / `--h-section` are
+  aliases of it, so a property field, a panel row and a section header are the same measurement. Inner
+  steps `--h-xs` 20 / `--h-sm` 24 / `--h-md` 28 / `--h-lg` 32; the segmented well arrives at 28 on its
+  own (24px segment + the 2px inset each side), and `--h-dock` stays 44 (pinned by `edgefit.test.mjs`).
+- **Indentation**: `--indent-base` (8) plus `--indent` (12) per level. A layer row carries `--lvl` as a
+  number and the sheet multiplies — nesting arithmetic is never written into a component.
 - **Radius**: `--r-0…--r-6` (2/3/4/6/8/10/12) plus `--r-pill` and the by-role names `--r-control` (4) /
   `--r-surface` (6) / `--r-popover` (8) / `--r-modal` (12). Inputs 4, panels 6, popovers 8, dialogs 12 —
   stated so a new surface does not invent a fifth.
 - **Type**: `--fs-3xs…--fs-3xl` (9…22) with `--fw-*`, `--lh-*` and the role shorthands `--t-label`
   (600 10/13), `--t-control` (500 11/14), `--t-body` (400 11/15), `--t-section` (600 11/16) and
-  `--t-num` (tabular, for anything read as a number). Inter for UI, JetBrains Mono for code and lined-up
-  numerals; both self-hosted.
-- **Motion**: `--dur-1/2/3` (90/140/220ms) with one `--ease`; a control transitions background, border,
-  colour and shadow, and nothing else.
+  `--t-num` (tabular, for anything read as a number), `--t-value` (500 12/16 mono — what a *field* holds,
+  one step above the label beside it) and `--t-value-ui` (400 12/16 UI — a select's words). Inter for UI,
+  JetBrains Mono for code and lined-up numerals; both self-hosted.
+- **Motion**: `--dur-1/2/3` (90/150/220ms) with one `--ease`; a control transitions background, border,
+  colour and shadow, and nothing else — the 150ms step is the control hover.
 - **Elevation**: `--elev-raised` / `--elev-floating` / `--elev-overlay` / `--elev-modal`; shadows are
   never written by hand.
 - **Geometry**: `--hairline` (1px), `--ring-w` (2px, the focus ring), `--rail` 54, `--left-w` 248,
   `--right-w` 296 (both panel widths are user-draggable, written back as inline custom properties).
 - **Icons**: 12 (rows) / 14 (controls) / 16 (toolbar) via `caretSize()` / `rowIconSize()`; 20px is
   reserved for marks. Canvas frame labels are a constant 11px.
+- **Painted chrome**: a canvas paint cannot read a custom property without a `getComputedStyle` per
+  frame, so `Canvas.tsx` names the same values once (`CHROME_FONT` 11, `CHROME_RADIUS` 4, `CHROME_CHIP_H`
+  20, `CHROME_GAP` 8) and every badge — the `50 × 96` measurement chip, the rotation chip, the locked
+  chip — draws from those instead of retyping numbers into each painter.
 
 ## How the scales are kept
 
@@ -91,13 +101,21 @@ Debt: the legacy alias block at the end of the token column (`--blue`, `--fg`, `
 `--elev-*` spellings) keeps pre-round call sites compiling; new code reads the role names above.
 `--blue` and `--blue-hover` are aliases OF the accent, not a second blue — rename, never reuse.
 
-Debt, measured and ratcheted (2026-10-04, after identity v3): `src/ui/*.tsx` carries **414 inline
+Debt, measured and ratcheted (2026-10-05, after the density pass): `src/ui/*.tsx` carries **406 inline
 `style={{` objects, 69 quoted hex literals, 370 native `title=`, 386 raw `<button>` and 59 raw
 `<select>`** across 22 surfaces, each number pinned per file in `drift.test.mjs`. The ION round lowered
 seven rows (`ZenHUD` 16/14/9/6/0 → 2/0/5/3/0, `RadialMenu` 3/6 → 1/0, `icons.tsx` 0/3 → 0/0, `Canvas`
 colours 14 → 9, `FigInspectorModal` 10 → 0, `chrome` 4 → 1, `inspector` 190/44 → 189/22). What remains
 in those colour columns is *document ink* — a default fill, a sample file's palette, a device bezel, a
 code generator's fallback — and none of it is anonymous any more.
+
+The density pass (2026-10-05) lowered two more rows by moving floating canvas chrome into the sheet
+(`Canvas` inline 11 → 7: the frame-rename field, the link box, the link hover pill and the emoji
+picker; `inspector` 189 → 185: the three size tags and the Flow header's ad-hoc bottom margin). It also
+folded the last two control families into one — the prototype panel's selects, the crop toolbar, the
+context-menu buttons, the Dev Mode menus, the zoom grid, the Export sheet's filter and rows, and the
+canvas HUD all ran their own 26px height or 6px corner; the sheet now has no `26px` left in a rule, and
+the active tool is rounded like the tools beside it.
 
 ## Components (source of truth → adoption)
 

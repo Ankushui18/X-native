@@ -1,6 +1,6 @@
 import { allowTopologyEdit } from "./vectorCapabilities";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ColorProfile, Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
 import type { DocSeed } from "../engine/files";
 import { coerceVariableValue, fallbackForType, isAlias, resolveVariable, wouldCycle } from "../engine/variables";
@@ -500,10 +500,10 @@ function LayerRowImpl({
             }
           }
         }}
-        className={`row${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}${
+        className={`row lvl${sel.includes(n.id) ? " sel" : ""}${n.isComponent || n.kind === "component" || n.kind === "instance" ? " comp" : ""}${n.visible ? "" : " dim"}${n.locked ? " locked" : ""}${
           isOver ? ` drop-${drag!.zone}` : ""
         }${drag?.ids.includes(n.id) ? " dragging" : ""}`}
-        style={{ paddingLeft: 8 + depth * 12 }}
+        style={{ "--lvl": depth } as CSSProperties}
         draggable={!renaming}
         onDragStart={(e) => {
           // Dragging an unselected row selects it first, so the drag payload

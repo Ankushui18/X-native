@@ -91,7 +91,11 @@ t(`a view smaller than the badge still yields finite numbers (${tiny.x},${tiny.y
 const canvasSrc = read("Canvas.tsx");
 const calls = (canvasSrc.match(/clampBadge\(/g) ?? []).length;
 t(`both badge sites clamp (single-selection + multi = ${calls} calls)`, calls === 2);
-t("each offers the flip above the box", /flipY: sy - 8 - bh/.test(canvasSrc) && /flipY: sy - 8 - 20/.test(canvasSrc));
+// Both sites offer the flip, and both read the recipe's gutter rather than a
+// number: the badge geometry is named in Canvas.tsx (CHROME_GAP / CHROME_CHIP_H),
+// so the pin follows the name instead of pinning the arithmetic text.
+t("each offers the flip above the box",
+  /flipY: sy - CHROME_GAP - bh/.test(canvasSrc) && /flipY: sy - CHROME_GAP - CHROME_CHIP_H/.test(canvasSrc));
 t("and neither keeps the unclamped `const by = sy + sh + 8`",
   !/const by = sy \+ sh \+ 8;/.test(canvasSrc));
 

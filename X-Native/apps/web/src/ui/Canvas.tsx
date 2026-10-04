@@ -230,6 +230,20 @@ const RASTER_NOISE_INK = "#ffffff";
 const RASTER_NOISE_BG = "#000000";
 const RASTER_TEMP_FILL = "#ffffff";
 
+/** Painted chrome's type and geometry — the canvas side of the sheet's scales.
+ *  A paint cannot read a CSS custom property without a `getComputedStyle` per
+ *  frame, so the numbers a badge draws with are named once, at the value the
+ *  ladder holds: `--fs-xs` for the label, `--r-control` for the corner,
+ *  `--h-xs` for the chip, `--sp-2` for the gutter that keeps a chip clear of
+ *  the box — and of the cursor — it annotates. */
+const CHROME_FONT = "500 11px Inter, system-ui";
+const CHROME_FONT_STRONG = "600 11px Inter, system-ui";
+const CHROME_RADIUS = 4;
+const CHROME_CHIP_H = 20;
+const CHROME_CHIP_PAD = 12;
+const CHROME_PAD_WIDE = 16;
+const CHROME_GAP = 8;
+
 const CREATE: Tool[] = [
   "frame",
   "section",
@@ -3119,7 +3133,7 @@ export function Canvas({
         // Weight does not carry selection state here — colour does, exactly as in
         // Figma, where a selected frame's name is the same 11px medium as every
         // other label, only in the selection ink.
-        ctx.font = "500 11px Inter, system-ui";
+        ctx.font = CHROME_FONT;
         ctx.fillStyle = active ? SEL : canvasLabel;
         ctx.textBaseline = "alphabetic";
         ctx.fillText(n.name, screenX, screenY - 8);
@@ -3216,7 +3230,7 @@ export function Canvas({
           const fy = snap.panY + startWp.y * z;
           const badgeText = "Flow 1";
           ctx.save();
-          ctx.font = "600 11px Inter, system-ui";
+          ctx.font = CHROME_FONT_STRONG;
           const tw = ctx.measureText(badgeText).width;
           const pw = tw + 28;
           const ph = 22;
@@ -3715,24 +3729,24 @@ export function Canvas({
         : lockedSel
           ? "Locked"
           : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
-      ctx.font = "500 11px Inter, system-ui";
+      ctx.font = CHROME_FONT;
       const tw = ctx.measureText(dim).width;
-      const bw = tw + 16;
-      const bh = 20;
+      const bw = tw + CHROME_PAD_WIDE;
+      const bh = CHROME_CHIP_H;
       // FR-U4: the readout used to hang 8px below the box unconditionally, so a
       // selection whose bottom edge was at the canvas bottom lost it — usually
       // mid-resize of something tall, which is when it is wanted most.
       const badge = clampBadge(
-        { x: sx + sw / 2 - bw / 2, y: sy + sh + 8, w: bw, h: bh },
+        { x: sx + sw / 2 - bw / 2, y: sy + sh + CHROME_GAP, w: bw, h: bh },
         { w, h },
-        { flipY: sy - 8 - bh },
+        { flipY: sy - CHROME_GAP - bh },
       );
       const bx = badge.x;
       const by = badge.y;
       ctx.fillStyle = lockedSel && !isRotating ? LOCK : accent;
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
-        ctx.roundRect(bx, by, bw, bh, 4);
+        ctx.roundRect(bx, by, bw, bh, CHROME_RADIUS);
         ctx.fill();
       } else {
         ctx.fillRect(bx, by, bw, bh);
@@ -4010,26 +4024,26 @@ export function Canvas({
           ctx.strokeRect(hx - 4 + 0.5, hy - 4 + 0.5, 7, 7);
         }
         const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
-        ctx.font = "500 11px Inter, system-ui";
-        const bw = ctx.measureText(dim).width + 16;
+        ctx.font = CHROME_FONT;
+        const bw = ctx.measureText(dim).width + CHROME_PAD_WIDE;
         // FR-U4, the multi-selection badge: same clamp, same flip above the box.
         const badge = clampBadge(
-          { x: sx + sw / 2 - bw / 2, y: sy + sh + 8, w: bw, h: 20 },
+          { x: sx + sw / 2 - bw / 2, y: sy + sh + CHROME_GAP, w: bw, h: CHROME_CHIP_H },
           { w, h },
-          { flipY: sy - 8 - 20 },
+          { flipY: sy - CHROME_GAP - CHROME_CHIP_H },
         );
         const bx = badge.x;
         const by = badge.y;
         ctx.fillStyle = allLocked ? LOCK : SEL;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
-          ctx.roundRect(bx, by, bw, 20, 4);
+          ctx.roundRect(bx, by, bw, CHROME_CHIP_H, CHROME_RADIUS);
           ctx.fill();
-        } else ctx.fillRect(bx, by, bw, 20);
+        } else ctx.fillRect(bx, by, bw, CHROME_CHIP_H);
         ctx.fillStyle = INK;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(dim, bx + bw / 2, by + 10);
+        ctx.fillText(dim, bx + bw / 2, by + CHROME_CHIP_H / 2);
         ctx.textAlign = "left";
         ctx.textBaseline = "alphabetic";
         ctx.restore();
@@ -4416,16 +4430,16 @@ export function Canvas({
           const rotationDrag = drag.current?.mode === "vecResize" && drag.current.id === vecEdit ? drag.current : null;
           if (pointRotation != null && rotationDrag?.currentX != null && rotationDrag.currentY != null) {
             const label = `${pointRotation > 0 ? "+" : ""}${pointRotation}°`;
-            ctx.font = "500 11px Inter, system-ui";
-            const bw = ctx.measureText(label).width + 12;
+            ctx.font = CHROME_FONT;
+            const bw = ctx.measureText(label).width + CHROME_CHIP_PAD;
             const bx = snap.panX + rotationDrag.currentX * z + 12;
             const by = snap.panY + rotationDrag.currentY * z - 24;
             ctx.fillStyle = SEL;
             if (typeof ctx.roundRect === "function") {
               ctx.beginPath();
-              ctx.roundRect(bx, by, bw, 20, 4);
+              ctx.roundRect(bx, by, bw, CHROME_CHIP_H, CHROME_RADIUS);
               ctx.fill();
-            } else ctx.fillRect(bx, by, bw, 20);
+            } else ctx.fillRect(bx, by, bw, CHROME_CHIP_H);
             ctx.fillStyle = INK;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
@@ -4656,7 +4670,7 @@ export function Canvas({
           const by = loupeY + loupeR + 6;
           if (typeof ctx.roundRect === "function") {
             ctx.beginPath();
-            ctx.roundRect(bx, by, tw, th, 4);
+            ctx.roundRect(bx, by, tw, th, CHROME_RADIUS);
             ctx.fill();
           } else {
             ctx.fillRect(bx, by, tw, th);
@@ -4769,7 +4783,7 @@ export function Canvas({
         const left = placing.srcs.length - placing.i;
         const label = left === 1 ? "Click to place · Esc to stop" : `${left} to place · click · Esc to stop`;
         ctx.save();
-        ctx.font = "500 11px Inter, system-ui";
+        ctx.font = CHROME_FONT;
         const tw = ctx.measureText(label).width + 16;
         const bx = cursorPos.x - r.left + 14;
         const by = cursorPos.y - r.top + 14;
@@ -9467,19 +9481,6 @@ export function Canvas({
               e.stopPropagation();
             }}
             onFocus={(e) => e.currentTarget.select()}
-            style={{
-              font: "600 11px Inter, system-ui",
-              padding: "2px 6px",
-              border: "1px solid var(--accent)",
-              // Figma's inline rename field is a plain rectangle - the accent
-              // hairline, square corners, no radius. This one used to be 4px,
-              // which read as a chip rather than as a field in the document.
-              borderRadius: 0,
-              background: "var(--elevated)",
-              color: "var(--text)",
-              minWidth: 80,
-              boxShadow: "var(--elev-floating)",
-            }}
           />
         </div>
       )}
@@ -9489,17 +9490,7 @@ export function Canvas({
           className="link-input"
           style={{ left: emojiPick.left, top: emojiPick.top, position: "absolute", zIndex: 31 }}
         >
-          <div
-            style={{
-              display: "flex",
-              gap: 2,
-              padding: "4px 6px",
-              background: "var(--elevated)",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              boxShadow: "var(--elev-floating)",
-            }}
-          >
+          <div className="emoji-pick">
             {emojiCompletions(emojiPick.query).map(({ code, emoji }) => (
               <button
                 key={code}
@@ -9509,7 +9500,6 @@ export function Canvas({
                   e.preventDefault();
                   emojiApply(code, emoji);
                 }}
-                style={{ font: "16px Inter, system-ui" }}
               >
                 {emoji}
               </button>
@@ -9555,35 +9545,13 @@ export function Canvas({
               setLinkInput(null);
             }}
             onBlur={() => setLinkInput(null)}
-            style={{
-              font: "12px Inter, system-ui",
-              padding: "4px 8px",
-              border: "1px solid var(--accent)",
-              borderRadius: 4,
-              background: "var(--elevated)",
-              color: "var(--text)",
-              minWidth: 220,
-              boxShadow: "var(--elev-floating)",
-            }}
           />
         </div>
       )}
       {linkHover && (
         <div
           className="link-hover"
-          style={{
-            left: linkHover.left,
-            top: linkHover.top,
-            position: "absolute",
-            zIndex: 25,
-            pointerEvents: "none",
-            font: "11px Inter, system-ui",
-            padding: "3px 7px",
-            borderRadius: 4,
-            background: "var(--elev-floating)",
-            color: "var(--text)",
-            boxShadow: "var(--elev-floating)",
-          }}
+          style={{ left: linkHover.left, top: linkHover.top, position: "absolute", zIndex: 25, pointerEvents: "none" }}
         >
           {linkHover.url} · click to open
         </div>

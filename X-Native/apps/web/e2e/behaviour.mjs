@@ -2532,9 +2532,12 @@ for (const [label, payload] of [
     };
   });
   // A borderless 24px select in the panel's rows, a bordered 12px default in the
-  // card, one row apart: the same control looked like two different things.
+  // card, one row apart: the same control looked like two different things. The
+  // density pass put both on the sheet's control recipe — 28px tall (the shared
+  // --h-control), --r-control corners and the control type — so the expectation
+  // is the ladder's, not a number this test invented.
   t(`panel and card selects share one recipe (${panel.rowShape})`,
-    panel.rowShape === panel.cardShape && panel.rowShape.startsWith("28px|solid 1px|6px|11px"));
+    panel.rowShape === panel.cardShape && panel.rowShape.startsWith("28px|solid 1px|4px|12px"));
   t(`the interaction is a card (${panel.card?.border}, ${panel.card?.radius}, ${panel.card?.bg})`,
     panel.card?.border === "1px" && panel.card?.radius === "8px" && panel.card?.gap === "5px");
   t(`and styles itself from the sheet (${panel.cardInline.length} inline, ${panel.selectInline} on selects)`,

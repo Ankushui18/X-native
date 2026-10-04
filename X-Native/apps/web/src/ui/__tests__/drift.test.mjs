@@ -106,7 +106,11 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [11, 9, 13, 16, 1],
+  // 2026-10-05: four floating surfaces left the component for the sheet — the
+  // frame-rename field, the link box, the link hover pill and the emoji
+  // picker all ride the control rhythm now (`.frame-name-edit input`,
+  // `.link-input input`, `.link-hover`, `.emoji-pick`).
+  "Canvas.tsx": [7, 9, 13, 16, 1],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   // Raised 2026-10-03 for the dev-only Rust WASM POC trigger (one named button).
@@ -141,7 +145,10 @@ const CEILING = {
   // Raised 2026-10-01 batch 21: Overflow scroll dropdown in the Layout section
   // for frames — one extra native <select>, plus a three-column inline grid
   // around it and the helper text.
-  "inspector.tsx": [189, 22, 248, 200, 49],
+  // 2026-10-05: four inline styles became classes — the three size tags
+  // (`.auto-tag`) and the Flow group header's ad-hoc `marginBottom: 6`. The
+  // group headers now carry the rows' own gutter from the sheet.
+  "inspector.tsx": [185, 22, 248, 200, 49],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };
