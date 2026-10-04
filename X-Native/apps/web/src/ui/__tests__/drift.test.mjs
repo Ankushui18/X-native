@@ -108,7 +108,11 @@ const CEILING = {
   // Raised 2026-09-30 for the File menu (P0-2): a trigger and two rows, the
   // chrome's first menu of its own — no title and no inline style, so only
   // the button row moves. One more row for Export assets… (P0-4).
-  "chrome.tsx": [49, 4, 41, 71, 2],
+  // Raised 2026-10-04 for the batch-45 canvas-chrome switch (View → Canvas
+  // chrome): one `<button>` in the rail menu, drawn from `CANVAS_CHROME_OPTIONS`
+  // so the row is the whole cost — no `title=`, no inline style, and the model
+  // (`themeModel.ts`) keeps its [0, 0, 0, 0, 0].
+  "chrome.tsx": [49, 4, 41, 72, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
   "icons.tsx": [0, 3, 0, 0, 0],
   // Raised 2026-10-01 batch 21: Overflow scroll dropdown in the Layout section

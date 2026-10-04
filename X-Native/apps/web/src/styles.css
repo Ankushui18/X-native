@@ -310,6 +310,36 @@ html[data-theme="dark"] {
   --accent-ring: rgba(16, 185, 129, 0.38);
 }
 
+/* Canvas chrome: the Figma-blue option (View → Canvas chrome).
+ *
+ * Opt-in only, and deliberately narrow: it moves the *canvas* selection family to
+ * Figma's blue and leaves the app's own `--accent` (panels, buttons, focus rings,
+ * the rail) exactly where it was. The canvas reads these through `canvasChrome.ts`
+ * per paint, so a flip repaints without a reload; `theme.tsx` writes
+ * `data-canvas-chrome` and removes it again for the default, which is why the
+ * `editor` palette is whatever the two blocks above already say.
+ *
+ * `--cv-target` is not restated because it is already `#0d99ff` in both columns —
+ * under this theme the selection ring and the drop target share one blue, which is
+ * what Figma itself does when you drag a layer over a frame. The emerald that
+ * `--grid` carried is included: a "no green on the canvas" theme that left a
+ * green-tinted pixel grid behind was not a theme.
+ *
+ * Specificity is `html[attr]` against `html[data-theme=dark]`'s `html[attr]` —
+ * equal, so this block sits *after* both to win the cascade.
+ */
+html[data-canvas-chrome="figma"] {
+  --cv-sel: #0d99ff;
+  --cv-sel-wash: rgba(13, 153, 255, 0.14);
+  --cv-sel-glow: rgba(13, 153, 255, 0.35);
+  --grid: rgba(13, 153, 255, 0.07);
+}
+/* The dark column thins nothing here except the grid, whose alpha is already
+   higher for the dark canvas; everything else is identical in both schemes. */
+html[data-canvas-chrome="figma"][data-theme="dark"] {
+  --grid: rgba(13, 153, 255, 0.09);
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {

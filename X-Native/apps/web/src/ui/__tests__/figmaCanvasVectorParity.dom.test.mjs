@@ -10,8 +10,9 @@
  *
  * Coverage by fix:
  *   A  pixel grid layers over the document, under the chrome          (Fix 1)
- *   B  frame rotation target: hollow → filled/haloed on hover, and the
- *      highlight comes from the same measurement as the cursor         (Fix 2)
+ *   B  rotation is an invisible band + a cursor, with nothing painted, and the
+ *      band the cursor reports is the band the press accepts            (Fix 2)
+ *   M  chrome type metrics: 11px medium labels, 8px container handles (Fix 2)
  *   C  path skeleton: unselected edges are a dim centre line, an edge
  *      between two selected anchors is full-strength                   (Fix 3)
  *   D  double-click enters vecEdit *and* selects the anchor under it    (Fix 4, 6)
@@ -24,7 +25,10 @@
  * assertions are load-bearing:
  *   - move `paintPixelGrid()` back above the layer tree   -> A1 fails
  *   - paint the grid after the chrome (never called)      -> A2 fails
- *   - `rotHover` never set in `onMove`                    -> B2, B3 fail
+ *   - repaint the rotation handle at the band               -> B1, B11 fail
+ *   - widen `ROTATION_HANDLE_HIT` past the constant         -> B7, B8 fail
+ *   - bold the selected frame's label again                 -> M1, M3 fail
+ *   - shrink the container handles back to 7px              -> M4, M5 fail
  *   - skeleton + selected edge share one style            -> C2 fails
  *   - delete the skeleton loop                            -> C1 fails
  *   - `entryAnchor` returns null (the pre-fix entry)      -> D1 fails
@@ -35,11 +39,12 @@
  *   - restore the authored-only mirror check in the drag  -> F1, F4 fail
  *   - do not persist the break (`p.mirrorMode` left alone)-> F2b fails
  */
+import { readFileSync } from "fs";
 import { installDom } from "./domEnv.mjs";
 import { MemoryEngine, node, find, localToWorld } from "../../engine/memory.ts";
 import { pathToVectorNetwork } from "../../engine/geometry.ts";
 import { effectiveMirrorMode, anchorIndexAt, addPointTargetAt, VERTEX_PRIORITY_PX, ADD_POINT_TOL_PX } from "../vectorEdit.ts";
-import { frameRotationHandle, rotationHandleHit, ROTATION_HANDLE_RADIUS, ROTATION_HANDLE_HIT, ROTATION_RING } from "../canvasSelection.ts";
+import { frameRotationHandle, rotationHandleHit, ROTATION_HANDLE_HIT, ROTATION_RING } from "../canvasSelection.ts";
 
 let pass = 0, fail = 0;
 const t = (name, ok, detail = "") => {
@@ -54,6 +59,7 @@ const near = (a, b, eps = 0.01) => Math.abs(a - b) <= eps;
 // retyping hexes) means a retheme moves the tests with the code; `canvasChrome
 // .test.mjs` is what pins the fallbacks to styles.css.
 const { CANVAS_CHROME_FALLBACK, withAlpha } = await import("../canvasChrome.ts");
+const canvasSource = readFileSync(new URL("../Canvas.tsx", import.meta.url), "utf8");
 const SEL = CANVAS_CHROME_FALLBACK.sel;
 const SKELETON = withAlpha(SEL, 0.45);
 const SEL_GLOW = CANVAS_CHROME_FALLBACK.selGlow;
@@ -75,7 +81,7 @@ window.HTMLCanvasElement.prototype.getContext = function getContext() {
   return el.__ctx;
 };
 function makeContext(el) {
-  const st = { strokeStyle: "#000000", fillStyle: "#000000", lineWidth: 1 };
+  const st = { strokeStyle: "#000000", fillStyle: "#000000", lineWidth: 1, font: "10px sans-serif" };
   const target = {
     canvas: el,
     measureText: (s) => ({ width: String(s).length * 6, actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 3 }),
@@ -102,7 +108,7 @@ function makeContext(el) {
     },
   });
 }
-const snapshot = (st) => ({ strokeStyle: st.strokeStyle, fillStyle: st.fillStyle, lineWidth: st.lineWidth });
+const snapshot = (st) => ({ strokeStyle: st.strokeStyle, fillStyle: st.fillStyle, lineWidth: st.lineWidth, font: st.font });
 Object.defineProperty(window.HTMLElement.prototype, "clientWidth", { configurable: true, get: () => 1000 });
 Object.defineProperty(window.HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 800 });
 window.HTMLElement.prototype.getBoundingClientRect = () => ({
@@ -196,56 +202,117 @@ const tri = [
   await ui.close();
 }
 
-/* --------------------------------------------------- B · rotation hover state */
+/* ------------------------- B · rotation is a cursor, and paints nothing at all */
 {
   const frame = node("frame", "Rotatable", 100, 100, 300, 200, { fill: "#ffffff" });
   const ui = await mount([frame]);
   await ui.dispatch({ type: "select", ids: [frame.id] });
   // zoom 1 / pan 0, so the test's "screen" and world coordinates coincide.
   const handle = frameRotationHandle("frame", 100, 100, 300, 200);
-  t("B0 the target sits above the top-right corner, not top-centre",
+  t("B0 the grab band is centred above the top-right corner, not top-centre",
     near(handle.x, 400) && near(handle.y, 80) && !near(handle.x, 100 + 150), JSON.stringify(handle));
-  // Not hovered: the shipped hollow dot, radius from the shared constant.
-  const atHandle = (o) => near(o.args[0], handle.x, 0.01) && near(o.args[1], handle.y, 0.01);
-  /** The dot and its halo are an `arc` followed by the `fill` that inks it, so the
-   *  style has to be read off the op after the geometry one. */
-  const filled = (radius) => {
-    const all = ui.ops();
-    for (let i = all.length - 1; i >= 0; i--) {
-      const o = all[i];
-      if (o.op === "arc" && atHandle(o) && near(o.args[2], radius)) {
-        const next = all[i + 1];
-        return next && next.op === "fill" ? next : o;
-      }
-    }
-    return null;
-  };
-  const hollow = filled(ROTATION_HANDLE_RADIUS);
-  t("B1 unhovered, the handle paints hollow (white fill)", !!hollow && hollow.fillStyle === HANDLE_FILL,
-    String(hollow?.fillStyle));
-  const haloBefore = ui.ops().some((o) => o.op === "arc" && atHandle(o) && near(o.args[2], ROTATION_HANDLE_RADIUS + 3));
-  t("B2 unhovered, there is no halo", !haloBefore);
-
+  /** Arcs inside the band: the 5px dot, its 8px halo, the 2.2px glyph and the
+   *  non-frame ring all used to live here. Every one of them is the regression
+   *  this pins, so the filter is on position, not on a radius someone could
+   *  re-tune to slip past it. */
+  const arcsInBand = () => ui.ops().filter((o) =>
+    o.op === "arc" && Math.hypot(o.args[0] - handle.x, o.args[1] - handle.y) <= 26);
+  t("B1 a selected frame paints nothing at its rotation target", arcsInBand().length === 0,
+    `${arcsInBand().length} arc(s) in the band`);
+  t("B2 and no stem joins the corner to the target",
+    !ui.ops().some((o) => o.op === "lineTo" && near(o.args[0], handle.x, 0.01) && near(o.args[1], handle.y, 0.01)));
+  const rotateCursor = () => ui.surface.style.cursor;
   await ui.mouse("mousemove", handle.x, handle.y);
-  const dot = filled(ROTATION_HANDLE_RADIUS);
-  t("B3 hovered, the handle fills with the selection accent", !!dot && dot.fillStyle === SEL, String(dot?.fillStyle));
-  const halo = filled(ROTATION_HANDLE_RADIUS + 3);
-  t("B4 hovered, the handle gains a halo ring", !!halo && halo.fillStyle === SEL_GLOW,
-    String(halo?.fillStyle));
-  t("B5 hovered, the stem thickens", ui.ops().some((o) => o.op === "stroke" && o.strokeStyle === SEL && o.lineWidth === 1.5));
-  t("B6 the cursor and the highlight agree on the target", ui.surface.style.cursor.includes("url("));
+  t("B3 hovering the band paints nothing either", arcsInBand().length === 0);
+  t("B4 the hover is sold by the cursor alone", rotateCursor().includes("url("), rotateCursor().slice(0, 28));
   ops = [];
   await ui.mouse("mousemove", 120, 120);
-  const back = filled(ROTATION_HANDLE_RADIUS);
-  t("B7 leaving the target makes the dot hollow again", !!back && back.fillStyle === HANDLE_FILL,
-    String(back?.fillStyle));
-  t("B8 leaving the target drops the halo", !filled(ROTATION_HANDLE_RADIUS + 3));
-  // The hit box is the painted box plus a grab margin, from one constant.
-  // The hit box is the painted box plus a grab margin, both from one module.
-  t("B9 hit radius comes from the shared constant", rotationHandleHit("frame", 500, 500, 100, 100, 300, 200) === false
-    && rotationHandleHit("frame", 400, 80 + ROTATION_HANDLE_HIT, 100, 100, 300, 200) === true
+  t("B5 leaving the band drops the cursor", !rotateCursor().includes("url("), rotateCursor().slice(0, 28));
+  t("B6 and the frame never gained chrome while the pointer was in it", arcsInBand().length === 0);
+  // The band stays exactly as wide as the module says, because the press and the
+  // cursor read the same number; with no handle to look at, that is the only
+  // promise left to keep.
+  t("B7 the band's half-width is the shared constant",
+    rotationHandleHit("frame", 400, 80 + ROTATION_HANDLE_HIT, 100, 100, 300, 200) === true
     && rotationHandleHit("frame", 400, 80 + ROTATION_HANDLE_HIT + 1, 100, 100, 300, 200) === false);
-  t("B10 a press exactly on the hit edge still rotates", rotationHandleHit("frame", 400 - ROTATION_HANDLE_HIT, 80, 100, 100, 300, 200));
+  t("B8 a press inside the band rotates", (() => {
+    const before = ui.node(frame.id).rotation;
+    return before === 0 && rotationHandleHit("frame", 400 - 6, 84, 100, 100, 300, 200);
+  })());
+  // The chrome cannot come back through a new export either: there is no
+  // handle radius left for a painter to draw with.
+  const sel = await import("../canvasSelection.ts");
+  t("B9 canvasSelection.ts exports no painted-handle geometry", !("ROTATION_HANDLE_RADIUS" in sel),
+    Object.keys(sel).join(", "));
+  t("B10 Canvas.tsx does not even import the handle position any more",
+    !/frameRotationHandle/.test(canvasSource), "the painter still reaches for it");
+  await ui.close();
+}
+{
+  // The other half of the removal: a plain shape used to get a 14px ring outside
+  // its top-right corner, and a `ROTATION_RING` band still decides the cursor.
+  const rect = node("rect", "Plain", 100, 100, 300, 200, { fill: "#ffffff" });
+  const ui = await mount([rect]);
+  await ui.dispatch({ type: "select", ids: [rect.id] });
+  const near = ROTATION_RING;
+  const ringArcs = ui.ops().filter((o) => o.op === "arc"
+    && Math.hypot(o.args[0] - 400, o.args[1] - 100) <= near.max);
+  t("B11 a plain shape has no ring outside its corner either", ringArcs.length === 0,
+    `${ringArcs.length} arc(s)`);
+  t("B12 its corner band is the one the press uses",
+    rotationHandleHit("rect", 400 - 14, 100 - 14, 100, 100, 300, 200) === true
+    && rotationHandleHit("rect", 400 - (near.max + 1), 100 - (near.max + 1), 100, 100, 300, 200) === false);
+  await ui.close();
+}
+
+/* --------------------------------------- M · the chrome's type and handle sizes */
+{
+  const frame = node("frame", "Named frame", 100, 100, 300, 200, { fill: "#ffffff" });
+  const rect = node("rect", "Plain", 100, 400, 300, 200, { fill: "#ffffff" });
+  const ui = await mount([frame, rect]);
+  /** Frame names are drawn by `labelNames`, one `fillText` per visible label;
+   *  `ops` accumulates for the whole mount, so each pass clears it first. */
+  const label = (text) => ui.ops().filter((o) => o.op === "fillText" && o.args[0] === text).pop();
+  const boxes = () => ui.ops().filter((o) => o.op === "fillRect" && o.fillStyle === HANDLE_FILL);
+  ops = [];
+  await ui.dispatch({ type: "select", ids: [frame.id] });
+  const on = label("Named frame");
+  t("M1 a selected frame's name is 11px medium", !!on && on.font === "500 11px Inter, system-ui",
+    on ? `${on.font} / ${on.fillStyle}` : "no label painted");
+  t("M2 and selection shows in its colour, not its weight", !!on && on.fillStyle === SEL,
+    String(on?.fillStyle));
+  // Handles: Figma's boxes are 8px on a container, painted one inset so the 1px
+  // stroke lands on the edge rather than outside the box.
+  const at = (o) => [o.args[0] + o.args[2] / 2, o.args[1] + o.args[3] / 2];
+  const FRAME_BOXES = [[100, 100], [250, 100], [400, 100], [400, 200], [400, 300], [250, 300], [100, 300], [100, 200]];
+  const frameBoxes = boxes();
+  t("M3 a selected frame's handles are 8px boxes (painted 7 + 1px stroke)",
+    frameBoxes.length === 8 && frameBoxes.every((o) => o.args[2] === 7 && o.args[3] === 7),
+    `${frameBoxes.length} boxes: ${frameBoxes.map((o) => o.args[2]).join(",")}`);
+  t("M4 growing them did not move them: every box is centred on its edge point",
+    frameBoxes.length === 8 && frameBoxes.every((o) => {
+      const [cx, cy] = at(o);
+      return FRAME_BOXES.some(([x, y]) => near(cx, x, 0.001) && near(cy, y, 0.001));
+    }),
+    frameBoxes.map((o) => at(o).map((v) => Math.round(v * 10) / 10).join(":")).join(" "));
+  ops = [];
+  await ui.dispatch({ type: "select", ids: [] });
+  t("M5 unselected, the label keeps the same font at the dim ink", (() => {
+    const off = label("Named frame");
+    return !!off && off.font === "500 11px Inter, system-ui" && off.fillStyle !== SEL;
+  })(), String(label("Named frame")?.font));
+  ops = [];
+  await ui.dispatch({ type: "select", ids: [rect.id] });
+  const small = boxes();
+  t("M6 a plain shape keeps four corner handles, one step smaller",
+    small.length === 4 && small.every((o) => o.args[2] === 6 && o.args[3] === 6),
+    `${small.length} boxes: ${small.map((o) => o.args[2]).join(",")}`);
+  t("M7 mid-edge handles are a container idea, not a shape one",
+    small.every((o) => {
+      const [cx, cy] = at(o);
+      return [[100, 400], [400, 400], [400, 600], [100, 600]].some(([x, y]) => near(cx, x, 0.001) && near(cy, y, 0.001));
+    }),
+    small.map((o) => at(o).map((v) => Math.round(v * 10) / 10).join(":")).join(" "));
   await ui.close();
 }
 

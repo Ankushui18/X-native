@@ -72,6 +72,7 @@ export function Minimap({
   viewW,
   viewH,
   theme,
+  chrome,
 }: {
   root: XNode;
   engine: Engine;
@@ -81,6 +82,11 @@ export function Minimap({
   viewW: number;
   viewH: number;
   theme: string;
+  /** The canvas-chrome preference. These surfaces read their palette out of the CSS
+   *  cascade, so a chrome flip changes what the *same* `theme` value resolves to;
+   *  without this in the deps the rails keep the old selection ink until something
+   *  else moves the view. */
+  chrome: string;
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef(false);
@@ -142,7 +148,7 @@ export function Minimap({
     ctx.strokeRect(Math.round(vx) + 0.5, Math.round(vy) + 0.5, Math.round(vw), Math.round(vh));
     ctx.fillStyle = chrome.accentWash;
     ctx.fillRect(vx, vy, vw, vh);
-  }, [root, zoom, panX, panY, viewW, viewH, theme]);
+  }, [root, zoom, panX, panY, viewW, viewH, theme, chrome]);
 
   /** Centre the viewport on the clicked point. */
   const goTo = (clientX: number, clientY: number) => {

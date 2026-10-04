@@ -240,15 +240,23 @@ const handleSquares = () => paints.filter(([c, , , w]) => c === "fillRect" && (w
   await ui.close();
 }
 
-// Frame chrome: detached rotation handle at top-right, no centre handle, corners never rotate.
+// Frame chrome: no painted rotate handle, no centre handle, corners never rotate.
 {
   const f = shape("frame", "Frame A", [], { x: 100, y: 100, w: 300, h: 200 });
   const ui = await mount([f], [f.id]);
   const hs = handleSquares();
   t("frame shows exactly 8 handles", hs.length >= 8, String(hs.length));
   t("frame has no centre handle", !hs.some(([x, y]) => near(x + 3.5, 250) && near(y + 3.5, 200)));
-  // Rotation affordance is the hollow arc above the top-right corner (400,80).
-  t("frame's rotation affordance is detached above the top-right region", paints.some(([c, x, y]) => c === "arc" && near(x, 400, 40) && near(y, 80, 20)));
+  // The band 20px above the top-right corner (400,80) is where the grab lives, and
+  // nothing is painted there — Figma's rotate affordance is the cursor alone, so an
+  // arc in that region means chrome came back (batch 45 removed it for exactly this
+  // reason, against a screenshot of the real thing).
+  t("frame's rotation affordance paints nothing above the top-right corner",
+    !paints.some(([c, x, y]) => c === "arc" && near(x, 400, 40) && near(y, 80, 20)),
+    String(paints.filter(([c, x, y]) => c === "arc" && near(x, 400, 40) && near(y, 80, 20)).length));
+  await ui.mouse("mousemove", 400, 80);
+  t("the band does promise the rotate cursor", ui.surface.style.cursor.includes("url("),
+    ui.surface.style.cursor.slice(0, 24));
   // Frame TL corner does NOT rotate a frame (only the detached dot does).
   await ui.mouse("mousemove", 100 - 14, 100 - 14);
   await ui.drag(100 - 14, 100 - 14, 200, 60);

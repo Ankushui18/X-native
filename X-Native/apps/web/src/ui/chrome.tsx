@@ -37,7 +37,7 @@ import {
 } from "./nudgePrefs";
 import { finishPenDraft } from "./penDraft";
 import { dismissSelectedConnection } from "./connSelection";
-import { THEME_OPTIONS, useTheme } from "./theme";
+import { CANVAS_CHROME_OPTIONS, THEME_OPTIONS, useTheme } from "./theme";
 import { ContextMenu, isGroupNode, layerMenu, pageMenu, runMenu } from "./ContextMenu";
 import { align, PRESET_GROUPS } from "./inspector";
 import { hugSize } from "./textLayout";
@@ -72,7 +72,7 @@ export function NavRail({
   onHome?: () => void;
 }) {
   const [menu, setMenu] = useState(false);
-  const { pref, setPref } = useTheme();
+  const { pref, setPref, chromePref, setChromePref } = useTheme();
   const items: { id: NavId; icon: IconName; label: string; tab?: "layers" | "assets" | "tokens" }[] = [
     { id: "file", icon: "layers", label: "File", tab: "layers" },
     { id: "agent", icon: "agent", label: "Agent" },
@@ -136,6 +136,25 @@ export function NavRail({
               <button key={o.id} className={pref === o.id ? "on" : ""} onClick={() => setPref(o.id)}>
                 {o.label}
                 {pref === o.id && <span className="sc">✓</span>}
+              </button>
+            ))}
+            <hr />
+            {/* Its own row, not a fourth Theme option: the colour scheme and the
+                canvas palette are independent switches. And it moves only the
+                overlays drawn on the document — ring, handles, labels, rulers,
+                minimap — while panels and the rail keep the app accent; the scope
+                is `html[data-canvas-chrome]` in styles.css, see `themeModel.ts`.
+                And no native tooltip attribute, in keeping with the Theme row and
+                the §2.3 rule the drift table's `title` column enforces. */}
+            <div className="kicker">Canvas chrome</div>
+            {CANVAS_CHROME_OPTIONS.map((o) => (
+              <button
+                key={o.id}
+                className={chromePref === o.id ? "on" : ""}
+                onClick={() => setChromePref(o.id)}
+              >
+                {o.label}
+                {chromePref === o.id && <span className="sc">✓</span>}
               </button>
             ))}
           </div>

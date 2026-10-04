@@ -14,7 +14,7 @@ import { worldPlacement as worldPos } from "../engine/memory";
 import { isPointBoxCorner, pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork, rotatePointNetwork, translatePointNetwork, type PointBounds } from "./pointBox";
 import { lassoSelectPathPoints, type LassoOperation } from "./vectorLasso";
 import { layersAt } from "./selectSame";
-import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit, ROTATION_HANDLE_RADIUS } from "./canvasSelection";
+import { canvasClickTarget, drillChild, rotationHandleHit } from "./canvasSelection";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { resizeGroupMembers, rotateGroupMembers, rotateAboutOrigin, wrapRotationDeg } from "./scaleModel";
 import {
@@ -954,10 +954,6 @@ export function Canvas({
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
   /* Keeps the rotation origin out of the way until `⌥R` asks for it. */
   const [rotTarget, setRotTarget] = useState(false);
-  /** The pointer is inside the detached rotation target, so the handle paints
-   *  its hover state. Figma sells rotation with a cursor change plus an
-   *  emphasised target; one measurement drives both. */
-  const [rotHover, setRotHover] = useState(false);
   /** Where a click would insert an anchor on the path under the pointer (Figma's
    *  "+" pen state). Node-local coordinates, in the edited node's space. */
   const [addPt, setAddPt] = useState<AddPointPreview | null>(null);
@@ -1041,7 +1037,7 @@ export function Canvas({
   const connClipboard = useRef<Interaction[]>([]);
   /** Static snap targets, captured once at drag start so they never shift mid-drag. */
   const snapTargets = useRef<Box[]>([]);
-  const { theme } = useTheme();
+  const { theme, chromePref } = useTheme();
   const runInteraction = useCallback(
     (ix: Interaction, sourceId?: string) => {
       // Conditions gate the whole interaction, animated or not.
@@ -3106,7 +3102,10 @@ export function Canvas({
       ) {
         const active = selected || hoverId === n.id || panelHover === n.id;
         ctx.save();
-        ctx.font = active ? "600 11px Inter, system-ui" : "500 11px Inter, system-ui";
+        // Weight does not carry selection state here — colour does, exactly as in
+        // Figma, where a selected frame's name is the same 11px medium as every
+        // other label, only in the selection ink.
+        ctx.font = "500 11px Inter, system-ui";
         ctx.fillStyle = active ? SEL : canvasLabel;
         ctx.textBaseline = "alphabetic";
         ctx.fillText(n.name, screenX, screenY - 8);
@@ -3654,9 +3653,11 @@ export function Canvas({
           ctx.fill();
           ctx.stroke();
         } else {
-          // Hollow square: 7×7 for containers, 6×6 for plain shapes. White
-          // fill with accent stroke matches Figma's selection chrome.
-          const s = isFrame ? 7 : 6;
+          // Hollow square: 8×8 for containers, 7×7 for plain shapes, white fill
+          // with the accent stroke — Figma's handle boxes, measured off its
+          // selection chrome at 100%. Painted one inset (`s - 1`) so the 1px
+          // stroke lands on the box edge.
+          const s = isFrame ? 8 : 7;
           const half = s / 2;
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = accent;
@@ -3686,74 +3687,13 @@ export function Canvas({
           ctx.stroke();
         }
       }
-      const rotateHandle = frameRotationHandle(kind, sx, sy, sw, sh);
-      if (rotateHandle && !lockedSel) {
-        // Figma's rotation target: a thin stem rising from the top-right
-        // corner to a small hollow circle with curved arrows inside. The old
-        // implementation placed the handle at top-centre and drew a detached
-        // arc glyph, which the tester called out as "rotation icon is in top
-        // middle of frame and Figma has different style".
-        //
-        // `rotHover` is the other half of the parity: Figma tells you the target
-        // has you (cursor swap + emphasised affordance) before you press, and the
-        // state comes from the same `rotationHandleHit` measurement the press
-        // uses, so the highlight and the grab can never disagree.
-        const rHov = rotHover;
-        ctx.save();
-        ctx.strokeStyle = accent;
-        ctx.lineWidth = rHov ? 1.5 : 1;
-        ctx.beginPath();
-        ctx.moveTo(sx + sw, sy);
-        ctx.lineTo(rotateHandle.x, rotateHandle.y);
-        ctx.stroke();
-        if (rHov) {
-          // Halo first, so the dot sits on it.
-          ctx.beginPath();
-          ctx.arc(rotateHandle.x, rotateHandle.y, ROTATION_HANDLE_RADIUS + 3, 0, Math.PI * 2);
-          ctx.fillStyle = SEL_GLOW;
-          ctx.fill();
-        }
-        // Hollow 9px dot with a 6px inner, stroked — Figma's rotation target;
-        // hovered, it fills with the accent and the glyph flips to the ink.
-        ctx.beginPath();
-        ctx.arc(rotateHandle.x, rotateHandle.y, ROTATION_HANDLE_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = rHov ? accent : HANDLE_FILL;
-        ctx.fill();
-        ctx.stroke();
-        const glyphInk = rHov ? INK : accent;
-        const prevFill = ctx.fillStyle;
-        ctx.strokeStyle = glyphInk;
-        ctx.fillStyle = glyphInk;
-        // Tiny double-arrow glyph inside (∿-style arrows) to read as "rotate".
-        ctx.beginPath();
-        ctx.arc(rotateHandle.x - 1, rotateHandle.y, 2.2, Math.PI * 0.15, Math.PI * 1.15);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15) - 2, rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15) - 2);
-        ctx.lineTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15), rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15));
-        ctx.lineTo(rotateHandle.x - 1 + 2.2 * Math.cos(Math.PI * 0.15) + 1.5, rotateHandle.y + 2.2 * Math.sin(Math.PI * 0.15) - 1.5);
-        ctx.stroke();
-        ctx.fillStyle = prevFill;
-        ctx.restore();
-      } else if (!lockedSel && !isFrame && !isLine && !isVectorLike && !isText) {
-        // Non-frame shapes: ring outside the top-right corner (no stem), hit
-        // at 8–24px by rotationHandleHit(). Matches Figma's shape rotate UX, and
-        // thickens on the same hover measurement the cursor uses.
-        ctx.save();
-        ctx.strokeStyle = accent;
-        ctx.lineWidth = rotHover ? 2 : 1;
-        ctx.beginPath();
-        ctx.arc(sx + sw, sy, 14, Math.PI * 0.6, Math.PI * 1.4);
-        ctx.stroke();
-        if (rotHover) {
-          ctx.strokeStyle = SEL_GLOW;
-          ctx.lineWidth = 4;
-          ctx.beginPath();
-          ctx.arc(sx + sw, sy, 14, Math.PI * 0.6, Math.PI * 1.4);
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
+      // No painted rotation handle, on purpose. Figma's rotate affordance is the
+      // *cursor*, not chrome: hovering just outside a corner swaps to
+      // `ROT_CURSOR` and dragging from there rotates, with the angle readout below
+      // as the only in-canvas feedback. The stem + hollow dot that used to live
+      // here was ours (top-centre first, then top-right per the 09-29 correction);
+      // a screenshot comparison against Figma settled it in batch 45, and the
+      // invisible band `rotationHandleHit` measures is all that remains.
       // Dynamic rotation angle readout badge when rotating
       const isRotating = drag.current?.mode === "rotate" && drag.current.id === wp.node.id;
       const dim = isRotating
@@ -4068,8 +4008,9 @@ export function Canvas({
         ctx.setLineDash([]);
         const hsMulti: [number, number][] = allLocked ? [] : handles(sx, sy, sw, sh);
         for (const [hx, hy] of hsMulti) {
-          // Multi-selection uses the same hollow-square handles as a single
-          // selected shape — white fill with selection-accent stroke.
+          // Multi-selection uses the same hollow-square recipe as a single selected
+          // shape — white fill, selection-accent stroke — at the smaller plain-shape
+          // size, because the box belongs to several layers, not to one.
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = SEL;
           ctx.lineWidth = 1;
@@ -4853,7 +4794,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, rotHover, addPt, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel]);
+  }, [snap, band, edit, engine, theme, chromePref, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, addPt, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -6348,7 +6289,6 @@ export function Canvas({
         next = isPointBoxCorner(pointHandle) && e.shiftKey ? ROT_CURSOR : resizeCursor(pointHandle);
       // The rotation target's hover state is measured in the same pass as its
       // cursor (below), so the two can never disagree about where the target is.
-      let rotHoverNow = false;
       if (r0 && snap.selection.length && !vecEdit) {
         const z = snap.zoom;
         const px0 = e.clientX - r0.left;
@@ -6379,7 +6319,6 @@ export function Canvas({
           const locked = bb && isEffectivelyLocked(root0, bb.node.id);
           if (!locked && rotationHandleHit(bb?.node.kind ?? "group", hx, hy, sx0, sy0, box.w * z, box.h * z)) {
             next = ROT_CURSOR;
-            rotHoverNow = true;
           }
           for (let i = 0; i < hs.length; i++) {
             if (Math.hypot(hx - hs[i][0], hy - hs[i][1]) < 8) {
@@ -6466,9 +6405,7 @@ export function Canvas({
         }
       }
       if (next !== hoverCursor) setHoverCursor(next);
-      if (rotHoverNow !== rotHover) setRotHover(rotHoverNow);
     } else {
-      if (rotHover) setRotHover(false);
       if (hoverId && snap.tool !== "select") setHoverId("");
     }
     if (snap.tool === "pen" && (draft.length || penBranch.current) && !penDrag.current) {
@@ -8381,7 +8318,6 @@ export function Canvas({
     // Nothing is hovered once the pointer is gone, and a stale "+" would keep
     // advertising an insert the next click cannot make.
     if (addPt) setAddPt(null);
-    if (rotHover) setRotHover(false);
   };
 
   /** SVG is a vector format, so it becomes editable layers rather than a flat
@@ -9220,6 +9156,7 @@ export function Canvas({
           width={box.w}
           height={box.h}
           theme={theme}
+          chrome={chromePref}
           selection={selectionBounds(snap.pages[snap.page].root, snap.selection)}
         />
       )}
@@ -9233,6 +9170,7 @@ export function Canvas({
           viewW={box.w}
           viewH={box.h}
           theme={theme}
+          chrome={chromePref}
         />
       )}
       {showFirstRun && (

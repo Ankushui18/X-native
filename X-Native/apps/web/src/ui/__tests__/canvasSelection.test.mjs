@@ -193,24 +193,29 @@ const paintedName = (name) => paints.some(([call, value]) => call === "fillText"
     await deep.close();
   }
 }
+// The rotate affordance is a cursor and an invisible band, nothing painted —
+// Figma draws no handle (batch 45 settled it against a screenshot), and these
+// assertions are what keep a future "let's show a little dot" from creeping back:
+// an arc anywhere near the target is the regression, not a missing feature.
+const arcsNear = (x, y, r = 26) =>
+  paints.filter(([call, cx, cy, radius]) => call === "arc" && Math.hypot(cx - x, cy - y) <= r && radius <= r);
 {
   const frame = shape("frame", "Rotatable", [], { w: 300, h: 200 });
   const ui = await mount([frame], [frame.id]);
-  // Rotation target is now above the top-right corner: (400, 80).
-  // The renderer draws the stem + hollow dot there (5px arc).
-  t("renderer paints a detached handle above the top-right corner", paints.some(([call, x, y, radius]) =>
-    call === "arc" && near(x, 400, 1) && near(y, 80, 1) && radius === 5));
-  t("curved handle has an arrowhead glyph nearby", paints.some(([call, x, y]) => call === "arc" && near(x, 399, 2) && near(y, 80, 2)));
+  // The grab band is centred 20px above the top-right corner: (400, 80).
+  t("nothing is painted at the rotation target", arcsNear(400, 80).length === 0,
+    JSON.stringify(arcsNear(400, 80).slice(0, 2)));
   await ui.mouse("mousemove", 400, 80);
+  t("hovering the target still paints nothing", arcsNear(400, 80).length === 0);
   const rotateCursor = ui.surface.style.cursor;
-  t("detached handle advertises rotation cursor", rotateCursor.includes("url("));
+  t("the band advertises the rotation cursor", rotateCursor.includes("url("), rotateCursor.slice(0, 24));
   await ui.mouse("mousemove", 90, 90);
-  t("outside frame corner no longer advertises rotation", ui.surface.style.cursor !== rotateCursor);
+  t("outside the band the cursor goes away", ui.surface.style.cursor !== rotateCursor);
   // Drag the rotation target to a new spot to induce rotation.
   await ui.mouse("mousedown", 400, 80);
   await ui.mouse("mousemove", 480, 140, { shiftKey: true });
   await ui.mouse("mouseup", 480, 140);
-  t("detached handle rotates the frame", Math.abs(ui.node(frame.id).rotation) > 20);
+  t("dragging inside the band rotates the frame", Math.abs(ui.node(frame.id).rotation) > 20);
   await ui.dispatch({ type: "undo" });
   t("rotation is a single undoable gesture", ui.node(frame.id).rotation === 0);
   // TL corner still resizes (does not rotate).
@@ -223,11 +228,16 @@ const paintedName = (name) => paints.some(([call, value]) => call === "fillText"
 {
   const frame = shape("frame", "Locked frame", [], { w: 300, h: 200, locked: true });
   const ui = await mount([frame], [frame.id]);
-  t("locked frame has no painted rotate handle", !paints.some(([call, , , radius]) => call === "arc" && radius === 5));
+  t("locked frame paints no rotate chrome at the target", arcsNear(400, 80).length === 0);
+  // Both halves of the removal, in one place: no chrome and no affordance, because
+  // the paint used to be the only thing telling you the target existed.
+  await ui.mouse("mousemove", 400, 80);
+  t("a locked frame does not advertise the rotate cursor either", !ui.surface.style.cursor.includes("url("),
+    ui.surface.style.cursor.slice(0, 24));
   await ui.mouse("mousedown", 400, 80);
   await ui.mouse("mousemove", 480, 140);
   await ui.mouse("mouseup", 480, 140);
-  t("locked frame cannot rotate from detached target", ui.node(frame.id).rotation === 0);
+  t("locked frame cannot rotate from the band", ui.node(frame.id).rotation === 0);
   await ui.close();
 }
 // Selection barriers must protect vector entry as well as text entry.

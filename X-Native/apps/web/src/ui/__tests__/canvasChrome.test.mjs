@@ -24,6 +24,13 @@
  *     move when the appearance changes. Every such literal is a named `DOC_*`
  *     constant or a commented default; anything else is chrome that escaped.
  *
+ *  4. THE OPT-IN CANVAS-CHROME OVERRIDE IS COMPLETE AND NARROW.
+ *     `html[data-canvas-chrome="figma"]` (View → Canvas chrome) must move every
+ *     emerald *canvas* role to the sheet's Figma blue, retune nothing else, and
+ *     sit after the two theme blocks so it wins the cascade. The panel accent is
+ *     deliberately out of scope; a test says so, because "why is the rail still
+ *     green?" and "why did the whole app turn blue?" are both answered here.
+ *
  * Nothing here needs a canvas, a DOM or a browser: `readCanvasChrome` is pure and
  * the rest is source text. Run with: npx vite-node src/ui/__tests__/canvasChrome.test.mjs
  */
@@ -242,6 +249,72 @@ t(
   "both still re-read on a theme flip (theme stays a paint dependency)",
   /\btheme\b/.test(minimap) && /\btheme\b/.test(rulers),
 );
+
+/* ------------------------------- 5. the opt-in Figma-blue canvas-chrome block */
+{
+  const figma = block(/^\s*html\[data-canvas-chrome="figma"\]\s*\{/m);
+  const figmaDark = block(/^\s*html\[data-canvas-chrome="figma"\]\[data-theme="dark"\]\s*\{/m);
+  t('styles.css offers an html[data-canvas-chrome="figma"] block', !!figma);
+  if (figma && light && dark) {
+    const isEmerald = (v) => /#10b981|#10B981|16,\s*185,\s*129|#0e9f6e|14,\s*159,\s*110/.test(v);
+    const canvasRoles = keys.filter((k) => {
+      const token = CANVAS_CHROME_TOKENS[k];
+      return isEmerald(CANVAS_CHROME_FALLBACK[k]) && (token.startsWith("--cv-") || token === "--grid");
+    });
+    const missing = canvasRoles.map((k) => CANVAS_CHROME_TOKENS[k]).filter((token) => !(token in figma));
+    t(`the figma block restates every emerald canvas role (${missing.join(", ") || "none missing"})`,
+      missing.length === 0);
+    // The blue is the sheet's existing drop-target blue, not a fourth literal to
+    // keep in step: a theme that invents its own hex is a theme nobody retunes.
+    const blue = light[CANVAS_CHROME_TOKENS.target];
+    const alphaOf = (v) => (String(v).match(/[,/]\s*([\d.]+)\s*\)/) ?? [])[1];
+    const hexToRgba = (hex, a) => {
+      const h = String(hex).trim().replace("#", "");
+      const n = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+      return `rgba(${parseInt(n.slice(0, 2), 16)}, ${parseInt(n.slice(2, 4), 16)}, ${parseInt(n.slice(4, 6), 16)}, ${a})`;
+    };
+    /** What a role has to become: the blue, thinned by whatever the light column
+     *  already thinned the emerald by. Recomputing it here is what keeps this a
+     *  contract rather than a copy of the sheet — a 0.14 wash written as 0.4
+     *  fails, and so does a hue nobody told anyone about. */
+    const expected = (token) => {
+      const base = String(light[token] ?? "").trim();
+      return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(base) ? blue : hexToRgba(blue, alphaOf(base));
+    };
+    const wrong = canvasRoles
+      .map((k) => CANVAS_CHROME_TOKENS[k])
+      .filter((token) => norm(figma[token] ?? "\u0000") !== norm(expected(token)));
+    t(`every emerald role turns into the sheet's blue, thinned the same way (${wrong.join(", ") || "all correct"})`,
+      wrong.length === 0);
+    const washed = canvasRoles.map((k) => CANVAS_CHROME_TOKENS[k]).filter((token) => alphaOf(figma[token]) != null);
+    t(`and that includes the three washes (${washed.join(", ")})`, washed.length === 3);
+
+    // The boundary, stated rather than assumed.
+    const panelRoles = keys
+      .map((k) => CANVAS_CHROME_TOKENS[k])
+      .filter((token) => !token.startsWith("--cv-") && token !== "--grid");
+    const touchedPanel = panelRoles.filter((token) => token in figma);
+    t(`it touches no panel role (${touchedPanel.join(", ") || "none touched"})`, touchedPanel.length === 0);
+    const extra = Object.keys(figma).filter((tk) => !canvasRoles.includes(keys.find((k) => CANVAS_CHROME_TOKENS[k] === tk)));
+    t(`and nothing outside the selection family (${extra.join(", ") || "nothing"})`, extra.length === 0);
+    // Cascade arithmetic, not cosmetics: equal specificity with the theme blocks,
+    // so the *only* thing that makes the override win is coming later in the file.
+    const at = (re) => {
+      const m = re.exec(css);
+      return m ? m.index : -1;
+    };
+    const figmaAt = css.indexOf('html[data-canvas-chrome="figma"]');
+    t("it sits after :root and after the dark block, so it wins the cascade",
+      figmaAt > at(/^\s*:root,/m) && figmaAt > at(/^\s*html\[data-theme="dark"\]\s*\{/m));
+    t("and the dark canvas gets its own grid alpha", !!figmaDark && "--grid" in figmaDark,
+      figmaDark ? Object.keys(figmaDark).join(", ") : "no block");
+    t("which is the dark sheet's alpha, not the light one",
+      !!figmaDark && alphaOf(figmaDark["--grid"]) === alphaOf(dark["--grid"] ?? ""),
+      `${alphaOf(figmaDark?.["--grid"] ?? "")} vs ${alphaOf(dark["--grid"] ?? "")}`);
+    t("and the dark override changes nothing but the grid",
+      !!figmaDark && Object.keys(figmaDark).length === 1, Object.keys(figmaDark ?? {}).join(", "));
+  }
+}
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
