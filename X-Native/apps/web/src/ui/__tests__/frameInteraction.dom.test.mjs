@@ -257,10 +257,16 @@ const handleSquares = () => paints.filter(([c, , , w]) => c === "fillRect" && (w
   await ui.mouse("mousemove", 400, 80);
   t("the band does promise the rotate cursor", ui.surface.style.cursor.includes("url("),
     ui.surface.style.cursor.slice(0, 24));
-  // Frame TL corner does NOT rotate a frame (only the detached dot does).
+  // Figma arms rotation at "one of the layer's bounds" corners, and the
+  // multi-selection box always offered all four - a single selection rotates
+  // from the top-left exactly as from the top-right now (audit F3 fixed the
+  // asymmetry the previous "only the detached dot rotates" pin protected).
   await ui.mouse("mousemove", 100 - 14, 100 - 14);
+  t("the band arms every corner of the bounds", ui.surface.style.cursor.includes("url("),
+    ui.surface.style.cursor.slice(0, 24));
   await ui.drag(100 - 14, 100 - 14, 200, 60);
-  t("the ring outside a frame corner does not rotate it", ui.node(f.id).rotation === 0 && !ui.commands.some((c) => c.type === "patch" && "rotation" in (c.patch ?? {})));
+  t("a top-left corner drag rotates the frame", ui.node(f.id).rotation !== 0
+    && ui.commands.some((c) => c.type === "patch" && "rotation" in (c.patch ?? {})));
   await ui.close();
 }
 

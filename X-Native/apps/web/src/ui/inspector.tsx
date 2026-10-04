@@ -102,7 +102,7 @@ import {
   wraps,
   type AlignCell,
 } from "../engine/layout";
-import { hugSize } from "./textLayout";
+import { effectiveLineHeight, hugSize } from "./textLayout";
 import { resolvedTextSpans, selectedTextRange, styleTextRange, type SpanStyle } from "./textSpans";
 import { hasRtlScript, directionOf } from "../engine/textInput";
 import { Icon, caretSize, rowIconSize, type IconName } from "./icons";
@@ -120,6 +120,7 @@ import {
   FORMAT_CAPS,
   FORMATS,
   SCALE_PRESETS,
+  exportBleed,
   exportSize,
   extrasOf,
   formatScale,
@@ -1460,7 +1461,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     rules.push(`font-size: ${devLen(n.fontSize, unit)};`);
     rules.push(`font-weight: ${n.fontWeight};`);
     if (n.lineHeight) rules.push(`line-height: ${devLen(Math.round(n.lineHeight), unit)};`);
-    if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
+    if (n.letterSpacing) rules.push(`letter-spacing: ${n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : devLen(n.letterSpacing, unit)};`);
     if (n.textAlign && n.textAlign !== "left")
       rules.push(`text-align: ${n.textAlign === "justified" ? "justify" : n.textAlign};`);
     if (n.textDecoration && n.textDecoration !== "none") {
@@ -1654,7 +1655,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
       color: n.fillVisible !== false && n.fill ? n.fill : "#000000",
     };
     if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
-    if (n.letterSpacing) textStyle.letterSpacing = `${n.letterSpacing}px`;
+    if (n.letterSpacing) textStyle.letterSpacing = n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : `${n.letterSpacing}px`;
     if (n.textAlign && n.textAlign !== "left")
       textStyle.textAlign = n.textAlign === "justified" ? "justify" : n.textAlign;
     if (n.textDecoration && n.textDecoration !== "none") textStyle.textDecoration = n.textDecoration;
@@ -2522,7 +2523,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     L("Font", `${n.fontFamily} ${n.fontWeight}`, "Typography");
     L("Font size", devLen(n.fontSize, unit), "Typography");
     if (n.lineHeight) L("Line height", devLen(n.lineHeight, unit), "Typography");
-    if (n.letterSpacing) L("Letter spacing", devLen(n.letterSpacing, unit), "Typography");
+    if (n.letterSpacing) L("Letter spacing", n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : devLen(n.letterSpacing, unit), "Typography");
     if (n.textAlign && n.textAlign !== "left") L("Alignment", n.textAlign, "Typography");
     if (n.textDecoration && n.textDecoration !== "none")
       L("Decoration", n.textDecoration === "strikethrough" ? "Strikethrough" : "Underline", "Typography");
@@ -2579,7 +2580,7 @@ function TypeSpecimen({ n }: { n: XNode }) {
           fontSize: Math.min(28, Math.max(11, n.fontSize / 2)),
           fontWeight: n.fontWeight,
           lineHeight: n.lineHeight ? `${n.lineHeight / n.fontSize}` : 1.3,
-          letterSpacing: n.letterSpacing ? `${n.letterSpacing}px` : undefined,
+          letterSpacing: n.letterSpacing ? (n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : `${n.letterSpacing}px`) : undefined,
           color: n.fillVisible === false || isNone(n.fill) ? "var(--text)" : n.fill,
           textAlign: n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left",
         }}
@@ -3809,7 +3810,7 @@ function Design({
               <Field
                 label={n.lineHeight ? "↑" : "Auto"}
                 bind={<BindControl engine={engine} snap={snap} targets={textTargets} prop="lineHeight" onOpenVariables={onOpenVariables} />}
-                value={n.lineHeight || n.fontSize * 1.2}
+                value={n.lineHeight || Math.round(effectiveLineHeight(n) * 100) / 100}
                 onLabelClick={() => (multi ? patchTypeMany({ lineHeight: 0 }) : num("lineHeight", 0))}
                 onChange={(v) => num("lineHeight", v)}
                 mixed={mixedProp((m) => m.lineHeight, textTargets)}
@@ -4043,7 +4044,7 @@ function Design({
                     value={n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto")}
                     onChange={(e) => {
                       const u = e.target.value as XNode["lineHeightUnit"];
-                      const cur = n.lineHeight || n.fontSize * 1.2;
+                      const cur = n.lineHeight || effectiveLineHeight(n);
                       const val =
                         u === "auto" ? 0
                           : u === "percent" ? Math.round((cur / Math.max(1, n.fontSize)) * 100)
@@ -4054,6 +4055,26 @@ function Design({
                     <option value="auto">Leading: Auto</option>
                     <option value="px">Leading: px</option>
                     <option value="percent">Leading: %</option>
+                  </select>
+                  {/* Letter spacing unit (Figma's ↔ field takes px or a percent
+                      of the font size): the same convert-on-switch control as
+                      Leading, percent kept to 2 decimals so 1.5% survives. */}
+                  <select
+                    aria-label="Letter spacing unit"
+                    title="Letter spacing unit - converts the value on switch"
+                    value={n.letterSpacingUnit ?? "px"}
+                    onChange={(e) => {
+                      const u = e.target.value as XNode["letterSpacingUnit"];
+                      const cur = n.letterSpacing || 0;
+                      const val =
+                        u === "percent"
+                          ? Math.round((cur / Math.max(1, n.fontSize)) * 10000) / 100
+                          : Math.round(((cur / 100) * n.fontSize) * 100) / 100;
+                      patchType({ letterSpacingUnit: u, letterSpacing: val });
+                    }}
+                  >
+                    <option value="px">Tracking: px</option>
+                    <option value="percent">Tracking: %</option>
                   </select>
                   <label className="check" title="Vertical trim - remove the space above and below the text">
                     <input
@@ -9305,8 +9326,12 @@ function runExport(n: XNode, p: ExportPreset, scope?: { root?: XNode; page?: boo
     downloadBlob(new Blob([svg], { type: "image/svg+xml" }), name);
     return;
   }
-  // Phase 9+: Rust pipeline (PNG/JPG/PDF) is primary; canvas.toBlob is fallback.
-  void tryWasmExport(n, p, scope, name, width, height, box).then((handled) => {
+  // Phase 9+: Rust pipeline (PNG/JPG/PDF) is primary; canvas.toBlob is the
+  // fallback for anything the bridge refuses - and now also for anything the
+  // bridge answers with bytes that are not the requested file, since
+  // `wasmExportNode` validates before it resolves.
+  const bleed = box ? { l: 0, t: 0, r: 0, b: 0 } : exportBleed(n);
+  void tryWasmExport(n, p, scope, name, width, height, box, settings, bleed).then((handled) => {
     if (!handled) canvasExportPath(n, p, svg, width, height, name, colorProfile, settings, box);
   });
 }
@@ -9321,14 +9346,33 @@ async function tryWasmExport(
   _width: number,
   _height: number,
   box: { w: number; h: number } | null,
+  settings: ReturnType<typeof resolveSettings>,
+  bleed: { l: number; t: number; r: number; b: number },
 ): Promise<boolean> {
   try {
+    // F8: the Rust bridge paints the single node and nothing else, in sRGB.
+    // The documented settings it cannot carry must therefore keep the export
+    // on the canvas tier, or "which engine loaded" would change the bytes:
+    //   * "Ignore overlapping layers" off means the layers under the selection
+    //     are painted too (help 13402894554519) - a scope the bridge has no
+    //     parameter for, so the fallback (which honors it) keeps the job.
+    //   * A non-sRGB render profile: the fallback renders and stamps P3;
+    //     export_raster only knows sRGB.
+    // Resampling is checked by the canvas path the same way the bridge would
+    // (the SVG raster always smooth-scales), quality rides along in the
+    // options JSON below, and the SVG-only toggles never reach this branch.
+    if (p.ignoreOverlap === false || getRenderColorProfile() !== "srgb") return false;
     const { wasmExportNode, buildExportXDoc } = await import("../engine/wasmExport");
     const xDoc = buildExportXDoc(n, box);
     if (!xDoc) return false;
     const scale = typeof p.scale === "number" ? p.scale : 1;
     const format = p.format.toLowerCase() as "png" | "jpg" | "pdf";
-    const result = await wasmExportNode(xDoc, n.id, format, scale);
+    // The documented per-format settings travel with the call (13402894554519:
+    // Image quality for JPG/PDF), and the effect/stroke bleed so the Rust page
+    // matches `exportSize` - the two tiers export the same box or the file
+    // disagrees with the panel.
+    const quality = Math.round(qualityValue(settings.quality) * 100);
+    const result = await wasmExportNode(xDoc, n.id, format, scale, { quality, bleed });
     if (!result) return false;
     const mime = format === "jpg" ? "image/jpeg" : format === "pdf" ? "application/pdf" : "image/png";
     downloadBlob(new Blob([new Uint8Array(result.bytes)], { type: mime }), name);
@@ -9351,6 +9395,12 @@ function canvasExportPath(
   settings: ReturnType<typeof resolveSettings>,
   box: { w: number; h: number } | null,
 ) {
+  // The DESIGN-space box the raster pixels cover: `exportSize` already grew
+  // it by the effect/stroke bleed, and the DPI stamp and the PDF page must
+  // divide the same box or a 2x export would stamp itself at 2x + margin.
+  const bleed = box ? { l: 0, t: 0, r: 0, b: 0 } : exportBleed(n);
+  const designW = Math.max(1, (box?.w ?? n.w) + bleed.l + bleed.r);
+  const designH = Math.max(1, (box?.h ?? n.h) + bleed.t + bleed.b);
   const image = new Image();
   image.onload = () => {
     const c = document.createElement("canvas");
@@ -9403,8 +9453,8 @@ function canvasExportPath(
             rgba,
             width,
             height,
-            Math.max(1, box?.w ?? n.w),
-            Math.max(1, box?.h ?? n.h),
+            designW,
+            designH,
             n.name,
             new Uint8Array(bytes),
           ))
@@ -9416,7 +9466,7 @@ function canvasExportPath(
     c.toBlob(
       (blob) => {
         if (!blob) return;
-        void setRasterExportDpi(blob, p.format as "PNG" | "JPG", width / Math.max(1, box?.w ?? n.w))
+        void setRasterExportDpi(blob, p.format as "PNG" | "JPG", width / designW)
           .then((tagged) => downloadBlob(tagged, name))
           .catch(() => toast("Could not prepare the raster export"));
       },

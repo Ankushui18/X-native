@@ -80,7 +80,11 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
   *  selectors, and the inline settings row that lays them out. Raised again
   *  for Export static designs: one filename hover title on bulk-export thumbnails.
  *  Raised 2026-10-03 for vector-edit Lasso (Q): one native toolbar button and
- *  its title tooltip make the newly added tool discoverable. */
+ *  its title tooltip make the newly added tool discoverable. Raised
+ *  2026-10-04 for the letter-spacing unit (audit F10): one native select for
+ *  px/% on the Type row and its title tooltip, mirroring the Leading unit
+ *  control exactly — the parity fix needs the unit field, and the ledger is
+ *  the mechanism that says so. */
 const CEILING = {
   //                 inline colour title button select
   "Canvas.tsx": [11, 14, 13, 16, 1],
@@ -118,7 +122,7 @@ const CEILING = {
   // Raised 2026-10-01 batch 21: Overflow scroll dropdown in the Layout section
   // for frames — one extra native <select>, plus a three-column inline grid
   // around it and the helper text.
-  "inspector.tsx": [190, 44, 247, 200, 48],
+  "inspector.tsx": [190, 44, 248, 200, 49],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };

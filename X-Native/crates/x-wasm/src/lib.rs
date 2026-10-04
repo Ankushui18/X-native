@@ -410,10 +410,20 @@ mod bindings {
         }
 
         /// Phase 9: Export a node to PNG, JPG, or PDF via the Rust render
-        /// pipeline. Returns a JSON envelope with base64-encoded bytes.
+        /// pipeline (x-render's real rasterizer - see session.rs
+        /// `export_node`). `options` is a JSON payload: { "quality": 0..=100,
+        /// "bleed": {l,t,r,b} }. Returns a JSON envelope with base64 bytes.
         #[wasm_bindgen(js_name = exportNode)]
-        pub fn export_node(&self, id: &str, format: &str, scale: f64) -> Result<String, JsValue> {
-            self.bridge.export_node(id, format, scale).map_err(js_error)
+        pub fn export_node(
+            &self,
+            id: &str,
+            format: &str,
+            scale: f64,
+            options: &str,
+        ) -> Result<String, JsValue> {
+            self.bridge
+                .export_node(id, format, scale, options)
+                .map_err(js_error)
         }
 
         /// Phase 9: Add a point to an existing vector path segment.

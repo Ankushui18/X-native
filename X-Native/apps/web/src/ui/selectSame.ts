@@ -86,6 +86,7 @@ function typography(n: XNode): string {
     n.fontWeight,
     n.lineHeight || "auto",
     n.letterSpacing,
+    n.letterSpacingUnit,
     n.paragraphSpacing || 0,
     n.textAlign,
     n.textAlignVertical,

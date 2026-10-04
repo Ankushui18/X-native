@@ -77,6 +77,8 @@ export type BaselineShift = "normal" | "super" | "sub";
 /** Line height unit (360039956634 §Line height): Auto (font default), a fixed
  * px value, or a percentage of the font size that converts to the nearest px. */
 export type LineHeightUnit = "auto" | "px" | "percent";
+/** Letter spacing unit: px value vs percent of the font size (Figma's ↔ field). */
+export type LetterSpacingUnit = "px" | "percent";
 export type StrokeAlign = "inside" | "center" | "outside";
 export type StrokeCap =
   | "none"
@@ -349,6 +351,7 @@ export interface TextStyleProps {
   lineHeight?: number;
   lineHeightUnit?: LineHeightUnit;
   letterSpacing?: number;
+  letterSpacingUnit?: LetterSpacingUnit;
   paragraphSpacing?: number;
   paragraphIndent?: number;
   textDecoration?: TextDecoration;
@@ -947,6 +950,8 @@ export interface XNode {
   paraDir?: ("ltr" | "rtl" | null)[];
   /** Line height unit: px value vs percent of the font size vs Auto. */
   lineHeightUnit?: LineHeightUnit;
+  /** Letter spacing unit: px value vs percent of the font size. */
+  letterSpacingUnit?: LetterSpacingUnit;
   /** Links (360045942953): the whole text layer is a link. */
   link?: string;
   children: XNode[];

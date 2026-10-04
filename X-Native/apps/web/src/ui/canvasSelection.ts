@@ -33,41 +33,73 @@ export function drillChild(root: XNode, container: XNode, x: number, y: number):
   return container.children.find((c) => c.visible && !c.locked) ?? null;
 }
 
-/** Rotation is a *cursor*, not a piece of chrome — that is the whole of Figma's
- *  affordance: move the pointer just outside the top-right corner, it turns into
- *  the rotate cursor, drag and the layer turns. Nothing is painted to advertise
- *  it (the stem + hollow dot that used to be drawn here was ours: top-centre
- *  first, then top-right per `FRAME_INTERACTION_AUDIT_2026-09-29.md`, and a
- *  side-by-side screenshot in batch 45 settled it).
- *
- *  What these numbers still own is the invisible band that both the cursor and
- *  the press measure — `ROTATION_HANDLE_STEM` where it sits (20px above the
- *  top-right corner, so the grab point is where the painted handle used to be)
- *  and `ROTATION_HANDLE_HIT` how wide it is, both constant in screen pixels as
- *  the document zooms. One source for hover and press, so the cursor can never
- *  promise a target the press then misses. */
-export const ROTATION_HANDLE_STEM = 20;
-/** A ~20px-wide grab target, generous enough to stay hittable at 25% zoom. */
-export const ROTATION_HANDLE_HIT = 10;
-/** Non-frame layers rotate from a band outside the top-right corner instead. */
-export const ROTATION_RING = { min: 8, max: 24 };
-
-export function frameRotationHandle(kind: NodeKind, x: number, y: number, w: number, _h: number) {
-  // Figma places the rotation target above the top-right corner, with a
-  // ~20px gap between the corner and the handle centre. Components and
-  // instances inherit the same affordance — they're also containers.
-  return kind === "frame" || kind === "component" || kind === "instance"
-    ? { x: x + w, y: y - ROTATION_HANDLE_STEM }
-    : null;
+/** A marquee selects at the *current click scope*, exactly like clicks do:
+ * after you have drilled into a container (Figma's rule that "selection is at
+ * the current scope" - see help 360039956914 / smart selection), a plain band
+ * collects the container's CHILDREN, never the container itself. `deep`
+ * (hold ⌘/Ctrl) keeps the legacy rule: descend from the page root and collect
+ * at every depth. Mirrored from `canvasClickTarget`'s ancestor decision, so
+ * the press and the band can never disagree about where the top level is.
+ * The band test is the unrotated AABB - deliberately the same rule the old
+ * walk used (rotated-hit-test parity is a separate, unresearched question). */
+export function marqueeCollect(
+  root: XNode,
+  selection: string[],
+  band: { x0: number; y0: number; x1: number; y1: number },
+  deep: boolean,
+): string[] {
+  let scope: XNode | null = null;
+  if (!deep && selection.length === 1) {
+    const parent = findParent(root, selection[0]);
+    if (parent && parent !== root) scope = parent;
+  }
+  const pathIds = new Set<string>();
+  if (scope) {
+    for (let q: XNode | null = scope; q && q !== root; q = findParent(root, q.id)) pathIds.add(q.id);
+  }
+  const ids: string[] = [];
+  const { x0, y0, x1, y1 } = band;
+  const visit = (n: XNode, px: number, py: number, top: boolean, lockedAbove: boolean) => {
+    const x = px + n.x;
+    const y = py + n.y;
+    const effLocked = lockedAbove || n.locked;
+    if (n !== root && n.visible && !effLocked) {
+      const hit = x + n.w >= x0 && y + n.h >= y0 && x <= x1 && y <= y1;
+      if (hit && (deep || top)) ids.push(n.id);
+    }
+    const nest = deep || n === root || (scope != null && pathIds.has(n.id));
+    if (!nest) return;
+    const childTop = scope != null ? n.id === scope.id : n === root;
+    for (const c of n.children) visit(c, x, y, childTop, effLocked);
+  };
+  visit(root, 0, 0, false, false);
+  return ids;
 }
 
-export function rotationHandleHit(kind: NodeKind, px: number, py: number, x: number, y: number, w: number, h: number): boolean {
-  const handle = frameRotationHandle(kind, x, y, w, h);
-  if (handle) return Math.hypot(px - handle.x, py - handle.y) <= ROTATION_HANDLE_HIT;
-  // Non-frame shapes: a band from 8 to 24px outside the top-right corner rather
-  // than a corner overlap — the resize handles own the 8px closest to the
-  // corner, so the cursor and the press agree about corner-resize vs. rotate.
-  const tr = { x: x + w, y: y };
-  const d = Math.hypot(px - tr.x, py - tr.y);
-  return d >= ROTATION_RING.min && d <= ROTATION_RING.max;
+/** Rotation is a *cursor*, not a piece of chrome — that is the whole of Figma's
+ *  affordance: "Hover just outside one of the layer's bounds until the rotation
+ *  cursor appears" (help 360039956914; "the corner bounds", 360039818874).
+ *  Every corner arms it — one ring per corner of the selection box, identical
+ *  for a single layer and for the combined multi box (the multi-press gesture
+ *  already works on all four; a single selection must not arm only the top
+ *  right). Nothing is painted: the stem + hollow dot that used to be drawn
+ *  here was ours, and batch 45 settled that Figma draws nothing.
+ *
+ *  The 8px closest to a corner belongs to the resize handles, so the ring
+ *  starts outside it; both the cursor and the press measure this one function,
+ *  so the cursor can never promise a target the press then misses. The `kind`
+ *  argument stays for call-site stability — the ring is kind-independent, as
+ *  Figma's is. */
+export const ROTATION_RING = { min: 8, max: 24 };
+
+/** The four corners of the (already screen-transformed) selection box. */
+export function rotationCorners(x: number, y: number, w: number, h: number): [number, number][] {
+  return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+}
+
+export function rotationHandleHit(_kind: NodeKind, px: number, py: number, x: number, y: number, w: number, h: number): boolean {
+  return rotationCorners(x, y, w, h).some(([cx, cy]) => {
+    const d = Math.hypot(px - cx, py - cy);
+    return d >= ROTATION_RING.min && d <= ROTATION_RING.max;
+  });
 }

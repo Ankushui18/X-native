@@ -153,28 +153,55 @@ function xnodeToX(n: XNode): Record<string, unknown> | null {
   return base;
 }
 
+/** Settings the Rust pipeline honors per Figma's format table
+ * (13402894554519): Image quality for JPG, as 0..100; and the export-area
+ * bleed per side, so the wasm canvas and `exportSize` frame the same box. */
+export interface WasmExportOptions {
+  quality?: number;
+  bleed?: { l: number; t: number; r: number; b: number };
+}
+
+/** The file-type signatures a correct answer must start with; JPEG also has
+ *  to END at its EOI marker. A bridge that cannot satisfy this is answered by
+ *  the canvas fallback, never downloaded. */
+const FILE_MAGIC: Record<"png" | "jpg" | "pdf", number[]> = {
+  png: [0x89, 0x50, 0x4e, 0x47],
+  jpg: [0xff, 0xd8, 0xff],
+  pdf: [0x25, 0x50, 0x44, 0x46],
+};
+
+function validateExportBytes(bytes: Uint8Array, format: "png" | "jpg" | "pdf"): boolean {
+  const magic = FILE_MAGIC[format];
+  if (bytes.length < magic.length + 8) return false;
+  for (let i = 0; i < magic.length; i++) if (bytes[i] !== magic[i]) return false;
+  if (format === "jpg" && !(bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9)) return false;
+  return true; // validated
+}
+
 /**
  * Attempt to export a node via the Rust render pipeline.
- * Returns null when the WASM bridge is not available or the export fails,
- * so the caller can fall back to the canvas-based path.
+ * Returns null when the WASM bridge is not available, the node is refused,
+ * or the bytes fail validation - so the caller falls back to the canvas path.
  *
  * @param xDocument - The serialized .x document string (from save_x/exportX)
  * @param nodeId - The ID of the node to export
  * @param format - "png", "jpg", or "pdf"
  * @param scale - Scale factor (1x, 2x, 3x, etc.)
+ * @param options - Per-format quality and the export-area bleed
  */
 export async function wasmExportNode(
   xDocument: string,
   nodeId: string,
   format: "png" | "jpg" | "pdf",
   scale: number,
+  options: WasmExportOptions = {},
 ): Promise<WasmExportResult | null> {
   if (!(await initWasmBridge())) return null;
   const Session = rustSessionConstructor();
   if (!Session) return null;
 
   let session: {
-    exportNode?: (id: string, format: string, scale: number) => string;
+    exportNode?: (id: string, format: string, scale: number, options: string) => string;
     free: () => void;
   } | null = null;
   try {
@@ -182,7 +209,7 @@ export async function wasmExportNode(
       "x-wasm.RustDocumentSession.new",
       () => new Session(xDocument),
     ) as unknown as {
-      exportNode?: (id: string, format: string, scale: number) => string;
+      exportNode?: (id: string, format: string, scale: number, options: string) => string;
       free: () => void;
     };
 
@@ -195,7 +222,7 @@ export async function wasmExportNode(
 
     const raw = auditRustCall(
       "x-wasm.RustDocumentSession.exportNode",
-      () => binding.exportNode!(nodeId, format, scale),
+      () => binding.exportNode!(nodeId, format, scale, JSON.stringify(options)),
     );
     const result = JSON.parse(raw) as {
       ok: boolean;
@@ -215,6 +242,9 @@ export async function wasmExportNode(
     for (let i = 0; i < binaryStr.length; i++) {
       bytes[i] = binaryStr.charCodeAt(i);
     }
+    // Never trust the bridge's ok flag alone: decode first, then validate the
+    // magic bytes, so a stub or truncated answer degrades to the canvas path.
+    if (!validateExportBytes(bytes, format)) return null;
 
     return {
       bytes,

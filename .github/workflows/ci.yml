@@ -137,10 +137,25 @@ jobs:
       - name: Package both WASM bridges (wasm-pack and matching bindgen glue)
         id: package-wasm
         run: |
-          rustup target add wasm32-unknown-unknown --toolchain 1.98.1
-          cargo install wasm-pack --version 0.15.0 --locked
-          cargo install wasm-bindgen-cli --version 0.2.127 --locked
-          bash scripts/build-wasm.sh
+          set +e
+          {
+            rustup target add wasm32-unknown-unknown --toolchain 1.98.1
+            cargo install wasm-pack --version 0.15.0 --locked
+            cargo install wasm-bindgen-cli --version 0.2.127 --locked
+            bash scripts/build-wasm.sh
+          } > /tmp/wasm-pack.log 2>&1
+          status=$?
+          cat /tmp/wasm-pack.log
+          if [ "$status" -ne 0 ]; then
+            # Same CDN note as the step below: the raw log is not reachable
+            # from every tool, so surface the actual cargo errors as
+            # annotations before failing.
+            grep -aE '^error|error\[E|^warning: unused|^ *--> ' /tmp/wasm-pack.log |
+              head -14 | while IFS= read -r line; do
+                printf '::error::%s\n' "${line//%/%25}"
+              done
+            exit "$status"
+          fi
 
       - name: Real WASM bridge smoke tests (no mocks or replay)
         id: wasm-smoke

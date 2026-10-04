@@ -2,7 +2,7 @@
  * This tests interaction wiring, not browser pixels or font/layout fidelity. */
 import { installDom } from "./domEnv.mjs";
 import { MemoryEngine, node, find, hitTest } from "../../engine/memory.ts";
-import { canvasClickTarget, drillChild, frameRotationHandle, rotationHandleHit } from "../canvasSelection.ts";
+import { canvasClickTarget, drillChild, rotationHandleHit } from "../canvasSelection.ts";
 
 let pass = 0, fail = 0;
 const t = (name, ok) => {
@@ -63,20 +63,25 @@ const near = (a, b, eps = 0.5) => Math.abs(a - b) <= eps;
   rotated.flipH = true;
   t("drilling honors a flipped parent", drillChild(root, rotated, 340, 140) === child);
 }
-for (const kind of ["frame", "component", "instance"]) {
+for (const kind of ["frame", "component", "instance", "rect", "group", "text"]) {
   for (const zoom of [0.25, 1, 4]) {
     const x = 100, y = 120, w = 300 * zoom, h = 200 * zoom;
-    const p = frameRotationHandle(kind, x, y, w);
-    // Figma places the rotation target above the top-right corner (x+w, y-20),
-    // not at top-center. See frameRotationHandle in canvasSelection.ts.
-    t(`${kind} handle sits above the top-right corner at zoom ${zoom}`, p.x === x + w && p.y === y - 20);
-    t(`${kind} detached handle is hittable at zoom ${zoom}`, rotationHandleHit(kind, p.x, p.y, x, y, w, h));
-    t(`${kind} corners no longer rotate at zoom ${zoom}`, [[x, y], [x+w, y], [x+w, y+h], [x, y+h]].every(([cx, cy]) => !rotationHandleHit(kind, cx - 10, cy - 10, x, y, w, h)));
+    // "Hover just outside one of the layer's bounds until the rotation cursor
+    // appears" (360039956914) - ONE corner set for every kind, all four
+    // corners, the same ring the multi-selection already used. The 8px
+    // closest to each corner stays the resize handles' (parityReaudit pins
+    // the exclusion; canvasSelection.ts keeps the single constant).
+    const corners = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    t(`${kind} rotation arms at all four corners at zoom ${zoom}`,
+      corners.every(([cx, cy]) => rotationHandleHit(kind, cx - 14, cy - 14, x, y, w, h)));
+    t(`${kind} resize radius stays rotation-free at zoom ${zoom}`,
+      corners.every(([cx, cy]) => !rotationHandleHit(kind, cx - 4, cy - 4, x, y, w, h)));
+    t(`${kind} rotation lets go past the ring at zoom ${zoom}`,
+      corners.every(([cx, cy]) => !rotationHandleHit(kind, cx - 30, cy - 30, x, y, w, h)));
   }
 }
-t("ordinary shapes retain corner rotation at top-right", rotationHandleHit("rect", 400 + 16, 100 - 16, 100, 100, 300, 200));
-t("group rotation uses top-right ring", rotationHandleHit("group", 400 + 16, 100 - 16, 100, 100, 300, 200));
-t("ordinary shapes do NOT rotate from top-left corner", !rotationHandleHit("rect", 90, 90, 100, 100, 300, 200));
+t("top-right still rotates (the legacy muscle memory keeps its corner)",
+  rotationHandleHit("rect", 400 + 16, 100 - 16, 100, 100, 300, 200));
 
 // Mount Canvas itself. Paint calls are recorded so culling is tested through
 // the renderer, rather than through a regex or a duplicated visibility rule.
@@ -202,15 +207,19 @@ const arcsNear = (x, y, r = 26) =>
 {
   const frame = shape("frame", "Rotatable", [], { w: 300, h: 200 });
   const ui = await mount([frame], [frame.id]);
-  // The grab band is centred 20px above the top-right corner: (400, 80).
+  // All four corners arm the band now; the probe stays at the top-right,
+  // 20px above the corner, where the handle used to be painted (batch 45).
   t("nothing is painted at the rotation target", arcsNear(400, 80).length === 0,
     JSON.stringify(arcsNear(400, 80).slice(0, 2)));
   await ui.mouse("mousemove", 400, 80);
   t("hovering the target still paints nothing", arcsNear(400, 80).length === 0);
   const rotateCursor = ui.surface.style.cursor;
   t("the band advertises the rotation cursor", rotateCursor.includes("url("), rotateCursor.slice(0, 24));
-  await ui.mouse("mousemove", 90, 90);
-  t("outside the band the cursor goes away", ui.surface.style.cursor !== rotateCursor);
+  // (90, 90) would now BE inside the band - the top-left corner arms it too
+  // (Figma: "just outside one of the layer's bounds", all corners). Step to a
+  // point farther than the ring from every corner instead.
+  await ui.mouse("mousemove", 90, 60);
+  t("outside every corner ring the cursor goes away", ui.surface.style.cursor !== rotateCursor);
   // Drag the rotation target to a new spot to induce rotation.
   await ui.mouse("mousedown", 400, 80);
   await ui.mouse("mousemove", 480, 140, { shiftKey: true });

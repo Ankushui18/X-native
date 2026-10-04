@@ -105,7 +105,9 @@ for(const multi of [false,true]) {
 for(const offset of [0,3,6,7.99])t(`rotation excludes resize radius ${offset}`,!rotationHandleHit('rect',100-offset,100,100,100,100,100));
 // Rotation ring is now outside the top-right corner (200,100), not top-left.
 t('rotation remains reachable outside top-right corner',rotationHandleHit('rect',200+16,100-16,100,100,100,100));
-t('top-left corner no longer advertises rotation',!rotationHandleHit('rect',90,90,100,100,100,100));
+// Figma arms rotation at "one of the layer's bounds" corners (360039956914) -
+// the single-selection ring matches the multi-selection one: all four.
+t('every corner advertises rotation now',rotationHandleHit('rect',90,90,100,100,100,100)&&rotationHandleHit('rect',210,110,100,100,100,100));
 for(const zoom of [.5,1,2]) {
  const a=node('rect','A',100,100,100,100),b=node('rect','B',300,100,100,100);
  const ui=await mount([a,b],[a.id,b.id],{zoom});
