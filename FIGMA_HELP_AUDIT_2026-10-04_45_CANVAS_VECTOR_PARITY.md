@@ -483,13 +483,14 @@ The bug it caught: `ThemeProvider` had been applying the preference from a
 already re-read the cascade. The click persisted, the DOM got `data-canvas-chrome`,
 and the ring stayed emerald until something else happened to repaint — while every
 text assertion in the suite stayed green. `theme.tsx:93-107` now applies it in the
-setter, before the state update. Note the limit, because it is the interesting part:
-re-creating the effect shape as a sabotage **passes** the pixel file, because
-jsdom's passive-effect order is not the browser's here — so the ordering is pinned
-textually in `canvasChromePref.test.mjs:123-131` (the write precedes the state
-update, and nothing applies it from an effect) and the pixel file asserts the
-consequence that survives both harnesses: a flip repaints. A dependency list is not a
-promise about pixels; that distinction has now earned two tests in this batch.
+setter, before the state update. The ordering is also pinned textually in
+`canvasChromePref.test.mjs` — the write precedes the state update, and nothing applies
+it from an effect — because a text pin is free and a repaint scheduled by a harness is
+a repaint that can stop being scheduled. A claim made in this round about that pin has
+to be corrected in the next one: the paragraph below asserted that re-creating the
+effect shape as a sabotage *passes* the pixel file, and it does not. The number came
+from a broken rig, and Follow-up 5 is where that is written out, because the
+correction is the most useful thing this batch learned about its own tests.
 
 ### Tests
 
@@ -540,10 +541,11 @@ Sabotages run for this follow-up, each one restored after its run:
 Then, for the pixel file: `--cv-sel` dropped from the figma block (×6 here, ×2 in
 `canvasChrome` §5); the attribute never written (×3, ×2); the flip dropped from the
 paint deps (×2); the rotation dot repainted (×2, plus parity B1/B3); the label no
-longer following the selection (×2). Nineteen breaks tried, eighteen caught; the
-nineteenth — the apply moved back into a parent `useEffect` — is not catchable in
-pixels in this harness, and the honest response was a text pin plus a sentence in
-the test file rather than a claim that a test covers it.
+longer following the selection (×2). Nineteen breaks tried, eighteen caught, and the
+nineteenth — the apply moved back into a parent `useEffect` — was recorded here as not
+catchable in pixels. That record was wrong, and the reason is in Follow-up 5: the
+break was never fully applied. Re-run whole, every one of the nineteen is caught, the
+useEffect one by five assertions.
 
 `npm test` → exit 0, **2003 `ok`, 0 `FAIL`** (1925 at `5314d38`; the delta is the
 B/M rewrite, `canvasChromePref`, `canvasChrome` §5 and `figmaChromeTheme`); `drift`
@@ -562,3 +564,96 @@ turn blue without touching anything else.
 The one paragraph this section used to end with — that no test could watch
 `getComputedStyle` hand the canvas a blue `--cv-sel` — is now only half true, and the
 half that remains is above.
+
+## Follow-up 5 — the rails, the thumbnail, the group box, and a rig bug
+
+Follow-up 4 closed with two deviations labelled "your call". They are done, and they
+turn out to have been the same omission wearing two hats: the canvas-chrome theme
+moved the ring, the label, the rails' markers and the thumbnail's selection box, and
+left everything *else* on those surfaces reading the panel accent.
+
+**Production.**
+
+- `Minimap.tsx:145-152` — the viewport rectangle and its wash read `chrome.sel` and
+  `chrome.selWash`. They read `chrome.accent` and `chrome.accentWash` before, i.e.
+  `--accent`, which no canvas-chrome theme is allowed to move; the thumbnail's
+  selection box *did* already follow `sel`, so a flip left one surface half-themed,
+  which is the accurate description of the old state and not a generous one.
+- `Rulers.tsx:78` — the selected-range wash, the same substitution. The rails'
+  corner markers were already on `chrome.sel` (`Rulers.tsx:60-67`), which is exactly
+  why the gap was easy to miss on screen: two thirds of the rulers were right.
+- `canvasChrome.ts` — `accent` and `accentWash` are deleted from the role map and from
+  the fallbacks, 24 tokens → 22, and the header now says why in the file that is the
+  only door between the sheet and the 2D surfaces: a canvas surface frames the
+  *selection*, never the control accent. The companions could not have kept their old
+  reads even in a future that wanted to.
+- `Canvas.tsx:4009-4020` — the combined bounds of several layers now paint handles at
+  the container size (a 7px box in the 8px recipe, the same as a selected frame)
+  instead of 5px; Figma draws a group's handles at the size it draws a frame's, not at
+  the size it draws a rectangle's. Before touching it, the hit paths were measured:
+  both the single-selection grab (`:5934`) and the combined one (`:6324`) test
+  `Math.hypot(px-hx, py-hy) < 8` around the same handle centre, and `handles()`
+  (`:10236`) returns eight positions that do not depend on the painted size — so only
+  pixels move, not reach. `gradientCanvasHandles.test.mjs`'s 7px squares are gradient
+  stop squares on a single selection and `multiSelectTransform.test.mjs` pins no handle
+  geometry, which is the whole reason the change is safe to make at all.
+
+**Tests.** `figmaChromeTheme.dom.test.mjs` 26 → **30**: the rulers and the minimap are
+mounted in the same harness (both flags live on the document, not the page — the first
+attempt put them in `pages[0]` and the assertions scanned `null`), and both are sampled
+before and after the flip. Countable is countable, and the file says which is which:
+the rails' 3×3 selection markers and the thumbnail's selection box are read as pixels;
+the 1px viewport rectangle and both range washes are at 0.14 alpha over white, which
+survives neither the hue rule nor a channel distance, so their ink is pinned as source
+in `canvasChromePref.test.mjs`, which went 41 → **43**. `canvasChrome.test.mjs` 60 →
+**61**, and §5's "no panel role is touched" is no longer what enforces that: with
+`accent` gone from the map, the check derived its denylist *from the map*, so
+`panelRoles` became empty and the assertion turned quietly vacuous. It is a whitelist
+now — the `[data-canvas-chrome="figma"]` block may declare `--cv-*` tokens and `--grid`
+and nothing else — plus a direct assertion that no role in the map resolves to
+`--accent` or `--accent-wash`, one per side of the door. `figmaCanvasVectorParity` 66 →
+**67**: M8 asserts that a multi-selection paints the container size and never a smaller
+box (the count is deliberately not asserted — two selected layers also paint their own
+chrome, and an exact 16 would be a fact about that, not about Figma).
+
+**The rig bug, which is the finding.** The sabotage driver applied a spec's patches by
+re-reading the pristine file for each one, so a break expressed as two edits to the same
+file wrote the second and silently undid the first. Three numbers in shipped comments
+were produced that way, and one of them mattered: "re-creating the effect shape as a
+sabotage passes the pixel file, because jsdom's passive-effect order does not reproduce
+the browser's" — the sentence that let Follow-up 4 claim the ordering was unverifiable in
+pixels and settle for a text pin. Re-run with the patches stacking, the original bug is
+caught by **five** assertions in the pixel file, with its signature intact: sheet blue,
+ring emerald, label emerald, rails emerald, thumbnail emerald, and the reverse palette
+after switching back. So the ordering *is* covered in pixels here; the text pin stays
+because it is free and because a repaint that depends on harness scheduling is a
+half-truth. The minimap's and the label's numbers moved too (0 → 2, 3 → 5, 6 → 8), and
+the two remaining zeroes in the log are the wash, which is a limit of the hue rule and
+says so. A green sabotage log is not evidence about the product until the rig that
+produced it has been checked; that is worth a sentence in any file that keeps a log.
+
+| Break (this round) | Caught by |
+|---|---|
+| the minimap painted the selection in a literal emerald | `figmaChromeTheme` ×2, `canvasChromePref` ×1 |
+| the rulers' range wash did the same | `canvasChromePref` ×1 (the wash is not countable) |
+| the rails' corner markers stopped following the selection | `figmaChromeTheme` ×2 |
+| the theme recoloured `--accent` in the sheet | `canvasChrome` §5 ×2 |
+| `accent` added back to the role map | `canvasChrome` §5 ×1 |
+| multi-selection boxes shrink back to 5px | parity M8 ×1 |
+
+Every break in the two tables above, and the six here, were re-run against the tree as
+it stands now rather than trusted from an earlier round: the fix to the driver changed
+what "applied" meant, and only re-running proved that.
+
+**Gate.** `npm test` → exit 0 with **2010** `ok` and 0 `FAIL` — the per-file numbers
+above are this round's measured runs (`figmaChromeTheme` 30, `canvasChromePref` 43,
+`canvasChrome` 61, `figmaCanvasVectorParity` 67), against 26 / 41 / 60 / 66 at the
+previous commit's 2003 total; `drift` 24/0 — `Canvas.tsx`, `Minimap.tsx` and `Rulers.tsx` all moved lines and
+none of them is under a ceiling, and the ceilings that are (`chrome.tsx`) did not move,
+so nothing here needed a new exemption; `npx tsc --noEmit` clean; `npm run build` →
+exit 0, `✓ built in 5.64s`. Two open items from the earlier rounds are now closed — the
+minimap/rulers deviation and the group-handle size — and the honest list is down to
+three: `--cv-target` is blue in both palettes by design (it is the *document* ink of
+the snap line, not chrome), `Dashboard.tsx:356` still carries a second Theme control
+that knows nothing about canvas chrome, and there is still no Chromium in this sandbox
+to check the real cascade behind the model that reads it.

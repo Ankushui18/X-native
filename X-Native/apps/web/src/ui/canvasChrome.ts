@@ -25,9 +25,17 @@
  *
  * Selection ink is intentionally a role of its own rather than `--accent`: the
  * ring and handles sit on the document canvas, not on a panel, so they are
- * contrast-tuned against `--canvas`. Document ink is NOT in this record — a
- * default fill or a new slice's stroke is written into the file and must not
- * move when the theme changes; those stay named literals at their call sites.
+ * contrast-tuned against `--canvas`. The reverse holds too, and is the reason the
+ * minimap viewport and the ruler range wash were moved off `--accent` onto `sel` /
+ * `selWash`: a *canvas* surface that reads the *panel* accent cannot answer the
+ * canvas-chrome theme (`View → Canvas chrome`), and a second green in the chrome
+ * is what the FR-U2 round was created to remove. That is a rule now, not a habit:
+ * the only panel tokens left in this record are the ones FR-U2 shares on purpose —
+ * surface, well, grid, label, component identity — and the control accent is not one
+ * of them, so no canvas surface can be themed by the appearance switch and left
+ * behind. Document ink is NOT in this record — a default fill or a new slice's
+ * stroke is written into the file and must not move when the theme changes; those
+ * stay named literals at their call sites.
  */
 
 /** Role → custom property. Every key here must exist in both theme blocks. */
@@ -72,10 +80,6 @@ export const CANVAS_CHROME_TOKENS = {
   label: "--canvas-label",
   /** Component / instance identity. */
   comp: "--comp",
-  /** Control accent — used by the minimap viewport rectangle. */
-  accent: "--accent",
-  /** Control accent wash — minimap viewport fill, ruler selection range. */
-  accentWash: "--accent-wash",
 } as const;
 
 export type CanvasChromeKey = keyof typeof CANVAS_CHROME_TOKENS;
@@ -106,8 +110,6 @@ export const CANVAS_CHROME_FALLBACK: CanvasChrome = {
   grid: "rgba(16, 185, 129, 0.07)",
   label: "rgba(17, 24, 39, 0.5)",
   comp: "#a855f7",
-  accent: "#0e9f6e",
-  accentWash: "rgba(14, 159, 110, 0.14)",
 };
 
 /**

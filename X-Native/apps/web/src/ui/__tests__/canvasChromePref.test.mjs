@@ -122,10 +122,11 @@ for (const [raw, want] of CASES) {
   // Ordering, because it is the bug that actually happened: applied from a
   // `ThemeProvider` effect, the write could land after the canvas had re-read the
   // cascade — the preference persisted, the sheet said blue, and the ring stayed
-  // emerald. That is what it did in a browser. jsdom's effect order will not
-  // reproduce it on demand (a sabotage putting it back passes the pixel file), so
-  // the order is pinned here, in text, and `figmaChromeTheme.dom.test.mjs`
-  // asserts the consequence that matters: the canvas does repaint for the flip.
+  // emerald. That is what it did in a browser. It is also caught in pixels —
+  // `figmaChromeTheme.dom.test.mjs` re-creates the effect shape and fails 5
+  // assertions — but a browser repaint is a scheduling accident waiting to be
+  // unscheduled, so the order is pinned here as well: text first, pixels second,
+  // and never a dependency list taken as a promise about a colour.
   const setter = (theme.match(/const setChromePref = useCallback\(\([\s\S]*?\}, \[\]\);/) ?? [""])[0];
   t("the setter writes the attribute before it updates state",
     /applyCanvasChromePref\(next[\s\S]*?setChromePrefState\(next\)/.test(setter), setter.slice(0, 80));
@@ -146,6 +147,13 @@ for (const [raw, want] of CASES) {
   t("and lists it in the paint effect's deps", /\}, \[[^\]]*\btheme, chromePref,[^\]]*\]/.test(canvas),
     (canvas.match(/\}, \[snap, band,[^\n]*/)?.[0] ?? "no deps line").slice(0, 90));
   t("the rulers repaint for it", /theme,\s*chrome\]/.test(rulers) && /chrome: string;/.test(rulers));
+  // Repainting for a flip you cannot see is not parity: a surface that frames the
+  // selection with the *panel* accent answers the colour scheme, not the canvas
+  // theme, so both companions have to read the selection role.
+  t("the minimap frames the viewport in selection ink, not the panel accent",
+    /chrome\.sel\b/.test(minimap) && /chrome\.selWash/.test(minimap) && !/chrome\.accent/.test(minimap));
+  t("and the rulers wash the selected range the same way",
+    /chrome\.selWash/.test(rulers) && !/chrome\.accentWash/.test(rulers));
   t("the minimap repaints for it", /theme,\s*chrome\]/.test(minimap) && /chrome: string;/.test(minimap));
   t("Canvas passes the preference to both",
     (canvas.match(/chrome=\{chromePref\}/g) ?? []).length === 2,

@@ -76,7 +76,7 @@ export function Rulers({
 
     // Highlight the selected range
     if (selection) {
-      ctx.fillStyle = chrome.accentWash;
+      ctx.fillStyle = chrome.selWash;
       const sx = panX + selection.x * zoom;
       const sy = panY + selection.y * zoom;
       ctx.fillRect(sx, 0, selection.w * zoom, SIZE);

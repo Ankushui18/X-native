@@ -143,10 +143,13 @@ export function Minimap({
     const vy = oy + (-panY / zoom) * scale;
     const vw = (viewW / zoom) * scale;
     const vh = (viewH / zoom) * scale;
-    ctx.strokeStyle = chrome.accent;
+    // The viewport rectangle is the same ink as the selection it frames — the
+    // canvas's selection role, not `--accent`: the panel accent is tuned for
+    // buttons, and it does not move with the canvas-chrome theme.
+    ctx.strokeStyle = chrome.sel;
     ctx.lineWidth = 1;
     ctx.strokeRect(Math.round(vx) + 0.5, Math.round(vy) + 0.5, Math.round(vw), Math.round(vh));
-    ctx.fillStyle = chrome.accentWash;
+    ctx.fillStyle = chrome.selWash;
     ctx.fillRect(vx, vy, vw, vh);
   }, [root, zoom, panX, panY, viewW, viewH, theme, chrome]);
 

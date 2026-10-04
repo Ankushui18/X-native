@@ -28,8 +28,12 @@
  *     `html[data-canvas-chrome="figma"]` (View → Canvas chrome) must move every
  *     emerald *canvas* role to the sheet's Figma blue, retune nothing else, and
  *     sit after the two theme blocks so it wins the cascade. The panel accent is
- *     deliberately out of scope; a test says so, because "why is the rail still
- *     green?" and "why did the whole app turn blue?" are both answered here.
+ *     out of scope by construction, in both directions: `canvasChrome.ts` has no
+ *     `accent` role at all, so a canvas surface cannot ask for one, and the override
+ *     block is whitelisted to `--cv-*` roles plus `--grid`, so it cannot answer for
+ *     one either. Both halves are asserted here, because "why is the rail still
+ *     green?" and "why did the whole app turn blue?" are the same question from
+ *     opposite sides of the door.
  *
  * Nothing here needs a canvas, a DOM or a browser: `readCanvasChrome` is pure and
  * the rest is source text. Run with: npx vite-node src/ui/__tests__/canvasChrome.test.mjs
@@ -289,12 +293,15 @@ t(
     const washed = canvasRoles.map((k) => CANVAS_CHROME_TOKENS[k]).filter((token) => alphaOf(figma[token]) != null);
     t(`and that includes the three washes (${washed.join(", ")})`, washed.length === 3);
 
-    // The boundary, stated rather than assumed.
-    const panelRoles = keys
-      .map((k) => CANVAS_CHROME_TOKENS[k])
-      .filter((token) => !token.startsWith("--cv-") && token !== "--grid");
-    const touchedPanel = panelRoles.filter((token) => token in figma);
-    t(`it touches no panel role (${touchedPanel.join(", ") || "none touched"})`, touchedPanel.length === 0);
+    // The boundary, stated as a whitelist of what the block may contain rather than
+    // a list of what it must not: a `[data-canvas-chrome]` rule that touched
+    // `--accent` would recolour every button, focus ring and rail in the app, which
+    // is the opposite of what the switch is for — and the list cannot come from the
+    // token map, because the map's whole point is that the panel accent is not in it.
+    const strays = Object.keys(figma).filter((tk) => !tk.startsWith("--cv-") && tk !== "--grid");
+    t(`the override declares only canvas roles (${strays.join(", ") || "none stray"})`, strays.length === 0);
+    t("and the door holds: no chrome role reads back through the panel accent",
+      !tokenNames.includes("--accent") && !tokenNames.includes("--accent-wash"));
     const extra = Object.keys(figma).filter((tk) => !canvasRoles.includes(keys.find((k) => CANVAS_CHROME_TOKENS[k] === tk)));
     t(`and nothing outside the selection family (${extra.join(", ") || "nothing"})`, extra.length === 0);
     // Cascade arithmetic, not cosmetics: equal specificity with the theme blocks,

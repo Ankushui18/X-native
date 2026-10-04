@@ -4009,13 +4009,15 @@ export function Canvas({
         const hsMulti: [number, number][] = allLocked ? [] : handles(sx, sy, sw, sh);
         for (const [hx, hy] of hsMulti) {
           // Multi-selection uses the same hollow-square recipe as a single selected
-          // shape — white fill, selection-accent stroke — at the smaller plain-shape
-          // size, because the box belongs to several layers, not to one.
+          // container — white fill, selection-accent stroke, the 8px box — because
+          // the bounds of several layers are a container-shaped thing, and Figma
+          // draws them at one size. The grab is an 8px radius around the handle
+          // centre either way, so only the pixels change, not what you can hit.
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = SEL;
           ctx.lineWidth = 1;
-          ctx.fillRect(hx - 3 + 0.5, hy - 3 + 0.5, 5, 5);
-          ctx.strokeRect(hx - 3 + 0.5, hy - 3 + 0.5, 5, 5);
+          ctx.fillRect(hx - 4 + 0.5, hy - 4 + 0.5, 7, 7);
+          ctx.strokeRect(hx - 4 + 0.5, hy - 4 + 0.5, 7, 7);
         }
         const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
         ctx.font = "500 11px Inter, system-ui";

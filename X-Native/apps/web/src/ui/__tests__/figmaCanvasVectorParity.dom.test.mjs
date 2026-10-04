@@ -12,7 +12,8 @@
  *   A  pixel grid layers over the document, under the chrome          (Fix 1)
  *   B  rotation is an invisible band + a cursor, with nothing painted, and the
  *      band the cursor reports is the band the press accepts            (Fix 2)
- *   M  chrome type metrics: 11px medium labels, 8px container handles (Fix 2)
+ *   M  chrome type metrics: 11px medium labels, 8px container handles — single
+ *      selection and combined bounds alike (Fix 2)
  *   C  path skeleton: unselected edges are a dim centre line, an edge
  *      between two selected anchors is full-strength                   (Fix 3)
  *   D  double-click enters vecEdit *and* selects the anchor under it    (Fix 4, 6)
@@ -29,6 +30,7 @@
  *   - widen `ROTATION_HANDLE_HIT` past the constant         -> B7, B8 fail
  *   - bold the selected frame's label again                 -> M1, M3 fail
  *   - shrink the container handles back to 7px              -> M4, M5 fail
+ *   - shrink the multi-selection boxes back to 5px          -> M8 fails
  *   - skeleton + selected edge share one style            -> C2 fails
  *   - delete the skeleton loop                            -> C1 fails
  *   - `entryAnchor` returns null (the pre-fix entry)      -> D1 fails
@@ -307,6 +309,15 @@ const tri = [
   t("M6 a plain shape keeps four corner handles, one step smaller",
     small.length === 4 && small.every((o) => o.args[2] === 6 && o.args[3] === 6),
     `${small.length} boxes: ${small.map((o) => o.args[2]).join(",")}`);
+  ops = [];
+  await ui.dispatch({ type: "select", ids: [frame.id, rect.id] });
+  const multi = boxes();
+  // Two selected layers paint their own boxes as well, so the claim is about the
+  // size, not the count: nothing in a multi-selection is the 5px box the combined
+  // bounds used to shrink to, and the plain-shape 6px is a single-selection size.
+  t("M8 a multi-selection paints the container handle size, never a smaller box",
+    multi.length >= 8 && multi.every((o) => o.args[2] === 7 && o.args[3] === 7),
+    `${multi.length} boxes: ${multi.map((o) => o.args[2]).join(",")}`);
   t("M7 mid-edge handles are a container idea, not a shape one",
     small.every((o) => {
       const [cx, cy] = at(o);

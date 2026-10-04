@@ -24,38 +24,57 @@
  * `[data-canvas-chrome]` block. If the sheet ever needs real specificity, this file
  * must stop agreeing with a browser, and it should: the sheet would then be wrong.
  *
+ * The rails and the thumbnail are sampled beside the canvas because that is where a
+ * chrome theme is easiest to half-do: both framed the selection with the *panel*
+ * accent (`--accent`), which no canvas-chrome theme is allowed to move. They read
+ * the selection role now, and the `accent` / `accentWash` roles were deleted from
+ * `canvasChrome.ts`, so nothing can reach back through the door — the file that
+ * owns the whitelist is `canvasChrome.test.mjs` §5.
+ *
  * It earned its keep on the first run. The click wrote the attribute, the sheet
  * said blue, and the pixels stayed emerald — because the preference had been
  * applied from a `useEffect` in `ThemeProvider`, and the write landed in the same
  * commit as the repaint it was supposed to drive. `theme.tsx` now writes it in the
- * setter, before the state update, and `canvasChromePref.test.mjs:123-131` pins that
- * order in text. Worth recording what that pin is *not*: re-creating the effect
- * shape as a sabotage no longer turns these pixels emerald, because jsdom's
- * passive-effect order does not reproduce the browser's here. So the ordering is
- * asserted on the source, and only its consequence — a canvas that repaints for the
- * flip — is asserted in pixels. That asymmetry is the honest limit of this harness,
- * and the reason the file reads colours instead of trusting that a dependency list
- * implies a visible change.
+ * setter, before the state update, and `canvasChromePref.test.mjs` pins that order
+ * in text as well, because the text pin is free.
+ *
+ * The second claim here had to be corrected, and the reason is worth keeping. An
+ * earlier round recorded that re-creating the effect shape as a sabotage *passed*
+ * this file — jsdom's passive-effect order was said not to reproduce the browser's,
+ * so the ordering was claimed uncatchable in pixels. It is catchable: the last run
+ * of that break fails 5 assertions, with exactly the bug's signature (the ring, the
+ * label, the rails and the thumbnail still emerald against a blue sheet). The zero
+ * had been produced by the sabotage *driver*, which re-read the pristine file for
+ * every patch instead of the patched one, so a break expressed as two edits to one
+ * file applied the second and silently undid the first — the harness measured
+ * "nothing writes the attribute" and concluded "the ordering does not matter here".
+ * A green sabotage log is not evidence about the product until the rig that
+ * produced it has itself been checked.
  *
  * Sabotage log — each break applied to the source, this file re-run, then
- * restored; the number after the arrow is how many of its assertions caught it:
- *   - `--cv-sel` dropped from the figma block                        -> 6  (+2 in `canvasChrome` §5)
- *   - the attribute never written                                    -> 3  (+2 in `canvasChromePref`)
- *   - the flip dropped from the canvas paint effect's deps           -> 2
- *   - the rotation dot repainted at the band                         -> 2  (+2 in the parity file)
- *   - the layer label no longer follows the selection                 -> 2
- *   - the apply moved back into a parent `useEffect`                  -> 0 — see above
+ * restored; the number after the arrow is how many assertions caught it, and
+ * where it is not this file, the other file is named:
+ *   - `--cv-sel` dropped from the figma block                   -> 8  (+2 in `canvasChrome` §5)
+ *   - the attribute never written                                -> 5  (+2 in `canvasChromePref`)
+ *   - the flip dropped from the canvas paint effect's deps       -> 2
+ *   - the rotation dot repainted at the band                     -> 2  (+2 in the parity file)
+ *   - the layer label stopped following the selection            -> 2
+ *   - the ruler markers stopped following the selection          -> 2
+ *   - the minimap painted the selection in a literal emerald     -> 2  (+1 in `canvasChromePref`)
+ *   - the rulers' range wash did the same                        -> 0 here, 1 in `canvasChromePref`
+ *   - the theme recoloured `--accent` in the sheet               -> 2 in `canvasChrome` §5
+ *   - `accent` added back to the role map                        -> 1 in `canvasChrome` §5
+ *   - the multi-selection box shrunk to 5px                      -> 1 in the parity file
+ *   - the apply moved back into a parent `useEffect`              -> 5 — see above
+ *
+ * The one zero here is the harness's shape, not a gap in the claim: a wash at 0.14
+ * alpha over white survives neither the hue rule nor a channel distance, so the ink
+ * of the ruler range and the minimap viewport rectangle is pinned as source. What
+ * the pixels do cover is that the two companions repaint at all for a flip, and in
+ * which hue their selection marks are.
  *
  * Run with: npx vite-node src/ui/__tests__/figmaChromeTheme.dom.test.mjs
  *
- * Sabotage log — each break applied to the source, this file re-run, then
- * restored; the number is how many assertions caught it:
- *   - apply from a `useEffect` instead of the setter (the original bug)  -> 2
- *   - `applyCanvasChromePref` never writes the attribute                 -> 3
- *   - `--cv-sel` dropped from the figma block                            -> 2
- *   - chrome flip removed from the canvas paint effect's deps            -> 1
- *   - the rotation handle repainted at the band                          -> 2
- *   - the sheet's `--canvas` recoloured by the theme block               -> 1
  */
 import { readFileSync } from "fs";
 import path from "path";
@@ -268,6 +287,10 @@ const engine = new MemoryEngine(false, {
   zoom: 2,
   panX: 0,
   panY: 0,
+  // The document, not the page, owns the view overlays — and both companions are
+  // mounted here because the whole point is what they paint.
+  showRulers: true,
+  showMinimap: true,
 });
 
 function Host() {
@@ -306,6 +329,25 @@ const LABEL = [200, 182, 360, 196];
 const OLD_HANDLE = [770, 130, 830, 190];
 
 t("the canvas mounted on the Skia backend", !!surface && surface.width > 0, `${surface?.width}×${surface?.height}`);
+/** The two companion surfaces read the same cascade through `canvasChrome()`; they
+ *  are where a chrome theme is easiest to half-do, so they are sampled too. */
+const scanSurface = (el) => {
+  const surf = el?.__probeCanvas;
+  if (!surf || !surf.width) return null;
+  const img = surf.getContext("2d").getImageData(0, 0, surf.width, surf.height);
+  const n = { green: 0, blue: 0, emerald: 0, figma: 0 };
+  for (let i = 0; i < img.data.length; i += 4) {
+    const q = { r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] };
+    n[hue(q)]++;
+    if (close(q, EMERALD)) n.emerald++;
+    if (close(q, BLUE)) n.figma++;
+  }
+  return n;
+};
+const rulersEl = host.querySelector("canvas.rulers");
+const miniEl = host.querySelector(".minimap canvas");
+t("the rulers and the minimap are mounted next to it", !!rulersEl && !!miniEl,
+  `${host.querySelectorAll("canvas").length} canvases`);
 await act(async () => engine.dispatch({ type: "select", ids: [frame.id] }));
 t("and the paint asked the cascade for real custom properties", reads > 0, `${reads} reads`);
 t(`every canvas role it asked for came out of the sheet (${[...misses].join(", ") || "no misses"})`,
@@ -316,6 +358,11 @@ t("the selected frame's ring is painted in the app's emerald", before.emerald > 
 t("with no Figma blue anywhere in it", before.blue === 0 && before.figma === 0, JSON.stringify(before));
 const labelBefore = scan(grab(), ...LABEL);
 t("the frame's name is emerald while it is selected", labelBefore.emerald > 4, `${labelBefore.emerald} px`);
+const rulersBefore = scanSurface(rulersEl);
+const miniBefore = scanSurface(miniEl);
+t("the rails and the thumbnail carry the emerald too",
+  !!rulersBefore && !!miniBefore && rulersBefore.emerald > 4 && miniBefore.emerald > 20,
+  JSON.stringify({ rulers: rulersBefore, minimap: miniBefore }));
 const gapBefore = scan(grab(), ...OLD_HANDLE);
 t("nothing is painted where the rotation handle used to be",
   gapBefore.green === 0 && gapBefore.blue === 0 && gapBefore.other > 0, JSON.stringify(gapBefore));
@@ -351,6 +398,12 @@ t("the ring is Figma blue now — same pixels, other palette", after.figma > 200
   JSON.stringify(after));
 const labelAfter = scan(grab(), ...LABEL);
 t("the layer name followed it", labelAfter.figma > 4 && labelAfter.emerald === 0, JSON.stringify(labelAfter));
+const rulersAfter = scanSurface(rulersEl);
+const miniAfter = scanSurface(miniEl);
+t("the ruler marker turned with it", !!rulersAfter && rulersAfter.figma > 4 && rulersAfter.emerald === 0,
+  JSON.stringify(rulersAfter));
+t("and so did the thumbnail's selection box", !!miniAfter && miniAfter.figma > 20 && miniAfter.emerald === 0,
+  JSON.stringify(miniAfter));
 t("and still nothing at the rotation band", (() => {
   const g = scan(grab(), ...OLD_HANDLE);
   return g.green === 0 && g.blue === 0;
