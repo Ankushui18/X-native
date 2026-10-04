@@ -29,7 +29,19 @@ import { RadialMenu } from "./ui/RadialMenu";
 import { toast as toastMsg } from "./ui/toast";
 import { clearDoc, saveDoc, saveSuppressed } from "./engine/persist";
 import { Dashboard } from "./ui/Dashboard";
-import { DEMO_ID, createFile, docFromTemplate, ensureDemoFile, getFile, migrateLegacyDoc, readDoc, readDocSync, saveFile, type DocSeed } from "./engine/files";
+import {
+  DEMO_ID,
+  createFile,
+  docFromTemplate,
+  ensureDemoFile,
+  getFile,
+  migrateLegacyDoc,
+  migrateLegacyDocFromIdb,
+  readDoc,
+  readDocSync,
+  saveFile,
+  type DocSeed,
+} from "./engine/files";
 import { dehydrateDoc, hydrateDoc } from "./engine/assets";
 import { initWasmBridge } from "./engine/wasmBridge";
 import { WasmEngine } from "./engine/WasmEngine";
@@ -97,6 +109,12 @@ export default function App() {
     if (route.view === "home") {
       ensureDemoFile();
       migrateLegacyDoc();
+      // …and the one it cannot see: a document too big for localStorage is in
+      // IndexedDB, which the sync adoption above never reads. Worth a toast, because
+      // the dashboard gains a file the user had every reason to think was gone.
+      void migrateLegacyDocFromIdb().then((meta) => {
+        if (meta) toastMsg("Recovered a file too large for browser storage");
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

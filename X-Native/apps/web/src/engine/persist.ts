@@ -8,6 +8,7 @@ import type {
   VariableItem,
 } from "./types";
 import { getPreferredColorProfile } from "./colorProfile";
+import { clampZoom } from "./view";
 
 /** Bump when the persisted shape changes incompatibly. A mismatch is discarded
  *  rather than migrated blindly, so a stale document can never half-load. */
@@ -90,7 +91,13 @@ function validate(v: unknown): PersistedDoc | null {
     components: v.components as ComponentMaster[],
     styles: v.styles as SharedStyle[],
     page: num(v.page, 0, pages.length - 1, 0),
-    zoom: num(v.zoom, 0.1, 8, 1),
+    // The engine's own clamp rather than a second range written here: this used to
+    // read `num(v.zoom, 0.1, 8, 1)`, which does not narrow an extreme, it
+    // *replaces* it — a document saved at 1% or at 2000% came back at exactly
+    // 100%, so a reload threw away where the user was looking. `clampZoom` agrees
+    // with ZOOM_MIN/ZOOM_MAX by construction, and answers a non-finite or absent
+    // zoom with 1, which is the default `num` was called with.
+    zoom: clampZoom(typeof v.zoom === "number" ? v.zoom : 1),
     panX: num(v.panX, -1e7, 1e7, 0),
     panY: num(v.panY, -1e7, 1e7, 0),
     showFlows: v.showFlows !== false,
@@ -157,6 +164,27 @@ export function loadDoc(): LoadResult {
   return { doc, corrupt: false };
 }
 
+/**
+ * The same read, allowed to be slow. `loadDoc` has to stay synchronous — the
+ * `MemoryEngine` constructor calls it — so a document that overflowed localStorage
+ * into IndexedDB is invisible to it. Anything that *can* await (the dashboard's
+ * rescue, a restore prompt, an export) should call this instead and get the bytes
+ * back rather than a clean document.
+ *
+ * localStorage wins when it holds the key, and that is not a preference but an
+ * invariant: `saveDoc` writes the backup first, then the slot, and removes the slot
+ * when the second write fails on quota. So a present slot is never older than the
+ * IndexedDB copy, and an absent one means the newest bytes are in IndexedDB.
+ */
+export async function loadDocHydrated(): Promise<LoadResult> {
+  const local = loadDoc();
+  if (local.doc) return local;
+  const doc = await loadDocFromIdb();
+  // `loadDocFromIdb` runs the same `validate`, so a half-written or version-stale
+  // payload is null here and the corrupt flag from the slot still stands.
+  return doc ? { doc, corrupt: false } : local;
+}
+
 export type SaveStatus = "saved" | "quota" | "error";
 
 const IDB_NAME = "x-native-db";
@@ -220,7 +248,10 @@ export async function loadDocFromIdb(): Promise<PersistedDoc | null> {
 export function saveDoc(doc: Omit<PersistedDoc, "version">): SaveStatus {
   if (suppressed) return "saved";
   const fullDoc: PersistedDoc = { version: VERSION, ...doc };
-  // Back up to IndexedDB for unlimited quota storage (handles documents with heavy base64 images)
+  // Back up to IndexedDB for unlimited quota storage (handles documents with heavy
+  // base64 images), and do it *before* touching localStorage: by the time the
+  // catch below can run, the newest bytes are already durable. Reading them back
+  // is `loadDocHydrated`'s job — a backstop nothing loads through is not a backstop.
   saveDocToIdb(fullDoc).catch(() => {});
 
   try {
@@ -228,11 +259,26 @@ export function saveDoc(doc: Omit<PersistedDoc, "version">): SaveStatus {
     return "saved";
   } catch (err) {
     // Images are stored inline as data URLs, so a large document can exceed the
-    // ~5MB localStorage budget. IndexedDB handles multi-hundred-MB storage.
+    // ~5MB localStorage budget. IndexedDB handles multi-hundred-MB storage, and the
+    // backup above already carries these bytes.
     const quota =
       isObj(err) &&
       (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED");
-    return quota ? "saved" : "error";
+    if (!quota) return "error";
+    // Answering this "saved" was its own bug: `SaveStatus` has a `quota` variant,
+    // `App.tsx` has a toast wired to it ("export to keep a copy"), and neither could
+    // ever fire — the user kept editing a document the browser had refused to store.
+    //
+    // The slot now holds an *older* document than the one in memory, and `loadDoc()`
+    // is synchronous, so it would restore that as if it were current and the user
+    // would go on editing yesterday's file. Empty-with-a-copy-in-IndexedDB is the
+    // honest state: `loadDocHydrated` finds it, `loadDoc` cannot invent it.
+    try {
+      localStorage.removeItem(KEY);
+    } catch {
+      /* nothing further to try */
+    }
+    return "quota";
   }
 }
 

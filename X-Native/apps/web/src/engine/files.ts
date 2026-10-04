@@ -14,6 +14,7 @@ import { blankPage, demoPage, node, uid } from "./memory";
 import { hydrateDoc } from "./assets";
 import type { Page, XNode } from "./types";
 import type { PersistedDoc } from "./persist";
+import { loadDocFromIdb } from "./persist";
 import { getPreferredColorProfile } from "./colorProfile";
 import type { ImportedNode, ImportResult } from "./svgImport";
 
@@ -751,15 +752,11 @@ export function previewFromDoc(doc: DocSeed, w = 480, h = 300): string {
 
 /** One-time upgrade: the product used to autosave a single anonymous
  *  document. Turn it into a Draft so nobody loses work by gaining a dashboard. */
-export function migrateLegacyDoc(): FileMeta | null {
+/** Both readers below end here, so an adopted document becomes a `legacy` file the
+ *  same way whichever slot it came out of — and the "already migrated" guard is one
+ *  rule, not two that can drift. */
+function adoptLegacyDoc(doc: DocSeed | null): FileMeta | null {
   if (readAll().some((f) => f.legacy)) return null;
-  let doc: DocSeed | null = null;
-  try {
-    const raw = localStorage.getItem("x-native-document");
-    doc = raw ? (JSON.parse(raw) as DocSeed) : null;
-  } catch {
-    doc = null;
-  }
   if (!doc || !Array.isArray(doc.pages) || !doc.fileName) return null;
   const now = Date.now();
   const meta: FileMeta = {
@@ -777,6 +774,33 @@ export function migrateLegacyDoc(): FileMeta | null {
   meta.thumb = previewFromDoc(doc) || undefined;
   writeAll([meta, ...readAll()]);
   return meta;
+}
+
+export function migrateLegacyDoc(): FileMeta | null {
+  let doc: DocSeed | null = null;
+  try {
+    const raw = localStorage.getItem("x-native-document");
+    doc = raw ? (JSON.parse(raw) as DocSeed) : null;
+  } catch {
+    doc = null;
+  }
+  return adoptLegacyDoc(doc);
+}
+
+/**
+ * The rescue `migrateLegacyDoc` cannot do, because it can only read the slot.
+ * `persist.saveDoc` keeps a copy in IndexedDB for any document too big for
+ * localStorage — which is exactly what a file with images in it is — so a browser
+ * whose slot reads empty may still hold the work. Without this, the first run of
+ * the dashboard adopts every light document and silently drops the heavy one, and
+ * the heavy one is the file someone spent an afternoon on.
+ */
+export async function migrateLegacyDocFromIdb(): Promise<FileMeta | null> {
+  // Checked before the await: an already-migrated browser must not open a
+  // transaction, and a second boot must not mint a second Draft.
+  if (readAll().some((f) => f.legacy)) return null;
+  const doc = await loadDocFromIdb();
+  return adoptLegacyDoc((doc ?? null) as DocSeed | null);
 }
 
 export const DEMO_ID = "demo";
