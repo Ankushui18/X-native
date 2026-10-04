@@ -1992,17 +1992,16 @@ export class MemoryEngine implements Engine {
    * If successful, patches the node with the precise result.
    * If it fails, the TS result is already applied — no visible difference.
    */
-  private async tryWasmOutlineStroke(id: string): Promise<void> {
+  private async tryWasmOutlineStroke(id: string, sourceSnapshot: XNode): Promise<void> {
     try {
       const { wasmOutlineStroke, rustPathToPoints } = await import("./wasmVectorOps");
-      const n = find(this.root(), id);
-      if (!n) return;
-      const result = await wasmOutlineStroke(n);
+      const result = await wasmOutlineStroke(sourceSnapshot);
       if (!result || !result.path.length) return;
       // Patch the node with the Rust result
       const target = find(this.root(), id);
       if (!target) return;
-      target.path = rustPathToPoints(result.path);
+      target.path = result.localPath ?? rustPathToPoints(result.path);
+      if (result.vectorNetwork) target.vectorNetwork = result.vectorNetwork;
       target.closed = true;
       // Trigger re-render
       this.listeners.forEach((f) => f());
@@ -2017,19 +2016,19 @@ export class MemoryEngine implements Engine {
    */
   private async tryWasmOffsetPath(
     id: string,
+    sourceSnapshot: XNode,
     distance: number,
     join: "miter" | "round" | "bevel",
   ): Promise<void> {
     try {
       const { wasmOffsetPath, rustPathToPoints } = await import("./wasmVectorOps");
-      const n = find(this.root(), id);
-      if (!n) return;
-      const result = await wasmOffsetPath(n, distance, join);
+      const result = await wasmOffsetPath(sourceSnapshot, distance, join);
       if (!result || !result.path.length) return;
       // Patch the node with the Rust result
       const target = find(this.root(), id);
       if (!target) return;
-      target.path = rustPathToPoints(result.path);
+      target.path = result.localPath ?? rustPathToPoints(result.path);
+      if (result.vectorNetwork) target.vectorNetwork = result.vectorNetwork;
       target.closed = true;
       this.listeners.forEach((f) => f());
     } catch {
@@ -4574,7 +4573,8 @@ export class MemoryEngine implements Engine {
           // The TS path runs synchronously for immediate feedback; the WASM
           // result patches the node when ready with mathematically precise
           // even-odd winding, matching Figma's output exactly.
-          void this.tryWasmOutlineStroke(id);
+          const sourceSnapshot = JSON.parse(JSON.stringify(n)) as XNode;
+          void this.tryWasmOutlineStroke(id, sourceSnapshot);
           if (usesVariableWidth(n)) {
             const baked = outlineVariableStroke(
               src,
@@ -4609,7 +4609,8 @@ export class MemoryEngine implements Engine {
           if (!n || hasExtraNetworkGeometry(n.vectorNetwork) || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) continue;
           const src = n.path.length ? n.path : shapePoly(n);
           // Phase 12: Try Rust pipeline for offset path (asynchronous upgrade).
-          void this.tryWasmOffsetPath(id, cmd.distance, cmd.join || "round");
+          const sourceSnapshot = JSON.parse(JSON.stringify(n)) as XNode;
+          void this.tryWasmOffsetPath(id, sourceSnapshot, cmd.distance, cmd.join || "round");
           n.path = offsetPath(src, cmd.distance, n.closed || (n.kind !== "line" && n.kind !== "arrow"), cmd.join || "round");
           n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
           n.kind = "vector";

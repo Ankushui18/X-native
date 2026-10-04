@@ -13,13 +13,98 @@
  */
 import { initWasmBridge, rustSessionConstructor } from "./wasmBridge";
 import { auditRustCall } from "./bridgeRuntimeAudit";
-import type { XNode } from "./types";
+import type { PathPoint, VectorNetwork, VectorSegment, VectorVertex, XNode } from "./types";
 
 export interface WasmVectorResult {
   /** The resulting path commands as a flat array of [tag, ...coords] tuples. */
   path: Array<[string, ...number[]]>;
   /** Whether the result path is closed. */
   closed: boolean;
+  /** Updated node bounds and local geometry when returned by Rust. */
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  localPath?: PathPoint[];
+  vectorNetwork?: VectorNetwork;
+}
+
+function normalizeOpaqueHex(color: unknown, fallback: string | null = "#000000"): string | null {
+  if (typeof color !== "string") return fallback;
+  const trimmed = color.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed.toLowerCase();
+  if (/^#[0-9a-fA-F]{8}$/.test(trimmed) && trimmed.slice(7).toLowerCase() === "ff") {
+    return trimmed.slice(0, 7).toLowerCase();
+  }
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+    const r = trimmed[1];
+    const g = trimmed[2];
+    const b = trimmed[3];
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return null;
+}
+
+function nodeKindToX(
+  n: XNode,
+  requireClosedVector: boolean,
+): { kind: Record<string, unknown>; isClosed: boolean } | null {
+  if (n.kind === "rect") {
+    const radii = n.cornerRadii ?? [0, 0, 0, 0];
+    if (radii.some((r) => r !== 0)) return null;
+    return { kind: { t: "rect", radius: 0 }, isClosed: true };
+  }
+  if (n.kind === "ellipse") {
+    if (n.arcData) return null;
+    return { kind: { t: "ellipse" }, isClosed: true };
+  }
+  if (n.kind === "star") {
+    return {
+      kind: {
+        t: "star",
+        points: n.count ?? 5,
+        ratio: n.starRatio ?? 0.4,
+      },
+      isClosed: true,
+    };
+  }
+  if (n.kind === "poly") {
+    return {
+      kind: {
+        t: "poly",
+        sides: n.count ?? 5,
+      },
+      isClosed: true,
+    };
+  }
+  if (n.kind === "line" && !requireClosedVector && (!n.path || n.path.length === 0)) {
+    return {
+      kind: { t: "line" },
+      isClosed: false,
+    };
+  }
+  if (n.kind === "vector" || n.kind === "boolean" || n.kind === "line") {
+    if (!n.path || n.path.length < 2) return null;
+    const isClosed = !!n.closed;
+    if (requireClosedVector && (!isClosed || n.path.length < 3)) return null;
+    for (const p of n.path) {
+      if (
+        (p.ix !== undefined && p.ix !== 0) ||
+        (p.iy !== undefined && p.iy !== 0) ||
+        (p.ox !== undefined && p.ox !== 0) ||
+        (p.oy !== undefined && p.oy !== 0)
+      ) {
+        return null;
+      }
+    }
+    const cmds: Array<[string, ...number[]]> = [
+      ["M", n.path[0].x, n.path[0].y],
+      ...n.path.slice(1).map((p): [string, ...number[]] => ["L", p.x, p.y]),
+    ];
+    if (isClosed) cmds.push(["Z"]);
+    return { kind: { t: "vector", path: cmds }, isClosed };
+  }
+  return null;
 }
 
 /**
@@ -27,67 +112,162 @@ export interface WasmVectorResult {
  * This is needed because the WASM bridge expects a full .x document,
  * but we only need to operate on a single node.
  */
-function buildMinimalXDoc(node: XNode): string | null {
+function buildMinimalXDoc(node: XNode, mode: "outline" | "offset"): string | null {
   try {
-    // Convert the node to .x format
-    const xNode = nodeToX(node);
+    const xNode = nodeToX(node, mode);
     if (!xNode) return null;
     return JSON.stringify({
+      format: "x-native",
       version: 1,
-      pages: [{
-        id: "vector-op-page",
-        name: "Vector Ops",
-        kind: "frame",
-        x: 0, y: 0, w: node.w || 100, h: node.h || 100,
-        children: [xNode],
-      }],
-      default_font: null,
-      variables: {},
-      styles: {},
-      assets: {},
+      pages: [
+        {
+          id: "vector-op-page",
+          name: "Vector Ops",
+          x: 0,
+          y: 0,
+          w: Math.max(1000, (node.x || 0) + (node.w || 100) + 100),
+          h: Math.max(1000, (node.y || 0) + (node.h || 100) + 100),
+          rotation: 0,
+          opacity: 1,
+          visible: true,
+          locked: false,
+          show_name: false,
+          blend: "pass-through",
+          fill: { t: "solid", c: "#ffffff" },
+          kind: { t: "frame" },
+          children: [xNode],
+        },
+      ],
     });
   } catch {
     return null;
   }
 }
 
-/** Convert an XNode to the .x Node JSON shape */
-function nodeToX(n: XNode): Record<string, unknown> | null {
-  const base: Record<string, unknown> = {
+/** Convert an XNode to the .x Node JSON shape expected by RustDocumentSession */
+function nodeToX(n: XNode, mode: "outline" | "offset"): Record<string, unknown> | null {
+  if (
+    (n.rotation ?? 0) !== 0 ||
+    n.flipH ||
+    n.flipV ||
+    (n.opacity ?? 1) !== 1 ||
+    n.visible === false ||
+    n.locked === true ||
+    (n.effects && n.effects.length > 0)
+  ) {
+    return null;
+  }
+  const shapeInfo = nodeKindToX(n, mode === "offset");
+  if (!shapeInfo) return null;
+  const { kind, isClosed } = shapeInfo;
+
+  if (mode === "outline") {
+    const strokeWidth = n.strokeWidth ?? 0;
+    if (!(strokeWidth > 0) || n.strokeVisible === false) return null;
+    if ((n.strokeDash ?? 0) > 0 || (n.strokeDashPattern && n.strokeDashPattern.length > 0)) return null;
+    if (n.strokeWidthProfile && n.strokeWidthProfile.length > 0) return null;
+
+    const strokeHex = normalizeOpaqueHex(n.strokePaint, "#000000");
+    if (!strokeHex) return null;
+
+    const hasFill =
+      n.fillVisible !== false &&
+      typeof n.fill === "string" &&
+      n.fill !== "transparent" &&
+      n.fill !== "none" &&
+      !n.fill.toLowerCase().endsWith("00");
+    const fillHex = hasFill ? normalizeOpaqueHex(n.fill, null) : null;
+    if (hasFill && !fillHex) return null;
+
+    const align =
+      n.strokeAlign === "inside" || n.strokeAlign === "outside"
+        ? (isClosed ? n.strokeAlign : "center")
+        : "center";
+    const cap =
+      !isClosed && (n.strokeCap === "round" || n.strokeCap === "square")
+        ? n.strokeCap
+        : "none";
+    const join =
+      n.strokeJoin === "round" || n.strokeJoin === "bevel" ? n.strokeJoin : "miter";
+
+    return {
+      id: n.id,
+      name: n.name || n.id,
+      x: n.x || 0,
+      y: n.y || 0,
+      w: Math.max(1, n.w || 100),
+      h: Math.max(1, n.h || 100),
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+      show_name: false,
+      fill: { t: "solid", c: fillHex ?? "#00000000" },
+      stroke: { color: strokeHex, width: strokeWidth },
+      fill_layers: fillHex
+        ? [
+            {
+              paint: { t: "solid", c: fillHex },
+              opacity: 1,
+              visible: true,
+              blend: "normal",
+            },
+          ]
+        : [],
+      stroke_layers: [
+        {
+          color: strokeHex,
+          width: strokeWidth,
+          opacity: 1,
+          visible: true,
+          blend: "normal",
+          align,
+          cap_start: cap,
+          cap_end: cap,
+          join,
+          dash: [],
+          dash_offset: 0,
+          miter: 4,
+        },
+      ],
+      effect_layers: [],
+      kind,
+    };
+  }
+
+  // mode === "offset"
+  const fillHex = normalizeOpaqueHex(typeof n.fill === "string" ? n.fill : "#000000", "#000000");
+  if (!fillHex) return null;
+  return {
     id: n.id,
     name: n.name || n.id,
-    kind: n.kind === "boolean" ? "vector" : n.kind,
     x: n.x || 0,
     y: n.y || 0,
-    w: n.w || 100,
-    h: n.h || 100,
-    visible: n.visible !== false,
-    locked: n.locked === true,
+    w: Math.max(1, n.w || 100),
+    h: Math.max(1, n.h || 100),
+    rotation: 0,
+    opacity: 1,
+    visible: true,
+    locked: false,
+    show_name: false,
+    fill: { t: "solid", c: fillHex },
+    stroke: { color: "#00000000", width: 0 },
+    fill_layers: [],
+    stroke_layers: [],
+    effect_layers: [],
+    kind,
   };
-  // Path data
-  if (n.path && n.path.length > 0) {
-    base.path = n.path.map((p) => ({
-      x: p.x,
-      y: p.y,
-      ix: p.ix,
-      iy: p.iy,
-      ox: p.ox,
-      oy: p.oy,
-    }));
-    base.closed = n.closed;
-  }
-  // Stroke
-  if (n.strokeWidth > 0) {
-    base.strokeWidth = n.strokeWidth;
-    if (typeof n.fill === "string") base.strokePaint = n.fill;
-    base.strokeCap = n.strokeCap || "round";
-    base.strokeJoin = n.strokeJoin || "round";
-  }
-  // Fill
-  if (typeof n.fill === "string") {
-    base.fill = n.fill;
-  }
-  return base;
+}
+
+function buildLocalGeometryFromRustDelta(
+  sourceNode: XNode,
+  deltaNode: { x: number; y: number; w: number; h: number; path: Array<[string, ...number[]]> },
+): { localPath: PathPoint[]; vectorNetwork: VectorNetwork } {
+  const offsetX = deltaNode.x - (sourceNode.x || 0);
+  const offsetY = deltaNode.y - (sourceNode.y || 0);
+  const localPath = rustPathToPoints(deltaNode.path, offsetX, offsetY);
+  const vectorNetwork = rustPathToVectorNetwork(deltaNode.path, offsetX, offsetY);
+  return { localPath, vectorNetwork };
 }
 
 /**
@@ -104,7 +284,7 @@ export async function wasmOutlineStroke(
   if (!Session) return null;
 
   try {
-    const xDocument = buildMinimalXDoc(node);
+    const xDocument = buildMinimalXDoc(node, "outline");
     if (!xDocument) return null;
 
     const session = auditRustCall(
@@ -112,7 +292,6 @@ export async function wasmOutlineStroke(
       () => new Session(xDocument),
     ) as {
       outlineStroke?: (id: string) => string;
-      getNode?: (id: string) => string;
       free: () => void;
     };
 
@@ -126,33 +305,39 @@ export async function wasmOutlineStroke(
       () => session.outlineStroke!(node.id),
     );
 
-    // Try to get the updated node state after outline
-    if (session.getNode) {
-      const nodeState = JSON.parse(session.getNode(node.id)) as {
-        path?: Array<[string, ...number[]]>;
-      };
-      session.free();
-      if (nodeState.path && nodeState.path.length > 0) {
-        return {
-          path: nodeState.path,
-          closed: true,
-        };
-      }
-    }
-
-    // Fallback: parse the delta result
     const delta = JSON.parse(result) as {
       revision?: number;
-      outline?: { path?: Array<[string, ...number[]]>; kind?: string };
+      outline?: {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        path?: Array<[string, ...number[]]>;
+        kind?: string;
+      };
     };
 
     session.free();
 
-    if (!delta.outline?.path) return null;
+    if (!delta.outline?.path || delta.outline.path.length === 0) return null;
+
+    const { localPath, vectorNetwork } = buildLocalGeometryFromRustDelta(node, {
+      x: delta.outline.x,
+      y: delta.outline.y,
+      w: delta.outline.w,
+      h: delta.outline.h,
+      path: delta.outline.path,
+    });
 
     return {
       path: delta.outline.path,
       closed: true,
+      x: delta.outline.x,
+      y: delta.outline.y,
+      w: delta.outline.w,
+      h: delta.outline.h,
+      localPath,
+      vectorNetwork,
     };
   } catch {
     return null;
@@ -178,7 +363,7 @@ export async function wasmOffsetPath(
   if (!Session) return null;
 
   try {
-    const xDocument = buildMinimalXDoc(node);
+    const xDocument = buildMinimalXDoc(node, "offset");
     if (!xDocument) return null;
 
     const session = auditRustCall(
@@ -186,7 +371,6 @@ export async function wasmOffsetPath(
       () => new Session(xDocument),
     ) as {
       offsetNode?: (id: string, distance: number, join: string) => string;
-      getNode?: (id: string) => string;
       free: () => void;
     };
 
@@ -200,33 +384,39 @@ export async function wasmOffsetPath(
       () => session.offsetNode!(node.id, distance, join),
     );
 
-    // Try to get the updated node state after offset
-    if (session.getNode) {
-      const nodeState = JSON.parse(session.getNode(node.id)) as {
-        path?: Array<[string, ...number[]]>;
-      };
-      session.free();
-      if (nodeState.path && nodeState.path.length > 0) {
-        return {
-          path: nodeState.path,
-          closed: true,
-        };
-      }
-    }
-
-    // Fallback: parse the delta result
     const delta = JSON.parse(result) as {
       revision?: number;
-      offset?: { path?: Array<[string, ...number[]]>; kind?: string };
+      offset?: {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+        path?: Array<[string, ...number[]]>;
+        kind?: string;
+      };
     };
 
     session.free();
 
-    if (!delta.offset?.path) return null;
+    if (!delta.offset?.path || delta.offset.path.length === 0) return null;
+
+    const { localPath, vectorNetwork } = buildLocalGeometryFromRustDelta(node, {
+      x: delta.offset.x,
+      y: delta.offset.y,
+      w: delta.offset.w,
+      h: delta.offset.h,
+      path: delta.offset.path,
+    });
 
     return {
       path: delta.offset.path,
       closed: true,
+      x: delta.offset.x,
+      y: delta.offset.y,
+      w: delta.offset.w,
+      h: delta.offset.h,
+      localPath,
+      vectorNetwork,
     };
   } catch {
     return null;
@@ -239,46 +429,109 @@ export async function wasmOffsetPath(
  */
 export function rustPathToPoints(
   rustPath: Array<[string, ...number[]]>,
+  offsetX = 0,
+  offsetY = 0,
 ): Array<{ x: number; y: number; ix?: number; iy?: number; ox?: number; oy?: number }> {
   const points: Array<{ x: number; y: number; ix?: number; iy?: number; ox?: number; oy?: number }> = [];
-  let prevX = 0;
-  let prevY = 0;
 
   for (const cmd of rustPath) {
     const tag = cmd[0];
     if (tag === "Z") continue;
 
     if (tag === "M" || tag === "L") {
-      const x = cmd[1];
-      const y = cmd[2];
+      const x = cmd[1] + offsetX;
+      const y = cmd[2] + offsetY;
       points.push({ x, y });
-      prevX = x;
-      prevY = y;
     } else if (tag === "C") {
       // Cubic: ["C", c1x, c1y, c2x, c2y, x, y]
-      const c1x = cmd[1];
-      const c1y = cmd[2];
-      const c2x = cmd[3];
-      const c2y = cmd[4];
-      const x = cmd[5];
-      const y = cmd[6];
-      // Incoming handle (c2) is relative to this point
-      // Outgoing handle will be set on the NEXT point
+      const c1x = cmd[1] + offsetX;
+      const c1y = cmd[2] + offsetY;
+      const c2x = cmd[3] + offsetX;
+      const c2y = cmd[4] + offsetY;
+      const x = cmd[5] + offsetX;
+      const y = cmd[6] + offsetY;
       points.push({
         x,
         y,
         ix: c2x - x,
         iy: c2y - y,
       });
-      // Set outgoing handle on previous point (c1 relative to prev)
       if (points.length >= 2) {
         const prev = points[points.length - 2];
         prev.ox = c1x - prev.x;
         prev.oy = c1y - prev.y;
       }
-      prevX = x;
-      prevY = y;
     }
   }
+
   return points;
+}
+
+/**
+ * Convert multi-contour Rust path commands into a VectorNetwork with EVENODD
+ * winding so interior cutout rings (such as outlined closed strokes) are preserved.
+ */
+export function rustPathToVectorNetwork(
+  rustPath: Array<[string, ...number[]]>,
+  offsetX = 0,
+  offsetY = 0,
+): VectorNetwork {
+  const vertices: VectorVertex[] = [];
+  const segments: VectorSegment[] = [];
+  const loops: number[][] = [];
+  let ringStart = -1;
+  let ringSegments: number[] = [];
+
+  const flushRing = () => {
+    if (ringStart >= 0 && vertices.length - ringStart >= 3 && ringSegments.length >= 2) {
+      const closeIdx = segments.length;
+      segments.push({ start: vertices.length - 1, end: ringStart });
+      ringSegments.push(closeIdx);
+      loops.push(ringSegments);
+    }
+    ringStart = -1;
+    ringSegments = [];
+  };
+
+  for (const cmd of rustPath) {
+    const tag = cmd[0];
+    if (tag === "M") {
+      flushRing();
+      ringStart = vertices.length;
+      vertices.push({ x: cmd[1] + offsetX, y: cmd[2] + offsetY });
+    } else if (tag === "L" && ringStart >= 0) {
+      const prev = vertices.length - 1;
+      const next = vertices.length;
+      vertices.push({ x: cmd[1] + offsetX, y: cmd[2] + offsetY });
+      ringSegments.push(segments.length);
+      segments.push({ start: prev, end: next });
+    } else if (tag === "C" && ringStart >= 0) {
+      const prev = vertices.length - 1;
+      const next = vertices.length;
+      const c1x = cmd[1] + offsetX;
+      const c1y = cmd[2] + offsetY;
+      const c2x = cmd[3] + offsetX;
+      const c2y = cmd[4] + offsetY;
+      const x = cmd[5] + offsetX;
+      const y = cmd[6] + offsetY;
+      const prevV = vertices[prev];
+      vertices.push({ x, y });
+      ringSegments.push(segments.length);
+      segments.push({
+        start: prev,
+        end: next,
+        tangentStart: { x: c1x - prevV.x, y: c1y - prevV.y },
+        tangentEnd: { x: c2x - x, y: c2y - y },
+      });
+    } else if (tag === "Z") {
+      flushRing();
+    }
+  }
+  flushRing();
+
+  return {
+    vertices,
+    segments,
+    regions: loops.length ? [{ windingRule: "EVENODD", loops }] : [],
+  };
 }

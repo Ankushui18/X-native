@@ -341,10 +341,7 @@ impl CommandBridge {
     /// into a downloadable Blob — never the lossy canvas.toDataURL path.
     pub fn export_node(&self, id: &str, format: &str, scale: f64) -> Result<String, String> {
         use base64::Engine;
-        use x_render::{
-            build_render_tree, export_pdf, export_raster, encode_png, encode_jpg,
-            RasterFormat,
-        };
+        use x_render::{build_render_tree, export_pdf, export_raster, RasterFormat};
         if !scale.is_finite() || scale <= 0.0 || scale > 64.0 {
             return Err("export scale must be a finite number between 0 and 64".into());
         }
@@ -359,9 +356,8 @@ impl CommandBridge {
         let tree = build_render_tree(node, &x_core::Variables::default());
         match format {
             "png" => {
-                let (bytes, pw, ph) = export_raster(
-                    &tree, w, h, RasterFormat::Png, scale, None, None, None,
-                )?;
+                let (bytes, pw, ph) =
+                    export_raster(&tree, w, h, RasterFormat::Png, scale, None, None, None)?;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                 Ok(format!(
                     r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"png"}}"#
@@ -370,8 +366,14 @@ impl CommandBridge {
             "jpg" | "jpeg" => {
                 let quality = 92u8; // high quality default
                 let (bytes, pw, ph) = export_raster(
-                    &tree, w, h, RasterFormat::Jpg(quality), scale,
-                    Some(x_core::Color::WHITE), None, None,
+                    &tree,
+                    w,
+                    h,
+                    RasterFormat::Jpg(quality),
+                    scale,
+                    Some(x_core::Color::WHITE),
+                    None,
+                    None,
                 )?;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                 Ok(format!(
@@ -381,9 +383,10 @@ impl CommandBridge {
             "pdf" => {
                 let bytes = export_pdf(&tree, w, h);
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let pw = w as u32;
+                let ph = h as u32;
                 Ok(format!(
-                    r#"{{"ok":true,"bytes":"{b64}","width":{},"height":{},"format":"pdf"}}"#,
-                    w as u32, h as u32
+                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"pdf"}}"#
                 ))
             }
             _ => Err(format!("unsupported export format: {format}")),
@@ -400,25 +403,25 @@ impl CommandBridge {
         x: f64,
         y: f64,
     ) -> Result<String, String> {
-        self.session
+        if !self
+            .session
             .editor_mut()
             .add_vector_point_on(id, segment_idx, (x, y))
-            .map(|_| delta_json(self.session.state()))
-            .ok_or_else(|| "could not add point: invalid node or segment".into())
+        {
+            return Err("could not add point: invalid node or segment".into());
+        }
+        self.session.bump_revision();
+        Ok(delta_json(self.session.state()))
     }
 
     /// Phase 9: Convert a corner point to smooth (or vice versa). Toggles a
     /// LineTo ↔ CurveTo at the given anchor index. ONE undoable command.
-    pub fn vector_convert_point(
-        &mut self,
-        id: &str,
-        anchor_idx: usize,
-    ) -> Result<String, String> {
-        self.session
-            .editor_mut()
-            .convert_anchor(id, anchor_idx)
-            .then(|| delta_json(self.session.state()))
-            .ok_or_else(|| "could not convert point: invalid node or anchor".into())
+    pub fn vector_convert_point(&mut self, id: &str, anchor_idx: usize) -> Result<String, String> {
+        if !self.session.editor_mut().convert_anchor(id, anchor_idx) {
+            return Err("could not convert point: invalid node or anchor".into());
+        }
+        self.session.bump_revision();
+        Ok(delta_json(self.session.state()))
     }
 
     /// Phase 10: Commit a pen-drawn path as a vector node. Takes raw click
@@ -450,9 +453,11 @@ impl CommandBridge {
         let id = x_core::fresh_id("pen");
         let mut node = x_core::Node::vector(&id, min_x, min_y, w, h, path);
         node.name = format!("Pen {}", self.session.state().revision + 1);
-        node.closed = false;
-        self.session.editor_mut().insert_node(parent_id, node);
-        self.session.editor_mut().selection = vec![id.clone()];
+        if !self.session.editor_mut().insert_node(parent_id, node) {
+            return Err("could not insert pen path".into());
+        }
+        self.session.editor_mut().selection = vec![id];
+        self.session.bump_revision();
         Ok(delta_json(self.session.state()))
     }
 
@@ -486,9 +491,11 @@ impl CommandBridge {
         let id = x_core::fresh_id("pencil");
         let mut node = x_core::Node::vector(&id, min_x, min_y, w, h, path);
         node.name = format!("Pencil {}", self.session.state().revision + 1);
-        node.closed = false;
-        self.session.editor_mut().insert_node(parent_id, node);
-        self.session.editor_mut().selection = vec![id.clone()];
+        if !self.session.editor_mut().insert_node(parent_id, node) {
+            return Err("could not insert pencil path".into());
+        }
+        self.session.editor_mut().selection = vec![id];
+        self.session.bump_revision();
         Ok(delta_json(self.session.state()))
     }
 
@@ -529,6 +536,7 @@ impl CommandBridge {
         if !success {
             return Err("erase did not affect the target node".into());
         }
+        self.session.bump_revision();
         Ok(delta_json(self.session.state()))
     }
 }
@@ -545,9 +553,9 @@ fn fit_pen_path(points: &[(f64, f64)]) -> Vec<x_core::PathCmd> {
         return vec![PathCmd::MoveTo(points[0].0, points[0].1)];
     }
     let mut cmds = vec![PathCmd::MoveTo(points[0].0, points[0].1)];
-    for i in 1..points.len() {
-        let (px, py) = points[i - 1];
-        let (cx, cy) = points[i];
+    for pair in points.windows(2) {
+        let (px, py) = pair[0];
+        let (cx, cy) = pair[1];
         let dx = cx - px;
         let dy = cy - py;
         // Auto-place cubic handles at 1/3 of the segment direction
@@ -1130,9 +1138,9 @@ mod tests {
         let path = super::fit_smooth_path(&points);
         assert_eq!(path.len(), 5); // MoveTo + 4 CurveTos
         assert!(matches!(path[0], PathCmd::MoveTo(0.0, 0.0)));
-        for i in 1..path.len() {
+        for (i, cmd) in path.iter().enumerate().skip(1) {
             assert!(
-                matches!(path[i], PathCmd::CurveTo(..)),
+                matches!(cmd, PathCmd::CurveTo(..)),
                 "segment {i} should be a cubic"
             );
         }
