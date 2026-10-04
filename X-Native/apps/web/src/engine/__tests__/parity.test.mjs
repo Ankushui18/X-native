@@ -2895,13 +2895,16 @@ console.log("text dimensions: the limits, and which axis a drag fixes:");
   t("with nothing left to bind it, the engine leaves the box where the clamp put it",
     Math.round(N(t0).w) === 200, "the panel re-fits a hugging layer; the engine only clamps:");
 
-  // The article: "If you manually resize a layer ... the resizing property will
-  // be set to fixed on the respective axis." Only the axis that moved.
+  // The article, in full (help 27378154668951): "When you manually change a
+  // layer's dimensions in the canvas, Figma will also update the resizing
+  // property to Fixed size" - ONE property, so the first manual change fixes
+  // BOTH axes (audit F6: the clip-on-resize behavior is Figma, the old
+  // per-axis reading of a truncated quote was the divergence).
   e.dispatch({ type: "add", kind: "text", x: 0, y: 200, w: 120, h: 20, extra: { text: "Copy", sizingW: "hug", sizingH: "hug" } });
   const t1 = e.snapshot().selection[0];
   e.dispatch({ type: "resize", id: t1, x: 0, y: 200, w: 240, h: N(t1).h });
-  t("a drag on the width fixes the width and leaves the height hugging",
-    N(t1).sizingW === "fixed" && N(t1).sizingH === "hug");
+  t("a drag on the width flips a still-auto layer to Fixed size (both axes)",
+    N(t1).sizingW === "fixed" && N(t1).sizingH === "fixed");
   e.dispatch({ type: "resize", id: t1, x: 0, y: 200, w: N(t1).w, h: 60 });
   t("and a drag on the height fixes the height too", N(t1).sizingW === "fixed" && N(t1).sizingH === "fixed");
   t("with the copy still the layer's own", N(t1).text === "Copy" && N(t1).kind === "text");

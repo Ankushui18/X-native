@@ -2676,8 +2676,26 @@ export class MemoryEngine implements Engine {
             if (Object.keys(n.ownBindings).length === 0) delete n.ownBindings;
           }
           if (n.kind === "text" && !cmd.scaleProps) {
-            if (askedW !== oldW) n.sizingW = "fixed";
-            if (askedH !== oldH) n.sizingH = "fixed";
+            // Figma keeps text sizing as ONE three-way property (auto width /
+            // auto height / fixed size), and "when you manually change a
+            // layer's dimensions in the canvas, Figma will also update the
+            // resizing property to Fixed size" (help 27378154668951). So the
+            // first manual change on a text layer that is still auto on both
+            // axes fixes BOTH axes - the width-handle drag that clips wrapped
+            // copy is Figma's documented gotcha, not a bug. A layer that
+            // already fixed one axis ("auto height") still only turns the
+            // other one, because from there a manual change lands on the
+            // remaining auto axis by construction. The Scale tool stays
+            // exempt: it scales content and sizing together.
+            if (askedW !== oldW || askedH !== oldH) {
+              if (n.sizingW !== "fixed" && n.sizingH !== "fixed") {
+                n.sizingW = "fixed";
+                n.sizingH = "fixed";
+              } else {
+                if (askedW !== oldW) n.sizingW = "fixed";
+                if (askedH !== oldH) n.sizingH = "fixed";
+              }
+            }
           }
           // "Any manual adjustments you make will set the layer to Fixed
           // on the relevant axis" - so a typed width or a dragged edge turns a

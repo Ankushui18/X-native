@@ -33,6 +33,49 @@ export function drillChild(root: XNode, container: XNode, x: number, y: number):
   return container.children.find((c) => c.visible && !c.locked) ?? null;
 }
 
+/** A marquee selects at the *current click scope*, exactly like clicks do:
+ * after you have drilled into a container (Figma's rule that "selection is at
+ * the current scope" - see help 360039956914 / smart selection), a plain band
+ * collects the container's CHILDREN, never the container itself. `deep`
+ * (hold ⌘/Ctrl) keeps the legacy rule: descend from the page root and collect
+ * at every depth. Mirrored from `canvasClickTarget`'s ancestor decision, so
+ * the press and the band can never disagree about where the top level is.
+ * The band test is the unrotated AABB - deliberately the same rule the old
+ * walk used (rotated-hit-test parity is a separate, unresearched question). */
+export function marqueeCollect(
+  root: XNode,
+  selection: string[],
+  band: { x0: number; y0: number; x1: number; y1: number },
+  deep: boolean,
+): string[] {
+  let scope: XNode | null = null;
+  if (!deep && selection.length === 1) {
+    const parent = findParent(root, selection[0]);
+    if (parent && parent !== root) scope = parent;
+  }
+  const pathIds = new Set<string>();
+  if (scope) {
+    for (let q: XNode | null = scope; q && q !== root; q = findParent(root, q.id)) pathIds.add(q.id);
+  }
+  const ids: string[] = [];
+  const { x0, y0, x1, y1 } = band;
+  const visit = (n: XNode, px: number, py: number, top: boolean, lockedAbove: boolean) => {
+    const x = px + n.x;
+    const y = py + n.y;
+    const effLocked = lockedAbove || n.locked;
+    if (n !== root && n.visible && !effLocked) {
+      const hit = x + n.w >= x0 && y + n.h >= y0 && x <= x1 && y <= y1;
+      if (hit && (deep || top)) ids.push(n.id);
+    }
+    const nest = deep || n === root || (scope != null && pathIds.has(n.id));
+    if (!nest) return;
+    const childTop = scope != null ? n.id === scope.id : n === root;
+    for (const c of n.children) visit(c, x, y, childTop, effLocked);
+  };
+  visit(root, 0, 0, false, false);
+  return ids;
+}
+
 /** Rotation is a *cursor*, not a piece of chrome — that is the whole of Figma's
  *  affordance: "Hover just outside one of the layer's bounds until the rotation
  *  cursor appears" (help 360039956914; "the corner bounds", 360039818874).

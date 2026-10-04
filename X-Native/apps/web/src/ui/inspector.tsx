@@ -9330,6 +9330,18 @@ async function tryWasmExport(
   bleed: { l: number; t: number; r: number; b: number },
 ): Promise<boolean> {
   try {
+    // F8: the Rust bridge paints the single node and nothing else, in sRGB.
+    // The documented settings it cannot carry must therefore keep the export
+    // on the canvas tier, or "which engine loaded" would change the bytes:
+    //   * "Ignore overlapping layers" off means the layers under the selection
+    //     are painted too (help 13402894554519) - a scope the bridge has no
+    //     parameter for, so the fallback (which honors it) keeps the job.
+    //   * A non-sRGB render profile: the fallback renders and stamps P3;
+    //     export_raster only knows sRGB.
+    // Resampling is checked by the canvas path the same way the bridge would
+    // (the SVG raster always smooth-scales), quality rides along in the
+    // options JSON below, and the SVG-only toggles never reach this branch.
+    if (p.ignoreOverlap === false || getRenderColorProfile() !== "srgb") return false;
     const { wasmExportNode, buildExportXDoc } = await import("../engine/wasmExport");
     const xDoc = buildExportXDoc(n, box);
     if (!xDoc) return false;

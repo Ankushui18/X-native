@@ -14,7 +14,7 @@ import { worldPlacement as worldPos } from "../engine/memory";
 import { isPointBoxCorner, pointBox, pointBoxHandles, pointBoxHit, resizePointNetwork, rotatePointNetwork, translatePointNetwork, type PointBounds } from "./pointBox";
 import { lassoSelectPathPoints, type LassoOperation } from "./vectorLasso";
 import { layersAt } from "./selectSame";
-import { canvasClickTarget, drillChild, rotationHandleHit } from "./canvasSelection";
+import { canvasClickTarget, drillChild, marqueeCollect, rotationHandleHit } from "./canvasSelection";
 import { rememberImage, hydrateNodes } from "../engine/assets";
 import { resizeGroupMembers, rotateGroupMembers, rotateAboutOrigin, wrapRotationDeg } from "./scaleModel";
 import {
@@ -7931,20 +7931,15 @@ export function Canvas({
         }
       }
 
-      const ids: string[] = [];
-      const deep = e.metaKey || e.ctrlKey;
-      const visit = (n: XNode, px: number, py: number, top: boolean, lockedAbove = false) => {
-        const x = px + n.x;
-        const y = py + n.y;
-        const effLocked = lockedAbove || n.locked;
-        if (n !== snap.pages[snap.page].root && n.visible && !effLocked) {
-          const hit = x + n.w >= x0 && y + n.h >= y0 && x <= x1 && y <= y1;
-          if (hit && (deep || top)) ids.push(n.id);
-        }
-        const nest = deep || n === snap.pages[snap.page].root;
-        if (nest) for (const c of n.children) visit(c, x, y, n === snap.pages[snap.page].root, effLocked);
-      };
-      visit(snap.pages[snap.page].root, 0, 0, false);
+      // F7: the band now collects at the drilled scope (children of the frame
+      // you are inside), not always at page-root level; one shared function
+      // with the click policy keeps press and marquee honest with each other.
+      const ids = marqueeCollect(
+        snap.pages[snap.page].root,
+        snap.selection,
+        { x0, y0, x1, y1 },
+        e.metaKey || e.ctrlKey,
+      );
       // ⇧-marquee adds to the pre-drag selection instead of replacing it;
       // plain marquee still replaces.
       engine.dispatch({
