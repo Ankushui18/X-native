@@ -137,6 +137,17 @@ the active tool is rounded like the tools beside it.
 - Inspector: `Section` (collapse + persist + `openSection` bus) + `Field` (arithmetic, Mixed,
   multi-values, tokens, disabled-reasons) + `ColorRow` (swatch/hex/opacity/visibility/export/remove +
   anchored picker) + `BindingChip`. All new rows compose these; no bespoke headers (IN-U3/U4).
+- Inspector vocabulary (2026-10-05): the panel's layout no longer lives inline. `styles.css` carries
+  `.ins-*` — flex/grid primitives (`.ins-row`/`.ins-col-*`/`.ins-grid-*`), spacing + text utilities
+  (`.ins-mt-1`, `.ins-cap`, `.ins-caps`, `.ins-ellip*`), surface recipes (`.ins-card`, `.ins-banner`,
+  `.ins-callout`, `.ins-tile`), control recipes (`.ins-input*`, `.ins-select*`, `.ins-range*`, `.ins-curve`)
+  — so `inspector.tsx`'s 185 inline style objects became **13** runtime values (document ink, a severity
+  dot, a boolean preview's opacity, a computed font stack, two template-string panes). Sub-ladder
+  paddings snap to the `--sp-*` ladder, 22px dev controls snap to `--h-xs`, `.ins-note`/`.ins-caps` read
+  `--lh-tight`/`--tr-caps`, and the Fill field's label reads `.field label` like every other field.
+- Design-file inspector modal (2026-10-05): `.fim-*` in the sheet — scrim, box, tabs, metric cards,
+  chunk rows, node list, figure panes, tags; the colour swatch keeps its one runtime fill (inline
+  ceiling 1 in `drift.test.mjs`). The same rewrite retired the file's one Figma-blue wash.
 - Tooltip: `Tooltip.tsx` (label + shortcut, 380ms + chaining, portal, clamped) — replaces ALL native
   `title=` on controls (§2.3); add focus trigger (TY-U6).
 - Menus: `ContextMenu.tsx` (clamped, Esc, arrows + submenus) for all right-click + "more" menus.

@@ -6228,3 +6228,352 @@ html[data-theme="dark"] .zoom-menu {
   font: var(--t-num);
   font-weight: var(--fw-bold);
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   The document inspector (`.fim-*`)
+
+   This modal used to carry 113 inline style objects: every metric card, table
+   cell, chip and code block kept its own copy of the same numbers, and three
+   of its colours were literals — a `rgba(0,0,0,0.65)` scrim, a red wash and a
+   green note — so none of them could follow the theme. The recipes live here
+   now, on the same scales as the panels: `--h-control`/`--h-sm` controls,
+   `--r-control` corners, `--sp-*` spacing, `--fs-*` type, `--scrim` and the
+   elevation tokens. The only values still inline are the ones that exist at
+   runtime: the selected node's own fill, and `display: none`.
+   --------------------------------------------------------------------------- */
+.fim-scrim {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--sp-6);
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.fim-box {
+  width: 90vw; max-width: 1100px; height: 85vh;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--panel);
+  border: var(--hairline) solid var(--line);
+  border-radius: var(--r-modal);
+  box-shadow: var(--elev-modal);
+}
+.fim-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: var(--hairline) solid var(--line);
+  background: var(--panel-2);
+}
+.fim-head-title { display: flex; align-items: center; gap: var(--sp-2-5); }
+.fim-title { font: var(--t-section); }
+.fim-label { font-size: var(--fs-2xs); color: var(--dim); }
+.fim-label-mb { font-size: var(--fs-2xs); color: var(--dim); margin-bottom: var(--sp-1); }
+.fim-dim11 { font-size: var(--fs-xs); color: var(--dim); }
+.fim-dim11-ml { font-size: var(--fs-xs); color: var(--dim); margin-left: var(--sp-2); }
+.fim-row8 { display: flex; align-items: center; gap: var(--sp-2); }
+.fim-row16 { display: flex; gap: var(--sp-4); }
+.fim-row14 { display: flex; gap: var(--sp-3-5); font-size: var(--fs-xs); }
+.fim-between { display: flex; justify-content: space-between; }
+.fim-between-c { display: flex; justify-content: space-between; align-items: center; }
+.fim-col8 { display: flex; flex-direction: column; gap: var(--sp-2); }
+.fim-col8-full { display: flex; flex-direction: column; gap: var(--sp-2); height: 100%; }
+.fim-col12 { display: flex; flex-direction: column; gap: var(--sp-3); }
+.fim-grid8 { display: grid; gap: var(--sp-2); }
+.fim-grid14 { display: grid; gap: var(--sp-3-5); }
+.fim-grid16 { display: grid; gap: var(--sp-4); }
+.fim-wrap { display: flex; flex-wrap: wrap; gap: var(--sp-2-5); }
+.fim-strong { font-weight: var(--fw-semibold); }
+.fim-strong14 { font-size: var(--fs-lg); font-weight: var(--fw-semibold); }
+.fim-mt4 { margin-top: var(--sp-1); }
+.fim-mt6 { margin-top: var(--sp-1-5); }
+.fim-sub-title { font-weight: var(--fw-semibold); margin-bottom: var(--sp-1-5); }
+.fim-h3 { margin: 0; font: var(--t-title); }
+.fim-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-5);
+  border-bottom: var(--hairline) solid var(--line);
+  background: var(--hover);
+}
+.fim-toolbar-label { font-size: var(--fs-xs); font-weight: var(--fw-medium); color: var(--dim); }
+.fim-tabs {
+  display: flex; gap: var(--sp-1);
+  padding: 0 var(--sp-5);
+  border-bottom: var(--hairline) solid var(--line);
+  background: var(--bg);
+}
+.fim-tab {
+  padding: var(--sp-2) var(--sp-3-5);
+  border-bottom: 2px solid transparent;
+  background: transparent; border-left: 0; border-right: 0; border-top: 0;
+  color: var(--muted); font: var(--t-control); cursor: pointer;
+}
+.fim-tab:hover { color: var(--text); }
+.fim-tab.on { border-bottom-color: var(--accent); color: var(--text); font-weight: var(--fw-semibold); }
+.fim-body { flex: 1; overflow-y: auto; padding: var(--sp-5); background: var(--panel); }
+.fim-empty { padding: var(--sp-10); text-align: center; color: var(--dim); }
+.fim-error {
+  padding: var(--sp-4); margin-bottom: var(--sp-4);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border: var(--hairline) solid color-mix(in srgb, var(--red) 35%, transparent);
+  border-radius: var(--r-4);
+  color: var(--red);
+}
+.fim-note {
+  padding: var(--sp-3);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  border: var(--hairline) solid color-mix(in srgb, var(--green) 30%, transparent);
+  border-radius: var(--r-3);
+}
+.fim-note-title { font-weight: var(--fw-semibold); color: var(--accent-ink); margin-bottom: var(--sp-1-5); }
+.fim-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3); }
+.fim-metric { padding: var(--sp-3-5); background: var(--hover); border-radius: var(--r-4); }
+.fim-metric-value { font-size: var(--fs-2xl); font-weight: var(--fw-bold); margin-top: var(--sp-1); }
+.fim-metric-note { font-size: var(--fs-2xs); color: var(--dim); margin-top: var(--sp-0-5); }
+.fim-card { padding: var(--sp-4); background: var(--hover); border-radius: var(--r-4); }
+.fim-card-title { font-weight: var(--fw-semibold); margin-bottom: var(--sp-2-5); }
+.fim-tile { padding: var(--sp-2-5); background: var(--hover); border-radius: var(--r-3); }
+.fim-tile-label { font-size: var(--fs-2xs); color: var(--dim); }
+.fim-type {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1-5) var(--sp-3);
+  background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--r-3);
+}
+.fim-count {
+  padding: var(--sp-0) var(--sp-1-5);
+  background: var(--accent); color: var(--on-accent);
+  border-radius: var(--r-5); font-size: var(--fs-2xs);
+}
+.fim-tag { text-transform: uppercase; color: var(--accent-ink); font-weight: var(--fw-semibold); }
+.fim-ink-accent { color: var(--accent-ink); }
+.fim-chip {
+  height: var(--h-sm); padding: 0 var(--sp-2);
+  background: var(--bg); color: var(--muted);
+  border: var(--hairline) solid var(--line); border-radius: var(--r-3);
+  font: var(--t-control); cursor: pointer;
+}
+.fim-chip:hover { background: var(--hover); color: var(--text); }
+.fim-chip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.fim-toggle {
+  display: flex; align-items: center; gap: var(--sp-1-5);
+  margin-left: auto; padding: 0 var(--sp-2-5); height: var(--h-sm);
+  background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--r-3);
+  color: var(--dim); font: var(--t-control); cursor: pointer;
+}
+.fim-close { height: var(--h-sm); padding: 0 var(--sp-2-5); border: 0; border-radius: var(--r-control);
+  background: var(--accent); color: var(--on-accent); font: var(--t-control); cursor: pointer; }
+.fim-close:hover { background: var(--accent-hover); }
+.fim-btn {
+  height: var(--h-sm); padding: 0 var(--sp-2);
+  background: var(--bg); color: var(--text);
+  border: var(--hairline) solid var(--line); border-radius: var(--r-control);
+  font: var(--t-control); cursor: pointer;
+}
+.fim-btn:hover { background: var(--hover); }
+.fim-btn-xs {
+  height: var(--h-xs); padding: 0 var(--sp-2);
+  background: var(--bg); color: var(--text);
+  border: var(--hairline) solid var(--line); border-radius: var(--r-control);
+  font: var(--t-label); cursor: pointer;
+}
+.fim-btn-xs:hover { background: var(--hover); }
+.fim-split { display: grid; grid-template-columns: 380px 1fr; gap: var(--sp-4); height: 100%; }
+.fim-pane {
+  display: flex; flex-direction: column; overflow-y: auto;
+  background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--r-4);
+}
+.fim-pane-head { padding: var(--sp-2); border-bottom: var(--hairline) solid var(--line); }
+.fim-search {
+  width: 100%; height: var(--h-sm); padding: 0 var(--sp-2);
+  background: var(--input); color: var(--text);
+  border: var(--hairline) solid var(--line); border-radius: var(--r-control);
+  font: var(--t-control); outline: none;
+}
+.fim-search:focus { border-color: var(--accent); box-shadow: 0 0 0 var(--ring-w) var(--sel); }
+.fim-scroll { flex: 1; overflow-y: auto; }
+.fim-node {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: var(--hairline) solid var(--line);
+  cursor: pointer;
+}
+.fim-node:hover { background: var(--hover); }
+.fim-node.sel { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+.fim-name { font-size: var(--fs-xs); }
+.fim-guid { font-size: var(--fs-3xs); color: var(--dim); }
+.fim-node-meta { display: flex; gap: var(--sp-2); margin-top: var(--sp-1); font-size: var(--fs-2xs); color: var(--dim); }
+.fim-detail {
+  overflow-y: auto; padding: var(--sp-4);
+  background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--r-4);
+}
+.fim-pairs { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2-5); }
+.fim-swatch-row { display: flex; align-items: center; gap: var(--sp-1-5); margin-top: var(--sp-1); }
+.fim-swatch {
+  display: inline-block; width: var(--sp-3); height: var(--sp-3);
+  border-radius: var(--r-1); border: var(--hairline) solid var(--line);
+}
+.fim-code {
+  padding: var(--sp-2-5); max-height: 260px; overflow-y: auto;
+  background: var(--input); border-radius: var(--r-3);
+  font: var(--t-num);
+}
+.fim-code-sm {
+  padding: var(--sp-2); max-height: 90px; overflow-y: auto;
+  background: var(--input); border-radius: var(--r-control);
+  font: var(--t-num);
+}
+.fim-code-lg {
+  flex: 1; padding: var(--sp-3); overflow-y: auto;
+  background: var(--input); border: var(--hairline) solid var(--line); border-radius: var(--r-4);
+  font: var(--t-num);
+}
+.fim-select {
+  width: 260px; height: var(--h-sm); padding: 0 var(--sp-2);
+  background: var(--input); color: var(--text);
+  border: var(--hairline) solid var(--line); border-radius: var(--r-control);
+  font: var(--t-control); outline: none;
+}
+.fim-figure {
+  display: grid; grid-template-columns: 180px 1fr; gap: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--r-4);
+}
+.fim-preview {
+  height: 180px; display: flex; align-items: center; justify-content: center;
+  background: var(--hover); border: var(--hairline) solid var(--line); border-radius: var(--r-3);
+}
+.fim-preview svg { max-width: 160px; max-height: 160px; }
+.fim-tablewrap {
+  overflow: hidden;
+  background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--r-4);
+}
+.fim-table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.fim-thead { background: var(--hover); text-align: left; }
+.fim-tr { border-top: var(--hairline) solid var(--line); }
+.fim-th { padding: var(--sp-2) var(--sp-3); }
+.fim-td { padding: var(--sp-1-5) var(--sp-3); }
+.fim-td-mono { padding: var(--sp-1-5) var(--sp-3); font-family: var(--font-mono); }
+.fim-td-dim { padding: var(--sp-1-5) var(--sp-3); color: var(--dim); }
+.fim-hidden { display: none; }
+.fim-chunk {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg); border: var(--hairline) solid var(--line); border-radius: var(--r-3);
+}
+.fim-meta { display: flex; gap: var(--sp-3); color: var(--dim); }
+
+/* ── Inspector vocabulary ────────────────────────────────────────────────
+   The right panel used to carry its layout as ~185 inline style objects.
+   These are those recipes, named. Everything physical reads a token: type
+   from the --fs-* ramp, padding/margin/gap from the --sp-* ladder, corners
+   from the --r-* ladder, control heights from --h-*. Two notes on the
+   arithmetic, because they are deliberate and not drift:
+     · sub-ladder paddings snap to the ladder — 3px → --sp-0-5, 7px →
+       --sp-1-5, 1px → --sp-0 — so no rule in this block carries a magic
+       pixel of its own;
+     · 22px-tall dev controls snap to --h-xs (20) — the small height step —
+       instead of inventing a third height between --h-xs and --h-sm;
+   three type details follow the system rather than the old ad-hoc numbers:
+   .ins-note reads --lh-tight, .ins-caps reads --tr-caps (an uppercase
+   eyebrow wants tracking, and 0.04px was not tracking at all), and
+   .ins-font-flex completes the fallback chain with --font-ui.
+   One deliberate subtraction: the Fill field's label used to carry an inline
+   11px that beat .field label; it now reads .field label like every other
+   field in the panel, so the field voice (--t-label) governs its own label.
+   Element sizes with no ladder (a 44px number box, a 170px popover) stay
+   whole px, the same way canvas chips and the modal box do. */
+.ins-flex-1 { flex: 1; min-width: 0; }
+.ins-grow { flex: 1; }
+.ins-row { display: flex; align-items: center; gap: var(--sp-1-5); }
+.ins-row-tight { display: flex; align-items: center; gap: var(--sp-1); }
+.ins-row-plain { display: flex; gap: var(--sp-1-5); }
+.ins-row-plain-sm { display: flex; gap: var(--sp-1); }
+.ins-row-plain-xs { display: flex; gap: var(--sp-0-5); }
+.ins-row-pad { display: flex; align-items: center; gap: var(--sp-1-5); padding: var(--sp-1) var(--sp-2); }
+.ins-between { display: flex; align-items: center; justify-content: space-between; }
+.ins-between-mb { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-1-5); }
+.ins-between-full { display: flex; align-items: center; justify-content: space-between; grid-column: 1 / -1; margin-top: var(--sp-1); }
+.ins-col-xs { display: grid; gap: var(--sp-0-5); }
+.ins-col-sm { display: grid; gap: var(--sp-1); }
+.ins-col-md { display: grid; gap: var(--sp-1-5); }
+.ins-col-lg { display: grid; gap: var(--sp-2); }
+.ins-col-xl { display: grid; gap: var(--sp-3); }
+.ins-col-flex-xs { display: flex; flex-direction: column; gap: var(--sp-0-5); }
+.ins-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.ins-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--sp-1); }
+.ins-grid-3seg { display: grid; grid-template-columns: 1fr 1fr 1fr; width: 100%; margin: var(--sp-0-5) 0; }
+.ins-grid-kv { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: var(--sp-1-5); }
+.ins-grid-mid { display: grid; grid-template-columns: 1fr auto 1fr; gap: var(--sp-1-5); margin-top: var(--sp-1); align-items: end; }
+.ins-rel { position: relative; display: flex; }
+.ins-span-all { grid-column: 1 / -1; }
+.ins-grid-note { grid-column: 1 / -1; font-size: var(--fs-2xs); color: var(--muted); }
+.ins-mt-1 { margin-top: var(--sp-1); }
+.ins-mt-1-5 { margin-top: var(--sp-1-5); }
+.ins-mt-2 { margin-top: var(--sp-2); }
+.ins-mb-1 { margin-bottom: var(--sp-1); }
+.ins-mb-1-5 { margin-bottom: var(--sp-1-5); }
+.ins-mb-hair { margin-bottom: var(--hairline); }
+.ins-py-0-5 { padding: var(--sp-0-5) 0; }
+.ins-p-top { padding: var(--sp-1) 0 0; }
+.ins-sep { margin-top: var(--sp-2-5); border-top: var(--hairline) solid var(--line); padding-top: var(--sp-2); }
+.ins-cap { font-size: var(--fs-3xs); color: var(--dim); }
+.ins-meta { font-size: var(--fs-2xs); color: var(--dim); }
+.ins-meta-cap { font-size: var(--fs-2xs); color: var(--dim); text-transform: capitalize; }
+.ins-caps { font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--muted); letter-spacing: var(--tr-caps); text-transform: uppercase; }
+.ins-eyebrow { display: flex; align-items: center; gap: var(--sp-1-5); padding: var(--sp-1) var(--sp-2); font-size: var(--fs-2xs); font-weight: var(--fw-semibold); color: var(--muted); text-transform: uppercase; }
+.ins-note { font-size: var(--fs-xs); color: var(--muted); line-height: var(--lh-tight); }
+.ins-strong { font-size: var(--fs-sm); font-weight: var(--fw-bold); }
+.ins-strong-xs { font-size: var(--fs-xs); font-weight: var(--fw-bold); }
+.ins-label-mt { margin-top: var(--sp-1-5); padding-left: 0; }
+.ins-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2-5); }
+.ins-value { font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text); line-height: 1; }
+.ins-xs { font-size: var(--fs-xs); }
+.ins-text { color: var(--text); }
+.ins-fg-muted { color: var(--fg-muted); }
+.ins-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-ellip-sm { font-size: var(--fs-2xs); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-ellip-strong { flex: 1; font-size: var(--fs-xs); font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ins-font-flex { flex: 1; font: var(--fs-xs) var(--font-ui); }
+.ins-tag { font-size: var(--fs-2xs); padding: var(--sp-0-5) var(--sp-1-5); border-radius: var(--r-pill); background: var(--panel); border: var(--hairline) solid var(--line); color: var(--muted); }
+.ins-tag-plain { font-size: var(--fs-2xs); padding: var(--sp-0) var(--sp-1-5); border-radius: var(--r-pill); background: var(--input); border: var(--hairline) solid var(--line); color: var(--muted); }
+.ins-dot { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--accent); }
+.ins-dot-lg { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--accent); box-shadow: 0 0 0 var(--sp-1) var(--accent-wash); flex-shrink: 0; }
+.ins-card { padding: var(--sp-2); border: var(--hairline) solid var(--line); border-radius: var(--r-4); background: var(--panel); display: grid; gap: var(--sp-1-5); }
+.ins-card-lg { padding: var(--sp-2-5); border-radius: var(--r-4); background: var(--panel); border: var(--hairline) solid var(--line); }
+.ins-card-subtle { background: var(--bg-subtle); border: var(--hairline) solid var(--border); border-radius: var(--r-3); padding: var(--sp-1-5) var(--sp-2); display: grid; gap: var(--sp-1); }
+.ins-banner { padding: var(--sp-3-5); border-radius: var(--r-5); background: var(--input); border: var(--hairline) solid var(--line); display: flex; gap: var(--sp-2-5); align-items: center; }
+.ins-callout { margin: 0 var(--sp-3) var(--sp-2-5); padding: var(--sp-2-5) var(--sp-3); border-radius: var(--r-5); background: var(--input); border: var(--hairline) solid var(--line); display: flex; align-items: center; gap: var(--sp-2); }
+.ins-tile { width: 36px; height: 36px; border-radius: var(--r-5); background: var(--panel); border: var(--hairline) solid var(--line); display: grid; place-items: center; flex-shrink: 0; }
+.ins-ghost { display: flex; align-items: center; gap: var(--sp-1-5); width: 100%; background: none; border: 0; padding: 0; cursor: pointer; color: var(--text); }
+.ins-ghost-left { flex: 1; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
+.ins-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; opacity: 0.55; }
+.ins-svg-visible { overflow: visible; }
+.ins-input { width: 100%; padding: var(--sp-0-5) var(--sp-1); font-size: var(--fs-xs); background: var(--bg); border: var(--hairline) solid var(--border); border-radius: var(--r-2); color: inherit; }
+.ins-input-num { width: 44px; padding: var(--sp-0-5) var(--sp-1); font-size: var(--fs-xs); background: var(--input-bg); border: var(--hairline) solid var(--border); border-radius: var(--r-1); color: var(--fg); text-align: right; }
+.ins-input-inline { flex: 1; min-width: 0; padding: var(--sp-0-5) var(--sp-1-5); border: var(--hairline) solid var(--border); border-radius: var(--r-2); background: var(--bg); color: var(--text); font: var(--fs-xs) var(--font-ui); }
+.ins-input-subtle { width: 110px; padding: var(--sp-0-5) var(--sp-1-5); font-size: var(--fs-xs); background: var(--bg-subtle); border: var(--hairline) solid var(--border); border-radius: var(--r-2); color: inherit; }
+.ins-input-expr { flex: 1; padding: var(--sp-0-5) var(--sp-1-5); font-size: var(--fs-xs); font-family: var(--font-mono); background: var(--input-bg); border: var(--hairline) solid var(--border); border-radius: var(--r-1); color: var(--fg); }
+.ins-select { height: var(--h-sm); padding: var(--sp-0-5) var(--sp-1); font-size: var(--fs-xs); background: var(--bg); border: var(--hairline) solid var(--border); border-radius: var(--r-2); color: inherit; }
+.ins-select-inline { padding: var(--sp-0-5) var(--sp-1); font-size: var(--fs-xs); background: var(--bg); border: var(--hairline) solid var(--border); border-radius: var(--r-2); color: inherit; }
+.ins-select-subtle { width: 110px; padding: var(--sp-0-5) var(--sp-1); font-size: var(--fs-xs); background: var(--bg-subtle); border: var(--hairline) solid var(--border); border-radius: var(--r-2); color: inherit; }
+.ins-select-bind { padding: var(--sp-0-5) var(--sp-1); font-size: var(--fs-xs); background: var(--input-bg); border: var(--hairline) solid var(--border); border-radius: var(--r-1); color: var(--fg); }
+.ins-select-strong { font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+.ins-select-tiny { width: var(--sp-3-5); margin-left: calc(-1 * var(--sp-1)); border: 0; background: transparent; cursor: pointer; opacity: 0.6; }
+.ins-select-grow { flex: 1; max-width: 140px; }
+.ins-range { width: 100%; height: var(--h-xs); padding: 0; background: var(--bg); border: var(--hairline) solid var(--border); border-radius: var(--r-2); }
+.ins-range-sm { width: 60px; height: var(--h-xs); padding: 0; background: var(--bg); border: var(--hairline) solid var(--border); border-radius: var(--r-2); }
+.ins-curve { width: 100%; height: auto; display: block; background: var(--bg-subtle); border-radius: var(--r-2); cursor: crosshair; touch-action: none; }
+.ins-handle { cursor: move; }
+.ins-btn-flex { flex: 1; font-size: var(--fs-xs); padding: var(--sp-1) var(--sp-2); }
+.ins-btn-flex-center { flex: 1; display: flex; align-items: center; justify-content: center; gap: var(--sp-1-5); }
+.ins-btn-flat { font-size: var(--fs-xs); padding: var(--sp-1) var(--sp-2); }
+.ins-btn-mt { font-size: var(--fs-xs); margin-top: var(--sp-1); }
+.ins-btn-sm { font-size: var(--fs-2xs); padding: var(--sp-0-5) var(--sp-2); width: auto; height: var(--h-xs); }
+.ins-btn-quiet { padding: var(--sp-0-5); opacity: 0.6; }
+.ins-w-52 { width: 52px; }
+.ins-w-86 { width: 86px; }
+.ins-w-92 { width: 92px; }
+.ins-w-full { width: 100%; }
+.ins-scroll-260 { max-height: 260px; overflow-y: auto; }
+.ins-scroll-340 { max-height: 340px; overflow-y: auto; }
+.ins-pop { position: absolute; right: 0; top: var(--h-md); left: auto; width: 170px; z-index: 200; }
+.ins-pop-right { right: var(--sp-2); top: var(--h-md); left: auto; width: 180px; }

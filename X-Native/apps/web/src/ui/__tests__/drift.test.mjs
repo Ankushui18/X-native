@@ -99,6 +99,23 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *                       red literals are tokens now)
  *    chrome.tsx        49/4/41/72/2 → 49/1/41/72/2
  *    inspector.tsx     190/44/248/200/49 → 189/22/248/200/49
+ *                       (and → 13/22/248/200/49 in the 2026-10-05 sweep)
+ *  LOWERED 2026-10-05 for the modal sweep: FigInspectorModal's 113 inline
+ *  style objects became one .fim-* recipe block in the sheet, so the file
+ *  keeps a single inline value — the colour swatch's runtime fill —
+ *    FigInspectorModal 113/0/2/8/1 → 1/0/2/8/1
+ *  The same rewrite retired the file's one Figma-blue wash
+ *  (rgba(13,153,255,.15) → .fim-node.sel's var(--sel)) and its 8px radius
+ *  default, so the row reads the shared control rhythm now.
+ *  LOWERED 2026-10-05 for the inspector sweep: inspector.tsx's 185 inline
+ *  style objects became a named vocabulary in the sheet — layout primitives,
+ *  rows and stacks, the input/select/range recipes, tags and cards — so the
+ *  file keeps only the values a renderer has to compute:
+ *    inspector.tsx 185/22/248/200/49 → 13/22/248/200/49
+ *  The 13 survivors are document ink (a swatch's fill, a paint's colour), a
+ *  severity dot, a boolean preview's opacity, a computed font stack and two
+ *  template-string style panes. The sweep also retired every magic pixel the
+ *  panel carried inline and snapped sub-ladder padding to the spacing ladder.
  *  The invariant those rows now hold is enforced from the other side by
  *  tokens.test.mjs: a colour literal in src/ui must be *named* (a `const`, an
  *  object property or a labelled table row) or it fails, and no rule in
@@ -116,7 +133,9 @@ const CEILING = {
   // Raised 2026-10-03 for the dev-only Rust WASM POC trigger (one named button).
   "Dashboard.tsx": [1, 0, 12, 34, 1],
   "DialogHost.tsx": [0, 0, 1, 0, 0],
-  "FigInspectorModal.tsx": [113, 0, 2, 8, 1],
+  // Lowered 2026-10-05 (modal sweep): 113 inline style objects → one .fim-*
+  // recipe block in the sheet; the swatch keeps the single runtime fill.
+  "FigInspectorModal.tsx": [1, 0, 2, 8, 1],
   // Raised 2026-10-01 batch 21: add-stop (+) / remove-stop (−) buttons in the
   // gradient editor, both with `title=` and `aria-label=` (per the gradients
   // article the + and − next to "Stops" are the documented affordance). That
@@ -148,7 +167,9 @@ const CEILING = {
   // 2026-10-05: four inline styles became classes — the three size tags
   // (`.auto-tag`) and the Flow group header's ad-hoc `marginBottom: 6`. The
   // group headers now carry the rows' own gutter from the sheet.
-  "inspector.tsx": [185, 22, 248, 200, 49],
+  // Lowered 2026-10-05 (inspector sweep): 185 inline style objects → the
+  // .ins-* vocabulary in the sheet; 13 runtime values stay inline.
+  "inspector.tsx": [13, 22, 248, 200, 49],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };
