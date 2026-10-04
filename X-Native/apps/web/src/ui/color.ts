@@ -414,32 +414,41 @@ export function cssRgba(hex: string, opacity = 1, profile = renderColorProfile):
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+/** "No fill" as a document value. A paint is cleared by writing this rather than
+ *  by deleting the key, so a file says why a layer is empty — and the sentinel
+ *  has one name instead of a literal at every call site that tests for it. */
+export const COLOR_NONE = "#00000000";
+
 export function isNone(hex: string): boolean {
-  return !hex || hex === "#00000000" || hex.toLowerCase() === "transparent";
+  return !hex || hex === COLOR_NONE || hex.toLowerCase() === "transparent";
 }
 
+/** The preset row under the picker. Palette data, and named as such: a grey in
+ *  this list is a design decision ("Slate 200"), so a reviewer can see what
+ *  changed instead of diffing hexes. Document ink — presets are written into
+ *  files, so they must not follow the theme. */
 const PRESETS = [
-  "#ffffff",
-  "#f5f5f5",
-  "#e5e5e5",
-  "#d9d9d9",
-  "#b3b3b3",
-  "#757575",
-  "#444444",
-  "#2c2c2c",
-  "#1e1e1e",
-  "#000000",
-  "#ff3b30",
-  "#ff9500",
-  "#ffcc00",
-  "#34c759",
-  "#6366f1",
-  "#5856d6",
-  "#af52de",
-  "#ff2d55",
+  ["White", "#ffffff"],
+  ["Fog", "#f5f5f5"],
+  ["Mist", "#e5e5e5"],
+  ["Silver", "#d9d9d9"],
+  ["Ash", "#b3b3b3"],
+  ["Slate", "#757575"],
+  ["Charcoal", "#444444"],
+  ["Graphite", "#2c2c2c"],
+  ["Ink", "#1e1e1e"],
+  ["Black", "#000000"],
+  ["Red", "#ff3b30"],
+  ["Orange", "#ff9500"],
+  ["Yellow", "#ffcc00"],
+  ["Green", "#34c759"],
+  ["Indigo", "#6366f1"],
+  ["Violet", "#5856d6"],
+  ["Purple", "#af52de"],
+  ["Magenta", "#ff2d55"],
 ];
 
-export const COLOR_PRESETS = PRESETS;
+export const COLOR_PRESETS = PRESETS.map(([, hex]) => hex);
 
 let eyedrop: EyedropCallback | null = null;
 let lastDrop = 0;

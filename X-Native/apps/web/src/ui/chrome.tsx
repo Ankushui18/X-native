@@ -53,6 +53,11 @@ import { applyEyedropSource, eyedropClipboardText, promptCreateEyedropToken } fr
 import { getEngineInfo } from "../engine/wasmBridge";
 import { XDialog, XSegmentedControl } from "./x-ui";
 
+/** The colour a fresh colour variable starts on: the brand, so the first token a
+ *  designer creates is the one the product is painted with. */
+const DEFAULT_VAR_COLOR = "#5b3df5";
+
+
 export type NavId = "file" | "assets" | "tools" | "variables" | "agent";
 
 export function NavRail({
@@ -1642,7 +1647,7 @@ export function Toolbar({
           <div className="tool">
             {/* The one button in the dock that is a commit rather than a tool
                 pick, so it wears the accent — from the tokens, including its ink
-                (`--on-accent`): the inline `#fff` it carried could not follow the
+                (`--on-accent`): the inline white it carried could not follow the
                 theme, and the accent's own ink is what every other filled
                 surface uses (TB-U5, §29). */}
             <button
@@ -3635,7 +3640,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
   const [addingVar, setAddingVar] = useState(false);
   const [varName, setVarName] = useState("token-1");
   const [varType, setVarType] = useState<VariableItem["type"]>("color");
-  const [varVal, setVarVal] = useState("#10b981");
+  const [varVal, setVarVal] = useState(DEFAULT_VAR_COLOR);
   const colors = Array.from(new Set(collectColors(snap.pages[snap.page].root)));
   const sel = snap.selection[0];
   const selNode = sel ? findNode(snap.pages[snap.page].root, sel)?.node : null;
@@ -3892,7 +3897,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                   onChange={(e) => {
                     const t = e.target.value as VariableItem["type"];
                     setVarType(t);
-                    if (t === "color") setVarVal("#10b981");
+                    if (t === "color") setVarVal(DEFAULT_VAR_COLOR);
                     else if (t === "number") setVarVal("16");
                     else if (t === "boolean") setVarVal("true");
                     else setVarVal("text");
@@ -3924,8 +3929,8 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                     padding: "4px 10px",
                     borderRadius: 4,
                     border: 0,
-                    background: "var(--blue)",
-                    color: "#ffffff",
+                    background: "var(--accent)",
+                    color: "var(--on-accent)",
                     fontSize: 11,
                     fontWeight: 600,
                     cursor: "pointer",
@@ -4137,7 +4142,7 @@ function VarsPane({ engine, snap }: { engine: Engine; snap: Snapshot }) {
                         value: st.color,
                         hint: "The leading # is optional",
                         confirmLabel: "Set colour",
-                        validate: (v) => (v.trim() ? null : "Enter a colour, e.g. #10b981"),
+                        validate: (v) => (v.trim() ? null : "Enter a colour, e.g. a hex code"),
                       });
                       if (!next) return;
                       const hex = next.trim().startsWith("#") ? next.trim() : `#${next.trim()}`;

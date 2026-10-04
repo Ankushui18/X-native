@@ -84,16 +84,35 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  2026-10-04 for the letter-spacing unit (audit F10): one native select for
  *  px/% on the Type row and its title tooltip, mirroring the Leading unit
  *  control exactly — the parity fix needs the unit field, and the ledger is
- *  the mechanism that says so. */
+ *  the mechanism that says so.
+ *
+ *  LOWERED 2026-10-04 for identity v3 (the ION token system), in the same
+ *  commit that earned it. Every row below is the measured value after the
+ *  round, not the old ceiling with slack: the four surfaces that carried the
+ *  retired emerald and the ad-hoc dark glass —
+ *    ZenHUD.tsx        16/14/9/6/0 → 2/0/5/3/0   (composed from .zen-* classes)
+ *    RadialMenu.tsx     3/6/0/0/0  → 1/0/0/0/0   (SVG paint moved to the sheet)
+ *    icons.tsx          0/3/0/0/0  → 0/0/0/0/0   (brand mark reads .brand-*)
+ *    Canvas.tsx        11/14/13/16/1 → 11/9/13/16/1 (10 anonymous paint
+ *                       literals became 9 named document-ink constants)
+ *    FigInspectorModal 113/10/2/8/1 → 113/0/2/8/1 (its eight emerald/white/
+ *                       red literals are tokens now)
+ *    chrome.tsx        49/4/41/72/2 → 49/1/41/72/2
+ *    inspector.tsx     190/44/248/200/49 → 189/22/248/200/49
+ *  The invariant those rows now hold is enforced from the other side by
+ *  tokens.test.mjs: a colour literal in src/ui must be *named* (a `const`, an
+ *  object property or a labelled table row) or it fails, and no rule in
+ *  styles.css below the token layers may paint a colour outright. */
+
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [11, 14, 13, 16, 1],
+  "Canvas.tsx": [11, 9, 13, 16, 1],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   // Raised 2026-10-03 for the dev-only Rust WASM POC trigger (one named button).
   "Dashboard.tsx": [1, 0, 12, 34, 1],
   "DialogHost.tsx": [0, 0, 1, 0, 0],
-  "FigInspectorModal.tsx": [113, 10, 2, 8, 1],
+  "FigInspectorModal.tsx": [113, 0, 2, 8, 1],
   // Raised 2026-10-01 batch 21: add-stop (+) / remove-stop (−) buttons in the
   // gradient editor, both with `title=` and `aria-label=` (per the gradients
   // article the + and − next to "Stops" are the documented affordance). That
@@ -103,11 +122,11 @@ const CEILING = {
   "Guides.tsx": [0, 0, 2, 0, 0],
   "Minimap.tsx": [0, 0, 0, 0, 0],
   "PresentationPlayer.tsx": [5, 0, 12, 9, 2],
-  "RadialMenu.tsx": [3, 6, 0, 0, 0],
+  "RadialMenu.tsx": [1, 0, 0, 0, 0],
   "Rulers.tsx": [0, 0, 0, 0, 0],
   "RustDocumentView.tsx": [2, 0, 0, 3, 0],
   "Tooltip.tsx": [1, 0, 0, 0, 0],
-  "ZenHUD.tsx": [16, 14, 9, 6, 0],
+  "ZenHUD.tsx": [2, 0, 5, 3, 0],
   "announce.tsx": [0, 0, 0, 0, 0],
   // Raised 2026-09-30 for the File menu (P0-2): a trigger and two rows, the
   // chrome's first menu of its own — no title and no inline style, so only
@@ -116,13 +135,13 @@ const CEILING = {
   // chrome): one `<button>` in the rail menu, drawn from `CANVAS_CHROME_OPTIONS`
   // so the row is the whole cost — no `title=`, no inline style, and the model
   // (`themeModel.ts`) keeps its [0, 0, 0, 0, 0].
-  "chrome.tsx": [49, 4, 41, 72, 2],
+  "chrome.tsx": [49, 1, 41, 72, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
-  "icons.tsx": [0, 3, 0, 0, 0],
+  "icons.tsx": [0, 0, 0, 0, 0],
   // Raised 2026-10-01 batch 21: Overflow scroll dropdown in the Layout section
   // for frames — one extra native <select>, plus a three-column inline grid
   // around it and the helper text.
-  "inspector.tsx": [190, 44, 248, 200, 49],
+  "inspector.tsx": [189, 22, 248, 200, 49],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };

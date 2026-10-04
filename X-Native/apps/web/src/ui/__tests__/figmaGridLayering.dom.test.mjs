@@ -20,6 +20,16 @@
  */
 import { mountRealCanvas } from "./realCanvas2d.mjs";
 import { node } from "../../engine/memory.ts";
+import { CANVAS_CHROME_FALLBACK } from "../canvasChrome.ts";
+
+/** The selection ring's ink, read from the role rather than typed: identity v3
+ *  moved it from the retired emerald to the brand violet, and a hue rule written
+ *  for green (`g > r + 30`) silently counted zero pixels of the new ring. */
+const SEL = (() => {
+  const h = CANVAS_CHROME_FALLBACK.sel.replace("#", "");
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+})();
+const isRing = (p) => Math.abs(p.r - SEL.r) <= 24 && Math.abs(p.g - SEL.g) <= 24 && Math.abs(p.b - SEL.b) <= 24;
 
 let pass = 0, fail = 0;
 const t = (name, ok, detail = "") => {
@@ -75,8 +85,7 @@ function countInk(f, x0, y0, w, h) {
   // hairlines must not have eaten the ring, so the corner row keeps its accent.
   let ring = 0;
   for (let x = 0; x < 300; x++) {
-    const p = s(x, 0);
-    if (p.g > 120 && p.g > p.r + 30 && p.g > p.b + 30) ring++;
+    if (isRing(s(x, 0))) ring++;
   }
   // A grid painted *last* would punch a white hairline through the ring every 5th
   // device pixel, so the run of accent has to be essentially unbroken.

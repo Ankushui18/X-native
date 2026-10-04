@@ -3977,16 +3977,19 @@ console.log("width-profile engine:");
   const baked = find(root(), id);
   t("outline-stroke bakes the profile into a filled vector", baked?.kind === "vector" && baked.closed === true);
   t("outline-stroke clears stroke + profile", baked?.strokeWidth === 0 && baked?.strokeWidthProfile === undefined);
-  const bakedTip = (baked?.path ?? []).filter((p) => p.x > 95).map((p) => Math.abs(p.y));
-  t("baked outline keeps the taper", bakedTip.length > 0 && Math.max(...bakedTip) < 2);
+  // The baked ribbon is re-fitted to its own frame, so measure the tip's
+  // thickness (y extent), not absolute y.
+  const extent = (path, x0) => { const ys = path.filter((p) => p.x > x0).map((p) => p.y); return ys.length ? Math.max(...ys) - Math.min(...ys) : -1; };
+  const bakedTip = extent(baked?.path ?? [], 95);
+  t("baked outline keeps the taper", bakedTip >= 0 && bakedTip < 4);
   // Uniform control: same path without a profile bakes a full-width ribbon.
   e.dispatch({ type: "addPath", points: [{ x: 0, y: 50 }, { x: 100, y: 50 }], closed: false });
   const id2 = e.snapshot().selection[0];
   e.dispatch({ type: "patch", id: id2, patch: { strokeWidth: 10, strokeVisible: true, strokePaint: "#111111", strokeCap: "none" } });
   e.dispatch({ type: "outlineStroke", id: id2 });
   const baked2 = find(root(), id2);
-  const uniTip = (baked2?.path ?? []).filter((p) => p.x > 95).map((p) => Math.abs(p.y));
-  t("uniform bake keeps full width at the tip", uniTip.length > 0 && Math.abs(Math.max(...uniTip) - 5) < 0.01);
+  const uniTip = extent(baked2?.path ?? [], 95);
+  t("uniform bake keeps full width at the tip", uniTip > 0 && Math.abs(uniTip - 10) < 0.01);
 }
 
 console.log("boolean-preview:");

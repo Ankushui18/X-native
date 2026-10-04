@@ -184,7 +184,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button
               className="export-run"
-              style={{ padding: "4px 10px", fontSize: 11, background: "#10b981" }}
+              style={{ padding: "4px 10px", fontSize: 11, background: "var(--accent)" }}
               disabled={!rawBuffer || loading}
               onClick={handleImportToCanvas}
               title="Import all layers into the active X-Native canvas"
@@ -218,7 +218,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
               borderRadius: 6,
               fontSize: 11,
               background: report?.fileName === "OpenFigs.fig" ? "var(--accent)" : "var(--bg)",
-              color: report?.fileName === "OpenFigs.fig" ? "#fff" : "var(--text)",
+              color: report?.fileName === "OpenFigs.fig" ? "var(--on-accent)" : "var(--text)",
             }}
             onClick={() => loadSample("/samples/OpenFigs.fig", "OpenFigs.fig")}
           >
@@ -231,7 +231,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
               borderRadius: 6,
               fontSize: 11,
               background: report?.fileName === "circle.fig" ? "var(--accent)" : "var(--bg)",
-              color: report?.fileName === "circle.fig" ? "#fff" : "var(--text)",
+              color: report?.fileName === "circle.fig" ? "var(--on-accent)" : "var(--text)",
             }}
             onClick={() => loadSample("/samples/circle.fig", "circle.fig")}
           >
@@ -308,7 +308,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
               style={{
                 padding: 16,
                 background: "rgba(239, 68, 68, 0.1)",
-                color: "#ef4444",
+                color: "var(--red)",
                 borderRadius: 8,
                 marginBottom: 16,
               }}
@@ -383,7 +383,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                       <span
                         style={{
                           background: "var(--accent)",
-                          color: "#fff",
+                          color: "var(--on-accent)",
                           borderRadius: 10,
                           padding: "1px 6px",
                           fontSize: 10,
@@ -418,7 +418,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                       </div>
                       <div style={{ display: "flex", gap: 12, color: "var(--dim)" }}>
                         <span>Size: {c.byteLength} bytes ({Math.round(c.byteLength / 1024)} KB)</span>
-                        <span style={{ textTransform: "uppercase", color: "#10b981", fontWeight: 600 }}>
+                        <span style={{ textTransform: "uppercase", color: "var(--accent-ink)", fontWeight: 600 }}>
                           {c.compression}
                         </span>
                       </div>
@@ -484,7 +484,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                       <div style={{ display: "flex", gap: 8, marginTop: 4, fontSize: 10, color: "var(--dim)" }}>
                         <span>{n.type}</span>
                         {n.w > 0 && <span>{Math.round(n.w)} × {Math.round(n.h)}</span>}
-                        {n.hasVectorGeometry && <span style={{ color: "#10b981" }}>• Vector ({n.vectorCommandsCount} cmds)</span>}
+                        {n.hasVectorGeometry && <span style={{ color: "var(--accent-ink)" }}>• Vector ({n.vectorCommandsCount} cmds)</span>}
                       </div>
                     </div>
                   ))}
@@ -557,7 +557,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
 
                     {selectedNode.hasVectorGeometry && (
                       <div style={{ padding: 12, background: "rgba(16, 185, 129, 0.08)", borderRadius: 6, border: "1px solid rgba(16, 185, 129, 0.2)" }}>
-                        <div style={{ fontWeight: 600, color: "#10b981", marginBottom: 6 }}>
+                        <div style={{ fontWeight: 600, color: "var(--accent-ink)", marginBottom: 6 }}>
                           Vector Network Analysis
                         </div>
                         <div style={{ display: "flex", gap: 16 }}>
@@ -643,8 +643,8 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                       >
                         <path
                           d={pathD}
-                          fill={n.fill || "#10b981"}
-                          stroke={n.stroke || "#ffffff"}
+                          fill={n.fill || "var(--accent)"}
+                          stroke={n.stroke || "var(--panel)"}
                           strokeWidth={Math.max(1, n.strokeWeight)}
                         />
                       </svg>

@@ -1132,11 +1132,12 @@ for (const [label, payload] of [
   });
   await p.mouse.click(Math.round(mm.x + mm.w / 2), Math.round(mm.y + mm.h / 2));
   await sleep(700);
-  // The viewport rectangle is drawn in the accent green: Minimap.tsx reads
-  // `--accent` per paint (FR-U2), so it is #0e9f6e light and #10b981 dark and
-  // this predicate stays green-ish rather than pinning either value. The old
-  // predicate was blue, which is document ink - so it tracked the thumbnail's
-  // fit changing, not the viewport.
+  // The viewport rectangle is drawn in the selection role now: Minimap.tsx reads
+  // `--cv-sel` per paint (FR-U2), so it answers the canvas-chrome theme and this
+  // predicate stays "violet, and much bluer than it is red" rather than pinning
+  // either theme's value. The first version of this rule was written for the old
+  // emerald (`g > r + 40`) and, once the ring moved to violet, counted zero pixels
+  // of the viewport it was supposed to find.
   const rect = await p.evaluate(() => {
     const c = document.querySelector(".minimap canvas");
     const dpr = window.devicePixelRatio || 1;
@@ -1145,7 +1146,7 @@ for (const [label, payload] of [
     for (let y = 0; y < c.height; y++) {
       for (let x = 0; x < c.width; x++) {
         const i = (y * c.width + x) * 4;
-        if (d[i + 1] > 100 && d[i + 1] > d[i] + 40 && d[i + 1] > d[i + 2] + 20) {
+        if (d[i + 2] > 100 && d[i + 2] > d[i + 1] + 40 && d[i] > d[i + 1] - 40) {
           if (x < minX) minX = x; if (x > maxX) maxX = x;
           if (y < minY) minY = y; if (y > maxY) maxY = y;
         }
@@ -1395,23 +1396,34 @@ for (const [label, payload] of [
     }
     return n;
   }, r, g, b, tol);
-  // The demo document paints the accent colour itself (a #10b981 toggle), so
-  // chrome is measured as the difference from an idle canvas - captured before
+  // The demo document paints a colour of its own (a switch, cyan since identity
+  // v3), so chrome is measured as the difference from an idle canvas - captured before
   // anything is drawn or selected, or the baseline would contain the very
   // chrome the check is looking for. Without the subtraction "no accent left"
   // could never be true: the toggle keeps ~550px on screen either way.
-  const idle = await countNear(16, 185, 129, 24);
+  // The chrome ink comes from the sheet (`--cv-sel`), not from a literal: the
+  // selection colour moved with identity v3 (emerald → brand violet), and a pin
+  // typed here would have kept counting pixels of a colour the app no longer
+  // paints. The idle baseline is subtracted the same way §27 does it.
+  const selInk = await p.evaluate(() => {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue("--cv-sel").trim();
+    const c = document.createElement("canvas").getContext("2d");
+    c.fillStyle = "#000000"; c.fillStyle = raw;
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+    return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 0, 0];
+  });
+  const idle = await countNear(...selInk, 24);
   await drawRect(p);
-  const emeraldBefore = (await countNear(16, 185, 129, 24)) - idle;
-  t(`editable selection renders accent chrome (${emeraldBefore}px)`, emeraldBefore > 500);
+  const accentBefore = (await countNear(...selInk, 24)) - idle;
+  t(`editable selection renders accent chrome (${accentBefore}px of --cv-sel)`, accentBefore > 500);
   const greyBefore = await countNear(154, 160, 166, 20);
   await p.keyboard.down("Meta"); await p.keyboard.down("Shift");
   await p.keyboard.press("l");
   await p.keyboard.up("Shift"); await p.keyboard.up("Meta");
   await sleep(500);
-  const emeraldAfter = (await countNear(16, 185, 129, 24)) - idle;
+  const accentAfter = (await countNear(...selInk, 24)) - idle;
   const greyAfter = await countNear(154, 160, 166, 20);
-  t(`locked selection drops the accent (${emeraldAfter}px)`, emeraldAfter < 60);
+  t(`locked selection drops the accent (${accentAfter}px)`, accentAfter < 60);
   t(`locked selection renders grey chrome (+${greyAfter - greyBefore}px)`, greyAfter - greyBefore > 100);
   await p.close();
 }
@@ -2772,23 +2784,23 @@ for (const [label, payload] of [
   t(`the sheet declares the canvas chrome roles (--cv-sel ${JSON.stringify(sel)}, --cv-lock ${JSON.stringify(lock)})`,
     Array.isArray(sel) && Array.isArray(lock));
 
-  // The demo document paints the accent itself (a #10b981 toggle), so chrome is
-  // measured as the difference from an idle canvas, as §26 does.
+  // The demo document paints a colour of its own (a switch, cyan since identity
+  // v3), so chrome is measured as the difference from an idle canvas, as §26 does.
   const idle = await countNear(sel, 24);
   await drawRect(p);
   const chrome = (await countNear(sel, 24)) - idle;
   t(`selection chrome paints --cv-sel (+${chrome}px over an idle ${idle}px)`, chrome > 500);
 
   // The part that could not pass before FR-U2: retheme the role under the
-  // running app and the chrome has to follow, while the document's own emerald
-  // stays put. The ring used to be `const BRAND_ACCENT = "#10b981"`, so the
-  // sheet had nothing to say about it.
+  // running app and the chrome has to follow, while the document's own ink stays
+  // put. The ring used to be a module constant, so the sheet had nothing to say
+  // about it.
   await p.evaluate(() => document.documentElement.style.setProperty("--cv-sel", "#ff8800"));
   await nudge();
   const moved = await countNear([255, 136, 0], 24);
   const stayed = await countNear(sel, 24);
   t(`rethemeing --cv-sel repaints the chrome (${moved}px of orange)`, moved > 500);
-  t(`and the document's own emerald does not follow it (${stayed}px, idle was ${idle}px)`, Math.abs(stayed - idle) < 150);
+  t(`and the document's own ink does not follow it (${stayed}px, idle was ${idle}px)`, Math.abs(stayed - idle) < 150);
 
   await p.evaluate(() => document.documentElement.style.removeProperty("--cv-sel"));
   await nudge();
@@ -2845,6 +2857,18 @@ for (const [label, payload] of [
   const theme = await p.evaluate(() => document.documentElement.dataset.theme);
   const accent = await tokenRgb("--accent");
   const sel = await tokenRgb("--cv-sel");
+  // The other half of the theme pair: read the light column off the same sheet.
+  const lightAccentRgb = await p.evaluate(() => {
+    const el = document.documentElement;
+    const was = el.dataset.theme;
+    el.dataset.theme = "light";
+    const raw = getComputedStyle(el).getPropertyValue("--cv-sel").trim();
+    el.dataset.theme = was;
+    const c = document.createElement("canvas").getContext("2d");
+    c.fillStyle = "#000000"; c.fillStyle = raw;
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c.fillStyle);
+    return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 0, 0];
+  });
   t(`the app booted dark (data-theme=${theme}, --accent ${JSON.stringify(accent)})`, theme === "dark" && Array.isArray(accent));
 
   const idle = await countNear(sel, 24);
@@ -2858,15 +2882,15 @@ for (const [label, payload] of [
   t(`and follows a retheme in dark too (${moved}px of orange)`, moved > 500);
   await p.evaluate(() => document.documentElement.style.removeProperty("--cv-sel"));
 
-  // The minimap viewport wears --accent, the one chrome colour whose two theme
-  // values genuinely differ (#0e9f6e light / #10b981 dark), so this is the pixel
-  // a visitor can see answer the theme. Tolerance 16 keeps the two apart (their
-  // green channels are 26 apart) while the document's own #10b981 toggle still
-  // shows up in the thumbnail - hence no "zero emerald" assertion in light.
+  // The minimap viewport wears the selection role, the one chrome colour whose two
+  // theme values genuinely differ (brand violet light / lighter violet dark), so
+  // this is the pixel a visitor can see answer the theme. Both ends are read from
+  // the sheet — the light value is taken with the theme flipped, so the pin cannot
+  // rot when the palette is retuned again.
   await p.keyboard.down("Shift"); await p.keyboard.press("M"); await p.keyboard.up("Shift");
   await sleep(600);
   const darkAccent = await countNear(accent, 16, ".minimap canvas");
-  const lightAccent = await countNear([14, 159, 110], 16, ".minimap canvas");
+  const lightAccent = await countNear(lightAccentRgb, 16, ".minimap canvas");
   t(`the minimap viewport wears the dark accent (${darkAccent}px) and not the light one (${lightAccent}px)`,
     darkAccent > 30 && lightAccent < 25);
 

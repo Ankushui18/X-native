@@ -199,16 +199,16 @@ t("real wasm loads, version 1", (await ensureGeo(stubMod))?.version === 1);
     !!raw && raw.status === 0 && raw.contours.length === 1 && eq(raw.contours[0][1], { x: 30, y: 0 }));
 }
 {
-  // Explicit diagnostic mode exercises the native choke without auto's oracle.
+  // Boolean no longer routes through the native raster module in any mode.
   const priorLocation = globalThis.location;
   globalThis.location = { search: "?geo=wasm" };
-  // The choke shapes stub contours exactly like a direct shaper call.
+  let called = false;
+  __setGeoModuleForTests({ version: 1, call: () => { called = true; return stubResp; } });
   const via = booleanPath("union", shapes2());
-  const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
-    (Math.max(30, 40) / 160) * 0.85, false);
-  t("choke shapes wasm contours via shared shaper", eq(via, direct));
-  t("shaped result has network + bbox", !!via && !!via.network && via.w === 30 && via.h === 40);
+  t("?geo=wasm no longer consults the native raster module", !called);
+  t("boolean result is the exact union (no raster noise)", !!via && via.w === 15 && via.h === 15 && via.path.length === 8);
   if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
+  __resetGeoForTests();
 }
 __resetGeoForTests();
 t("version-0 module rejected", (await ensureGeo(assembleGeoModule({ versionConst: 0, response: stubResp }))) === null);
@@ -230,104 +230,34 @@ t("relative fetch in node degrades to null", (await ensureGeo()) === null);
   __resetGeoForTests();
 }
 {
-  __setGeoModuleForTests({ version: 1, call: () => stubResp });
-  const via = booleanPath("union", shapes2());
-  const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
-    (19 / 160) * 0.85, false);
-  t("default uses native shaped output even when a mock disagrees with TS",
-    eq(via, direct) && !eq(via, booleanPathTs("union", shapes2())));
-  __resetGeoForTests();
-}
-{
-  // Throwing module -> TS fallback, identical to the authority.
-  __setGeoModuleForTests({ version: 1, call: () => { throw new Error("trap"); } });
-  const warn = console.warn; console.warn = () => {};
-  const via = booleanPath("union", shapes2());
-  console.warn = warn;
-  t("trap falls back to TS", eq(via, booleanPathTs("union", shapes2())));
-  __resetGeoForTests();
-}
-{
-  // No per-call oracle in auto: the native result, including empty, is used.
-  // In audit mode the same false-empty candidate is rejected against TS.
-  __setGeoModuleForTests({ version: 1, call: () => cannedResponse(1) });
-  t("auto selects native empty without running the TS oracle", booleanPath("union", shapes2()) === null);
+  // The exact engine is the contract: a loaded module — agreeing, disagreeing,
+  // trapping, or reporting an error — cannot change the result.
+  const exact = booleanPath("union", shapes2());
+  const exactSub = booleanPath("subtract", shapes2());
+  for (const [label, mod] of [
+    ["disagreeing module", { version: 1, call: () => stubResp }],
+    ["trapping module", { version: 1, call: () => { throw new Error("trap"); } }],
+    ["false-empty module", { version: 1, call: () => cannedResponse(1) }],
+    ["wasm-error module", { version: 1, call: () => cannedResponse(2, "nope") }],
+  ]) {
+    let called = false;
+    __setGeoModuleForTests({ version: 1, call: (r) => { called = true; return mod.call(r); } });
+    t(`${label}: never called, result unchanged`,
+      !called && eq(booleanPath("union", shapes2()), exact) && eq(booleanPath("subtract", shapes2()), exactSub));
+    __resetGeoForTests();
+  }
   const priorLocation = globalThis.location;
-  globalThis.location = { search: "?geo=audit" };
-  const via = booleanPath("union", shapes2());
-  t("geo=audit rejects false empty and restores TS", eq(via, booleanPathTs("union", shapes2())) && via !== null);
+  for (const mode of ["?geo=audit", "?geo=ts", "?geo=wasm"]) {
+    globalThis.location = { search: mode };
+    t(`${mode}: same exact result`, eq(booleanPath("union", shapes2()), exact));
+  }
   if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
-  __resetGeoForTests();
 }
 {
-  // Status-2 (wasm error) defers to the authority.
-  __setGeoModuleForTests({ version: 1, call: () => cannedResponse(2, "nope") });
-  const warn = console.warn; console.warn = () => {};
-  const via = booleanPath("intersect", shapes2());
-  console.warn = warn;
-  t("wasm-error defers to TS", eq(via, booleanPathTs("intersect", shapes2())));
-  __resetGeoForTests();
-}
-{
-  // ?geo=ts never touches the module, even when loaded.
-  let called = false;
-  __setGeoModuleForTests({ version: 1, call: () => { called = true; return stubResp; } });
-  globalThis.window = { location: { search: "?geo=ts" } };
-  const via = booleanPath("union", shapes2());
-  delete globalThis.window;
-  t("geo=ts bypasses loaded module", !called && eq(via, booleanPathTs("union", shapes2())));
-  __resetGeoForTests();
-}
-{
-  // No module at all: choke is a pure alias of the authority.
-  __resetGeoForTests();
-  t("no module -> TS identical (union)", eq(booleanPath("union", shapes2()), booleanPathTs("union", shapes2())));
-  t("no module -> TS identical (subtract)", eq(booleanPath("subtract", shapes2()), booleanPathTs("subtract", shapes2())));
-  let called = false;
-  __setGeoModuleForTests({ version: 1, call: () => { called = true; return stubResp; } });
-  t("fewer than 2 shapes -> null, module untouched",
-    booleanPath("union", shapes2().slice(0, 1)) === null && !called);
-  __resetGeoForTests();
-}
-{
-  const priorLocation = globalThis.location;
-  globalThis.location = { search: "?geo=wasm" };
-  // Curved inputs smooth through the shared shaper on the wasm path too.
-  const curved = () => [
-    { poly: [{ x: 0, y: 0, ox: 5, oy: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], ox: 0, oy: 0 },
-    { poly: rect(5, 5, 10, 10), ox: 0, oy: 0 },
-  ];
-  __setGeoModuleForTests({ version: 1, call: () => stubResp });
-  const via = booleanPath("union", curved());
-  const direct = shapeBooleanResult("union", [[{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }]],
-    (19 / 160) * 0.85, true);
-  t("curved flag flows to shaper on wasm path", eq(via, direct));
-  if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
-  __resetGeoForTests();
-}
-{
-  // The wire bbox describes the native contour, not the original coverage
-  // grid. A distant second input makes those scales differ substantially.
-  const priorLocation = globalThis.location;
-  globalThis.location = { search: "?geo=wasm" };
-  const ring = [{ x: 0, y: 0 }, { x: 5, y: 1 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
-  const response = new Uint8Array(52 + 8 + ring.length * 16), dv = new DataView(response.buffer);
-  dv.setUint32(0, 0x58475231, true); dv.setUint32(4, response.length, true); dv.setUint16(8, 1, true);
-  dv.setFloat64(28, 10, true); dv.setFloat64(36, 10, true); dv.setUint32(44, 1, true);
-  dv.setUint32(52, ring.length, true);
-  ring.forEach((p, i) => { dv.setFloat64(60 + i * 16, p.x, true); dv.setFloat64(68 + i * 16, p.y, true); });
-  __setGeoModuleForTests({ version: 1, call: () => response });
-  const far = [
-    { poly: rect(0, 0, 10, 10), ox: 0, oy: 0 },
-    { poly: rect(500, 500, 10, 10), ox: 0, oy: 0 },
-  ];
-  const gridEps = (514 / 160) * 0.85;
-  const correct = shapeBooleanResult("subtract", [ring], gridEps, false);
-  const bboxEps = shapeBooleanResult("subtract", [ring], (10 / 160) * 0.85, false);
-  t("native output uses input grid scale for shared shaper, never output bbox",
-    eq(booleanPath("subtract", far), correct) && !eq(correct, bboxEps));
-  if (priorLocation === undefined) delete globalThis.location; else globalThis.location = priorLocation;
-  __resetGeoForTests();
+  t("union of two 10x10 squares offset by 5 is exactly 15x15", (() => { const r = booleanPath("union", shapes2()); return r.x === 0 && r.y === 0 && r.w === 15 && r.h === 15; })());
+  t("subtract keeps outer frame and adds a hole", (() => { const r = booleanPath("subtract", [{ poly: rect(0, 0, 100, 100), ox: 0, oy: 0 }, { poly: rect(25, 25, 50, 50), ox: 0, oy: 0 }]); return r.w === 100 && r.network.regions[0].loops.length === 2; })());
+  t("fewer than 2 shapes -> null", booleanPath("union", shapes2().slice(0, 1)) === null);
+  t("disjoint intersect -> null", booleanPath("intersect", [{ poly: rect(0, 0, 10, 10), ox: 0, oy: 0 }, { poly: rect(50, 50, 10, 10), ox: 0, oy: 0 }]) === null);
 }
 
 /* -------------------------------------------------------------------------- */

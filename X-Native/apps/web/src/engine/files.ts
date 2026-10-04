@@ -359,6 +359,12 @@ export const TEMPLATES: { id: TemplateId; label: string; hint: string }[] = [
   { id: "prototype", label: "Prototype flow", hint: "3 linked screens" },
 ];
 
+/** Starter-template ink. Document values, so they are written into the file and
+ *  do not follow the theme — but they are the product's own palette, not Figma's:
+ *  the templates used to hand every new document a Figma-blue button. */
+const SAMPLE_BRAND = "#5b3df5";
+const SAMPLE_BRAND_DEEP = "#4a2cd8";
+
 function frame(
   name: string,
   x: number,
@@ -458,14 +464,14 @@ export function docFromTemplate(template: TemplateId): DocSeed {
       label("Link", 240, 28, 60, 16, "Product", 13, "#5a6172"),
       label("Link 2", 324, 28, 60, 16, "Pricing", 13, "#5a6172"),
       label("Link 3", 408, 28, 60, 16, "Docs", 13, "#5a6172"),
-      box("CTA", 1240, 20, 160, 32, "#0d99ff", 8),
+      box("CTA", 1240, 20, 160, 32, SAMPLE_BRAND, 8),
       label("CTA label", 1268, 28, 110, 16, "Get started", 13, "#ffffff", 600),
     ];
     const hero = frame("Hero", 40, 104, 1360, 320, { fill: "#0d1220", cornerRadii: [24, 24, 24, 24], overflow: "clip" });
     hero.children = [
       label("Hero title", 56, 88, 620, 96, "Ship design work, not files", 44, "#ffffff", 700),
       label("Hero body", 56, 196, 520, 48, "One workspace for design, prototype and handoff — with the whole team in it.", 15, "#9aa3b8"),
-      box("Hero button", 56, 256, 148, 40, "#0d99ff", 10),
+      box("Hero button", 56, 256, 148, 40, SAMPLE_BRAND, 10),
       box("Hero art", 880, 48, 424, 224, "#1b2130", 16),
     ];
     const cards: XNode[] = [];
@@ -492,7 +498,7 @@ export function docFromTemplate(template: TemplateId): DocSeed {
     const titles = ["Onboarding", "Browse", "Detail"];
     for (let i = 0; i < 3; i++) {
       const s = frame(`Screen ${i + 1} / ${titles[i]}`, i * 480, 0, 393, 852, { fill: "#ffffff", cornerRadii: [40, 40, 40, 40] });
-      const btn = box(`Next ${i + 1}`, 24, 732, 345, 48, i === 2 ? "#10b981" : "#0d99ff", 24);
+      const btn = box(`Next ${i + 1}`, 24, 732, 345, 48, i === 2 ? SAMPLE_BRAND_DEEP : SAMPLE_BRAND, 24);
       btn.name = `Next button ${i + 1}`;
       const btnLabel = label(`Next label ${i + 1}`, 24, 748, 345, 18, i === 2 ? "Done" : "Continue", 14, "#ffffff", 600);
       btnLabel.x = 24;
@@ -542,7 +548,7 @@ export function docFromTemplate(template: TemplateId): DocSeed {
     box("Card", 24, 232, 345, 160, "#0d1220", 20),
     label("Card title", 48, 264, 240, 24, "Weekly review", 18, "#ffffff", 600),
     label("Card body", 48, 296, 260, 36, "Sync the design system checklist before Friday.", 13, "#9aa3b8"),
-    box("Card button", 48, 344, 120, 30, "#0d99ff", 15),
+    box("Card button", 48, 344, 120, 30, SAMPLE_BRAND, 15),
   ];
   forApp(screen);
   const root = node("frame", "Page 1", 0, 0, 4000, 4000, { fill: "#00000000", overflow: "visible", showName: false, children: [screen] });
@@ -557,8 +563,8 @@ function forApp(screen: XNode): void {
   const kids: XNode[] = [];
   items.forEach((t, i) => {
     const x = 24 + i * 92;
-    kids.push(box(`Tab ${t} icon`, x + 18, 800, 20, 20, i === 0 ? "#0d99ff" : "#c3c9d6", 6));
-    kids.push(label(`Tab ${t}`, x, 826, 56, 14, t, 11, i === 0 ? "#0d99ff" : "#8b93a5", i === 0 ? 600 : 400));
+    kids.push(box(`Tab ${t} icon`, x + 18, 800, 20, 20, i === 0 ? SAMPLE_BRAND : "#c3c9d6", 6));
+    kids.push(label(`Tab ${t}`, x, 826, 56, 14, t, 11, i === 0 ? SAMPLE_BRAND : "#8b93a5", i === 0 ? 600 : 400));
   });
   screen.children.push(bar, ...kids);
   screen.children.push(box("List row 1", 24, 412, 345, 68, "#f1f3f7", 16));

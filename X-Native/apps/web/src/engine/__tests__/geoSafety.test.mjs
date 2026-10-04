@@ -107,24 +107,20 @@ await test("TS override does not poison a later explicit load", async () => {
   const fetch = globalThis.fetch; let called = false; globalThis.fetch = async () => { called = true; return { ok: false }; };
   try { await ensureGeo(); assert.equal(called, true); } finally { globalThis.fetch = fetch; __resetGeoForTests(); }
 });
-await test("auto returns the native Boolean without consulting TS", () => {
-  __setGeoModuleForTests({ version: 1, call: () => response() });
-  assert.notDeepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
-});
-await test("auto accepts a native empty result without running the oracle", () => {
-  __setGeoModuleForTests({ version: 1, call: () => response(1) }); assert.equal(booleanPath("union", shapes), null);
-});
-await test("audit rejects unequal geometry and false emptiness, then falls back to TS", () => {
-  globalThis.location = { search: "?geo=audit" };
-  try {
-    __setGeoModuleForTests({ version: 1, call: () => response() });
-    assert.deepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
-    __setGeoModuleForTests({ version: 1, call: () => response(1) });
-    assert.deepEqual(booleanPath("union", shapes), booleanPathTs("union", shapes));
-  } finally { delete globalThis.location; }
-});
-await test("explicit wasm mode exposes real empty result for differential testing", () => {
-  globalThis.location = { search: "?geo=wasm" }; __setGeoModuleForTests({ version: 1, call: () => response(1) }); assert.equal(booleanPath("union", shapes), null); delete globalThis.location;
+await test("Boolean never consults the native module, whatever it returns or the mode", () => {
+  // Exact polygon clipping is the only Boolean engine; the native raster
+  // module (agreeing, false-empty, or erroring) and ?geo= cannot change it.
+  const exact = booleanPath("union", shapes);
+  assert.notEqual(exact, null);
+  for (const mode of [undefined, "?geo=audit", "?geo=wasm", "?geo=ts"]) {
+    if (mode) globalThis.location = { search: mode }; else delete globalThis.location;
+    for (const r of [response(), response(1)]) {
+      let called = false;
+      __setGeoModuleForTests({ version: 1, call: (q) => { called = true; return r; } });
+      try { assert.deepEqual(booleanPath("union", shapes), exact); assert.equal(called, false); }
+      finally { delete globalThis.location; }
+    }
+  }
 });
 __resetGeoForTests();
 console.log(`geoSafety: ${passed} passed, ${failed} failed`);

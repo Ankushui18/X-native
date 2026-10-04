@@ -43,6 +43,14 @@ import { XSegmentedControl, XSelect } from "./x-ui";
 import { mixHex } from "../engine/paint";
 import { useEscape } from "./escape";
 
+/** What shows through a preview that has nothing to composite: the panel's own
+ *  white. A named document value rather than a token, because a preview is
+ *  rasterised onto a canvas and cannot read the cascade. */
+const PREVIEW_BACKING = "#ffffff";
+/** The grey a paint row falls back to when a layer's fill is "none". */
+const DOC_FILL_NONE = "#d9d9d9";
+
+
 export interface FillValue {
   color: string;
   opacity: number;
@@ -290,7 +298,7 @@ export function FillPicker({
      only ever an approximation of what sits behind the fill, so the field is
      editable; the fill's opacity is composited in because a 40% fill is not the
      colour it looks like. */
-  const bg = bgOverride ?? (background && background.length >= 7 ? background.slice(0, 7) : "#ffffff");
+  const bg = bgOverride ?? (background && background.length >= 7 ? background.slice(0, 7) : PREVIEW_BACKING);
   const fg = (() => {
     const c = parseHex(value.color);
     const g0 = parseHex(bg);
@@ -347,7 +355,7 @@ export function FillPicker({
 
   const setType = (id: FillType) => {
     const handles = handlesForFill(id);
-    const color = id !== "image" && isNone(value.color) ? "#d9d9d9" : value.color;
+    const color = id !== "image" && isNone(value.color) ? DOC_FILL_NONE : value.color;
     onChange({
       ...value,
       type: id,

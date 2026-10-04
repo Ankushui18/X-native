@@ -33,6 +33,7 @@ import { MemoryEngine, node } from "../../engine/memory.ts";
 import { partitionMaskRuns, reduceMaskAlpha } from "../../engine/paint.ts";
 import { runMenu, layerMenu, canvasMenu } from "../ContextMenu.tsx";
 import { contexts, near, mountCanvas, mountPanel } from "./softCanvas2d.mjs";
+import { CANVAS_CHROME_FALLBACK } from "../canvasChrome.ts";
 
 let pass = 0,
   fail = 0;
@@ -180,26 +181,33 @@ const pair = (mask, kid = content(), extra = {}) =>
 }
 
 /* ------------------------------------------------------------------ *
- * 6. Show mask outlines: green, on the canvas, and gone when the article says
- *    it is gone.
+ * 6. Show mask outlines: in the mask role's ink, on the canvas, and gone when
+ *    the article says it is gone.
+ *
+ * The ink is read from `canvasChrome` rather than typed here. It used to be a
+ * hardcoded green (`#00c853`) on both sides, which meant a theme change could
+ * silently stop outlining masks while this file stayed green — the run that
+ * recoloured the mask role to amber (identity v3) is exactly that: the pixels
+ * moved and the pin had to move with them, so the pin now names the role.
  * ------------------------------------------------------------------ */
 // Each mount builds its own contexts (the canvas element included), so the
 // count is scoped to the contexts created after the mark.
 const mark = () => contexts.length;
-const greenStrokes = (from = 0) =>
+const MASK_INK = CANVAS_CHROME_FALLBACK.mask.toLowerCase();
+const maskStrokes = (from = 0) =>
   contexts
     .slice(from)
     .flatMap((ctx) => ctx.strokes.map((s) => ({ ...s, color: String(s.color) })))
-    .filter((s) => s.color.toLowerCase() === "#00c853");
+    .filter((s) => s.color.toLowerCase() === MASK_INK);
 
 {
   const from = mark();
   const ui = await mountCanvas([pair(softMask())]);
-  const before = greenStrokes(from).length;
+  const before = maskStrokes(from).length;
   await ui.dispatch({ type: "toggleMaskOutlines" });
-  const on = greenStrokes(from);
-  t("mask outlines off by default: no green outline", before === 0, `${before} strokes`);
-  t("mask outlines on: the mask is outlined in green", on.length === 1, `${on.length} green strokes`);
+  const on = maskStrokes(from);
+  t("mask outlines off by default: no outline", before === 0, `${before} strokes`);
+  t(`mask outlines on: the mask is outlined in the mask role (${MASK_INK})`, on.length === 1, `${on.length} strokes`);
   t("mask outlines land on the canvas, not inside a masked tile", on.every((s) => s.inDoc), JSON.stringify(on.map((s) => s.inDoc)));
   await ui.close();
 }
@@ -211,7 +219,7 @@ const greenStrokes = (from = 0) =>
   const from = mark();
   const ui = await mountCanvas([pair(softMask(), hiddenKid)]);
   await ui.dispatch({ type: "toggleMaskOutlines" });
-  t("all masked layers hidden: no mask outline", greenStrokes(from).length === 0, `${greenStrokes(from).length} green strokes`);
+  t("all masked layers hidden: no mask outline", maskStrokes(from).length === 0, `${maskStrokes(from).length} strokes`);
   await ui.close();
 }
 {
@@ -219,7 +227,8 @@ const greenStrokes = (from = 0) =>
   const from = mark();
   const ui = await mountCanvas([pair(softMask(), zeroKid)]);
   await ui.dispatch({ type: "toggleMaskOutlines" });
-  t("all masked layers at 0% opacity: no mask outline", greenStrokes(from).length === 0, `${greenStrokes(from).length} green strokes`);
+  t("all masked layers at 0% opacity: no mask outline", maskStrokes(from).length === 0, `${maskStrokes(from).length} strokes`);
+//reen strokes`);
   await ui.close();
 }
 

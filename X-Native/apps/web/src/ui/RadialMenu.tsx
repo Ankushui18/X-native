@@ -120,7 +120,6 @@ export function RadialMenu({
         width={radius * 2 + 20}
         height={radius * 2 + 20}
         viewBox={`${-radius - 10} ${-radius - 10} ${radius * 2 + 20} ${radius * 2 + 20}`}
-        style={{ filter: "drop-shadow(0 8px 24px rgba(0, 0, 0, 0.45))" }}
       >
         {SLICES.map((s, i) => {
           const a0 = -Math.PI / 2 + (i - 0.5) * sliceAngle;
@@ -145,24 +144,16 @@ export function RadialMenu({
 
           return (
             <g key={s.id}>
-              <path
-                d={d}
-                fill={isSelected ? "var(--accent, #10b981)" : "#1e1e22"}
-                stroke="#2a2a30"
-                strokeWidth={1.5}
-                style={{
-                  transition: "fill 0.1s ease",
-                  cursor: "pointer",
-                }}
-              />
+              {/* Paint comes from the sheet: `.radial-slice` and its `.on`
+                  state, so the radial follows the theme like every other
+                  surface (the fill used to be an SVG attribute holding
+                  `var(--accent, …)`, which no browser resolves). */}
+              <path className={`radial-slice${isSelected ? " on" : ""}`} d={d} />
               <g transform={`translate(${ix}, ${iy})`}>
                 <text
+                  className={`radial-label${isSelected ? " on" : ""}`}
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fill={isSelected ? "#ffffff" : "#cccccc"}
-                  fontSize={10}
-                  fontWeight={600}
-                  fontFamily="system-ui, sans-serif"
                 >
                   {s.label}
                 </text>
@@ -172,24 +163,8 @@ export function RadialMenu({
         })}
 
         {/* Center hub */}
-        <circle
-          cx={0}
-          cy={0}
-          r={innerRadius - 4}
-          fill="#141416"
-          stroke="var(--accent, #10b981)"
-          strokeWidth={2}
-        />
-        <text
-          x={0}
-          y={0}
-          textAnchor="middle"
-          dominantBaseline="central"
-          fill="#ffffff"
-          fontSize={11}
-          fontWeight={700}
-          fontFamily="system-ui, sans-serif"
-        >
+        <circle className="radial-hub" cx={0} cy={0} r={innerRadius - 4} />
+        <text className="radial-shortcut" x={0} y={0} textAnchor="middle" dominantBaseline="central">
           {activeIdx !== null ? SLICES[activeIdx].shortcut : "X"}
         </text>
       </svg>

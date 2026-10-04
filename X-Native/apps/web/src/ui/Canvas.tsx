@@ -212,11 +212,23 @@ const PENCIL_TOLERANCE_PX = 2;
  * itself. Those must not follow the theme, or a saved document — and its SVG
  * export — would change colour with the viewer's appearance setting. */
 /** A new Slice's dashed stroke, written into the layer on creation. */
-const DOC_SLICE_STROKE = "#10b981";
+const DOC_SLICE_STROKE = "#5b3df5";
 /** Paint-bucket defaults: a region's fill when the node has none, and the
- *  brand emerald it gets when its fill was hidden. Both land in the document. */
+ *  brand colour it gets when its fill was hidden. Both land in the document. */
 const DOC_FILL_NONE = "#d9d9d9";
-const DOC_FILL_BRAND = "#10b981";
+const DOC_FILL_BRAND = "#5b3df5";
+/** "No fill" as a document value: a paint bucket clears a fill by writing this,
+ *  not by deleting the key, so the file says *why* the layer is empty. */
+const DOC_NO_FILL = "#00000000";
+/** An effect's own default tint when the file does not carry one. */
+const DOC_GLASS_TINT = "#ffffff";
+/** The pixel a colour picker shows before it has read one off the canvas. */
+const DOC_PICKER_FALLBACK = "#000000";
+/** Internal raster ink: the noise/speckle pass and the temp layers a mask is
+ *  composited through. Never chrome, never the theme. */
+const RASTER_NOISE_INK = "#ffffff";
+const RASTER_NOISE_BG = "#000000";
+const RASTER_TEMP_FILL = "#ffffff";
 
 const CREATE: Tool[] = [
   "frame",
@@ -1876,11 +1888,12 @@ export function Canvas({
     const CHIP_LINE = chrome.chipLine;
     const CHIP_INK = chrome.chipInk;
     const SCRIM = chrome.scrim;
-    // Selection handles in Figma are always white squares with an accent
-    // outline — they live on the document, not on panels, so they stay
-    // white across themes. Reading one constant keeps the drift count at
-    // one literal instead of one per painted handle.
-    const HANDLE_FILL = "#ffffff";
+    // Selection handles are always white squares with an accent outline — they
+    // live on the document, not on panels, so they keep their ink across
+    // themes. That ink is the chrome record's own `ink` role, which is what the
+    // rotation dots and the badge text read too, so a handle can no longer
+    // drift from the chrome it belongs to.
+    const HANDLE_FILL = INK;
     ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, w, h);
     const pageRoot = snap.pages[snap.page].root;
@@ -2372,7 +2385,7 @@ export function Canvas({
         ctx.clip();
         ctx.globalAlpha *= 0.28;
         // Document ink: an effect's own default tint, not chrome (FR-U2).
-        ctx.fillStyle = glass.color || "#ffffff";
+        ctx.fillStyle = glass.color || DOC_GLASS_TINT;
         ctx.fill();
         ctx.restore();
       }
@@ -4730,7 +4743,7 @@ export function Canvas({
         for (const [rx, ry] of rotatePoints) {
           ctx.beginPath();
           ctx.arc(rx, ry, 5, 0, Math.PI * 2);
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = INK;
           ctx.fill();
           ctx.strokeStyle = TARGET;
           ctx.lineWidth = 1.5;
@@ -4788,7 +4801,7 @@ export function Canvas({
     const cached = eyedropPixel.current;
     const hasCachedPixel = !!cached && Math.hypot(cached.x - clientX, cached.y - clientY) <= 2;
     let hasPixel = hasCachedPixel;
-    let hex = hasCachedPixel && cached ? cached.hex : "#000000";
+    let hex = hasCachedPixel && cached ? cached.hex : DOC_PICKER_FALLBACK;
     if (canvas && rect && !hasCachedPixel) {
       const dpr = window.devicePixelRatio || 1;
       const px = Math.floor((clientX - rect.left) * dpr);
@@ -7811,7 +7824,7 @@ export function Canvas({
           : snap.tool === "slice"
             ? {
                 name: "Slice",
-                fill: "#00000000",
+                fill: DOC_NO_FILL,
                 fillVisible: false,
                 strokePaint: DOC_SLICE_STROKE,
                 strokeVisible: true,
@@ -8491,7 +8504,7 @@ export function Canvas({
               fillType: "image",
               imageFit: "fill",
               name: it.name,
-              fill: "#00000000",
+              fill: DOC_NO_FILL,
               fillVisible: true,
             },
           });
@@ -8526,7 +8539,7 @@ export function Canvas({
           imageFit: "fill",
           imageTile: 100,
           imageCrop: undefined,
-          fill: "#00000000",
+          fill: DOC_NO_FILL,
           fillVisible: true,
           name: hit.nameLocked ? hit.name : img.name,
         },
@@ -8555,7 +8568,7 @@ export function Canvas({
           fillType: "image",
           imageFit: "fill",
           name: img.name,
-          fill: "#00000000",
+          fill: DOC_NO_FILL,
           fillVisible: true,
         },
       });
@@ -9634,27 +9647,6 @@ export function Canvas({
           e.target.value = "";
         }}
       />
-      {snap.pages[snap.page].root.children.length === 0 &&
-        !draft.length &&
-        snap.tool === "select" &&
-        !edit &&
-        !snap.presentFrame && (
-        <div className="canvas-start">
-          <div className="canvas-start-card">
-            <b>Nothing on this page yet</b>
-            <p>
-              Press <kbd>F</kbd> for a frame, <kbd>R</kbd> for a rectangle, <kbd>T</kbd> for text — or{" "}
-              <kbd>⌘</kbd>
-              <kbd>K</kbd> to search every command.
-            </p>
-            <span>
-              Every shortcut in the app is listed under <kbd>⌥</kbd>
-              <kbd>⇧</kbd>
-              <kbd>?</kbd>.
-            </span>
-          </div>
-        </div>
-      )}
       {snap.tool === "zoom" && !snap.presentFrame && (
         <div className="canvas-hud">
           <span>Zoom tool</span>
@@ -10015,7 +10007,7 @@ function paintNoise(
   sh: number,
   density: number,
   size = 1,
-  color = "#ffffff",
+  color = RASTER_NOISE_INK,
 ) {
   const d = Math.max(0, Math.min(1, density / 100));
   if (d <= 0 || sw < 1 || sh < 1) return;
@@ -10050,7 +10042,7 @@ function paintTexture(
   if (sw < 1 || sh < 1) return;
   ctx.save();
   ctx.clip();
-  ctx.fillStyle = "#000000";
+  ctx.fillStyle = RASTER_NOISE_BG;
   ctx.globalAlpha = Math.max(0.04, Math.min(0.3, density / 100));
   const step = Math.max(2, Math.round(scale));
   for (let x = sx; x < sx + sw; x += step * 2) {
@@ -11474,7 +11466,7 @@ function rasterizeBoolean(
     }
     const path = shapePoly(c);
     tracePath(o, path, sx, sy, z, c.closed || (c.kind !== "line" && c.kind !== "arrow"));
-    o.fillStyle = "#ffffff";
+    o.fillStyle = RASTER_TEMP_FILL;
     o.fill();
     o.restore();
   };

@@ -161,6 +161,31 @@ import {
   type TreeFormat,
 } from "../engine/codegen";
 
+/* -- document ink, named ------------------------------------------------------
+   The inspector writes colours *into* files: a default fill when a paint bucket
+   pours into a layer that had none, the ink a code block hands to SwiftUI or
+   Compose, the second colour of a fresh paint, the white a JPEG is flattened
+   onto. None of these may follow the theme -- a saved document, and the code it
+   generates, must look the same in every viewer -- so they are named here rather
+   than typed at the call site, and the token suite checks that no inspector
+   literal is anonymous. */
+const DOC_FILL_NONE = "#d9d9d9";
+const DOC_NO_FILL = "#00000000";
+const DOC_INK = "#000000";
+const DOC_SECOND_PAINT = "#ffffff";
+const DOC_STROKE = "#1e1e1e";
+const DOC_FLATTEN_INK = "#ffffff";
+const DOC_CONTRAST_BG = "#ffffff";
+const DOC_RECENT_INK = ["#000000", "#00000040", "#ffffff"];
+const DOC_RECENT_BRAND = ["#ffffff", "#000000", "#00000040"];
+const DOC_RECENT_PAIR = ["#ffffff", "#000000"];
+const DOC_PAGE_BG = "#ffffff";
+const DOC_GRID_DEFAULT = "#cccccc";
+const DOC_GRID_RECENTS = ["#cccccc", "#e6e6e6", "#8a8a8a", "#5b3df5"];
+/** A value that will not parse, painted so somebody notices. */
+const DOC_ALERT = "#ff0000";
+
+
 export function RightPanel({
   engine,
   snap,
@@ -739,7 +764,7 @@ function PageDesign({
                         y: vy,
                         w: p.w,
                         h: p.h,
-                        extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
+                        extra: { name: p.name, overflow: "clip", fill: DOC_PAGE_BG, fillVisible: true },
                       });
                     }}
                   >
@@ -793,10 +818,10 @@ function PageDesign({
       <Section id="pixel-grid" title="Pixel grid">
       <div className="insp-pad">
         <ColorRow
-          value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
+          value={snap.pages[snap.page].pixelGridColor || DOC_GRID_DEFAULT}
           opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
           visible={!!snap.pages[snap.page].pixelGrid}
-          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#10b981"]}
+          recents={DOC_GRID_RECENTS}
           onChange={(pixelGridColor) =>
             engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
           }
@@ -922,7 +947,7 @@ function Prototype({
       <div className="proto-preview device">
         <DevicePreview
           spec={deviceFor(snap.prototypeDevice)}
-          fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : "#fff"}
+          fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : DOC_PAGE_BG}
           radius={n?.cornerRadii?.[0] || 0}
         />
       </div>
@@ -1419,7 +1444,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     if (n.cornerSmoothing)
       rules.push(`/* corner smoothing ${Math.round(n.cornerSmoothing * 100)}% - border-radius is a circular arc */`);
   }
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     rules.push(`background: ${n.fill};`);
   }
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
@@ -1537,7 +1562,7 @@ function generateTailwind(n: XNode): string {
       cls.push(`rounded-[${n.cornerRadii[0]}px]`);
     }
   }
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     cls.push(`bg-[${n.fill}]`);
   }
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
@@ -1599,7 +1624,7 @@ function generateSwiftUI(n: XNode): string {
           : "";
     return `Text("${n.text || n.name}")
     .font(.system(size: ${n.fontSize}, weight: ${weight}))${deco}${tcase}
-    .foregroundColor(Color(hex: "${hex(n.fill || "#000000")}"))`;
+    .foregroundColor(Color(hex: "${hex(n.fill || DOC_INK)}"))`;
   }
   const stack = n.layout ? (n.layout.direction === "horizontal" ? "HStack" : "VStack") : "ZStack";
   const spacing = n.layout?.gap ? `spacing: ${n.layout.gap}` : "";
@@ -1607,7 +1632,7 @@ function generateSwiftUI(n: XNode): string {
   const args = [align, spacing].filter(Boolean).join(", ");
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   const padStr = pl || pr || pt || pb ? `\n    .padding(EdgeInsets(top: ${pt}, leading: ${pl}, bottom: ${pb}, trailing: ${pr}))` : "";
-  const bgStr = n.fillVisible !== false && n.fill && n.fill !== "#00000000" ? `\n    .background(Color(hex: "${hex(n.fill)}"))` : "";
+  const bgStr = n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL ? `\n    .background(Color(hex: "${hex(n.fill)}"))` : "";
   const cornerStr = n.cornerRadii[0] > 0 ? `\n    .cornerRadius(${n.cornerRadii[0]})` : "";
   const borderStr = n.strokeVisible && n.strokeWidth > 0 ? `\n    .overlay(RoundedRectangle(cornerRadius: ${n.cornerRadii[0] || 0}).stroke(Color(hex: "${hex(n.strokePaint)}"), lineWidth: ${n.strokeWidth}))` : "";
 
@@ -1625,13 +1650,13 @@ function generateCompose(n: XNode): string {
     text = "${n.text || n.name}",
     fontSize = ${n.fontSize}.sp,
     fontWeight = FontWeight.${weight},
-    color = Color(${hex8(n.fill || "#000000")})
+    color = Color(${hex8(n.fill || DOC_INK)})
 )`;
   }
   const container = n.layout ? (n.layout.direction === "horizontal" ? "Row" : "Column") : "Box";
   const mod: string[] = [`Modifier.size(${Math.round(n.w)}.dp, ${Math.round(n.h)}.dp)`];
   if (n.cornerRadii[0] > 0) mod.push(`clip(RoundedCornerShape(${n.cornerRadii[0]}.dp))`);
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") mod.push(`background(Color(${hex8(n.fill)}))`);
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) mod.push(`background(Color(${hex8(n.fill)}))`);
   if (n.strokeVisible && n.strokeWidth > 0) mod.push(`border(${n.strokeWidth}.dp, Color(${hex8(n.strokePaint)}))`);
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   if (pl || pr || pt || pb) mod.push(`padding(${pt}.dp, ${pr}.dp, ${pb}.dp, ${pl}.dp)`);
@@ -1652,7 +1677,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
       fontFamily: `"${n.fontFamily}", sans-serif`,
       fontSize: unit === "rem" ? `${Math.round((n.fontSize / 16) * 100) / 100}rem` : `${n.fontSize}px`,
       fontWeight: n.fontWeight,
-      color: n.fillVisible !== false && n.fill ? n.fill : "#000000",
+      color: n.fillVisible !== false && n.fill ? n.fill : DOC_INK,
     };
     if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
     if (n.letterSpacing) textStyle.letterSpacing = n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : `${n.letterSpacing}px`;
@@ -1685,7 +1710,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
     }
   }
 
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     styles.backgroundColor = `"${n.fill}"`;
   }
 
@@ -1731,7 +1756,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
 }
 
 function generateFlutter(n: XNode): string {
-  const hex = (n.fill || "#000000").replace("#", "").padEnd(6, "0");
+  const hex = (n.fill || DOC_INK).replace("#", "").padEnd(6, "0");
   return `Container(
   width: ${Math.round(n.w)}.0,
   height: ${Math.round(n.h)}.0,
@@ -2217,7 +2242,7 @@ function DevTokens({ snap }: { snap: Snapshot }) {
 
 function generateDesignTokens(n: XNode): string {
   const tokens: Record<string, unknown> = {};
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     tokens.color = {
       value: n.fill,
       type: "color",
@@ -3641,11 +3666,11 @@ function Design({
           ? {
               strokes: [
                 ...(m.strokes ?? []),
-                { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: m.strokeAlign },
+                { color: DOC_STROKE, opacity: 1, visible: true, width: 1, align: m.strokeAlign },
               ],
             }
           : {
-              strokePaint: isNone(m.strokePaint) ? "#1e1e1e" : m.strokePaint,
+              strokePaint: isNone(m.strokePaint) ? DOC_STROKE : m.strokePaint,
               strokeVisible: true,
               strokeWidth: m.strokeWidth || 1,
             },
@@ -3655,14 +3680,14 @@ function Design({
     const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
     if (!hasBase) {
       patch({
-        strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
+        strokePaint: isNone(n.strokePaint) ? DOC_STROKE : n.strokePaint,
         strokeVisible: true,
         strokeWidth: n.strokeWidth || 1,
       });
       return;
     }
     patch({
-      strokes: [...(n.strokes ?? []), { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
+      strokes: [...(n.strokes ?? []), { color: DOC_STROKE, opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
     });
   };
 
@@ -5906,7 +5931,9 @@ function Design({
                   };
                   const hexOf = (c: string | undefined) => {
                     const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
-                    if (!m) return "#ff0000";
+                    // Unparseable, so the caller sees red rather than a silently
+                    // "close enough" colour.
+                    if (!m) return DOC_ALERT;
                     const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
                     return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
                   };
@@ -6347,11 +6374,11 @@ function Design({
             if (multi) {
               patchMany((m) =>
                 isNone(m.fill) && !m.fillVisible
-                  ? { fill: "#d9d9d9", fillVisible: true, fillOpacity: m.fillOpacity ?? 1 }
+                  ? { fill: DOC_FILL_NONE, fillVisible: true, fillOpacity: m.fillOpacity ?? 1 }
                   : {
                       fills: [
                         ...(m.fills ?? []),
-                        { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                        { type: "solid", color: DOC_SECOND_PAINT, opacity: 1, visible: true },
                       ],
                     },
               );
@@ -6363,7 +6390,7 @@ function Design({
               engine.dispatch({
                 type: "patch",
                 id: n.id,
-                patch: { fill: "#d9d9d9", fillVisible: true, fillOpacity: n.fillOpacity ?? 1 },
+                patch: { fill: DOC_FILL_NONE, fillVisible: true, fillOpacity: n.fillOpacity ?? 1 },
               });
               return;
             }
@@ -6373,7 +6400,7 @@ function Design({
               patch: {
                 fills: [
                   ...(n.fills ?? []),
-                  { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                  { type: "solid", color: DOC_SECOND_PAINT, opacity: 1, visible: true },
                 ],
               },
             });
@@ -6571,12 +6598,12 @@ function Design({
               // the stroke row uses), leaving the section empty; Fill "+"
               // then re-adds the default fill instead of stacking over a
               // hidden one.
-              if (multi) patchMany({ fill: "#00000000", fillVisible: false });
+              if (multi) patchMany({ fill: DOC_NO_FILL, fillVisible: false });
               else
                 engine.dispatch({
                   type: "patch",
                   id: n.id,
-                  patch: { fill: "#00000000", fillVisible: false },
+                  patch: { fill: DOC_NO_FILL, fillVisible: false },
                 });
             }}
             onMeta={(p) =>
@@ -6672,11 +6699,11 @@ function Design({
             }
             onRemove={() =>
               multi
-                ? patchMany({ strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 })
+                ? patchMany({ strokePaint: DOC_NO_FILL, strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 })
                 : engine.dispatch({
                     type: "patch",
                     id: n.id,
-                    patch: { strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 },
+                    patch: { strokePaint: DOC_NO_FILL, strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 },
                   })
             }
           />
@@ -7343,7 +7370,7 @@ function SelectionColors({
                     title={`${u.bucket} colours`}
                     anchor={picking.rect}
                     recents={collectColors(root)}
-                    value={{ color: u.hex, opacity: 100, type: "solid", second: "#ffffff", blend: "normal" }}
+                    value={{ color: u.hex, opacity: 100, type: "solid", second: DOC_SECOND_PAINT, blend: "normal" }}
                     onChange={(v) => {
                       recolorMatches(engine, root, u, v.color);
                       setPicking(null);
@@ -7416,7 +7443,7 @@ function EffectPopover({
           value={fx.color}
           opacity={Math.round(parseHex(fx.color).a * 100)}
           visible
-          recents={["#000000", "#00000040", "#ffffff"]}
+          recents={DOC_RECENT_INK}
           onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
@@ -7433,7 +7460,7 @@ function EffectPopover({
           value={fx.color}
           opacity={Math.round(parseHex(fx.color).a * 100)}
           visible
-          recents={["#ffffff", "#000000", "#00000040"]}
+          recents={DOC_RECENT_BRAND}
           onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
@@ -7464,7 +7491,7 @@ function EffectPopover({
           value={fx.color}
           opacity={Math.round(parseHex(fx.color).a * 100)}
           visible
-          recents={["#ffffff", "#000000"]}
+          recents={DOC_RECENT_PAIR}
           onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
@@ -8025,7 +8052,7 @@ function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
         {entries.map(([prop, expr]) => (
           <div className="insp-pad" key={prop} style={{ marginBottom: 4 }}>
             <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
-              <span style={{ fontWeight: 600, fontSize: 11, color: "var(--accent, #10b981)", minWidth: 28 }}>
+              <span className="insp-accent-num">
                 ƒ({prop})
               </span>
               <input
@@ -8501,7 +8528,7 @@ function WidthProfileEditor({
             cy={H / 2}
             r={4}
             fill={active ? "var(--accent)" : "var(--dim)"}
-            stroke="#ffffff"
+            stroke="var(--panel)"
             strokeWidth={1}
             style={{ cursor: "move" }}
             onPointerDown={(e) => {
@@ -9420,7 +9447,7 @@ function canvasExportPath(
     }
     // PDF keeps transparency via a soft mask, so it must not be flattened.
     if (p.format === "JPG") {
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = DOC_FLATTEN_INK;
       ctx.fillRect(0, 0, width, height);
     }
     ctx.drawImage(image, 0, 0, width, height);
@@ -9951,7 +9978,7 @@ function ColorRow({
   visible = true,
   exportVisible = true,
   type = "solid",
-  second = "#ffffff",
+  second = DOC_SECOND_PAINT,
   blend = "Normal",
   image,
   imageFit = "fill",
@@ -10046,7 +10073,7 @@ function ColorRow({
   const isImage = type === "image" || !!image;
   const isPattern = type === "pattern";
   const hidden = !isImage && !isPattern && (!visible || isNone(value));
-  const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
+  const hex = value.length >= 7 ? value.slice(0, 7) : DOC_INK;
   // The hex field keeps its own draft while typing. Committing on every
   // keystroke meant an in-progress value like "f" was parsed as an invalid
   // colour and normalised to black, which wiped the field mid-entry and made
@@ -10204,7 +10231,7 @@ function fillBackground(root: XNode, n: XNode): string {
       if (q.visible !== false && q.type === "solid" && !isNone(q.color)) return q.color.slice(0, 7);
     }
   }
-  return "#ffffff";
+  return DOC_CONTRAST_BG;
 }
 
 /** WCAG large-text exemption: 24px, or 19px and bold. */
