@@ -18,6 +18,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write # TEMP(debug): the Gate step's failure mirror posts an issue comment; drop with the mirror.
 
 concurrency:
   group: ci-${{ github.ref }}
