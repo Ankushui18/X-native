@@ -459,6 +459,38 @@ assumption holds, which M4/M7 now pin directly). The multi-selection box keeps i
 smaller 5px boxes, and its comment no longer claims it matches the single-selection
 size.
 
+### 4 · And then the pixels were made to answer
+
+Everything above is text: the sheet declares the block, the model writes the
+attribute, the components list the dependency. What no source-text test can say is
+that a value read out of the cascade *becomes the colour of a ring on the canvas* —
+and that gap is where the last real bug sat.
+
+`figmaChromeTheme.dom.test.mjs` (26) closes it. It reads `styles.css` itself —
+top-level `:root` / `html[…]` blocks, in document order, last match wins — installs
+that as jsdom's `getComputedStyle` for custom properties, mounts the real `Canvas`
+on the real Skia backend next to the real `NavRail`, selects a frame, and samples
+composited device pixels across the ring's top edge and the layer name. Then it
+clicks the actual "Figma blue" row and samples again: emerald before, Figma blue
+after, emerald again after "Editor", the choice in `localStorage` under its own key,
+and the band above the top-right corner holding nothing in either palette. The
+model reads the sheet rather than a constant, so retinting `--cv-sel` moves the
+test with it; the price is that it does not re-derive specificity, which §5 of
+`canvasChrome.test.mjs` pins for the sheet instead.
+
+The bug it caught: `ThemeProvider` had been applying the preference from a
+`useEffect`, and in the browser that write landed after the canvas's paint effect had
+already re-read the cascade. The click persisted, the DOM got `data-canvas-chrome`,
+and the ring stayed emerald until something else happened to repaint — while every
+text assertion in the suite stayed green. `theme.tsx:93-107` now applies it in the
+setter, before the state update. Note the limit, because it is the interesting part:
+re-creating the effect shape as a sabotage **passes** the pixel file, because
+jsdom's passive-effect order is not the browser's here — so the ordering is pinned
+textually in `canvasChromePref.test.mjs:123-131` (the write precedes the state
+update, and nothing applies it from an effect) and the pixel file asserts the
+consequence that survives both harnesses: a flip repaints. A dependency list is not a
+promise about pixels; that distinction has now earned two tests in this batch.
+
 ### Tests
 
 `figmaCanvasVectorParity` — the B series was inverted from "paints a hollow dot, fills
@@ -475,7 +507,7 @@ interaction level, and `frameInteraction`'s "rotation affordance is detached abo
 top-right region" — which demanded the dot — became the opposite claim plus a cursor
 test. 66 / 93 / 66 pass.
 
-A new file, `canvasChromePref.test.mjs` (39 assertions, wired into the `test` chain
+A new file, `canvasChromePref.test.mjs` (41 assertions, wired into the `test` chain
 next to `canvasChrome`), holds the preference: menu shape, twelve normaliser cases,
 `applyCanvasChromePref` against a `{dataset:{}}` object — no DOM needed, because the
 writer takes its root as an argument — and the wiring contracts (its own key, read
@@ -505,15 +537,28 @@ Sabotages run for this follow-up, each one restored after its run:
 | the menu row disappears | `canvasChromePref` |
 | the hover promises a grab instead of a rotate | B4; `canvasSelection` ×4; `frameInteraction` |
 
-Thirteen for thirteen caught. `npm test` → exit 0, 1975 `ok`, 0 `FAIL` (was 1925 at
-`5314d38`; the delta is the B/M rewrite, `canvasChromePref`, and §5); `drift` 24/0
-with `chrome.tsx`'s button row raised to 72 and the dated note beside it;
-`npx tsc --noEmit` clean; `npm run build` → exit 0, `✓ built in 5.29s`.
+Then, for the pixel file: `--cv-sel` dropped from the figma block (×6 here, ×2 in
+`canvasChrome` §5); the attribute never written (×3, ×2); the flip dropped from the
+paint deps (×2); the rotation dot repainted (×2, plus parity B1/B3); the label no
+longer following the selection (×2). Nineteen breaks tried, eighteen caught; the
+nineteenth — the apply moved back into a parent `useEffect` — is not catchable in
+pixels in this harness, and the honest response was a text pin plus a sentence in
+the test file rather than a claim that a test covers it.
 
-Not verified, and it should be said plainly: **jsdom has no cascade for custom
-properties**, so no test here can watch `getComputedStyle` hand the canvas a blue
-`--cv-sel`. What is proven is that the attribute is written, that the sheet declares
-the right values in the right order, and that every surface re-reads on the flip. The
-last step — open the app, switch the row, see the ring turn blue — is a human one, and
-in this sandbox there is no browser to do it with (`npm run test:e2e` needs a Chromium
-this image does not have). The dev server on :5173 is the quickest way to close it out.
+`npm test` → exit 0, **2003 `ok`, 0 `FAIL`** (1925 at `5314d38`; the delta is the
+B/M rewrite, `canvasChromePref`, `canvasChrome` §5 and `figmaChromeTheme`); `drift`
+24/0 with `chrome.tsx`'s button row raised to 72 and the dated note beside it;
+`npx tsc --noEmit` clean; `npm run build` → exit 0, `✓ built in 5.00s`.
+
+Still not verified, and the wording matters: the cascade in
+`figmaChromeTheme.dom.test.mjs` is **that file's reader of `styles.css`**, not
+cssstyle's. It proves that the values the sheet declares, read in the order the
+sheet declares them, drive the pixels — against the real component, the real backend
+and the real menu row. It does not prove a browser parses those two blocks the same
+way, and there is still no Chromium here for `npm run test:e2e` to say so. The
+remaining human step is short: open the app on :5173, switch the row, watch the ring
+turn blue without touching anything else.
+
+The one paragraph this section used to end with — that no test could watch
+`getComputedStyle` hand the canvas a blue `--cv-sel` — is now only half true, and the
+half that remains is above.

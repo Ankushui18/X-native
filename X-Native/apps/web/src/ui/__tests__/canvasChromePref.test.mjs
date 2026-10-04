@@ -110,7 +110,7 @@ for (const [raw, want] of CASES) {
 
   // Its own key: the colour scheme and the canvas palette are independent choices.
   t("the preference persists under its own storage key",
-    /x-native-canvas-chrome/.test(theme) && /localStorage\.setItem\(\s*CHROME_KEY\s*,\s*chromePref\s*\)/.test(theme));
+    /x-native-canvas-chrome/.test(theme) && /localStorage\.setItem\(\s*CHROME_KEY\s*,\s*next\s*\)/.test(theme));
   t("and is read before the first paint, so a reload does not flash the other palette",
     /applyCanvasChromePref\(readChromePref\(\)/.test(theme));
   t("the read goes through the normalizer, so a stale value cannot survive",
@@ -118,14 +118,25 @@ for (const [raw, want] of CASES) {
   t("the writer itself lives in the model, not in the component",
     /export function applyCanvasChromePref/.test(model) && !/dataset\.canvasChrome\s*=/.test(theme));
   t("the provider exposes both the value and the setter",
-    /chromePref,\s*setChromePref:\s*setChromePrefState/.test(theme));
+    /chromePref,\s*setChromePref\s*[,}]/.test(theme));
+  // Ordering, because it is the bug that actually happened: applied from a
+  // `ThemeProvider` effect, the write could land after the canvas had re-read the
+  // cascade — the preference persisted, the sheet said blue, and the ring stayed
+  // emerald. That is what it did in a browser. jsdom's effect order will not
+  // reproduce it on demand (a sabotage putting it back passes the pixel file), so
+  // the order is pinned here, in text, and `figmaChromeTheme.dom.test.mjs`
+  // asserts the consequence that matters: the canvas does repaint for the flip.
+  const setter = (theme.match(/const setChromePref = useCallback\(\([\s\S]*?\}, \[\]\);/) ?? [""])[0];
+  t("the setter writes the attribute before it updates state",
+    /applyCanvasChromePref\(next[\s\S]*?setChromePrefState\(next\)/.test(setter), setter.slice(0, 80));
+  t("and nothing applies it from an effect", !/useEffect\(\(\) => \{\s*applyCanvasChromePref/.test(theme));
   // A memo left on `[pref, theme]` hands back the same object, every consumer
   // bails out of its re-render, and the chrome keeps painting the old colour
   // until the user pans. That is the bug these two lines exist to keep dead.
   const memo = (theme.match(/const value = useMemo\([\s\S]*?\);/) ?? [""])[0];
   const memoDeps = (memo.match(/\[([^\]]*)\]\s*,?\s*\);/) ?? [])[1] ?? "";
   t("the context memo carries the chrome preference and its setter",
-    /setChromePref:/.test(memo) && /chromePref,/.test(memo), memo.slice(0, 60));
+    /setChromePref\s*[,}]/.test(memo) && /chromePref,/.test(memo), memo.slice(0, 70));
   t("and depends on it, so consumers actually re-render",
     memoDeps.includes("chromePref"), `deps: ${memoDeps || "not found"}`);
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
   applyCanvasChromePref,
@@ -87,20 +87,30 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const [chromePref, setChromePrefState] = useState<CanvasChromePref>(readChromePref);
 
-  useEffect(() => {
-    applyCanvasChromePref(chromePref, document.documentElement);
+  // The attribute is written *here*, before the state update, and not from an
+  // effect: the paint that has to show the change reads the DOM cascade, so the
+  // write must already be there when it runs. From a `useEffect` on this provider
+  // the order between the two effects is React's to choose, and in the browser the
+  // canvas won — the preference persisted, the sheet said blue, and the ring stayed
+  // emerald until something else repainted. `figmaChromeTheme.dom.test.mjs` caught
+  // it in pixels. The colour-scheme flip above is immune for a different reason:
+  // `theme` is state set in the same effect, so children re-render a second time
+  // after the write.
+  const setChromePref = useCallback((next: CanvasChromePref) => {
+    applyCanvasChromePref(next, document.documentElement);
+    setChromePrefState(next);
     try {
-      localStorage.setItem(CHROME_KEY, chromePref);
+      localStorage.setItem(CHROME_KEY, next);
     } catch {
       /* ignore */
     }
-  }, [chromePref]);
+  }, []);
 
   // `theme` is in this dependency list because the canvas repaints on it; the
   // chrome preference has to change the context identity for the same reason, or
   // a switch would sit unpainted until something else moved the view.
   const value = useMemo(
-    () => ({ pref, theme, setPref: setPrefState, chromePref, setChromePref: setChromePrefState }),
+    () => ({ pref, theme, setPref: setPrefState, chromePref, setChromePref }),
     [pref, theme, chromePref],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
