@@ -433,8 +433,8 @@ impl CommandBridge {
         parent_id: &str,
         points_json: &str,
     ) -> Result<String, String> {
-        let points: Vec<(f64, f64)> = serde_json::from_str(points_json)
-            .map_err(|e| format!("invalid points JSON: {e}"))?;
+        let points: Vec<(f64, f64)> =
+            serde_json::from_str(points_json).map_err(|e| format!("invalid points JSON: {e}"))?;
         if points.len() < 2 {
             return Err("pen path needs at least 2 points".into());
         }
@@ -470,8 +470,8 @@ impl CommandBridge {
         points_json: &str,
         tolerance: f64,
     ) -> Result<String, String> {
-        let points: Vec<(f64, f64)> = serde_json::from_str(points_json)
-            .map_err(|e| format!("invalid points JSON: {e}"))?;
+        let points: Vec<(f64, f64)> =
+            serde_json::from_str(points_json).map_err(|e| format!("invalid points JSON: {e}"))?;
         if points.len() < 2 {
             return Err("pencil path needs at least 2 points".into());
         }
@@ -1006,8 +1006,8 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["format"], "png");
         let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let bytes = STANDARD.decode(bytes_b64).unwrap();
         assert_eq!(&bytes[1..4], b"PNG", "valid PNG signature");
         assert!(bytes.len() > 8);
     }
@@ -1020,8 +1020,8 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["format"], "jpg");
         let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let bytes = STANDARD.decode(bytes_b64).unwrap();
         assert_eq!(&bytes[0..2], &[0xFF, 0xD8], "JPEG SOI marker");
     }
 
@@ -1033,8 +1033,8 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["format"], "pdf");
         let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let bytes = STANDARD.decode(bytes_b64).unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.starts_with("%PDF-1.4"));
         assert!(text.contains("%%EOF"));
