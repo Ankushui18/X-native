@@ -140,9 +140,9 @@ export class WasmEngine {
    *  suitable for creating a download Blob — never canvas.toDataURL.
    *  Falls back to null when the Rust session bridge is not available. */
   async exportNode(
-    id: string,
-    format: "png" | "jpg" | "pdf",
-    scale: number,
+    _id: string,
+    _format: "png" | "jpg" | "pdf",
+    _scale: number,
   ): Promise<Uint8Array | null> {
     // The POC engine does not have document-level export; this method is
     // a forwarder for the RustDocumentSession path. The main editor's

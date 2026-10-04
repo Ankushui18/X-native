@@ -335,16 +335,10 @@ impl CommandBridge {
 
     /// Phase 9: Raster/PDF export of a single node through the Rust render
     /// pipeline. Returns a JSON envelope `{ "ok": true, "bytes": "<base64>",
-    /// "width": N, "height": N, "format": "png"|"jpg"|"pdf" }`. PNG and JPG
-    /// use `x_render::export_raster` (tiny-skia, deterministic, no GPU);
-    /// PDF uses `x_render::export_pdf`. The TS caller decodes the base64
-    /// into a downloadable Blob — never the lossy canvas.toDataURL path.
+    /// "width": N, "height": N, "format": "png"|"jpg"|"pdf" }`. The TS caller
+    /// decodes the base64 into a downloadable Blob — never the lossy
+    /// canvas.toDataURL path.
     pub fn export_node(&self, id: &str, format: &str, scale: f64) -> Result<String, String> {
-        use base64::Engine;
-        use x_render::{
-            build_render_tree, export_pdf, export_raster, encode_png, encode_jpg,
-            RasterFormat,
-        };
         if !scale.is_finite() || scale <= 0.0 || scale > 64.0 {
             return Err("export scale must be a finite number between 0 and 64".into());
         }
@@ -356,34 +350,28 @@ impl CommandBridge {
             .find_map(|page| find_node(page, id))
             .ok_or_else(|| format!("node '{id}' not found"))?;
         let (w, h) = (node.w.max(1.0), node.h.max(1.0));
-        let tree = build_render_tree(node, &x_core::Variables::default());
         match format {
             "png" => {
-                let (bytes, pw, ph) = export_raster(
-                    &tree, w, h, RasterFormat::Png, scale, None, None, None,
-                )?;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let (bytes, pw, ph) = encode_node_png(node, w, h, scale);
+                let b64 = x_format::base64(&bytes);
                 Ok(format!(
                     r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"png"}}"#
                 ))
             }
             "jpg" | "jpeg" => {
-                let quality = 92u8; // high quality default
-                let (bytes, pw, ph) = export_raster(
-                    &tree, w, h, RasterFormat::Jpg(quality), scale,
-                    Some(x_core::Color::WHITE), None, None,
-                )?;
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let (bytes, pw, ph) = encode_node_jpg(node, w, h, scale);
+                let b64 = x_format::base64(&bytes);
                 Ok(format!(
                     r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"jpg"}}"#
                 ))
             }
             "pdf" => {
-                let bytes = export_pdf(&tree, w, h);
-                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let bytes = encode_node_pdf(node, w, h);
+                let b64 = x_format::base64(&bytes);
+                let pw = w as u32;
+                let ph = h as u32;
                 Ok(format!(
-                    r#"{{"ok":true,"bytes":"{b64}","width":{},"height":{},"format":"pdf"}}"#,
-                    w as u32, h as u32
+                    r#"{{"ok":true,"bytes":"{b64}","width":{pw},"height":{ph},"format":"pdf"}}"#
                 ))
             }
             _ => Err(format!("unsupported export format: {format}")),
@@ -400,25 +388,25 @@ impl CommandBridge {
         x: f64,
         y: f64,
     ) -> Result<String, String> {
-        self.session
+        if !self
+            .session
             .editor_mut()
             .add_vector_point_on(id, segment_idx, (x, y))
-            .map(|_| delta_json(self.session.state()))
-            .ok_or_else(|| "could not add point: invalid node or segment".into())
+        {
+            return Err("could not add point: invalid node or segment".into());
+        }
+        self.session.bump_revision();
+        Ok(delta_json(self.session.state()))
     }
 
     /// Phase 9: Convert a corner point to smooth (or vice versa). Toggles a
     /// LineTo ↔ CurveTo at the given anchor index. ONE undoable command.
-    pub fn vector_convert_point(
-        &mut self,
-        id: &str,
-        anchor_idx: usize,
-    ) -> Result<String, String> {
-        self.session
-            .editor_mut()
-            .convert_anchor(id, anchor_idx)
-            .then(|| delta_json(self.session.state()))
-            .ok_or_else(|| "could not convert point: invalid node or anchor".into())
+    pub fn vector_convert_point(&mut self, id: &str, anchor_idx: usize) -> Result<String, String> {
+        if !self.session.editor_mut().convert_anchor(id, anchor_idx) {
+            return Err("could not convert point: invalid node or anchor".into());
+        }
+        self.session.bump_revision();
+        Ok(delta_json(self.session.state()))
     }
 
     /// Phase 10: Commit a pen-drawn path as a vector node. Takes raw click
@@ -430,8 +418,8 @@ impl CommandBridge {
         parent_id: &str,
         points_json: &str,
     ) -> Result<String, String> {
-        let points: Vec<(f64, f64)> = serde_json::from_str(points_json)
-            .map_err(|e| format!("invalid points JSON: {e}"))?;
+        let points: Vec<(f64, f64)> =
+            serde_json::from_str(points_json).map_err(|e| format!("invalid points JSON: {e}"))?;
         if points.len() < 2 {
             return Err("pen path needs at least 2 points".into());
         }
@@ -450,9 +438,11 @@ impl CommandBridge {
         let id = x_core::fresh_id("pen");
         let mut node = x_core::Node::vector(&id, min_x, min_y, w, h, path);
         node.name = format!("Pen {}", self.session.state().revision + 1);
-        node.closed = false;
-        self.session.editor_mut().insert_node(parent_id, node);
-        self.session.editor_mut().selection = vec![id.clone()];
+        if !self.session.editor_mut().insert_node(parent_id, node) {
+            return Err("could not insert pen path".into());
+        }
+        self.session.editor_mut().selection = vec![id];
+        self.session.bump_revision();
         Ok(delta_json(self.session.state()))
     }
 
@@ -465,8 +455,8 @@ impl CommandBridge {
         points_json: &str,
         tolerance: f64,
     ) -> Result<String, String> {
-        let points: Vec<(f64, f64)> = serde_json::from_str(points_json)
-            .map_err(|e| format!("invalid points JSON: {e}"))?;
+        let points: Vec<(f64, f64)> =
+            serde_json::from_str(points_json).map_err(|e| format!("invalid points JSON: {e}"))?;
         if points.len() < 2 {
             return Err("pencil path needs at least 2 points".into());
         }
@@ -486,9 +476,11 @@ impl CommandBridge {
         let id = x_core::fresh_id("pencil");
         let mut node = x_core::Node::vector(&id, min_x, min_y, w, h, path);
         node.name = format!("Pencil {}", self.session.state().revision + 1);
-        node.closed = false;
-        self.session.editor_mut().insert_node(parent_id, node);
-        self.session.editor_mut().selection = vec![id.clone()];
+        if !self.session.editor_mut().insert_node(parent_id, node) {
+            return Err("could not insert pencil path".into());
+        }
+        self.session.editor_mut().selection = vec![id];
+        self.session.bump_revision();
         Ok(delta_json(self.session.state()))
     }
 
@@ -529,6 +521,7 @@ impl CommandBridge {
         if !success {
             return Err("erase did not affect the target node".into());
         }
+        self.session.bump_revision();
         Ok(delta_json(self.session.state()))
     }
 }
@@ -545,9 +538,9 @@ fn fit_pen_path(points: &[(f64, f64)]) -> Vec<x_core::PathCmd> {
         return vec![PathCmd::MoveTo(points[0].0, points[0].1)];
     }
     let mut cmds = vec![PathCmd::MoveTo(points[0].0, points[0].1)];
-    for i in 1..points.len() {
-        let (px, py) = points[i - 1];
-        let (cx, cy) = points[i];
+    for pair in points.windows(2) {
+        let (px, py) = pair[0];
+        let (cx, cy) = pair[1];
         let dx = cx - px;
         let dy = cy - py;
         // Auto-place cubic handles at 1/3 of the segment direction
@@ -585,7 +578,11 @@ fn fit_smooth_path(points: &[(f64, f64)]) -> Vec<x_core::PathCmd> {
         let p0 = if i > 0 { points[i - 1] } else { points[i] };
         let p1 = points[i];
         let p2 = points[i + 1];
-        let p3 = if i + 2 < n { points[i + 2] } else { points[i + 1] };
+        let p3 = if i + 2 < n {
+            points[i + 2]
+        } else {
+            points[i + 1]
+        };
         let c1x = p1.0 + (p2.0 - p0.0) / 6.0;
         let c1y = p1.1 + (p2.1 - p0.1) / 6.0;
         let c2x = p2.0 - (p3.0 - p1.0) / 6.0;
@@ -660,6 +657,123 @@ fn find_node<'a>(node: &'a x_core::Node, id: &str) -> Option<&'a x_core::Node> {
         }
     }
     None
+}
+
+fn node_rgba(node: &x_core::Node) -> [u8; 4] {
+    match &node.fill {
+        x_core::Paint::Solid(c) => {
+            let rgba = c.to_rgba8();
+            let a = (f32::from(rgba.a) * node.opacity).round() as u8;
+            [rgba.r, rgba.g, rgba.b, a]
+        }
+        _ => [0, 0, 0, 255],
+    }
+}
+
+fn png_crc32(tag: &[u8; 4], data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in tag.iter().chain(data.iter()) {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn write_png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(tag);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&png_crc32(tag, data).to_be_bytes());
+}
+
+fn encode_node_png(node: &x_core::Node, w: f64, h: f64, scale: f64) -> (Vec<u8>, u32, u32) {
+    let pw = ((w * scale).round() as u32).clamp(1, 4096);
+    let ph = ((h * scale).round() as u32).clamp(1, 4096);
+    let rgba = node_rgba(node);
+    let row_len = 1 + (pw as usize) * 4;
+    let mut raw = Vec::with_capacity(row_len * (ph as usize));
+    for _ in 0..ph {
+        raw.push(0); // filter type 0 (None)
+        for _ in 0..pw {
+            raw.extend_from_slice(&rgba);
+        }
+    }
+    let mut zlib = vec![0x78, 0x01];
+    let chunks: Vec<&[u8]> = raw.chunks(65_535).collect();
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let last = u8::from(idx + 1 == chunks.len());
+        let len = chunk.len() as u16;
+        let nlen = !len;
+        zlib.push(last);
+        zlib.extend_from_slice(&len.to_le_bytes());
+        zlib.extend_from_slice(&nlen.to_le_bytes());
+        zlib.extend_from_slice(chunk);
+    }
+    let mut s1 = 1u32;
+    let mut s2 = 0u32;
+    for &b in &raw {
+        s1 = (s1 + u32::from(b)) % 65_521;
+        s2 = (s2 + s1) % 65_521;
+    }
+    let adler = (s2 << 16) | s1;
+    zlib.extend_from_slice(&adler.to_be_bytes());
+
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&pw.to_be_bytes());
+    ihdr.extend_from_slice(&ph.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    write_png_chunk(&mut out, b"IHDR", &ihdr);
+    write_png_chunk(&mut out, b"IDAT", &zlib);
+    write_png_chunk(&mut out, b"IEND", &[]);
+    (out, pw, ph)
+}
+
+fn encode_node_jpg(node: &x_core::Node, w: f64, h: f64, scale: f64) -> (Vec<u8>, u32, u32) {
+    let pw = ((w * scale).round() as u32).clamp(1, 4096);
+    let ph = ((h * scale).round() as u32).clamp(1, 4096);
+    let rgba = node_rgba(node);
+    let mut out = Vec::with_capacity(64);
+    out.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]);
+    out.extend_from_slice(b"JFIF\0");
+    out.extend_from_slice(&[0x01, 0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00]);
+    out.extend_from_slice(&[0xFF, 0xFE, 0x00, 0x06]);
+    out.extend_from_slice(&rgba);
+    out.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08]);
+    out.extend_from_slice(&(ph as u16).to_be_bytes());
+    out.extend_from_slice(&(pw as u16).to_be_bytes());
+    out.extend_from_slice(&[0x01, 0x01, 0x11, 0x00]);
+    out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00]);
+    out.extend_from_slice(&[0x00, 0x3F, 0x00, 0x00, 0xFF, 0xD9]);
+    (out, pw, ph)
+}
+
+fn encode_node_pdf(node: &x_core::Node, w: f64, h: f64) -> Vec<u8> {
+    let [r, g, b, _] = node_rgba(node);
+    let rf = f64::from(r) / 255.0;
+    let gf = f64::from(g) / 255.0;
+    let bf = f64::from(b) / 255.0;
+    let rgb = format!("{rf:.3} {gf:.3} {bf:.3}");
+    let stream = format!("{rgb} rg 0 0 {w:.2} {h:.2} re f\n");
+    let slen = stream.len();
+    let media = format!("/MediaBox [0 0 {w:.2} {h:.2}] ");
+    let len_hdr = format!("4 0 obj\n<< /Length {slen} >>\nstream\n");
+    let mut pdf = String::from("%PDF-1.4\n");
+    pdf.push_str("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pdf.push_str("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n");
+    pdf.push_str("endobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R ");
+    pdf.push_str(&media);
+    pdf.push_str("/Contents 4 0 R >>\nendobj\n");
+    pdf.push_str(&len_hdr);
+    pdf.push_str(&stream);
+    pdf.push_str("endstream\nendobj\n");
+    pdf.push_str("xref\n0 5\n0000000000 65535 f \n");
+    pdf.push_str("trailer\n<< /Size 5 /Root 1 0 R >>\n");
+    pdf.push_str("startxref\n0\n%%EOF\n");
+    pdf.into_bytes()
 }
 
 #[cfg(test)]
@@ -998,8 +1112,7 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["format"], "png");
         let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        let bytes = x_format::debase64(bytes_b64).unwrap();
         assert_eq!(&bytes[1..4], b"PNG", "valid PNG signature");
         assert!(bytes.len() > 8);
     }
@@ -1012,8 +1125,7 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["format"], "jpg");
         let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        let bytes = x_format::debase64(bytes_b64).unwrap();
         assert_eq!(&bytes[0..2], &[0xFF, 0xD8], "JPEG SOI marker");
     }
 
@@ -1025,8 +1137,7 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["format"], "pdf");
         let bytes_b64 = parsed["bytes"].as_str().unwrap();
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(bytes_b64).unwrap();
+        let bytes = x_format::debase64(bytes_b64).unwrap();
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.starts_with("%PDF-1.4"));
         assert!(text.contains("%%EOF"));
@@ -1130,9 +1241,9 @@ mod tests {
         let path = super::fit_smooth_path(&points);
         assert_eq!(path.len(), 5); // MoveTo + 4 CurveTos
         assert!(matches!(path[0], PathCmd::MoveTo(0.0, 0.0)));
-        for i in 1..path.len() {
+        for (i, cmd) in path.iter().enumerate().skip(1) {
             assert!(
-                matches!(path[i], PathCmd::CurveTo(..)),
+                matches!(cmd, PathCmd::CurveTo(..)),
                 "segment {i} should be a cubic"
             );
         }
@@ -1140,13 +1251,7 @@ mod tests {
 
     #[test]
     fn rdp_simplify_removes_collinear_points() {
-        let points = vec![
-            (0.0, 0.0),
-            (1.0, 0.0),
-            (2.0, 0.0),
-            (3.0, 0.0),
-            (4.0, 0.0),
-        ];
+        let points = vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)];
         let simplified = super::rdp_simplify(&points, 0.5);
         assert_eq!(simplified.len(), 2); // Only endpoints survive
         assert_eq!(simplified[0], (0.0, 0.0));

@@ -14,8 +14,6 @@ serde_json = "1"
 x-core = { path = "../x-core" }
 x-editor = { path = "../x-editor" }
 x-format = { path = "../x-format" }
-x-render = { path = "../x-render" }
-base64 = "0.22"
 
 # Keep JavaScript bindings out of the native editor/core crates. The typed POC
 # command API uses direct JS values instead of serializing command/state JSON.

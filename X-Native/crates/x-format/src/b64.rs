@@ -39,7 +39,7 @@ fn val(c: u8) -> Option<u32> {
     }
 }
 
-pub(crate) fn debase64(text: &str) -> Option<Vec<u8>> {
+pub fn debase64(text: &str) -> Option<Vec<u8>> {
     let bytes: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if !bytes.len().is_multiple_of(4) {
         return None;
