@@ -91,11 +91,28 @@ jobs:
       # output when the log sink stops reading (the step log dies with a broken
       # pipe and the pipeline's status becomes tee's 0, masking the failure).
       - name: Gate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set +e
           bash scripts/check.sh > /tmp/gate.log 2>&1
           status=$?
           cat /tmp/gate.log || true
+          if [ "$status" -ne 0 ]; then
+            # TEMP(debug): the blob-hosted step log is unreadable from some
+            # networks; mirror the tail into a PR comment so the verdict is
+            # legible everywhere. Remove once the smoke step is understood.
+            {
+              echo '### Gate log tail (debug mirror)'
+              echo '~~~'
+              tail -c 13000 /tmp/gate.log
+              echo '~~~'
+            } > /tmp/gate-tail.md
+            pr=$(jq -r '.number // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+            if [ -n "$pr" ]; then
+              gh api --method POST "repos/${{ github.repository }}/issues/$pr/comments" -F "body=<-/tmp/gate-tail.md" || true
+            fi
+          fi
           exit $status
 
       # Sprint 3 measurement probe (crates/x-core/tests/vector_probe.rs): complex
