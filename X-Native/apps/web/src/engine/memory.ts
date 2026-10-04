@@ -38,7 +38,7 @@ import { clipPlainText, copyText, nativeClipHtml, writeClipboard } from "./clipb
 import { dehydrateNode } from "./assets";
 import { computeMasterHash } from "./codegen";
 import { exportClipSvg, exportSvg } from "./svgExport";
-import { effectiveLineHeight } from "../ui/textLayout";
+import { effectiveLetterSpacing, effectiveLineHeight } from "../ui/textLayout";
 import { loadDoc, type PersistedDoc } from "./persist";
 import { clampZoom, panForZoom } from "./view";
 import { convertColorValue, convertNodeColors, getPreferredColorProfile } from "./colorProfile";
@@ -525,6 +525,7 @@ export function pickTextStyle(n: XNode): TextStyleProps {
     lineHeight: n.lineHeight,
     lineHeightUnit: n.lineHeightUnit,
     letterSpacing: n.letterSpacing,
+    letterSpacingUnit: n.letterSpacingUnit,
     paragraphSpacing: n.paragraphSpacing,
     paragraphIndent: n.paragraphIndent,
     textDecoration: n.textDecoration,
@@ -1953,7 +1954,7 @@ export class MemoryEngine implements Engine {
     const root = this.root();
     const parent = findParent(root, n.id);
     if (!parent || isEffectivelyLocked(root, n.id) || isInstanceMember(root, n.id)) return;
-    const results = convertTextToGlyphPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || 400), n.letterSpacing, effectiveLineHeight(n));
+    const results = convertTextToGlyphPaths(n.text, n.fontSize, n.fontFamily, String(n.fontWeight || 400), effectiveLetterSpacing(n), effectiveLineHeight(n));
     // Empty/whitespace-only text has no drawable glyphs; don't destroy it.
     if (!results.length) return;
     // Replacing one flow item with N siblings would introduce N layout gaps.
@@ -2727,6 +2728,41 @@ export class MemoryEngine implements Engine {
           if (par?.layout && !cmd.scaleProps) {
             if (askedW !== oldW) n.sizingW = "fixed";
             if (askedH !== oldH) n.sizingH = "fixed";
+            // F9, Fill container: "Child objects of an auto layout frame will
+            // also be set to Fill container if they are manually resized to the
+            // full available space of the parent frame" (guide 360040451373).
+            // The axis a manual change just fixed, landing within a pixel of the
+            // space the flow leaves for it, is promoted right back - to Fill.
+            // A hugging parent is exempt (its available space IS the child, so
+            // promotion would chase it), wrapping flows are per-line, and the
+            // Scale tool keeps scaling without reinterpreting sizing.
+            const l = par.layout;
+            if (!l.wrap) {
+              const horiz = widthIsMain(l);
+              const kids = par.children.filter((c) => c.visible !== false);
+              // padding is [left, right, top, bottom].
+              const innerW = par.w - l.padding[0] - l.padding[1];
+              const innerH = par.h - l.padding[2] - l.padding[3];
+              const flowAxis: "w" | "h" = horiz ? "w" : "h";
+              const gapTotal = l.gapMode === "auto" ? 0 : (l.gap || 0) * Math.max(0, kids.length - 1);
+              const others = kids.reduce((sum, c) => sum + (c.id === n.id ? 0 : c[flowAxis]), 0);
+              const availFlow = Math.max(0, (flowAxis === "w" ? innerW : innerH) - others - gapTotal);
+              const availStack = flowAxis === "w" ? innerH : innerW;
+              const hugsFlow = (horiz ? l.sizing : l.cross) === "hug";
+              const hugsStack = (horiz ? l.cross : l.sizing) === "hug";
+              // The changed axis compares against ITS available space: the flow
+              // axis leaves the room its siblings and gaps do not take; the
+              // cross axis gets the full inner cross size (a row child dragged
+              // to the frame's content height fills it too).
+              if (askedW !== oldW && n.sizingW === "fixed") {
+                const avail = horiz ? availFlow : availStack;
+                if (!(horiz ? hugsFlow : hugsStack) && avail > 1 && Math.abs(n.w - avail) <= 1) n.sizingW = "fill";
+              }
+              if (askedH !== oldH && n.sizingH === "fixed") {
+                const avail = horiz ? availStack : availFlow;
+                if (!(horiz ? hugsStack : hugsFlow) && avail > 1 && Math.abs(n.h - avail) <= 1) n.sizingH = "fill";
+              }
+            }
           }
           // A locked box that was resized by hand takes its new ratio with it.
           if (n.aspectLocked && askedW !== oldW && askedH !== oldH && n.w > 0 && n.h > 0) {
@@ -6043,7 +6079,10 @@ function scaleProps(n: XNode, sx: number, sy: number) {
   if (n.strokeDashPattern?.length) n.strokeDashPattern = n.strokeDashPattern.map((v) => v * s);
   if (n.strokeSideW) n.strokeSideW = n.strokeSideW.map((v) => v * s) as [number, number, number, number];
   n.fontSize *= s;
-  n.letterSpacing *= s;
+  // Percent tracking is a property OF the font size: proportional scaling
+  // grows the size and the tracking follows, so the number must not move
+  // (px tracking does).
+  if ((n as { letterSpacingUnit?: string }).letterSpacingUnit !== "percent") n.letterSpacing *= s;
   n.paragraphSpacing *= s;
   n.paragraphIndent *= s;
   if (n.lineHeight) n.lineHeight *= s;

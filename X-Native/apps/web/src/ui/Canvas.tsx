@@ -87,7 +87,7 @@ import { Guides } from "./Guides";
 import { Minimap } from "./Minimap";
 import { Comments } from "./Comments";
 import { useTheme } from "./theme";
-import { hasMixedTextSpans, styledTextRows, truncateStyledRows } from "./textLayout";
+import { effectiveLetterSpacing, hasMixedTextSpans, styledTextRows, truncateStyledRows } from "./textLayout";
 import { rememberTextRange, resolvedTextSpans, spansAfterTextEdit, styleTextRange } from "./textSpans";
 import {
   emojiCompletions,
@@ -8910,7 +8910,7 @@ export function Canvas({
         fontSize: node.fontSize * snap.zoom,
         fontWeight: node.fontWeight,
         lineHeight: `${lh}px`,
-        letterSpacing: `${node.letterSpacing * snap.zoom}px`,
+        letterSpacing: `${effectiveLetterSpacing(node, snap.zoom)}px`,
         textAlign: node.textAlign === "justified" ? "left" : node.textAlign,
         color: node.fill,
         // Font fallback (360040449673): unsupported characters render in Noto.
@@ -10742,7 +10742,7 @@ function paintStyledText(ctx: CanvasRenderingContext2D, n: XNode, sx: number, sy
   const strokeOn = n.strokeVisible && n.strokeWidth > 0 && (n.strokeType === "pattern" || !isNone(n.strokePaint));
   const strokeStyle = n.strokeType === "pattern"
     ? patternStrokeStyle(ctx, n, sx, sy, z) ?? "rgba(0,0,0,0)" : cssRgba(n.strokePaint);
-  const ls = (n.letterSpacing || 0) * z;
+  const ls = effectiveLetterSpacing(n, z);
   const draw = (mode: "fill" | "stroke" | "none", phase: "post" | "pre" = "post") => {
     let ty = y;
     for (const row of lines) {
@@ -10954,7 +10954,7 @@ function paintOnPath(
     const ch = content[i];
     const run = styleAt(i);
     const size = Math.max(1, (run?.fontSize ?? n.fontSize) * z);
-    const ls = (n.letterSpacing || 0) * z;
+    const ls = effectiveLetterSpacing(n, z);
     if (ch === "\n") {
       adv += size * 0.5 + ls;
       continue;
@@ -11021,7 +11021,7 @@ function paintText(
   // size, so the painter agrees with the hug box and the field. Percent
   // leading resolves against the font size (360039956634 §Line height).
   const lh = Math.max(1, effectiveLineHeight(n, uniform?.fontSize ?? n.fontSize) * z);
-  const ls = (n.letterSpacing || 0) * z;
+  const ls = effectiveLetterSpacing(n, z);
   const paraGap = (n.paragraphSpacing || 0) * z;
   const listGap = (n.listSpacing || 0) * z;
   const wrap = n.sizingW !== "hug";

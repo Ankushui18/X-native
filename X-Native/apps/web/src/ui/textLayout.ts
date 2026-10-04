@@ -84,6 +84,18 @@ export function paraWrapOf(n: XNode, pi: number): XNode["textWrap"] {
  * the fonts are loaded). Span sizes rescale the recorded box proportionally,
  * so an override larger than the base keeps the same font's ratio.
  */
+/** Effective letter spacing in px. Figma's ↔ field takes px or a percent of
+ * the font size ("Letter spacing: % is relative to the font size" in the text
+ * guide 360039956634), exactly like line height's unit - so one resolver
+ * feeds measurement, paint, export, and outlining alike. */
+export function effectiveLetterSpacing(
+  n: Pick<XNode, "letterSpacing" | "letterSpacingUnit" | "fontSize">,
+  scale = 1,
+): number {
+  const v = n.letterSpacing || 0;
+  return (n.letterSpacingUnit === "percent" ? (v / 100) * n.fontSize : v) * scale;
+}
+
 export function effectiveLineHeight(n: XNode, fontSize?: number): number {
   const fs = Math.max(1, fontSize ?? n.fontSize);
   const unit = n.lineHeightUnit ?? (n.lineHeight > 0 ? "px" : "auto");
@@ -332,7 +344,7 @@ export function textMetrics(ctx: CanvasRenderingContext2D, n: XNode, text: strin
   ctx.font = uniform.length === 1 ? canvasTextFont(n, uniform[0].fontSize, uniform[0]) : canvasTextFont(n);
   text = applyTextCase(text, n.textCase);
   const wrap = n.sizingW !== "hug";
-  const ls = n.letterSpacing || 0;
+  const ls = effectiveLetterSpacing(n);
   const widthOf = (line: string) =>
     measureCached(ctx, line) + (ls ? ls * Math.max(0, line.length - 1) : 0);
   const indent = indentOf(n);
@@ -521,7 +533,7 @@ export type StyledRow = {
  * A piece's own case transformation happens AFTER range lookup. */
 export function styledTextRows(ctx: CanvasRenderingContext2D, n: XNode, text: string, boxW: number, scale = 1): StyledRow[] {
   const spans = resolvedTextSpans(n);
-  const ls = (n.letterSpacing || 0) * scale;
+  const ls = effectiveLetterSpacing(n, scale);
   const cased = applyTextCase(text, n.textCase);
   const width = (a: number, b: number): StyledPiece[] => spans.flatMap((run) => {
     const start = Math.max(a, run.start), end = Math.min(b, run.end);
@@ -604,7 +616,7 @@ export function truncateStyledRows(
   const last = taken[taken.length - 1];
   const run = last.pieces.at(-1)?.run ?? resolvedTextSpans(n).at(-1);
   if (!run) return taken;
-  const ls = (n.letterSpacing || 0) * scale;
+  const ls = effectiveLetterSpacing(n, scale);
   const pieces = last.pieces.map((p) => ({ ...p }));
   const pieceWidth = (text: string, style: StyledSpan) => {
     ctx.font = canvasTextFont(n, style.fontSize * scale, style);

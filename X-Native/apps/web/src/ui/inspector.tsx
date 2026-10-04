@@ -1461,7 +1461,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     rules.push(`font-size: ${devLen(n.fontSize, unit)};`);
     rules.push(`font-weight: ${n.fontWeight};`);
     if (n.lineHeight) rules.push(`line-height: ${devLen(Math.round(n.lineHeight), unit)};`);
-    if (n.letterSpacing) rules.push(`letter-spacing: ${devLen(n.letterSpacing, unit)};`);
+    if (n.letterSpacing) rules.push(`letter-spacing: ${n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : devLen(n.letterSpacing, unit)};`);
     if (n.textAlign && n.textAlign !== "left")
       rules.push(`text-align: ${n.textAlign === "justified" ? "justify" : n.textAlign};`);
     if (n.textDecoration && n.textDecoration !== "none") {
@@ -1655,7 +1655,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
       color: n.fillVisible !== false && n.fill ? n.fill : "#000000",
     };
     if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
-    if (n.letterSpacing) textStyle.letterSpacing = `${n.letterSpacing}px`;
+    if (n.letterSpacing) textStyle.letterSpacing = n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : `${n.letterSpacing}px`;
     if (n.textAlign && n.textAlign !== "left")
       textStyle.textAlign = n.textAlign === "justified" ? "justify" : n.textAlign;
     if (n.textDecoration && n.textDecoration !== "none") textStyle.textDecoration = n.textDecoration;
@@ -2523,7 +2523,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
     L("Font", `${n.fontFamily} ${n.fontWeight}`, "Typography");
     L("Font size", devLen(n.fontSize, unit), "Typography");
     if (n.lineHeight) L("Line height", devLen(n.lineHeight, unit), "Typography");
-    if (n.letterSpacing) L("Letter spacing", devLen(n.letterSpacing, unit), "Typography");
+    if (n.letterSpacing) L("Letter spacing", n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : devLen(n.letterSpacing, unit), "Typography");
     if (n.textAlign && n.textAlign !== "left") L("Alignment", n.textAlign, "Typography");
     if (n.textDecoration && n.textDecoration !== "none")
       L("Decoration", n.textDecoration === "strikethrough" ? "Strikethrough" : "Underline", "Typography");
@@ -2580,7 +2580,7 @@ function TypeSpecimen({ n }: { n: XNode }) {
           fontSize: Math.min(28, Math.max(11, n.fontSize / 2)),
           fontWeight: n.fontWeight,
           lineHeight: n.lineHeight ? `${n.lineHeight / n.fontSize}` : 1.3,
-          letterSpacing: n.letterSpacing ? `${n.letterSpacing}px` : undefined,
+          letterSpacing: n.letterSpacing ? (n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : `${n.letterSpacing}px`) : undefined,
           color: n.fillVisible === false || isNone(n.fill) ? "var(--text)" : n.fill,
           textAlign: n.textAlign === "center" ? "center" : n.textAlign === "right" ? "right" : "left",
         }}
@@ -4055,6 +4055,26 @@ function Design({
                     <option value="auto">Leading: Auto</option>
                     <option value="px">Leading: px</option>
                     <option value="percent">Leading: %</option>
+                  </select>
+                  {/* Letter spacing unit (Figma's ↔ field takes px or a percent
+                      of the font size): the same convert-on-switch control as
+                      Leading, percent kept to 2 decimals so 1.5% survives. */}
+                  <select
+                    aria-label="Letter spacing unit"
+                    title="Letter spacing unit - converts the value on switch"
+                    value={n.letterSpacingUnit ?? "px"}
+                    onChange={(e) => {
+                      const u = e.target.value as XNode["letterSpacingUnit"];
+                      const cur = n.letterSpacing || 0;
+                      const val =
+                        u === "percent"
+                          ? Math.round((cur / Math.max(1, n.fontSize)) * 10000) / 100
+                          : Math.round(((cur / 100) * n.fontSize) * 100) / 100;
+                      patchType({ letterSpacingUnit: u, letterSpacing: val });
+                    }}
+                  >
+                    <option value="px">Tracking: px</option>
+                    <option value="percent">Tracking: %</option>
                   </select>
                   <label className="check" title="Vertical trim - remove the space above and below the text">
                     <input

@@ -433,7 +433,8 @@ function resolveStyles(
       decls.push(["color", paintOrToken(ctx, n.fill)]);
     }
     if (n.lineHeight) decls.push(["line-height", len(Math.round(n.lineHeight), ctx.unit)]);
-    if (n.letterSpacing) decls.push(["letter-spacing", len(n.letterSpacing, ctx.unit)]);
+    if (n.letterSpacing) decls.push(["letter-spacing",
+      (n as { letterSpacingUnit?: string }).letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : len(n.letterSpacing, ctx.unit)]);
     if (n.textAlign && n.textAlign !== "left") decls.push(["text-align", n.textAlign]);
     if (n.textWrap === "balance" || n.textWrap === "pretty") {
       decls.push(["text-wrap", n.textWrap]);

@@ -21,7 +21,7 @@ import type { ColorProfile, StrokeCap, XNode } from "./types";
 import { outlineStroke, outlineVariableStroke, shapePoly } from "./geometry";
 import { directionOf, fontFamilyStack } from "./textInput";
 import { exportBleed } from "../ui/exportModel";
-import { applyTextCase, effectiveLineHeight, valignApplies } from "../ui/textLayout";
+import { effectiveLetterSpacing, applyTextCase, effectiveLineHeight, valignApplies } from "../ui/textLayout";
 import { miterLimitFromAngle, paintedStrokeAlign, sideCones, sideWidths, sidesSupported, usesVariableWidth } from "./strokeModel";
 import { convertTextToVectorPaths } from "./textVector";
 import { patternPeriod, patternSettings, patternSourceNode } from "./pattern";
@@ -617,7 +617,7 @@ export function svgNode(n: XNode, top = false, opts: SvgOpts = {}): string {
       variCss ? `font-variation-settings:${variCss}` : "",
     ].filter(Boolean).join(";");
     body.push(
-      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging"${directionOf(n.text, n.paraDir?.[0] ?? n.textDirection) === "rtl" ? ' direction="rtl"' : ""} fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(fontFamilyStack(n.fontFamily))}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${n.letterSpacing}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${extraStyle ? ` style="${extraStyle}"` : ""}${filter}>${content}</text>`,
+      `<text x="${tx}" y="0" text-anchor="${anchor}" dominant-baseline="hanging"${directionOf(n.text, n.paraDir?.[0] ?? n.textDirection) === "rtl" ? ' direction="rtl"' : ""} fill="${paint}" fill-opacity="${Math.max(0, Math.min(1, n.fillOpacity))}" stroke="${textStroke}" stroke-opacity="${Math.max(0, Math.min(1, n.strokeOpacity))}" stroke-width="${Math.max(0, n.strokeWidth)}" font-family="${escXml(fontFamilyStack(n.fontFamily))}" font-size="${n.fontSize}" font-weight="${n.fontWeight}"${n.fontStyle === "italic" ? ' font-style="italic"' : ""}${smallCaps ? ' font-variant="small-caps"' : ""} letter-spacing="${Math.round(effectiveLetterSpacing(n) * 100) / 100}" text-decoration="${n.textDecoration === "none" ? "none" : n.textDecoration}"${extraStyle ? ` style="${extraStyle}"` : ""}${filter}>${content}</text>`,
     );
     }
   } else if (n.fillType === "image" && n.imageSrc && n.fillExportVisible !== false) {
