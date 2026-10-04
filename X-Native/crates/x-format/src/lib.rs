@@ -11,7 +11,7 @@ pub mod admission;
 pub mod cancellation;
 pub use admission::{read_bounded, validate_admission};
 pub(crate) mod b64;
-pub use b64::base64;
+pub use b64::{base64, debase64};
 pub mod codegen;
 pub mod deserialize;
 pub mod figbinary;
