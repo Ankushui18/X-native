@@ -30,6 +30,7 @@ export function Rulers({
   height,
   selection,
   theme,
+  chrome,
 }: {
   zoom: number;
   panX: number;
@@ -39,6 +40,11 @@ export function Rulers({
   /** Selection bounds in world space, if anything is selected. */
   selection: { x: number; y: number; w: number; h: number } | null;
   theme: string;
+  /** The canvas-chrome preference. These surfaces read their palette out of the CSS
+   *  cascade, so a chrome flip changes what the *same* `theme` value resolves to;
+   *  without this in the deps the rails keep the old selection ink until something
+   *  else moves the view. */
+  chrome: string;
 }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
@@ -56,7 +62,7 @@ export function Rulers({
     ctx.clearRect(0, 0, width, height);
 
     // Chrome comes from the sheet, not from a hand-maintained dark/light pair
-    // (FR-U2); `theme` stays in the deps so the rails re-read on a flip.
+    // (FR-U2); `theme` and `chrome` stay in the deps so the rails re-read on a flip.
     const chrome = canvasChrome();
     const bg = chrome.panel;
     const line = chrome.line;
@@ -70,7 +76,7 @@ export function Rulers({
 
     // Highlight the selected range
     if (selection) {
-      ctx.fillStyle = chrome.accentWash;
+      ctx.fillStyle = chrome.selWash;
       const sx = panX + selection.x * zoom;
       const sy = panY + selection.y * zoom;
       ctx.fillRect(sx, 0, selection.w * zoom, SIZE);
@@ -141,7 +147,7 @@ export function Rulers({
       ctx.fillStyle = accent;
       ctx.fillRect(SIZE - 4, SIZE - 4, 3, 3);
     }
-  }, [zoom, panX, panY, width, height, selection, theme]);
+  }, [zoom, panX, panY, width, height, selection, theme, chrome]);
 
   return <canvas className="rulers" ref={ref} aria-hidden="true" />;
 }

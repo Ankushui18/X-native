@@ -33,26 +33,41 @@ export function drillChild(root: XNode, container: XNode, x: number, y: number):
   return container.children.find((c) => c.visible && !c.locked) ?? null;
 }
 
-/** Frame-like containers use a detached rotation handle. In Figma the rotation
- *  target sits above the top-right corner, connected by a short vertical stem —
- *  never at top-centre (that position was an earlier draft that never matched
- *  the shipped UI, reported as "rotation icon is in top middle"). Offset and
- *  hit radius stay constant in screen pixels as the document zoom changes. */
+/** Rotation is a *cursor*, not a piece of chrome — that is the whole of Figma's
+ *  affordance: move the pointer just outside the top-right corner, it turns into
+ *  the rotate cursor, drag and the layer turns. Nothing is painted to advertise
+ *  it (the stem + hollow dot that used to be drawn here was ours: top-centre
+ *  first, then top-right per `FRAME_INTERACTION_AUDIT_2026-09-29.md`, and a
+ *  side-by-side screenshot in batch 45 settled it).
+ *
+ *  What these numbers still own is the invisible band that both the cursor and
+ *  the press measure — `ROTATION_HANDLE_STEM` where it sits (20px above the
+ *  top-right corner, so the grab point is where the painted handle used to be)
+ *  and `ROTATION_HANDLE_HIT` how wide it is, both constant in screen pixels as
+ *  the document zooms. One source for hover and press, so the cursor can never
+ *  promise a target the press then misses. */
+export const ROTATION_HANDLE_STEM = 20;
+/** A ~20px-wide grab target, generous enough to stay hittable at 25% zoom. */
+export const ROTATION_HANDLE_HIT = 10;
+/** Non-frame layers rotate from a band outside the top-right corner instead. */
+export const ROTATION_RING = { min: 8, max: 24 };
+
 export function frameRotationHandle(kind: NodeKind, x: number, y: number, w: number, _h: number) {
   // Figma places the rotation target above the top-right corner, with a
   // ~20px gap between the corner and the handle centre. Components and
   // instances inherit the same affordance — they're also containers.
   return kind === "frame" || kind === "component" || kind === "instance"
-    ? { x: x + w, y: y - 20 }
+    ? { x: x + w, y: y - ROTATION_HANDLE_STEM }
     : null;
 }
 
 export function rotationHandleHit(kind: NodeKind, px: number, py: number, x: number, y: number, w: number, h: number): boolean {
   const handle = frameRotationHandle(kind, x, y, w, h);
-  if (handle) return Math.hypot(px - handle.x, py - handle.y) < 10;
-  // Non-frame shapes: the rotation target is a larger ring outside the top-right
-  // corner (22px radius), not a corner overlap with 8px — so the cursor and
-  // the press handler agree about corner-resize vs. rotate.
+  if (handle) return Math.hypot(px - handle.x, py - handle.y) <= ROTATION_HANDLE_HIT;
+  // Non-frame shapes: a band from 8 to 24px outside the top-right corner rather
+  // than a corner overlap — the resize handles own the 8px closest to the
+  // corner, so the cursor and the press agree about corner-resize vs. rotate.
   const tr = { x: x + w, y: y };
-  return Math.hypot(px - tr.x, py - tr.y) >= 8 && Math.hypot(px - tr.x, py - tr.y) <= 24;
+  const d = Math.hypot(px - tr.x, py - tr.y);
+  return d >= ROTATION_RING.min && d <= ROTATION_RING.max;
 }

@@ -1449,6 +1449,114 @@ export function projectPointOnSegment(
   return { x: projX, y: projY, dist: Math.hypot(px - projX, py - projY), t };
 }
 
+/** Where a pointer hovering over a path would land a newly inserted anchor.
+ *  `curve` is present when the segment carries Bézier handles: the click has to
+ *  land on the curve, not on its chord, so the refinement is what both the "+"
+ *  hover affordance and the insert itself use. */
+export interface SegmentInsertTarget {
+  /** Index of the segment's first vertex; the new anchor goes after it. */
+  segIndex: number;
+  /** Parameter and point along the segment's chord. */
+  t: number;
+  x: number;
+  y: number;
+  /** Distance from the pointer to that chord point. */
+  dist: number;
+  /** Same measurement taken on the cubic when the segment is curved. */
+  curve: { t: number; x: number; y: number; dist: number } | null;
+}
+
+/**
+ * The one segment a click would insert an anchor on, or null when the pointer is
+ * not over the path.
+ *
+ * This is the segment test `insertPointOnPath` runs, lifted out so a hover can
+ * answer the same question the click will. Two callers, one measurement: the
+ * "+" preview can never promise an anchor that the click then refuses to make.
+ */
+export function nearestSegmentForInsert(
+  pts: PathPoint[],
+  px: number,
+  py: number,
+  closed: boolean,
+  maxDist = 12,
+): SegmentInsertTarget | null {
+  if (pts.length < 2) return null;
+  const n = pts.length;
+  const count = closed ? n : n - 1;
+  let bestDist = maxDist;
+  let bestIdx = -1;
+  let bestT = 0.5;
+  let bestProj = { x: px, y: py };
+  for (let i = 0; i < count; i++) {
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const res = projectPointOnSegment(px, py, p1.x, p1.y, p2.x, p2.y);
+    // Endpoints belong to the anchors: a click that close to a vertex is a
+    // grab-the-point gesture in Figma, not an insert.
+    if (res.dist < bestDist && res.t > 0.05 && res.t < 0.95) {
+      bestDist = res.dist;
+      bestIdx = i;
+      bestT = res.t;
+      bestProj = { x: res.x, y: res.y };
+    }
+  }
+  if (bestIdx === -1) return null;
+  const p0 = pts[bestIdx];
+  const p1 = pts[(bestIdx + 1) % n];
+  const curved =
+    (p0.ox || 0) !== 0 || (p0.oy || 0) !== 0 || (p1.ix || 0) !== 0 || (p1.iy || 0) !== 0;
+  if (!curved) return { segIndex: bestIdx, t: bestT, ...bestProj, dist: bestDist, curve: null };
+  // Sample the cubic for the parameter closest to the pointer, then clamp it
+  // inside the segment the same way the chord test bounds its `t`.
+  const c1 = { x: p0.x + (p0.ox || 0), y: p0.y + (p0.oy || 0) };
+  const c2 = { x: p1.x + (p1.ix || 0), y: p1.y + (p1.iy || 0) };
+  let bt = 0.5;
+  let bd = Infinity;
+  const SAMPLES = 24;
+  for (let k = 0; k <= SAMPLES; k++) {
+    const t = k / SAMPLES;
+    const mt = 1 - t;
+    const x = mt * mt * mt * p0.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p1.x;
+    const y = mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p1.y;
+    const d = Math.hypot(px - x, py - y);
+    if (d < bd) {
+      bd = d;
+      bt = t;
+    }
+  }
+  const t = Math.min(0.95, Math.max(0.05, bt));
+  const mt = 1 - t;
+  return {
+    segIndex: bestIdx,
+    t: bestT,
+    ...bestProj,
+    dist: bestDist,
+    curve: {
+      t,
+      x: mt * mt * mt * p0.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p1.x,
+      y: mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p1.y,
+      dist: bd,
+    },
+  };
+}
+
+/** The point a click would actually put the new anchor on, given a
+ *  `nearestSegmentForInsert` result: the refined curve point when the pointer is
+ *  close enough to the curve to count as a curve edit, the chord point
+ *  otherwise. `insertPointOnPath` splits at exactly here, so a "+" preview
+ *  drawn from this lands where the click puts the anchor — one measurement. */
+export function segmentInsertLanding(
+  hit: SegmentInsertTarget,
+  maxDist = 12,
+): { x: number; y: number; t: number; onCurve: boolean } {
+  // A curved segment is edited on its *curve*; a pointer far enough from the curve
+  // that it was clearly aimed at the chord keeps the chord's meaning — the rule
+  // the engine has always used, now stated once for both the split and the hint.
+  const onCurve = !!hit.curve && hit.curve.dist <= maxDist * 1.5;
+  return onCurve ? { ...hit.curve!, onCurve: true } : { x: hit.x, y: hit.y, t: hit.t, onCurve: false };
+}
+
 /**
  * Inserts a new point onto an existing vector path by splitting the nearest segment.
  */
@@ -1459,57 +1567,26 @@ export function insertPointOnPath(
   closed: boolean,
   maxDist = 12,
 ): { newPath: PathPoint[]; insertedIndex: number } | null {
-  if (pts.length < 2) return null;
+  // One segment test shared with the "+" hover preview, so the affordance and
+  // the click can never disagree about where an anchor goes.
+  const hit = nearestSegmentForInsert(pts, px, py, closed, maxDist);
+  if (!hit) return null;
   const n = pts.length;
-  const count = closed ? n : n - 1;
-  let bestDist = maxDist;
-  let bestIdx = -1;
-  let bestProj = { x: px, y: py };
-
-  for (let i = 0; i < count; i++) {
-    const p1 = pts[i];
-    const p2 = pts[(i + 1) % n];
-    const res = projectPointOnSegment(px, py, p1.x, p1.y, p2.x, p2.y);
-    if (res.dist < bestDist && res.t > 0.05 && res.t < 0.95) {
-      bestDist = res.dist;
-      bestIdx = i;
-      bestProj = { x: res.x, y: res.y };
-    }
-  }
-
-  if (bestIdx === -1) return null;
+  const bestIdx = hit.segIndex;
+  const p0 = pts[bestIdx];
+  const p1 = pts[(bestIdx + 1) % n];
 
   // Curve-aware split: when the segment carries Bézier handles, the click
   // projects onto the chord but the new anchor must land ON the curve, and
   // the curve must keep its shape (De Casteljau subdivision). Inserting a
   // bare corner on the chord would visibly flatten the arc — Figma splits
   // the curve instead.
-  const p0 = pts[bestIdx];
-  const p1 = pts[(bestIdx + 1) % n];
-  const c1 = { x: p0.x + (p0.ox || 0), y: p0.y + (p0.oy || 0) };
-  const c2 = { x: p1.x + (p1.ix || 0), y: p1.y + (p1.iy || 0) };
-  const curved =
-    (p0.ox || 0) !== 0 || (p0.oy || 0) !== 0 || (p1.ix || 0) !== 0 || (p1.iy || 0) !== 0;
-  if (curved) {
-    // Walk the cubic for the parameter closest to the click.
-    let bt = 0.5;
-    let bd = Infinity;
-    const SAMPLES = 24;
-    for (let k = 0; k <= SAMPLES; k++) {
-      const t = k / SAMPLES;
-      const mt = 1 - t;
-      const x =
-        mt * mt * mt * p0.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p1.x;
-      const y =
-        mt * mt * mt * p0.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p1.y;
-      const d = Math.hypot(px - x, py - y);
-      if (d < bd) {
-        bd = d;
-        bt = t;
-      }
-    }
-    const t = Math.min(0.95, Math.max(0.05, bt));
-    if (bd <= maxDist * 1.5) {
+  const land = segmentInsertLanding(hit, maxDist);
+  if (hit.curve && land.onCurve) {
+    const t = land.t;
+    const c1 = { x: p0.x + (p0.ox || 0), y: p0.y + (p0.oy || 0) };
+    const c2 = { x: p1.x + (p1.ix || 0), y: p1.y + (p1.iy || 0) };
+    {
       // De Casteljau at t: L0=p0, L1, L2, M | M, R1, R2, R3=p1.
       const lerp = (a: number, b: number) => a + (b - a) * t;
       const l1 = { x: lerp(p0.x, c1.x), y: lerp(p0.y, c1.y) };
@@ -1540,7 +1617,7 @@ export function insertPointOnPath(
     }
   }
 
-  const newPt: PathPoint = { x: bestProj.x, y: bestProj.y };
+  const newPt: PathPoint = { x: land.x, y: land.y };
   const newPath = [...pts];
   newPath.splice(bestIdx + 1, 0, newPt);
   return { newPath, insertedIndex: bestIdx + 1 };
