@@ -683,7 +683,7 @@ function LayerRowImpl({
         )}
         <button
           className="mini"
-          title={`${n.visible ? "Hide" : "Show"} layer (⇧⌘H)`}
+          title={`${n.visible ? "Hide" : "Show"} layer (${sc("⇧⌘H")})`}
           onClick={(e) => {
             e.stopPropagation();
             engine.dispatch({ type: "patch", id: n.id, patch: { visible: !n.visible } });
@@ -1038,7 +1038,7 @@ function LeftPanelImpl({
           value={snap.fileName}
           onChange={(e) => engine.dispatch({ type: "setFileName", name: e.target.value })}
         />
-        <button className="icon-btn" title={"Minimize UI (⇧⌘\\)"} onClick={onMinimize}>
+        <button className="icon-btn" title={`Minimize UI (${sc("⇧⌘\\")})`} onClick={onMinimize}>
           <Icon name="minimize" size={14} />
         </button>
       </div>
@@ -1654,7 +1654,7 @@ export function Toolbar({
             <button
               className="hit vec-done"
               onClick={() => engine.dispatch({ type: "setVecEdit", id: null, pointIndex: null })}
-              title="Done editing path (Esc or ⌘↵)"
+              title={`Done editing path (Esc or ${sc("⌘↵")})`}
             >
               <Icon name="check" size={14} />
               Done
@@ -2685,7 +2685,7 @@ export function bindHotkeys(
       engine.dispatch({ type: "delete" });
       // Deleting a layer that is scrolled out of view gives no visual feedback;
       // confirm it and advertise the undo.
-      if (n) toast(`Deleted ${plural(n, "layer")} · ⌘Z to undo`);
+      if (n) toast(`Deleted ${plural(n, "layer")} · ${sc("⌘Z")} to undo`);
       return;
     }
     if (e.key === "Escape") {
@@ -4718,7 +4718,7 @@ export function HelpBtn() {
 
   return (
     <>
-      <button className="help" title="Keyboard shortcuts (⇧?)" onClick={() => setOpen((v) => !v)}>
+      <button className="help" title={`Keyboard shortcuts (${sc("⇧?")})`} onClick={() => setOpen((v) => !v)}>
         <Icon name="help" size={14} />
       </button>
       {open && (
@@ -4940,7 +4940,7 @@ export function FindReplaceBar({
       <span style={{ minWidth: 60, color: "var(--dim)", fontSize: 11, textAlign: "center" }}>
         {q ? (matches.length ? `${matchIdx + 1} of ${matches.length}` : "0 matches") : ""}
       </span>
-      <button className="icon-btn" title="Previous match (⇧Enter)" onClick={handlePrev} disabled={!matches.length}>
+      <button className="icon-btn" title={`Previous match (${sc("⇧Enter")})`} onClick={handlePrev} disabled={!matches.length}>
         <Icon name="chevron-up" size={14} />
       </button>
       <button className="icon-btn" title="Next match (Enter)" onClick={handleNext} disabled={!matches.length}>

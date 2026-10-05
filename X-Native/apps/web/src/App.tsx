@@ -20,7 +20,8 @@ import {
   type NavId,
 } from "./ui/chrome";
 import { Icon } from "./ui/icons";
-import { RightPanel, copyLayerCode, copyPng, copyPngNodes, layerCode } from "./ui/inspector";
+import { sc } from "./ui/sc";
+import { RightPanel, copyLayerCode, copyPng, copyPngNodes, copySvg, copySvgNodes, layerCode } from "./ui/inspector";
 import { installDesignApi } from "./engine/designApi";
 import { FigInspectorModal } from "./ui/FigInspectorModal";
 import { PresentationPlayer } from "./ui/PresentationPlayer";
@@ -509,10 +510,30 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
       }
       copyPngNodes(worldClones(items));
     };
+    // Copy/Paste as ▸ Copy as SVG — the vector twin of onCopyPng: same
+    // selection walk, same export renderer, text on the clipboard instead.
+    const onCopySvg = () => {
+      const s = engine.snapshot();
+      const root = s.pages[s.page].root;
+      const items = s.selection
+        .map((id) => worldPos(root, id))
+        .filter((w): w is NonNullable<typeof w> => !!w);
+      if (!items.length) {
+        flash("Select a layer to copy it as SVG");
+        return;
+      }
+      if (items.length === 1) {
+        copySvg(items[0].node, root);
+        return;
+      }
+      copySvgNodes(worldClones(items));
+    };
+    window.addEventListener("x-native-copy-svg", onCopySvg);
     window.addEventListener("x-native-copy-link", onCopyLink);
     window.addEventListener("x-native-copy-png", onCopyPng);
     window.addEventListener("x-native-copy-code", onCopyCode);
     return () => {
+      window.removeEventListener("x-native-copy-svg", onCopySvg);
       window.removeEventListener("x-native-copy-link", onCopyLink);
       window.removeEventListener("x-native-copy-png", onCopyPng);
       window.removeEventListener("x-native-copy-code", onCopyCode);
@@ -536,7 +557,7 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
       setZenMode((v) => {
         const next = !v;
         setHideUi(next);
-        toastMsg(next ? "Zen Mode active · Press Z or ⌘\\ to exit" : "Exited Zen Mode");
+        toastMsg(next ? `Zen Mode active · Press Z or ${sc("⌘\\")} to exit` : "Exited Zen Mode");
         return next;
       });
     };
@@ -678,10 +699,10 @@ function Editor({ fileId, seed, onHome }: { fileId: string; seed: DocSeed | null
             <button className="icon-btn" title="Back to files" aria-label="Back to files" onClick={onHome}>
               <Icon name="back" size={14} />
             </button>
-            <span className="min-chip-name" title="UI minimized · ⇧⌘\ restores the panels">
+            <span className="min-chip-name" title={`UI minimized · ${sc("⇧⌘\\")} restores the panels`}>
               {snap.fileName}
             </span>
-            <button className="icon-btn" title="Restore UI (⇧⌘\)" aria-label="Restore panels" onClick={() => setMinUi(false)}>
+            <button className="icon-btn" title={`Restore UI (${sc("⇧⌘\\")})`} aria-label="Restore panels" onClick={() => setMinUi(false)}>
               <Icon name="minimize" size={14} />
             </button>
           </div>

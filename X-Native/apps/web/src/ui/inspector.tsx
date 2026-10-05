@@ -9534,6 +9534,31 @@ export function copyPngNodes(nodes: XNode[]) {
   );
 }
 
+/** Put the layer's vector source on the clipboard as SVG text — the same
+ *  string the export path writes, so what pastes into a code editor is what
+ *  the downloaded .svg would have contained. */
+export function copySvg(n: XNode, root?: XNode) {
+  const preset: ExportPreset = { format: "SVG", scale: 1, suffix: "", colorProfile: getRenderColorProfile() };
+  writeSvgClipboard(exportSvg(n, preset, root ? { root } : undefined), n.name);
+}
+
+/** SVG of several layers at their relative positions (see `worldClones`). */
+export function copySvgNodes(nodes: XNode[]) {
+  if (!nodes.length) return;
+  if (nodes.length === 1) {
+    copySvg(nodes[0]);
+    return;
+  }
+  writeSvgClipboard(exportClipSvg(nodes, getRenderColorProfile()), `${nodes.length} layers`);
+}
+
+function writeSvgClipboard(svg: string, label: string) {
+  navigator.clipboard.writeText(svg).then(
+    () => toast(`Copied ${label} as SVG`),
+    () => toast(`Clipboard cannot take text · could not copy ${label}`),
+  );
+}
+
 /** Every layer across the file a Pattern fill on `n` may repeat: not `n`,
  *  nothing inside it, none of its ancestors, and not the page roots. */
 function patternSourcesFor(snap: Snapshot, n: XNode): PatternSourceOption[] {

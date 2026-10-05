@@ -1,4 +1,5 @@
 import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
+import { sc } from "./sc";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Effect, Engine, ImageFit, Interaction, ListStyle, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, VariableWidthPoint, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
@@ -5409,7 +5410,7 @@ export function Canvas({
           const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
           if (d >= 8 && d <= 22) {
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             engine.dispatch({ type: "begin" });
@@ -5436,7 +5437,7 @@ export function Canvas({
               return;
             }
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             engine.dispatch({ type: "begin" });
@@ -5466,7 +5467,7 @@ export function Canvas({
           const gy = snap.panY + (g.axis === "x" ? g.cross : g.at) * z;
           if (Math.hypot(px - gx, py - gy) < 10) {
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             engine.dispatch({ type: "begin" });
@@ -5975,7 +5976,7 @@ export function Canvas({
             const dims = cropImageDims(wp.node);
             if (dims) {
               if (isEffectivelyLocked(root, wp.node.id)) {
-                toast("Locked · ⇧⌘L to unlock");
+                toast(`Locked · ${sc("⇧⌘L")} to unlock`);
                 return;
               }
               const start = wp.node.imageCrop
@@ -5995,7 +5996,7 @@ export function Canvas({
         }
         if (!vecEdit && !onResizeHandle && rotationHandleHit(wp.node.kind, px, py, sx, sy, nb.w * z, nb.h * z)) {
           if (isEffectivelyLocked(root, wp.node.id)) {
-            toast("Locked · ⇧⌘L to unlock");
+            toast(`Locked · ${sc("⇧⌘L")} to unlock`);
             return;
           }
           const startAngle = Math.atan2(rawY - cy, rawX - cx);
@@ -6032,7 +6033,7 @@ export function Canvas({
               return;
             }
             if (isEffectivelyLocked(root, wp.node.id)) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             drag.current = {
