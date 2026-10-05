@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { sc } from "./sc";
 import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
@@ -158,7 +159,7 @@ export function ContextMenu({
                       >
                         {s.icon && <Icon name={s.icon} size={14} />}
                         {s.label}
-                        {s.shortcut && <span className="sc">{s.shortcut}</span>}
+                        {s.shortcut && <span className="sc">{sc(s.shortcut)}</span>}
                       </button>
                     ) : (
                       <hr key={j} />
@@ -181,7 +182,7 @@ export function ContextMenu({
           >
             {it.icon && <Icon name={it.icon} size={14} />}
             {it.label}
-            {it.shortcut && <span className="sc">{it.shortcut}</span>}
+            {it.shortcut && <span className="sc">{sc(it.shortcut)}</span>}
           </button>
         );
       })}
@@ -283,7 +284,7 @@ export function canvasMenu(
           shortcut: l.id === "css" ? "⌥⇧⌘C" : undefined,
           icon: "code" as IconName,
         })),
-        { kind: "action" as const, id: "copyPng", label: "Copy as PNG", icon: "image" },
+        { kind: "action" as const, id: "copyPng", label: "Copy as PNG", shortcut: "⇧⌘C", icon: "image" },
         { kind: "action" as const, id: "copyLink", label: "Copy link to selection", icon: "link" },
       ],
     },
@@ -311,10 +312,10 @@ export function canvasMenu(
     label: "Arrange",
     icon: "layers",
     items: [
-      { kind: "action", id: "front", label: "Bring to front", shortcut: "⇧⌘]", icon: "chevrons-up" },
+      { kind: "action", id: "front", label: "Bring to front", shortcut: "]", icon: "chevrons-up" },
       { kind: "action", id: "forward", label: "Bring forward", shortcut: "⌘]", icon: "chevron-up" },
       { kind: "action", id: "backward", label: "Send backward", shortcut: "⌘[", icon: "chevron-down" },
-      { kind: "action", id: "back", label: "Send to back", shortcut: "⇧⌘[", icon: "chevrons-down" },
+      { kind: "action", id: "back", label: "Send to back", shortcut: "[", icon: "chevrons-down" },
     ],
   });
   if (sel > 1) {
@@ -327,14 +328,14 @@ export function canvasMenu(
         { kind: "action", id: "subtract", label: "Subtract selection", shortcut: "⌥⇧S" },
         { kind: "action", id: "intersect", label: "Intersect selection", shortcut: "⌥⇧I" },
         { kind: "action", id: "exclude", label: "Exclude selection", shortcut: "⌥⇧E" },
-        { kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" },
+        { kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌥⇧F" },
       ],
     });
   }
   items.push({ kind: "sep" });
   // §22 MN-002: multi-select already gets Flatten inside the Boolean submenu
   // above, so the standalone row is single-select only — no twin rows.
-  if (sel < 2) items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
+  if (sel < 2) items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌥⇧F" });
   items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O", enabled: caps.outline ?? true });
   items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
   items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });

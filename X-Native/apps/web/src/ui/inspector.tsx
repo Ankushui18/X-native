@@ -1,4 +1,5 @@
 import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
+import { sc } from "./sc";
 import {
   useEffect,
   useMemo,
@@ -10275,17 +10276,17 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       {open && (
         <div className="ctx zoom-menu" role="menu">
           <button role="menuitem" onClick={go(() => zoomTo(engine, "fit"))}>
-            Zoom to fit<span className="sc">⇧1</span>
+            Zoom to fit<span className="sc">{sc("⇧1")}</span>
           </button>
           <button
             role="menuitem"
             disabled={!snap.selection.length}
             onClick={go(() => zoomTo(engine, "selection"))}
           >
-            Zoom to selection<span className="sc">⇧2</span>
+            Zoom to selection<span className="sc">{sc("⇧2")}</span>
           </button>
           <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, 1))}>
-            Zoom to 100%<span className="sc">⇧0</span>
+            Zoom to 100%<span className="sc">{sc("⌘0")}</span>
           </button>
           <hr />
           <div className="menu-label">Presets</div>
@@ -10304,16 +10305,16 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           </div>
           <div className="zoom-grid">
             <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, 1)))}>
-              <Icon name="zoom-in" size={12} /> Zoom in<span className="sc">⇧=</span>
+              <Icon name="zoom-in" size={12} /> Zoom in<span className="sc">{sc("⌘+")}</span>
             </button>
             <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, -1)))}>
-              <Icon name="zoom-out" size={12} /> Zoom out<span className="sc">⇧−</span>
+              <Icon name="zoom-out" size={12} /> Zoom out<span className="sc">{sc("⌘−")}</span>
             </button>
           </div>
           <hr />
           <div className="menu-label">Canvas</div>
           <button role="menuitemcheckbox" aria-checked={snap.showRulers} onClick={go(() => engine.dispatch({ type: "toggleRulers" }))}>
-            Rulers<span className="sc">⇧R</span>
+            Rulers<span className="sc">{sc("⇧R")}</span>
             {snap.showRulers && <Icon name="check" size={12} className="tick" />}
           </button>
           <button
@@ -10323,7 +10324,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           >
             Pixel grid
             {snap.zoom < 4 && <span className="hint">visible at 400%+</span>}
-            <span className="sc">⌘&apos;</span>
+            <span className="sc">{sc("⇧'")}</span>
             {page.pixelGrid && <Icon name="check" size={12} className="tick" />}
           </button>
           <button
@@ -10331,7 +10332,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             aria-checked={page.pixelSnap ?? true}
             onClick={go(() => engine.dispatch({ type: "patchPage", patch: { pixelSnap: !(page.pixelSnap ?? true) } }))}
           >
-            Snap to pixel grid<span className="sc">⌘⇧&apos;</span>
+            Snap to pixel grid<span className="sc">{sc("⌘⇧'")}</span>
             {page.pixelSnap ?? true ? <Icon name="check" size={12} className="tick" /> : null}
           </button>
           <div className="menu-label">Pixel preview</div>
@@ -10343,12 +10344,12 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               onClick={go(() => engine.dispatch({ type: "setPixelPreview", preview: pv }))}
             >
               {pv === "off" ? "Off" : `${pv[0]}× device pixels`}
-              <span className="sc">{pv === "1x" ? "⌃P" : pv === "2x" ? "⌃⌥P" : ""}</span>
+              <span className="sc">{sc(pv === "1x" ? "⌃P" : pv === "2x" ? "⌃⌥P" : "")}</span>
               {snap.pixelPreview === pv && <Icon name="check" size={12} className="tick" />}
             </button>
           ))}
           <button role="menuitemcheckbox" aria-checked={snap.viewLayoutGuides} onClick={go(() => engine.dispatch({ type: "toggleLayoutGuides" }))}>
-            Layout guides<span className="sc">⇧G</span>
+            Layout guides<span className="sc">{sc("⇧G")}</span>
             {snap.viewLayoutGuides && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.propertyLabels} onClick={go(() => engine.dispatch({ type: "togglePropertyLabels" }))}>
@@ -10364,7 +10365,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             {snap.showComments && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={!!snap.outlineMode} onClick={go(() => engine.dispatch({ type: "toggleOutlines" }))}>
-            Layer outlines<span className="sc">⇧O</span>
+            Layer outlines<span className="sc">{sc("⇧O")}</span>
             {snap.outlineMode && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={!!snap.showMaskOutlines} onClick={go(() => engine.dispatch({ type: "toggleMaskOutlines" }))}>
@@ -10372,12 +10373,12 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             {snap.showMaskOutlines && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.showFlows !== false} onClick={go(() => engine.dispatch({ type: "toggleFlows" }))}>
-            Prototype flows<span className="sc">⇧F</span>
+            Prototype flows<span className="sc">{sc("⇧F")}</span>
             {snap.showFlows !== false && <Icon name="check" size={12} className="tick" />}
           </button>
           <hr />
           <button role="menuitem" onClick={go(() => window.dispatchEvent(new CustomEvent("x-native-hide-ui")))}>
-            Hide UI<span className="sc">⌘\</span>
+            Hide UI<span className="sc">{sc("⌘\\")}</span>
           </button>
         </div>
       )}

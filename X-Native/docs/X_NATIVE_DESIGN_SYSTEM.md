@@ -117,6 +117,31 @@ context-menu buttons, the Dev Mode menus, the zoom grid, the Export sheet's filt
 canvas HUD all ran their own 26px height or 6px corner; the sheet now has no `26px` left in a rule, and
 the active tool is rounded like the tools beside it.
 
+The conformance pass (2026-10-05) verified the sheet against its own ladders and fixed what it found:
+
+- **Every dimension that had a token reads the token.** 56 declarations in `styles.css` still spelled a
+  ladder value as a literal (`height: 44px`, `width: 20px`, `border-radius: 0 6px 6px 0`,
+  `border-bottom: 2px`, 45 heights and 8 widths among them); each was rewritten to its token with the
+  value proven identical, so the sheet now holds only geometry that has no token — element sizes,
+  gradients, shadows, grid tracks. `--w-chip: 44px` covers the one dimension the ladders lacked, the
+  44×22 value chips (stroke weight, hex operator).
+- **A control wears `--r-control`.** The radius roles were audited across the sheet: nav tiles and the
+  brand tile (8px), the split zoom button with a literal `6px` half, the segment cells, colour swatches,
+  checkbox wells, the proto chip, `.x-seg-btn` and the `.ins-*` number/expression/bind fields (3px) all
+  wore someone else's radius; they read 4px now, and the modal's chips/toggles follow. Sub-control marks
+  keep the 3px step (tab underline, kbd chips, badges, guides, the 14px preview swatch) — proportion at
+  small sizes is deliberate, not drift. Live census in the editor: **157 controls at 4px, 0 exceptions**,
+  dark and light.
+- **A select's text clears its chevron.** `.field:has(> select)` draws the arrow inside the field's own
+  right padding; the rule now pairs it with `padding-right: var(--sp-3)` on the select, so a long option
+  name can no longer run under the arrow.
+- **Motion was audited, not retuned.** No raw duration in the sheet equals a `--dur-*` step: what remains
+  is content timelines (prototype transitions up to 280ms, popovers 110–140ms) whose values would change
+  if they were snapped, so they stay literals by decision. Chrome motion is tokenised end to end.
+- **The pins were moved with the values.** `edgefit.test.mjs` pinned the dock's `min-height: 44px`
+  literally; it now follows `var(--h-dock)` and asserts the ladder still resolves to 44, so retuning the
+  token cannot retune the dock silently.
+
 ## Components (source of truth → adoption)
 
 - Button/input/numeric/select/segmented/popover/dialog/tabs: `x-ui.tsx` (`XButton`/`XInput`/

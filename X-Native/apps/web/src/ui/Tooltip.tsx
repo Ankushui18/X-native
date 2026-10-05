@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { sc } from "./sc";
 import { createPortal } from "react-dom";
 
 /**
@@ -130,7 +131,7 @@ export function Tooltip({
             }}
           >
             {label}
-            {shortcut && <span className="tip-sc">{shortcut}</span>}
+            {shortcut && <span className="tip-sc">{sc(shortcut)}</span>}
           </div>,
           document.body,
         )}

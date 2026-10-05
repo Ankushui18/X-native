@@ -1,4 +1,5 @@
 import { allowTopologyEdit } from "./vectorCapabilities";
+import { sc } from "./sc";
 /**
  * Marking / Radial Menu (Phase 7 Leapfrog Differentiation)
  *
@@ -165,7 +166,7 @@ export function RadialMenu({
         {/* Center hub */}
         <circle className="radial-hub" cx={0} cy={0} r={innerRadius - 4} />
         <text className="radial-shortcut" x={0} y={0} textAnchor="middle" dominantBaseline="central">
-          {activeIdx !== null ? SLICES[activeIdx].shortcut : "X"}
+          {activeIdx !== null ? sc(SLICES[activeIdx].shortcut) : "X"}
         </text>
       </svg>
     </div>

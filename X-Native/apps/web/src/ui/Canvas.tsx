@@ -244,6 +244,36 @@ const CHROME_CHIP_PAD = 12;
 const CHROME_PAD_WIDE = 16;
 const CHROME_GAP = 8;
 
+/* The rest of the canvas paint voices. Chrome that is not a chip — the guide
+   badges, the canvas label, the dev readout — names its own font, corner and
+   stroke here, for the same reason CHROME_* exists: one place per voice. */
+const HAIRLINE = 1;                       // every 1px chrome stroke
+const CHROME_STROKE = 1.5;                // handles, drop outlines, station rings
+const CHROME_STROKE_BOLD = 2;             // the flow insertion line
+const GUIDE_FONT = "500 10px Inter, system-ui";   // measurement badge + gap pill
+const GUIDE_RADIUS = 3;                   // the guide family's distinct corner
+const GUIDE_BADGE_H = 14;
+const GUIDE_BADGE_PAD = 8;
+const GUIDE_PILL_H = 16;
+const GUIDE_PILL_PAD = 10;
+const LABEL_FONT = "600 12px Inter, system-ui";   // canvas label, constant at any zoom
+const MONO_CHIP_FONT = "bold 10px monospace";     // eyedropper readout chip
+const DEV_PIN_FONT = "bold 10px Inter, system-ui, sans-serif";
+const DEV_CARD_FONT = "11px Inter, system-ui, sans-serif";
+const DEV_CARD_HEAD_FONT = "bold 9px Inter, system-ui, sans-serif";
+const PROFILE_FONT = "11px sans-serif";           // width-profile station labels
+
+/** The selection size badge speaks Figma's readout exactly: at most two
+ *  decimals with trailing zeros trimmed ("13.31 × 3.49", "9.5 × 4.34",
+ *  "128 × 178"), and the axis's sizing word printed beside the number when
+ *  that axis hugs — "22 Hug × 26 Hug" is what the reference captures show
+ *  under a hugging auto-layout frame. A fill axis resolves to a plain number. */
+const dimNum = (v: number) => String(Math.round(v * 100) / 100);
+const dimAxis = (v: number, mode?: "fixed" | "hug" | "fill") =>
+  `${dimNum(v)}${mode === "hug" ? " Hug" : ""}`;
+const dimText = (w: number, h: number, wm?: "fixed" | "hug" | "fill", hm?: "fixed" | "hug" | "fill") =>
+  `${dimAxis(w, wm)} × ${dimAxis(h, hm)}`;
+
 const CREATE: Tool[] = [
   "frame",
   "section",
@@ -550,7 +580,7 @@ function paintArcHandles(
   for (const h of arcHandlePoints(node, sx, sy, sw, sh)) {
     ctx.fillStyle = ink;
     ctx.strokeStyle = sel;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = CHROME_STROKE;
     ctx.beginPath();
     ctx.arc(h.x, h.y, 4.5, 0, Math.PI * 2);
     ctx.fill();
@@ -1935,7 +1965,7 @@ export function Canvas({
       if (!page.pixelGrid || snap.zoom < 4) return;
       ctx.save();
       ctx.strokeStyle = page.pixelGridColor || grid;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       const step = snap.zoom;
       ctx.beginPath();
       for (let x = snap.panX % step; x < w; x += step) {
@@ -2111,7 +2141,7 @@ export function Canvas({
       if (snap.outlineMode) {
         ctx.save();
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.setLineDash([]);
         traceShape();
         ctx.stroke();
@@ -2740,7 +2770,7 @@ export function Canvas({
             const offset = g.offset !== undefined ? g.offset : 0;
             const origin = ((offset % sz) + sz) % sz;
             ctx.strokeStyle = color;
-            ctx.lineWidth = 1;
+            ctx.lineWidth = HAIRLINE;
             ctx.beginPath();
             // Zero offset keeps the old rhythm (first line at one cell in);
             // a nonzero offset shifts the whole lattice over by it.
@@ -3114,7 +3144,7 @@ export function Canvas({
         // 12px while the canvas zooms.
         if (labelOnScreen) {
           ctx.save();
-          ctx.font = "600 12px Inter, system-ui";
+          ctx.font = LABEL_FONT;
           ctx.fillStyle = canvasLabel;
           ctx.textBaseline = "alphabetic";
           ctx.fillText(n.name, screenX + 8, screenY + 16);
@@ -3158,7 +3188,7 @@ export function Canvas({
         const ax = snap.panX + (anchorNode.x + v.x) * z;
         const ay = snap.panY + (anchorNode.y + v.y) * z;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         if (ghost) {
           ctx.beginPath();
           ctx.moveTo(ax, ay);
@@ -3177,7 +3207,7 @@ export function Canvas({
     }
     if (draft.length) {
       ctx.strokeStyle = SEL;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = CHROME_STROKE;
       const preview = ghost ? [...draft, ghost] : draft;
       tracePath(ctx, preview, snap.panX, snap.panY, z, false);
       ctx.stroke();
@@ -3187,7 +3217,7 @@ export function Canvas({
         const py = snap.panY + p.y * z;
         if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
           ctx.strokeStyle = SEL;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.beginPath();
           ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
           ctx.lineTo(px + (p.ox || 0) * z, py + (p.oy || 0) * z);
@@ -3214,7 +3244,7 @@ export function Canvas({
           // cue placed next to the cursor.
           ctx.beginPath();
           ctx.arc(px, py, 7, 0, Math.PI * 2);
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.stroke();
         }
       }
@@ -3356,13 +3386,13 @@ export function Canvas({
             ctx.fillStyle = SEL;
             ctx.fill();
             ctx.strokeStyle = INK;
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = CHROME_STROKE;
             ctx.stroke();
 
             // Plus symbol inside handle
             ctx.beginPath();
             ctx.strokeStyle = INK;
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = CHROME_STROKE;
             ctx.moveTo(h.x - 3, h.y);
             ctx.lineTo(h.x + 3, h.y);
             ctx.moveTo(h.x, h.y - 3);
@@ -3413,7 +3443,7 @@ export function Canvas({
         ctx.arc(sax, say, 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = INK;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.stroke();
 
         // Destination indicator / arrow
@@ -3436,7 +3466,7 @@ export function Canvas({
           ctx.arc(sbx, sby, 5, 0, Math.PI * 2);
           ctx.fill();
           ctx.strokeStyle = INK;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.stroke();
         }
 
@@ -3470,12 +3500,12 @@ export function Canvas({
           ctx.arc(ax, ay, 9, 0, Math.PI * 2);
           ctx.fillStyle = SEL;
           ctx.fill();
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.strokeStyle = INK;
           ctx.stroke();
 
           ctx.fillStyle = INK;
-          ctx.font = "bold 10px Inter, system-ui, sans-serif";
+          ctx.font = DEV_PIN_FONT;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText(String(idx + 1), ax, ay);
@@ -3486,13 +3516,13 @@ export function Canvas({
             const cardX = ax + 14;
             const cardY = ay - 14;
             const text = ann.note || "Spec note";
-            ctx.font = "11px Inter, system-ui, sans-serif";
+            ctx.font = DEV_CARD_FONT;
             const textWidth = Math.min(240, Math.max(130, ctx.measureText(text).width + 24));
             const cardH = 36;
 
             ctx.fillStyle = CHIP;
             ctx.strokeStyle = CHIP_LINE;
-            ctx.lineWidth = 1;
+            ctx.lineWidth = HAIRLINE;
             if (typeof ctx.roundRect === "function") {
               ctx.beginPath();
               ctx.roundRect(cardX, cardY, textWidth, cardH, 6);
@@ -3503,13 +3533,13 @@ export function Canvas({
             }
 
             ctx.fillStyle = SEL;
-            ctx.font = "bold 9px Inter, system-ui, sans-serif";
+            ctx.font = DEV_CARD_HEAD_FONT;
             ctx.textAlign = "left";
             ctx.textBaseline = "top";
             ctx.fillText(`SPEC #${idx + 1} · ${ann.author || "Dev"}`, cardX + 8, cardY + 6);
 
             ctx.fillStyle = CHIP_INK;
-            ctx.font = "11px Inter, system-ui, sans-serif";
+            ctx.font = DEV_CARD_FONT;
             const displayStr = text.length > 30 ? text.slice(0, 28) + "…" : text;
             ctx.fillText(displayStr, cardX + 8, cardY + 18);
             ctx.restore();
@@ -3536,7 +3566,7 @@ export function Canvas({
           ctx.translate(-(hx + hw / 2), -(hy + hh / 2));
         }
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.strokeRect(hx + 0.5, hy + 0.5, hw, hh);
         ctx.restore();
       }
@@ -3594,7 +3624,7 @@ export function Canvas({
           ctx.fillStyle = SEL;
           ctx.fill();
           ctx.strokeStyle = INK;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.beginPath();
           ctx.moveTo(cx - 4, cy);
           ctx.lineTo(cx + 4, cy);
@@ -3635,7 +3665,7 @@ export function Canvas({
       // grey dashed ring says "selected, not grabbable" (move/resize refuse
       // it; the resize handles below are suppressed for the same reason).
       ctx.strokeStyle = lockedSel ? LOCK : accent;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       if (lockedSel) ctx.setLineDash([4, 3]);
       ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
       ctx.setLineDash([]);
@@ -3671,7 +3701,7 @@ export function Canvas({
           // Diamond handles for editable vector/boolean/star/polygon nodes.
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.beginPath();
           ctx.moveTo(hx, hy - 4);
           ctx.lineTo(hx + 4, hy);
@@ -3689,7 +3719,7 @@ export function Canvas({
           const half = s / 2;
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.fillRect(hx - half + 0.5, hy - half + 0.5, s - 1, s - 1);
           ctx.strokeRect(hx - half + 0.5, hy - half + 0.5, s - 1, s - 1);
         }
@@ -3710,7 +3740,7 @@ export function Canvas({
           ctx.closePath();
           ctx.fillStyle = INK;
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.fill();
           ctx.stroke();
         }
@@ -3728,7 +3758,7 @@ export function Canvas({
         ? `${Math.round(find(root, wp.node.id)?.rotation ?? 0)}°`
         : lockedSel
           ? "Locked"
-          : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
+          : dimText(nb.w, nb.h, wp.node.sizingW, wp.node.sizingH);
       ctx.font = CHROME_FONT;
       const tw = ctx.measureText(dim).width;
       const bw = tw + CHROME_PAD_WIDE;
@@ -3764,7 +3794,7 @@ export function Canvas({
         const bx = sx + gt.hx * sw;
         const by = sy + gt.hy * sh;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
@@ -3829,7 +3859,7 @@ export function Canvas({
         // Ratio handle (valley)
         ctx.fillStyle = INK;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.beginPath();
         ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
         ctx.fill();
@@ -3865,7 +3895,7 @@ export function Canvas({
         const cyCount = cy + Math.sin(aCount) * ry;
         ctx.fillStyle = INK;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.beginPath();
         ctx.arc(cxCount, cyCount, 4.5, 0, Math.PI * 2);
         ctx.fill();
@@ -3913,7 +3943,7 @@ export function Canvas({
           ];
           const values = [radii.tl, radii.tr, radii.bl, radii.br];
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.lineCap = "round";
           for (let i = 0; i < 4; i++) {
             if (values[i] <= 0) continue;
@@ -3981,14 +4011,14 @@ export function Canvas({
         ctx.fillStyle = INK;
         ctx.fill();
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.stroke();
         ctx.beginPath();
         ctx.moveTo(tx - 4, ty);
         ctx.lineTo(tx + 4, ty);
         ctx.moveTo(tx, ty - 4);
         ctx.lineTo(tx, ty + 4);
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.stroke();
         ctx.restore();
       }
@@ -4006,7 +4036,7 @@ export function Canvas({
         ctx.save();
         const allLocked = snap.selection.every((id) => isEffectivelyLocked(root, id));
         ctx.strokeStyle = allLocked ? LOCK : SEL;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         if (allLocked) ctx.setLineDash([4, 3]);
         ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
         ctx.setLineDash([]);
@@ -4019,11 +4049,11 @@ export function Canvas({
           // centre either way, so only the pixels change, not what you can hit.
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = SEL;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.fillRect(hx - 4 + 0.5, hy - 4 + 0.5, 7, 7);
           ctx.strokeRect(hx - 4 + 0.5, hy - 4 + 0.5, 7, 7);
         }
-        const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
+        const dim = allLocked ? "Locked" : dimText(bb.w, bb.h);
         ctx.font = CHROME_FONT;
         const bw = ctx.measureText(dim).width + CHROME_PAD_WIDE;
         // FR-U4, the multi-selection badge: same clamp, same flip above the box.
@@ -4054,7 +4084,7 @@ export function Canvas({
     if (guides.length) {
       ctx.save();
       ctx.strokeStyle = GUIDE;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       for (const g of guides) {
         ctx.setLineDash(g.center ? [4, 3] : []);
         ctx.beginPath();
@@ -4078,20 +4108,20 @@ export function Canvas({
     // chrome the measurement overlay uses.
     const paintGapPills = (list: GapBadge[]) => {
       ctx.save();
-      ctx.font = "500 10px Inter, system-ui";
+      ctx.font = GUIDE_FONT;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       for (const g of list) {
         const cx = g.axis === "x" ? snap.panX + g.at * z : snap.panX + g.cross * z;
         const cy = g.axis === "x" ? snap.panY + g.cross * z : snap.panY + g.at * z;
         const label = `${Math.round(g.size)}`;
-        const bw = ctx.measureText(label).width + 10;
+        const bw = ctx.measureText(label).width + GUIDE_PILL_PAD;
         ctx.fillStyle = GUIDE;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
-          ctx.roundRect(cx - bw / 2, cy - 8, bw, 16, 3);
+          ctx.roundRect(cx - bw / 2, cy - GUIDE_PILL_H / 2, bw, GUIDE_PILL_H, GUIDE_RADIUS);
           ctx.fill();
-        } else ctx.fillRect(cx - bw / 2, cy - 8, bw, 16);
+        } else ctx.fillRect(cx - bw / 2, cy - GUIDE_PILL_H / 2, bw, GUIDE_PILL_H);
         ctx.fillStyle = INK;
         ctx.fillText(label, cx, cy);
       }
@@ -4110,7 +4140,7 @@ export function Canvas({
     if (dropHint) {
       ctx.save();
       ctx.strokeStyle = TARGET;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = CHROME_STROKE;
       ctx.strokeRect(
         snap.panX + dropHint.fx * z,
         snap.panY + dropHint.fy * z,
@@ -4119,7 +4149,7 @@ export function Canvas({
       );
       const ln = dropHint.line;
       if (ln) {
-        ctx.lineWidth = 2;
+        ctx.lineWidth = CHROME_STROKE_BOLD;
         ctx.beginPath();
         if (ln.horiz) {
           const x = snap.panX + ln.at * z;
@@ -4145,7 +4175,7 @@ export function Canvas({
         ctx.fillStyle = SEL_WASH;
         ctx.fill();
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.setLineDash([6, 4]);
         ctx.stroke();
         ctx.restore();
@@ -4166,13 +4196,13 @@ export function Canvas({
           const dots = widthProfileStations(sel.path, sel.closed, prof);
           if (dots.length || widthHover || widthSel.length) {
             ctx.save();
-            ctx.font = "11px sans-serif";
+            ctx.font = PROFILE_FONT;
             for (const d of dots) {
               ctx.beginPath();
               ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 3.5, 0, Math.PI * 2);
               ctx.fillStyle = INK;
               ctx.fill();
-              ctx.lineWidth = 1.5;
+              ctx.lineWidth = CHROME_STROKE;
               ctx.strokeStyle = SEL;
               ctx.stroke();
             }
@@ -4182,7 +4212,7 @@ export function Canvas({
               if (!d) continue;
               ctx.beginPath();
               ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 6, 0, Math.PI * 2);
-              ctx.lineWidth = 2;
+              ctx.lineWidth = CHROME_STROKE_BOLD;
               ctx.strokeStyle = SEL;
               ctx.stroke();
               ctx.fillStyle = INK;
@@ -4199,13 +4229,13 @@ export function Canvas({
               ctx.beginPath();
               ctx.arc(hx, hy, widthHover.onPoint != null ? 7 : 5, 0, Math.PI * 2);
               if (widthHover.onPoint != null) {
-                ctx.lineWidth = 2;
+                ctx.lineWidth = CHROME_STROKE_BOLD;
                 ctx.strokeStyle = GUIDE;
                 ctx.stroke();
               } else {
                 ctx.fillStyle = GUIDE;
                 ctx.fill();
-                ctx.lineWidth = 1;
+                ctx.lineWidth = HAIRLINE;
                 ctx.strokeStyle = INK;
                 ctx.stroke();
               }
@@ -4221,7 +4251,7 @@ export function Canvas({
     if (cutLine) {
       ctx.save();
       ctx.strokeStyle = SEL;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = CHROME_STROKE;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
       ctx.moveTo(snap.panX + cutLine.x1 * z, snap.panY + cutLine.y1 * z);
@@ -4343,7 +4373,7 @@ export function Canvas({
           if (isSelected) {
             ctx.save();
             ctx.strokeStyle = withAlpha(SEL, 0.75);
-            ctx.lineWidth = 1;
+            ctx.lineWidth = HAIRLINE;
             if (p.ix != null && p.iy != null && (p.ix !== 0 || p.iy !== 0)) {
               const hx = px + p.ix * z;
               const hy = py + p.iy * z;
@@ -4387,7 +4417,7 @@ export function Canvas({
             ctx.fill();
             ctx.fillStyle = SEL;
             ctx.strokeStyle = INK;
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = CHROME_STROKE;
             ctx.beginPath();
             ctx.moveTo(px, py - 5);
             ctx.lineTo(px + 5, py);
@@ -4416,7 +4446,7 @@ export function Canvas({
           ctx.save();
           ctx.strokeStyle = SEL;
           ctx.fillStyle = INK;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.setLineDash([3, 3]);
           ctx.strokeRect(snap.panX + hs[0][0] * z, snap.panY + hs[0][1] * z, (hs[4][0] - hs[0][0]) * z, (hs[4][1] - hs[0][1]) * z);
           ctx.setLineDash([]);
@@ -4486,7 +4516,7 @@ export function Canvas({
           ctx.save();
           ctx.fillStyle = withAlpha(SEL, 0.08);
           ctx.strokeStyle = withAlpha(SEL, 0.4);
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.setLineDash([2, 2]);
           if (pt > 0) ctx.fillRect(sx, sy, sw, pt * z);
           if (pb > 0) ctx.fillRect(sx, sy + sh - pb * z, sw, pb * z);
@@ -4504,19 +4534,19 @@ export function Canvas({
         ctx.save();
         ctx.strokeStyle = GUIDE;
         ctx.fillStyle = GUIDE;
-        ctx.lineWidth = 1;
-        ctx.font = "500 10px Inter, system-ui";
+        ctx.lineWidth = HAIRLINE;
+        ctx.font = GUIDE_FONT;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
         const drawBadge = (label: string, x: number, y: number) => {
-          const bw = ctx.measureText(label).width + 8;
+          const bw = ctx.measureText(label).width + GUIDE_BADGE_PAD;
           ctx.fillStyle = GUIDE;
           if (typeof ctx.roundRect === "function") {
             ctx.beginPath();
-            ctx.roundRect(x - bw / 2, y - 7, bw, 14, 3);
+            ctx.roundRect(x - bw / 2, y - GUIDE_BADGE_H / 2, bw, GUIDE_BADGE_H, GUIDE_RADIUS);
             ctx.fill();
-          } else ctx.fillRect(x - bw / 2, y - 7, bw, 14);
+          } else ctx.fillRect(x - bw / 2, y - GUIDE_BADGE_H / 2, bw, GUIDE_BADGE_H);
           ctx.fillStyle = INK;
           ctx.fillText(label, x, y);
           ctx.fillStyle = GUIDE;
@@ -4594,7 +4624,7 @@ export function Canvas({
     if (band) {
       ctx.fillStyle = SEL_WASH;
       ctx.strokeStyle = SEL;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
@@ -4607,13 +4637,13 @@ export function Canvas({
       if (snap.tool === "eraser") {
         ctx.save();
         ctx.strokeStyle = INK;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
         ctx.arc(cx, cy, ERASER_PX, 0, Math.PI * 2);
         ctx.stroke();
         ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.arc(cx, cy, ERASER_PX + 0.5, 0, Math.PI * 2);
@@ -4637,13 +4667,13 @@ export function Canvas({
           ctx.lineWidth = 3;
           ctx.strokeStyle = INK;
           ctx.stroke();
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
           ctx.stroke();
 
           // Crosshair
           ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.beginPath();
           ctx.moveTo(loupeX - 8, loupeY);
           ctx.lineTo(loupeX + 8, loupeY);
@@ -4663,9 +4693,9 @@ export function Canvas({
                 ? `H ${Math.round(hsl.h)}° S ${Math.round(hsl.s * 100)}% L ${Math.round(hsl.l * 100)}%`
                 : `H ${Math.round(hsb.h)}° S ${Math.round(hsb.s * 100)}% B ${Math.round(hsb.v * 100)}%`;
           ctx.fillStyle = CHIP;
-          ctx.font = "bold 10px monospace";
+          ctx.font = MONO_CHIP_FONT;
           const tw = Math.max(60, ctx.measureText(readout).width + 14);
-          const th = 20;
+          const th = CHROME_CHIP_H;
           const bx = loupeX - tw / 2;
           const by = loupeY + loupeR + 6;
           if (typeof ctx.roundRect === "function") {
@@ -4760,17 +4790,17 @@ export function Canvas({
           ctx.fillStyle = INK;
           ctx.fill();
           ctx.strokeStyle = TARGET;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.stroke();
         }
         ctx.strokeStyle = TARGET;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.strokeRect(bsx, bsy, bsw, bsh);
         for (const hh of cropHandleRects({ x: bsx, y: bsy, w: bsw, h: bsh }, 8)) {
           ctx.fillStyle = TARGET;
           ctx.fillRect(hh.x, hh.y, 8, 8);
           ctx.strokeStyle = INK;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.strokeRect(hh.x, hh.y, 8, 8);
         }
         ctx.restore();

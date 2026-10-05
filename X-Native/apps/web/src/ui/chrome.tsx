@@ -1,4 +1,5 @@
 import { allowTopologyEdit } from "./vectorCapabilities";
+import { sc } from "./sc";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ColorProfile, Engine, Snapshot, Tool, XNode, VariableCollection, VariableItem, VariableValue } from "../engine/types";
@@ -112,7 +113,7 @@ export function NavRail({
             </button>
             <hr />
             <button onClick={onActions}>
-              Actions <span className="sc">⌘K</span>
+              Actions <span className="sc">{sc("⌘K")}</span>
             </button>
             <button
               onClick={() => {
@@ -120,17 +121,17 @@ export function NavRail({
                 setMenu(false);
               }}
             >
-              Inspect File (.fig) <span className="sc">⇧⌘F</span>
+              Inspect File (.fig) <span className="sc">{sc("⇧⌘F")}</span>
             </button>
             <button onClick={() => engine.dispatch({ type: "undo" })}>
-              Undo <span className="sc">⌘Z</span>
+              Undo <span className="sc">{sc("⌘Z")}</span>
             </button>
             <button onClick={() => engine.dispatch({ type: "redo" })}>
-              Redo <span className="sc">⇧⌘Z</span>
+              Redo <span className="sc">{sc("⇧⌘Z")}</span>
             </button>
             <hr />
             <button onClick={() => engine.dispatch({ type: "duplicate" })}>
-              Duplicate <span className="sc">⌘D</span>
+              Duplicate <span className="sc">{sc("⌘D")}</span>
             </button>
             <button onClick={() => engine.dispatch({ type: "delete" })}>
               Delete <span className="sc">⌫</span>
@@ -908,7 +909,7 @@ export function FileMenu({
             onClick={() => run(() => saveLocalCopy(engine, snap.fileName))}
           >
             <Icon name="export" size={14} /> Save local copy
-            <span className="sc">⇧⌘S</span>
+            <span className="sc">{sc("⇧⌘S")}</span>
           </button>
           <button
             role="menuitem"
@@ -929,7 +930,7 @@ export function FileMenu({
           </button>
           <button role="menuitem" onClick={() => run(openExportAssets)}>
             <Icon name="image" size={14} /> Export assets…
-            <span className="sc">⇧⌘E</span>
+            <span className="sc">{sc("⇧⌘E")}</span>
           </button>
         </div>
       )}
@@ -1454,7 +1455,7 @@ export function Toolbar({
                   >
                     <Icon name={TOOL_ICON[t.id]} size={16} />
                     {t.label}
-                    {t.shortcut && <span className="sc">{t.shortcut}</span>}
+                    {t.shortcut && <span className="sc">{sc(t.shortcut)}</span>}
                   </button>
                 ))}
                 <div className="fly-hint">Hold Space to pan · {g.id === "move" ? "V moves, H hands" : "click a tool to switch"}</div>
@@ -1529,7 +1530,7 @@ export function Toolbar({
                   >
                     <Icon name="boolean-union" size={14} />
                     Union selection
-                    <span className="sc">⌥⇧U</span>
+                    <span className="sc">{sc("⌥⇧U")}</span>
                   </button>
                   <button
                     role="menuitem"
@@ -1541,7 +1542,7 @@ export function Toolbar({
                   >
                     <Icon name="boolean-subtract" size={14} />
                     Subtract selection
-                    <span className="sc">⌥⇧S</span>
+                    <span className="sc">{sc("⌥⇧S")}</span>
                   </button>
                   <button
                     role="menuitem"
@@ -1553,7 +1554,7 @@ export function Toolbar({
                   >
                     <Icon name="boolean-intersect" size={14} />
                     Intersect selection
-                    <span className="sc">⌥⇧I</span>
+                    <span className="sc">{sc("⌥⇧I")}</span>
                   </button>
                   <button
                     role="menuitem"
@@ -1565,7 +1566,7 @@ export function Toolbar({
                   >
                     <Icon name="boolean-exclude" size={14} />
                     Exclude selection
-                    <span className="sc">⌥⇧E</span>
+                    <span className="sc">{sc("⌥⇧E")}</span>
                   </button>
                   <div className="fly-div" role="separator" />
                   <button
@@ -1578,7 +1579,7 @@ export function Toolbar({
                   >
                     <Icon name="vector" size={14} />
                     Flatten selection
-                    <span className="sc">⌘E</span>
+                    <span className="sc">{sc("⌥⇧F")}</span>
                   </button>
                 </div>
               )}
@@ -1813,7 +1814,7 @@ export function Actions({
     { label: "Subtract", sc: "⌥⇧S", run: () => engine.dispatch({ type: "boolean", op: "subtract" }) },
     { label: "Intersect", sc: "⌥⇧I", run: () => engine.dispatch({ type: "boolean", op: "intersect" }) },
     { label: "Exclude", sc: "⌥⇧E", run: () => engine.dispatch({ type: "boolean", op: "exclude" }) },
-    { label: "Flatten", sc: "⌘E", run: () => engine.dispatch({ type: "flatten" }) },
+    { label: "Flatten", sc: "⌥⇧F", run: () => engine.dispatch({ type: "flatten" }) },
     { label: "Outline stroke", sc: "⇧⌘O", run: () => engine.dispatch({ type: "outlineStroke" }) },
     { label: "Wrap in section", sc: "", run: () => engine.dispatch({ type: "wrapSection" }) },
     {
@@ -1840,7 +1841,7 @@ export function Actions({
     { label: "Remove all auto layout", sc: "", run: () => removeAllAutoLayout(engine, engine.snapshot()) },
     { label: "Flip horizontal", sc: "⇧H", run: () => engine.dispatch({ type: "flip", axis: "h" }) },
     { label: "Flip vertical", sc: "⇧V", run: () => engine.dispatch({ type: "flip", axis: "v" }) },
-    { label: "Zoom to 100%", sc: "⇧0", run: () => zoomAboutCentre(engine, 1) },
+    { label: "Zoom to 100%", sc: "⌘0", run: () => zoomAboutCentre(engine, 1) },
     { label: "Zoom to fit", sc: "⇧1", run: () => zoomTo(engine, "fit") },
     { label: "Zoom to selection", sc: "⇧2", run: () => zoomTo(engine, "selection") },
   ];
@@ -1988,7 +1989,7 @@ export function Actions({
         {e.icon && <Icon name={e.kind === "layer" ? kindIcon(e.icon) : (e.icon as IconName)} size={14} />}
         <span className="qo-label">{e.label}</span>
         {e.detail && <span className="qo-detail">{e.detail}</span>}
-        {e.sc && <span className="sc">{e.sc}</span>}
+        {e.sc && <span className="sc">{sc(e.sc)}</span>}
       </button>
     );
   };
@@ -2540,6 +2541,19 @@ export function bindHotkeys(
     // Arrange menu shows) — both chords reach the same command. §26 KB-003:
     // matched on e.code too, because on a Mac ⌥] types a dead-key character
     // instead of "]", which left the ⌥ half of the pair silently dead there.
+    // Figma's own docs (Select, move, and order objects): "Bring to front" is
+    // the bare ] and "Send to back" the bare [ — the ⌘/Ctrl forms below are
+    // the one-step forward/backward. Both families reach the same commands.
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === "]" || e.code === "BracketRight")) {
+      e.preventDefault();
+      engine.dispatch({ type: "arrange", dir: "front" });
+      return;
+    }
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === "[" || e.code === "BracketLeft")) {
+      e.preventDefault();
+      engine.dispatch({ type: "arrange", dir: "back" });
+      return;
+    }
     if (meta && (e.key === "]" || e.code === "BracketRight")) {
       e.preventDefault();
       engine.dispatch({ type: "arrange", dir: e.shiftKey || e.altKey ? "front" : "forward" });
@@ -2953,9 +2967,10 @@ export function bindHotkeys(
         return;
       }
     }
-    // Zoom to 100% is ⇧0 in Figma — ⌘0 is NOT a Figma zoom shortcut (it is
-    // reserved in some browsers and Figma keeps it unbound here too).
-    if (!meta && e.shiftKey && e.code === "Digit0") {
+    // Zoom to 100% is ⌘0 / Ctrl+0 in current Figma — the zoom menu in the
+    // reference captures prints "Ctrl+0" on the row. ⇧0 keeps working as the
+    // older chord this app shipped with.
+    if (e.code === "Digit0" && (meta || (!e.altKey && e.shiftKey))) {
       e.preventDefault();
       zoomAboutCentre(engine, 1);
       return;
@@ -3011,11 +3026,20 @@ export function bindHotkeys(
       });
       return;
     }
-    // ⌘' shows the pixel grid, ⌘⇧' toggles snapping to it — standard pair.
+    // Figma's pixel grid is ⇧' alone ("Pixel grid Shift+'" on the zoom menu in
+    // the reference captures); ⌘⇧' toggles snapping to it. The ⌘' form keeps
+    // working as the older chord this app shipped with.
     // Matched on the physical key as well as the character, because with Shift
     // held the quote key *is* a different character: on a US layout ⇧' arrives
     // as `"`, on a German one ⇧2 as `@`, and matching only on those meant the
     // snapping half of the pair did nothing at all.
+    if (!meta && !e.altKey && e.shiftKey && (e.code === "Quote" || e.key === '"' || e.key === "'" || e.key === "@")) {
+      e.preventDefault();
+      const cur = engine.snapshot();
+      const page = cur.pages[cur.page];
+      engine.dispatch({ type: "patchPage", patch: { pixelGrid: !page.pixelGrid } });
+      return;
+    }
     if (meta && (e.code === "Quote" || e.key === "'" || e.key === "@")) {
       e.preventDefault();
       const cur = engine.snapshot();
@@ -4254,7 +4278,7 @@ function ToolsPane({
       blocked: snap.canRedo ? undefined : "Nothing to redo",
       run: () => engine.dispatch({ type: "redo" }),
     },
-    { label: "Zoom to 100%", sc: "⇧0", run: () => zoomAboutCentre(engine, 1) },
+    { label: "Zoom to 100%", sc: "⌘0", run: () => zoomAboutCentre(engine, 1) },
     { label: "All actions…", sc: "⌘K", run: () => onActions?.() },
   ];
   const blocked = actions.map((a) => a.blocked).filter((b): b is string => !!b);
@@ -4264,7 +4288,7 @@ function ToolsPane({
       <div className="presets">
         {actions.map((a) => (
           <button key={a.label} disabled={!!a.blocked} onClick={a.run}>
-            {a.label} <span className="sc">{a.sc}</span>
+            {a.label} <span className="sc">{sc(a.sc)}</span>
           </button>
         ))}
       </div>
@@ -4437,13 +4461,13 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
     items: [
       { id: "zoom-in", name: "Zoom in", keys: ["⌘", "+"] },
       { id: "zoom-out", name: "Zoom out", keys: ["⌘", "-"] },
-      { id: "zoom-100", name: "Zoom to 100%", keys: ["⇧", "0"] },
+      { id: "zoom-100", name: "Zoom to 100%", keys: ["⌘", "0"] },
       { id: "zoom-fit", name: "Zoom to fit", keys: ["⇧", "1"] },
       { id: "zoom-sel", name: "Zoom to selection", keys: ["⇧", "2"] },
       { id: "frame-next", name: "Zoom to next frame", keys: ["N"] },
       { id: "frame-prev", name: "Zoom to previous frame", keys: ["⇧", "N"] },
       { id: "rulers", name: "Rulers", keys: ["⇧", "R"] },
-      { id: "pixel-grid", name: "Pixel grid", keys: ["⌘", "'"] },
+      { id: "pixel-grid", name: "Pixel grid", keys: ["⇧", "'"] },
       { id: "pixel-snap", name: "Snap to pixel grid", keys: ["⌘", "⇧", "'"] },
       { id: "pixel-preview", name: "Pixel preview 1×", keys: ["⌃", "P"] },
       { id: "pixel-preview-2", name: "Pixel preview 2×", keys: ["⌃", "⌥", "P"] },
@@ -4513,7 +4537,7 @@ const SHORTCUT_TABS: { tab: string; items: ShortcutItem[] }[] = [
       { id: "align-box-gap", name: "Alignment box: switch the gap between a number and Auto", keys: ["X"] },
       { id: "pad-shorthand", name: "Padding field: ⌘-click, then type CSS shorthand (1,2,3 or 1,2,3,4)", keys: ["⌘", "click"] },
       { id: "mask", name: "Use as mask", keys: ["⌃", "⌘", "M"] },
-      { id: "flatten", name: "Flatten selection", keys: ["⌘", "E"] },
+      { id: "flatten", name: "Flatten selection", keys: ["⌥", "⇧", "F"] },
       { id: "union", name: "Union selection", keys: ["⌥", "⇧", "U"] },
       { id: "heal", name: "Delete & heal vector point", keys: ["⇧", "⌫"] },
     ],
@@ -4742,7 +4766,7 @@ export function HelpBtn() {
                     </div>
                     <div className="shortcut-keys">
                       {it.keys.map((k, idx) => (
-                        <kbd key={idx}>{k}</kbd>
+                        <kbd key={idx}>{sc(k)}</kbd>
                       ))}
                     </div>
                   </div>

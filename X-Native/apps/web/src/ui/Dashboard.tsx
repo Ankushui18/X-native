@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { sc } from "./sc";
 import { ICON_LG, Icon, caretSize, type IconName } from "./icons";
 import { Tooltip } from "./Tooltip";
 import { THEME_OPTIONS, useTheme } from "./theme";
@@ -438,7 +439,7 @@ export function Dashboard({
                   <button key={t.id} onClick={() => startNew(t.id)}>
                     <Icon name={TEMPLATE_ICON[t.id]} size={14} />
                     {t.label}
-                    <span className="sc">{t.hint}</span>
+                    <span className="sc">{sc(t.hint)}</span>
                   </button>
                 ))}
                 <hr />

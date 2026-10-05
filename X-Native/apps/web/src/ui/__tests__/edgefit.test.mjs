@@ -108,8 +108,12 @@ t(`the dock is bounded by the column it hangs in (max-width ${decl(dockRule, "ma
   decl(dockRule, "max-width") === "calc(100% - 24px)");
 t(`it wraps instead of overflowing (flex-wrap ${decl(dockRule, "flex-wrap")})`,
   decl(dockRule, "flex-wrap") === "wrap");
-t(`and grows upward from its own height (min-height ${decl(dockRule, "min-height")}, height ${decl(dockRule, "height") ?? "none"})`,
-  decl(dockRule, "min-height") === "44px" && !decl(dockRule, "height"));
+// The strip's 44px is named --h-dock; the pin follows the name and asserts the
+// ladder still resolves to 44, so retuning the token cannot silently retune the
+// dock without this test saying so.
+const hDock = css.match(/--h-dock:\s*([^;]+)/)?.[1].trim();
+t(`and grows upward from its own height (min-height ${decl(dockRule, "min-height")} = ${hDock}, height ${decl(dockRule, "height") ?? "none"})`,
+  decl(dockRule, "min-height") === "var(--h-dock)" && hDock === "44px" && !decl(dockRule, "height"));
 t("wrapped rows stay centred under the cursor", decl(dockRule, "justify-content") === "center");
 
 const toolsetRule = css.match(/(?:^|\n)\.toolset\s*\{([^}]*)\}/)?.[1] ?? "";
