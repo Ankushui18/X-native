@@ -138,6 +138,7 @@ function isFractional(n: XNode) {
   return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
 }
 import { FillPicker, type FillValue, type PatternSourceOption } from "./FillPicker";
+import { FontPicker, FontStyleMenu, styleName } from "./FontPicker";
 import type { EyedropSource } from "./color";
 import { applyEyedropSource, promptCreateEyedropToken, type EyedropTargetProperty } from "./eyedropper";
 import { containsId } from "../engine/pattern";
@@ -3176,6 +3177,31 @@ function CodeMappingEditor({ engine, master }: { engine: Engine; master: Compone
   );
 }
 
+/** The advertised families: bundled variable faces first (they resolve from
+ *  /public/fonts), then the CJK/RTL Noto shorthand list Figma also shows
+ *  (360040449673, 4972283635863), then the icon fonts (360040449513) where an
+ *  icon's Regular/Solid variant is the font weight (400/900). System fonts
+ *  discovered through the Local Font Access API merge beside them. */
+const FONT_BASE = [
+  "Inter",
+  "Roboto",
+  // SF Pro is a system font, not a distributable web font.
+  ...(/Mac|iPhone|iPad/.test(navigator.platform) ? ["SF Pro"] : []),
+  "Geist",
+  "Space Grotesk",
+  "Plus Jakarta Sans",
+  "Poppins",
+  "Outfit",
+  "Fira Code",
+  "JetBrains Mono",
+  "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR",
+  "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR",
+  "Noto Sans Arabic", "Noto Sans Hebrew",
+  "Font Awesome 6 Free", "Font Awesome 6 Brands",
+  "Font Awesome 5 Free", "Font Awesome 5 Brands",
+  "system-ui",
+];
+
 function Design({
   n,
   x,
@@ -3228,6 +3254,25 @@ function Design({
       cancelled = true;
     };
   }, []);
+  // The family dialog and the style menu are portalled pops anchored under
+  // their field (FontPicker.tsx); null = closed.
+  const [fontPop, setFontPop] = useState<{ left: number; top: number } | null>(null);
+  const [stylePop, setStylePop] = useState<{ left: number; top: number } | null>(null);
+  // Lazy: rangeStyle is computed below, and this runs at render time in JSX.
+  const fontEntries = (): { name: string; system: boolean }[] => {
+    const seen = new Set<string>();
+    const out: { name: string; system: boolean }[] = [];
+    const add = (name: string, system: boolean) => {
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      out.push({ name, system });
+    };
+    for (const f of FONT_BASE) add(f, false);
+    for (const f of localFonts) add(f, true);
+    if (n.fontFamily) add(n.fontFamily, false);
+    if (rangeStyle?.fontFamily) add(rangeStyle.fontFamily, false);
+    return out;
+  };
   const [fillDrag, setFillDrag] = useState<number | null>(null);
   const [fillOver, setFillOver] = useState<number | null>(null);
   const [strokeDrag, setStrokeDrag] = useState<number | null>(null);
@@ -3707,70 +3752,31 @@ function Design({
         >
           <div  className="insp-pad ins-col-sm">
             <div className="field">
-              <select
-                aria-label="Font family"
-                value={mixedProp((m) => m.fontFamily, textTargets) ? "__mixed" : rangeStyle?.fontFamily ?? n.fontFamily}
-                onChange={(e) => {
-                  if (e.target.value === "__mixed") return;
-                  if (multi) patchTypeMany({ fontFamily: e.target.value });
-                  else patchType({ fontFamily: e.target.value });
-                }}
-              >
-                {mixedProp((m) => m.fontFamily, textTargets) && <option value="__mixed">Mixed</option>}
-                {(() => {
-                  const base = [
-                    "Inter",
-                    "Roboto",
-                    // SF Pro is a system font, not a distributable web font.
-                    ...(/Mac|iPhone|iPad/.test(navigator.platform) ? ["SF Pro"] : []),
-                    "Geist",
-                    "Space Grotesk",
-                    "Plus Jakarta Sans",
-                    "Poppins",
-                    "Outfit",
-                    "Fira Code",
-                    "JetBrains Mono",
-                    // CJK (360040449673): Figma lists the Noto CJK fonts in
-                    // shorthand (SC/TC/JP/KR) and falls back to Noto for
-                    // unsupported characters. RTL (4972283635863): RTL fonts
-                    // are in the default list. These resolve from the system
-                    // when installed, like Figma's desktop fonts.
-                    "— Noto fonts —",
-                    "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR",
-                    "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR",
-                    "Noto Sans Arabic", "Noto Sans Hebrew",
-                    // Icon fonts (360040449513): Font Awesome; an icon's
-                    // Regular/Solid variant is the font weight (400/900).
-                    "— Icon fonts —",
-                    "Font Awesome 6 Free", "Font Awesome 6 Brands",
-                    "Font Awesome 5 Free", "Font Awesome 5 Brands",
-                    "system-ui",
-                  ];
-                  const merged = (() => {
-                    const seen = new Set(base.map((b) => b.toLowerCase()));
-                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
-                    const list = [...base];
-                    if (extra.length) {
-                      list.push("— System fonts —");
-                      list.push(...extra);
-                    }
-                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
-                    if (rangeStyle?.fontFamily && !list.includes(rangeStyle.fontFamily)) list.unshift(rangeStyle.fontFamily);
-                    return list;
-                  })();
-                  return merged.map((f) =>
-                    f.startsWith("—") ? (
-                      <option key={f} disabled>
-                        {f}
-                      </option>
-                    ) : (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ),
-                  );
-                })()}
-              </select>
+              <button
+                  type="button"
+                  className="field-btn"
+                  aria-label="Font family"
+                  data-value={mixedProp((m) => m.fontFamily, textTargets) ? "mixed" : rangeStyle?.fontFamily ?? n.fontFamily}
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setFontPop({ left: r.left, top: r.bottom + 4 });
+                  }}
+                >
+                  {mixedProp((m) => m.fontFamily, textTargets) ? "Mixed" : rangeStyle?.fontFamily ?? n.fontFamily}
+                </button>
+                {fontPop && (
+                  <FontPicker
+                    value={rangeStyle?.fontFamily ?? n.fontFamily}
+                    mixed={!!mixedProp((m) => m.fontFamily, textTargets)}
+                    fonts={fontEntries()}
+                    anchor={fontPop}
+                    onChange={(family) => {
+                      if (multi) patchTypeMany({ fontFamily: family });
+                      else patchType({ fontFamily: family });
+                    }}
+                    onClose={() => setFontPop(null)}
+                  />
+                )}
               <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontFamily" onOpenVariables={onOpenVariables} />
               {localFonts.length === 0 && (
                 <button
@@ -3801,27 +3807,32 @@ function Design({
             </div>
             <div className="grid2">
               <div className="field">
-                <select
+                <button
+                  type="button"
+                  className="field-btn"
                   aria-label="Font weight"
-                  value={mixedProp((m) => m.fontWeight, textTargets) ? "mixed" : rangeStyle?.fontWeight ?? n.fontWeight}
-                  onChange={(e) => {
-                    if (e.target.value === "mixed") return;
-                    const fontWeight = parseInt(e.target.value, 10);
-                    if (multi) patchTypeMany({ fontWeight });
-                    else patchType({ fontWeight });
+                  data-value={String(mixedProp((m) => m.fontWeight, textTargets) ? "mixed" : rangeStyle?.fontWeight ?? n.fontWeight)}
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setStylePop({ left: r.left, top: r.bottom + 4 });
                   }}
                 >
-                  {mixedProp((m) => m.fontWeight, textTargets) && <option value="mixed">Mixed</option>}
-                  <option value={100}>Thin (100)</option>
-                  <option value={200}>Extra Light (200)</option>
-                  <option value={300}>Light (300)</option>
-                  <option value={400}>Regular (400)</option>
-                  <option value={500}>Medium (500)</option>
-                  <option value={600}>Semi Bold (600)</option>
-                  <option value={700}>Bold (700)</option>
-                  <option value={800}>Extra Bold (800)</option>
-                  <option value={900}>Black (900)</option>
-                </select>
+                  {mixedProp((m) => m.fontWeight, textTargets)
+                    ? "Mixed"
+                    : styleName(rangeStyle?.fontWeight ?? n.fontWeight, (rangeStyle?.fontStyle ?? n.fontStyle ?? "normal") === "italic")}
+                </button>
+                {stylePop && (
+                  <FontStyleMenu
+                    weight={rangeStyle?.fontWeight ?? n.fontWeight}
+                    italic={(rangeStyle?.fontStyle ?? n.fontStyle ?? "normal") === "italic"}
+                    anchor={stylePop}
+                    onPick={({ fontWeight, fontStyle }) => {
+                      if (multi) patchTypeMany({ fontWeight, fontStyle });
+                      else patchType({ fontWeight, fontStyle });
+                    }}
+                    onClose={() => setStylePop(null)}
+                  />
+                )}
                 <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontWeight" onOpenVariables={onOpenVariables} />
               </div>
               <Field

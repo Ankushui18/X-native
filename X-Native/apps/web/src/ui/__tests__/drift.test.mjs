@@ -142,6 +142,12 @@ const CEILING = {
   // is one new title and one new button; the remove-stop title replaced the
   // trash-only icon so the title count goes up by one (from the new +).
   "FillPicker.tsx": [12, 2, 16, 19, 2],
+  // Raised 2026-10-05 for the Fonts dialog (reference captures: family field
+  // opens a searchable picker, style field opens the upright/italic menu).
+  // One inline value: each family row paints its own typeface at runtime.
+  // Five buttons (close, clear-search, the family row map, two style-menu
+  // maps) and one source-filter select; no title and no colour literal.
+  "FontPicker.tsx": [1, 0, 0, 5, 1],
   "Guides.tsx": [0, 0, 2, 0, 0],
   "Minimap.tsx": [0, 0, 0, 0, 0],
   "PresentationPlayer.tsx": [5, 0, 12, 9, 2],
@@ -169,7 +175,9 @@ const CEILING = {
   // group headers now carry the rows' own gutter from the sheet.
   // Lowered 2026-10-05 (inspector sweep): 185 inline style objects → the
   // .ins-* vocabulary in the sheet; 13 runtime values stay inline.
-  "inspector.tsx": [13, 22, 248, 200, 49],
+  // 2026-10-05: the font family/weight <select>s became the dialog and menu
+  // triggers — two fewer native selects, two more field buttons.
+  "inspector.tsx": [13, 22, 248, 202, 47],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };

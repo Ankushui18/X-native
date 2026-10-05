@@ -1739,6 +1739,24 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
   cursor: pointer;
 }
 
+/* The font family / font-style triggers (FontPicker's openers) speak the
+   select's own recipe — same height, same value type — and truncate long
+   family names the way the select clipped them. */
+.field button.field-btn {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: var(--t-value-ui);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .color-row {
   display: flex;
   align-items: center;
@@ -2749,6 +2767,103 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
 }
 .type-menu button:hover, .type-menu button.on { background: var(--hover); }
 .type-menu .sc { margin-left: auto; color: var(--dim); }
+
+/* The font family dialog + the font-style menu (FontPicker.tsx). The family
+   rows render in their own typeface — the one place a runtime font name
+   paints type — with the check in a reserved left column, as the reference
+   captures show. The style menu reuses the .type-menu rhythm, only portalled
+   and widened; the tick column mirrors the dialog. */
+.font-style-menu { position: fixed; width: 176px; z-index: 80; }
+.font-style-menu .tick,
+.font-pop-row .tick {
+  width: var(--sp-4);
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.font-pop {
+  position: fixed;
+  width: 264px;
+  background: var(--elevated);
+  border-radius: var(--r-popover);
+  box-shadow: var(--elev-floating);
+  padding: var(--sp-2);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.font-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--sp-1);
+}
+.font-pop-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.font-pop-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-md);
+  padding: 0 var(--sp-2);
+  background: var(--input);
+  border-radius: var(--r-control);
+}
+.font-pop-search:focus-within {
+  outline: var(--ring-w) solid var(--accent);
+  outline-offset: -1px;
+}
+.font-pop-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.font-pop-search input::placeholder { color: var(--dim); }
+.font-pop-src {
+  height: var(--h-sm);
+  border: 0;
+  background: var(--input);
+  border-radius: var(--r-control);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  padding: 0 var(--sp-2);
+}
+.font-pop-list {
+  max-height: 264px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-0-5);
+}
+.font-pop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: var(--h-lg);
+  padding: 0 var(--sp-2);
+  border: 0;
+  background: transparent;
+  border-radius: var(--r-control);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.font-pop-row:hover, .font-pop-row.active { background: var(--hover); }
+.font-pop-row.on { font-weight: 600; }
+.font-pop-row .tick { color: var(--accent); }
+.font-pop-empty {
+  padding: var(--sp-5) var(--sp-4);
+  text-align: center;
+  font-size: var(--fs-xs);
+}
 .img-fill { display: flex; flex-direction: column; gap: var(--sp-1-5); }
 .img-preview {
   width: 100%;
