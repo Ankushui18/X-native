@@ -473,6 +473,45 @@ type Drag =
       cy?: number;
     };
 
+/** Drag modes whose press opened a history group (`engine.dispatch({type:"begin"})`):
+ *  the release must close it, or the engine stays in "grouping" mode and every
+ *  edit the user makes afterwards is folded into that one undo entry — one ⌘Z
+ *  then rolls back the handle drag *and* everything after it. Figma steps back
+ *  one action per ⌘Z, so a leaked group is exactly the "undo skips steps" bug
+ *  (see `rotationHandleHit` press sites and the shape-handle branches). The
+ *  list is exhaustive on purpose: a mode missing here is a shipped bug, and
+ *  `gestureUndoSteps.test.mjs` drives every entry through the mounted canvas. */
+const GESTURE_MODES: ReadonlySet<Drag["mode"]> = new Set<Drag["mode"]>([
+  "move",
+  "resize",
+  "vec",
+  "vecResize",
+  "grad",
+  "gradStop",
+  "gradMid",
+  "multiResize",
+  "multiRotate",
+  "rotOrigin",
+  "autoPad",
+  "pathStart",
+  "autoGap",
+  "smartGap",
+  "arc",
+  "widthPt",
+  "crop",
+  "cropMove",
+  "cropRotate",
+  "cropScale",
+  "rotate",
+  "bend",
+  "starRatio",
+  "starCount",
+  "starRadius",
+  "polyCount",
+  "polyRadius",
+  "radius",
+]);
+
 /** Drop selected descendants whose selected ancestor already carries them. */
 function transformSelectionRoots(root: XNode, ids: string[]): string[] {
   const wanted = new Set(ids), roots: string[] = [];
@@ -5986,8 +6025,11 @@ export function Canvas({
             const nextFill = wp.node.fillVisible ? (wp.node.fill || DOC_FILL_NONE) : DOC_FILL_BRAND;
             const vn = wp.node.vectorNetwork || pathToVectorNetwork(wp.node.path.length ? wp.node.path : shapePoly(wp.node), effClosed(wp.node));
             const updatedVn = fillNetworkRegionAtPoint(vn, local.x, local.y, nextFill);
+            // Region paint + making the fill visible are one click: one undo.
+            engine.dispatch({ type: "begin" });
             engine.dispatch({ type: "patchVectorNetwork", id: wp.node.id, network: updatedVn });
             engine.dispatch({ type: "patch", id: wp.node.id, patch: { fillVisible: true } });
+            engine.dispatch({ type: "end" });
             toast("Filled vector region (Paint Bucket)");
             return;
           }
@@ -7590,6 +7632,9 @@ export function Canvas({
         const targetNode = find(root, protoDrag.targetId);
         if (srcNode && targetNode) {
           const prev = srcNode.interactions ?? [];
+          // The connection and the flow-start it may set are ONE user action,
+          // so they share one undo step (Figma's ⌘Z steps back one action).
+          engine.dispatch({ type: "begin" });
           engine.dispatch({
             type: "setInteractions",
             id: d.id,
@@ -7616,6 +7661,7 @@ export function Canvas({
               engine.dispatch({ type: "patchPage", patch: { flowStart: flowId } });
             }
           }
+          engine.dispatch({ type: "end" });
           toast(`Connected to ${targetNode.name}`);
         }
       }
@@ -7664,29 +7710,7 @@ export function Canvas({
         }
       }
     }
-    if (
-      d.mode === "move" ||
-      d.mode === "resize" ||
-      d.mode === "vec" ||
-      d.mode === "vecResize" ||
-      d.mode === "grad" ||
-      d.mode === "gradStop" ||
-      d.mode === "gradMid" ||
-      d.mode === "multiResize" ||
-      d.mode === "multiRotate" ||
-      d.mode === "rotOrigin" ||
-      d.mode === "autoPad" ||
-      d.mode === "pathStart" ||
-      d.mode === "autoGap" ||
-      d.mode === "smartGap" ||
-      d.mode === "arc" ||
-      d.mode === "widthPt" ||
-      d.mode === "crop" ||
-      d.mode === "cropMove" ||
-      d.mode === "cropRotate" ||
-      d.mode === "cropScale" ||
-      (d.mode === "marquee" && d.id === "erase")
-    )
+    if (GESTURE_MODES.has(d.mode) || (d.mode === "marquee" && d.id === "erase"))
       engine.dispatch({ type: "end" });
     // Phase 10: Finalize eraser via WASM when a stroke path was collected.
     // The TS erase already ran during the drag for visual feedback; the WASM
