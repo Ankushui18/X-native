@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { sc } from "./sc";
 import { createPortal } from "react-dom";
 import type { Engine, XNode } from "../engine/types";
 import { plural, toast } from "./toast";
@@ -158,7 +159,7 @@ export function ContextMenu({
                       >
                         {s.icon && <Icon name={s.icon} size={14} />}
                         {s.label}
-                        {s.shortcut && <span className="sc">{s.shortcut}</span>}
+                        {s.shortcut && <span className="sc">{sc(s.shortcut)}</span>}
                       </button>
                     ) : (
                       <hr key={j} />
@@ -181,7 +182,7 @@ export function ContextMenu({
           >
             {it.icon && <Icon name={it.icon} size={14} />}
             {it.label}
-            {it.shortcut && <span className="sc">{it.shortcut}</span>}
+            {it.shortcut && <span className="sc">{sc(it.shortcut)}</span>}
           </button>
         );
       })}
@@ -246,7 +247,7 @@ export function canvasMenu(
   if (sel === 0) {
     return [
       ...selectItems(under),
-      { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
+      { kind: "action", id: "paste", label: "Paste here", shortcut: "⌘V", icon: "clipboard" },
       { kind: "action", id: "selectAll", label: "Select all", shortcut: "⌘A", icon: "rect" },
       { kind: "action", id: "placeImage", label: "Place image…", shortcut: "⇧⌘K", icon: "image" },
       // Right-clicking an empty canvas is the second way to get
@@ -261,7 +262,7 @@ export function canvasMenu(
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
-    { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
+    { kind: "action", id: "paste", label: "Paste here", shortcut: "⌘V", icon: "clipboard" },
     // Figma, Copy and paste objects (4409078832791): ⌘⇧V lands the copy at
     // the selection's own x,y in its parent ("on top of a selected frame,
     // not inside it"); ⇧⌘R swaps the selection for the clipboard at the same
@@ -273,9 +274,13 @@ export function canvasMenu(
       // Grouped under "Copy/paste as", and the language list is the
       // inspect panel's own, so the menu and the panel answer in one voice.
       kind: "sub",
-      label: "Copy/paste as",
+      label: "Copy/Paste as",
       icon: "code",
+      // Figma's own submenu order (reference capture): link first, then the
+      // code copies, SVG, PNG. Copy link keeps no chip — Figma prints ⌘L and
+      // this app's ⌘L is Add stack layout; the conflict is documented, not lied about.
       items: [
+        { kind: "action" as const, id: "copyLink", label: "Copy link to selection", icon: "link" },
         ...DEV_LANGS.map((l) => ({
           kind: "action" as const,
           id: `copyCode:${l.id}`,
@@ -283,8 +288,8 @@ export function canvasMenu(
           shortcut: l.id === "css" ? "⌥⇧⌘C" : undefined,
           icon: "code" as IconName,
         })),
-        { kind: "action" as const, id: "copyPng", label: "Copy as PNG", icon: "image" },
-        { kind: "action" as const, id: "copyLink", label: "Copy link to selection", icon: "link" },
+        { kind: "action" as const, id: "copySvg", label: "Copy as SVG", icon: "code" },
+        { kind: "action" as const, id: "copyPng", label: "Copy as PNG", shortcut: "⇧⌘C", icon: "image" },
       ],
     },
     { kind: "action", id: "duplicate", label: "Duplicate", shortcut: "⌘D", icon: "copy" },
@@ -311,10 +316,10 @@ export function canvasMenu(
     label: "Arrange",
     icon: "layers",
     items: [
-      { kind: "action", id: "front", label: "Bring to front", shortcut: "⇧⌘]", icon: "chevrons-up" },
+      { kind: "action", id: "front", label: "Bring to front", shortcut: "]", icon: "chevrons-up" },
       { kind: "action", id: "forward", label: "Bring forward", shortcut: "⌘]", icon: "chevron-up" },
       { kind: "action", id: "backward", label: "Send backward", shortcut: "⌘[", icon: "chevron-down" },
-      { kind: "action", id: "back", label: "Send to back", shortcut: "⇧⌘[", icon: "chevrons-down" },
+      { kind: "action", id: "back", label: "Send to back", shortcut: "[", icon: "chevrons-down" },
     ],
   });
   if (sel > 1) {
@@ -327,14 +332,14 @@ export function canvasMenu(
         { kind: "action", id: "subtract", label: "Subtract selection", shortcut: "⌥⇧S" },
         { kind: "action", id: "intersect", label: "Intersect selection", shortcut: "⌥⇧I" },
         { kind: "action", id: "exclude", label: "Exclude selection", shortcut: "⌥⇧E" },
-        { kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" },
+        { kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌥⇧F" },
       ],
     });
   }
   items.push({ kind: "sep" });
   // §22 MN-002: multi-select already gets Flatten inside the Boolean submenu
   // above, so the standalone row is single-select only — no twin rows.
-  if (sel < 2) items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌘E" });
+  if (sel < 2) items.push({ kind: "action", id: "flatten", label: "Flatten selection", shortcut: "⌥⇧F" });
   items.push({ kind: "action", id: "outlineStroke", label: "Outline stroke", shortcut: "⇧⌘O", enabled: caps.outline ?? true });
   items.push({ kind: "action", id: "offsetPath", label: "Offset path…" });
   items.push({ kind: "action", id: "simplifyPath", label: "Simplify vector" });
@@ -381,7 +386,7 @@ export function layerMenu(isGroup: boolean, hasLayout = false, caps: MenuCaps = 
     { kind: "action", id: "cut", label: "Cut", shortcut: "⌘X", icon: "scissors" },
     { kind: "action", id: "copy", label: "Copy", shortcut: "⌘C", icon: "copy" },
     { kind: "action", id: "copyProperties", label: "Copy properties", shortcut: "⌥⌘C", icon: "copy" },
-    { kind: "action", id: "paste", label: "Paste", shortcut: "⌘V", icon: "clipboard" },
+    { kind: "action", id: "paste", label: "Paste here", shortcut: "⌘V", icon: "clipboard" },
     { kind: "action", id: "pasteOver", label: "Paste over selection", shortcut: "⌘⇧V", icon: "clipboard" },
     { kind: "action", id: "pasteToReplace", label: "Paste to replace", shortcut: "⇧⌘R", icon: "clipboard" },
     { kind: "action", id: "pasteProperties", label: "Paste properties", shortcut: "⌥⌘V", icon: "clipboard" },
@@ -487,6 +492,11 @@ export async function runMenu(
       // renderer, hence the event: same language and units as the snippet shown.
       window.dispatchEvent(new CustomEvent("x-native-copy-code", { detail: { format: null } }));
       break;
+    case "copySvg":
+      // The SVG string is assembled by the same export renderer as the PNG
+      // twin; App.tsx owns the clipboard write (see x-native-copy-svg).
+      window.dispatchEvent(new CustomEvent("x-native-copy-svg"));
+      break;
     case "copyPng":
       // The rasteriser lives beside the export code in the right panel, so the
       // menu asks for it over an event rather than duplicating the renderer.
@@ -509,7 +519,7 @@ export async function runMenu(
     case "delete": {
       const n = engine.snapshot().selection.length;
       engine.dispatch({ type: "delete" });
-      if (n) toast(`Deleted ${plural(n, "layer")} · ⌘Z to undo`);
+      if (n) toast(`Deleted ${plural(n, "layer")} · ${sc("⌘Z")} to undo`);
       break;
     }
     case "selectAll":

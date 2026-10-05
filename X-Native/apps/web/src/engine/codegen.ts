@@ -502,7 +502,7 @@ function resolveStyles(
     const layerBlur = n.effects.find((e) => e.visible && e.kind === "layer-blur");
     if (layerBlur) decls.push(["filter", `blur(${len(layerBlur.blur, ctx.unit)})`]);
     for (const e of n.effects) {
-      if (e.visible && (e.kind === "noise" || e.kind === "glass" || e.kind === "texture")) {
+      if (e.visible && (e.kind === "noise" || e.kind === "glass" || e.kind === "texture" || e.kind === "shader")) {
         notes.push(`${e.kind} effect — no CSS equivalent`);
       }
     }

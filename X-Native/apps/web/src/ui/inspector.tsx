@@ -1,4 +1,5 @@
 import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
+import { sc } from "./sc";
 import {
   useEffect,
   useMemo,
@@ -137,6 +138,8 @@ function isFractional(n: XNode) {
   return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
 }
 import { FillPicker, type FillValue, type PatternSourceOption } from "./FillPicker";
+import { FontPicker, FontStyleMenu, styleName, useAnchoredPop, useClickOutside } from "./FontPicker";
+import { usePresence } from "./presence";
 import type { EyedropSource } from "./color";
 import { applyEyedropSource, promptCreateEyedropToken, type EyedropTargetProperty } from "./eyedropper";
 import { containsId } from "../engine/pattern";
@@ -160,6 +163,31 @@ import {
   mappingSyncStatus,
   type TreeFormat,
 } from "../engine/codegen";
+
+/* -- document ink, named ------------------------------------------------------
+   The inspector writes colours *into* files: a default fill when a paint bucket
+   pours into a layer that had none, the ink a code block hands to SwiftUI or
+   Compose, the second colour of a fresh paint, the white a JPEG is flattened
+   onto. None of these may follow the theme -- a saved document, and the code it
+   generates, must look the same in every viewer -- so they are named here rather
+   than typed at the call site, and the token suite checks that no inspector
+   literal is anonymous. */
+const DOC_FILL_NONE = "#d9d9d9";
+const DOC_NO_FILL = "#00000000";
+const DOC_INK = "#000000";
+const DOC_SECOND_PAINT = "#ffffff";
+const DOC_STROKE = "#1e1e1e";
+const DOC_FLATTEN_INK = "#ffffff";
+const DOC_CONTRAST_BG = "#ffffff";
+const DOC_RECENT_INK = ["#000000", "#00000040", "#ffffff"];
+const DOC_RECENT_BRAND = ["#ffffff", "#000000", "#00000040"];
+const DOC_RECENT_PAIR = ["#ffffff", "#000000"];
+const DOC_PAGE_BG = "#ffffff";
+const DOC_GRID_DEFAULT = "#cccccc";
+const DOC_GRID_RECENTS = ["#cccccc", "#e6e6e6", "#8a8a8a", "#5b3df5"];
+/** A value that will not parse, painted so somebody notices. */
+const DOC_ALERT = "#ff0000";
+
 
 export function RightPanel({
   engine,
@@ -195,11 +223,30 @@ export function RightPanel({
   const wp = id ? worldPos(root, id) : null;
   const n = wp?.node;
   const inspect = snap.rightTab === "inspect";
+  // Multiplayer: the collaborator cluster rides the panel head next to "You".
+  const { peers: presence } = usePresence();
   return (
     <aside className="panel right" aria-label="Inspector">
       <div className="right-head">
-        <div className="avatar" title="You">
-          X
+        <div className="presence-cluster" aria-label="Collaborators">
+          <div className="avatar" title="You">
+            X
+          </div>
+          {presence.slice(0, 3).map((p) => (
+            <div
+              key={p.id}
+              className="avatar peer"
+              title={p.name}
+              style={{ background: `hsl(${Math.round(p.hue)}, 72%, 52%)` }}
+            >
+              {p.name.slice(0, 1)}
+            </div>
+          ))}
+          {presence.length > 3 && (
+            <div className="avatar more" title={presence.slice(3).map((p) => p.name).join(", ")}>
+              +{presence.length - 3}
+            </div>
+          )}
         </div>
         <span className="grow" />
         <Tooltip label={inspect ? "Exit Dev Mode" : "Dev Mode"} shortcut="⇧D">
@@ -620,9 +667,9 @@ function DesignHealth({
   const shown = report.issues.slice(0, 40);
   return (
     <>
-      <div className="h-row" style={{ marginTop: 4 }}>
+      <div  className="h-row ins-mt-1">
         <h3>Design health</h3>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div className="ins-row">
           <span
             style={{ fontSize: 11, fontWeight: 700, color: scoreColor }}
             title={`${report.counts.error} errors · ${report.counts.warning} warnings · ${report.counts.info} notes`}
@@ -635,7 +682,7 @@ function DesignHealth({
         </div>
       </div>
       {open && (
-        <div className="insp-pad" style={{ display: "grid", gap: 4, maxHeight: 260, overflowY: "auto" }}>
+        <div  className="insp-pad ins-col-sm ins-scroll-260">
           {report.issues.length === 0 && <p className="muted">No issues — every color, variable, and component checks out.</p>}
           {shown.map((issue, i) => (
             <div
@@ -657,7 +704,7 @@ function DesignHealth({
                 style={{ width: 7, height: 7, borderRadius: 999, background: dot(issue.severity), flexShrink: 0 }}
                 aria-hidden
               />
-              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={issue.message}>
+              <span className="ins-grow ins-ellip" title={issue.message}>
                 {issue.message}
               </span>
               {issue.fix && (
@@ -716,10 +763,10 @@ function PageDesign({
       {tool === "frame" && (
         <>
           <Section id="presets" title="Frame Presets">
-          <div className="presets" style={{ maxHeight: 340, overflowY: "auto" }}>
+          <div  className="presets ins-scroll-340">
             {PRESET_GROUPS.map((grp) => (
-              <div key={grp.category} style={{ marginBottom: 6 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", padding: "4px 8px" }}>
+              <div key={grp.category} className="ins-mb-1-5">
+                <div className="ins-eyebrow">
                   <Icon name={grp.icon} size={14} />
                   <span>{grp.category}</span>
                 </div>
@@ -739,7 +786,7 @@ function PageDesign({
                         y: vy,
                         w: p.w,
                         h: p.h,
-                        extra: { name: p.name, overflow: "clip", fill: "#ffffff", fillVisible: true },
+                        extra: { name: p.name, overflow: "clip", fill: DOC_PAGE_BG, fillVisible: true },
                       });
                     }}
                   >
@@ -793,10 +840,10 @@ function PageDesign({
       <Section id="pixel-grid" title="Pixel grid">
       <div className="insp-pad">
         <ColorRow
-          value={snap.pages[snap.page].pixelGridColor || "#cccccc"}
+          value={snap.pages[snap.page].pixelGridColor || DOC_GRID_DEFAULT}
           opacity={snap.pages[snap.page].pixelGrid ? 100 : 0}
           visible={!!snap.pages[snap.page].pixelGrid}
-          recents={["#cccccc", "#e6e6e6", "#8a8a8a", "#10b981"]}
+          recents={DOC_GRID_RECENTS}
           onChange={(pixelGridColor) =>
             engine.dispatch({ type: "patchPage", patch: { pixelGridColor, pixelGrid: true } })
           }
@@ -922,7 +969,7 @@ function Prototype({
       <div className="proto-preview device">
         <DevicePreview
           spec={deviceFor(snap.prototypeDevice)}
-          fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : "#fff"}
+          fill={n?.fillVisible !== false && n?.fill && n.fill.length >= 7 ? n.fill : DOC_PAGE_BG}
           radius={n?.cornerRadii?.[0] || 0}
         />
       </div>
@@ -976,6 +1023,13 @@ function Prototype({
                 <option value="keyPress">Key / Gamepad press</option>
                 <option value="onDrag">On drag</option>
               </select>
+              <button
+                className="mini"
+                title="Preview this interaction"
+                onClick={() => engine.dispatch({ type: "presentGo", id: ix.destination || n.id })}
+              >
+                ▷ Play
+              </button>
               <button
                 className="mini minus"
                 title="Remove interaction"
@@ -1276,7 +1330,7 @@ function Prototype({
               </label>
             </div>
             <div className="proto-ease">
-              <svg width="32" height="18" viewBox="0 0 32 18" style={{ overflow: "visible" }}>
+              <svg width="32" height="18" viewBox="0 0 32 18" className="ins-svg-visible">
                 {ix.easing === "linear" && <line x1="2" y1="16" x2="30" y2="2" stroke="var(--accent)" strokeWidth="1.5" />}
                 {ix.easing === "easeIn" && <path d="M 2 16 Q 22 16, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
                 {(ix.easing === "easeOut" || !ix.easing) && <path d="M 2 16 Q 8 2, 30 2" fill="none" stroke="var(--accent)" strokeWidth="1.5" />}
@@ -1419,7 +1473,7 @@ function generateCss(n: XNode, unit: DevUnit = "px"): string {
     if (n.cornerSmoothing)
       rules.push(`/* corner smoothing ${Math.round(n.cornerSmoothing * 100)}% - border-radius is a circular arc */`);
   }
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     rules.push(`background: ${n.fill};`);
   }
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
@@ -1537,7 +1591,7 @@ function generateTailwind(n: XNode): string {
       cls.push(`rounded-[${n.cornerRadii[0]}px]`);
     }
   }
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     cls.push(`bg-[${n.fill}]`);
   }
   if (n.strokeVisible && n.strokeWidth > 0 && n.strokePaint) {
@@ -1599,7 +1653,7 @@ function generateSwiftUI(n: XNode): string {
           : "";
     return `Text("${n.text || n.name}")
     .font(.system(size: ${n.fontSize}, weight: ${weight}))${deco}${tcase}
-    .foregroundColor(Color(hex: "${hex(n.fill || "#000000")}"))`;
+    .foregroundColor(Color(hex: "${hex(n.fill || DOC_INK)}"))`;
   }
   const stack = n.layout ? (n.layout.direction === "horizontal" ? "HStack" : "VStack") : "ZStack";
   const spacing = n.layout?.gap ? `spacing: ${n.layout.gap}` : "";
@@ -1607,7 +1661,7 @@ function generateSwiftUI(n: XNode): string {
   const args = [align, spacing].filter(Boolean).join(", ");
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   const padStr = pl || pr || pt || pb ? `\n    .padding(EdgeInsets(top: ${pt}, leading: ${pl}, bottom: ${pb}, trailing: ${pr}))` : "";
-  const bgStr = n.fillVisible !== false && n.fill && n.fill !== "#00000000" ? `\n    .background(Color(hex: "${hex(n.fill)}"))` : "";
+  const bgStr = n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL ? `\n    .background(Color(hex: "${hex(n.fill)}"))` : "";
   const cornerStr = n.cornerRadii[0] > 0 ? `\n    .cornerRadius(${n.cornerRadii[0]})` : "";
   const borderStr = n.strokeVisible && n.strokeWidth > 0 ? `\n    .overlay(RoundedRectangle(cornerRadius: ${n.cornerRadii[0] || 0}).stroke(Color(hex: "${hex(n.strokePaint)}"), lineWidth: ${n.strokeWidth}))` : "";
 
@@ -1625,13 +1679,13 @@ function generateCompose(n: XNode): string {
     text = "${n.text || n.name}",
     fontSize = ${n.fontSize}.sp,
     fontWeight = FontWeight.${weight},
-    color = Color(${hex8(n.fill || "#000000")})
+    color = Color(${hex8(n.fill || DOC_INK)})
 )`;
   }
   const container = n.layout ? (n.layout.direction === "horizontal" ? "Row" : "Column") : "Box";
   const mod: string[] = [`Modifier.size(${Math.round(n.w)}.dp, ${Math.round(n.h)}.dp)`];
   if (n.cornerRadii[0] > 0) mod.push(`clip(RoundedCornerShape(${n.cornerRadii[0]}.dp))`);
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") mod.push(`background(Color(${hex8(n.fill)}))`);
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) mod.push(`background(Color(${hex8(n.fill)}))`);
   if (n.strokeVisible && n.strokeWidth > 0) mod.push(`border(${n.strokeWidth}.dp, Color(${hex8(n.strokePaint)}))`);
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   if (pl || pr || pt || pb) mod.push(`padding(${pt}.dp, ${pr}.dp, ${pb}.dp, ${pl}.dp)`);
@@ -1652,7 +1706,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
       fontFamily: `"${n.fontFamily}", sans-serif`,
       fontSize: unit === "rem" ? `${Math.round((n.fontSize / 16) * 100) / 100}rem` : `${n.fontSize}px`,
       fontWeight: n.fontWeight,
-      color: n.fillVisible !== false && n.fill ? n.fill : "#000000",
+      color: n.fillVisible !== false && n.fill ? n.fill : DOC_INK,
     };
     if (n.lineHeight) textStyle.lineHeight = unit === "rem" ? `${Math.round((n.lineHeight / 16) * 100) / 100}rem` : `${Math.round(n.lineHeight)}px`;
     if (n.letterSpacing) textStyle.letterSpacing = n.letterSpacingUnit === "percent" ? `${n.letterSpacing}%` : `${n.letterSpacing}px`;
@@ -1685,7 +1739,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
     }
   }
 
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     styles.backgroundColor = `"${n.fill}"`;
   }
 
@@ -1731,7 +1785,7 @@ function generateReact(n: XNode, unit: DevUnit = "px"): string {
 }
 
 function generateFlutter(n: XNode): string {
-  const hex = (n.fill || "#000000").replace("#", "").padEnd(6, "0");
+  const hex = (n.fill || DOC_INK).replace("#", "").padEnd(6, "0");
   return `Container(
   width: ${Math.round(n.w)}.0,
   height: ${Math.round(n.h)}.0,
@@ -1836,6 +1890,305 @@ function generateLayerJson(n: XNode): string {
   return JSON.stringify(payload, null, 2);
 }
 
+/**
+ * Layout grids: Figma's shape — the header offers the three kinds plus `+`,
+ * and each grid is one compact summary row (`10 10px #FF0000`) whose click
+ * opens the parameter popover (Grid | Columns | Rows segmented at the top).
+ * Every field writes the same LayoutGrid model the renderer already reads.
+ */
+function LayoutGrids({ n, engine }: { n: XNode; engine: Engine }) {
+  const [pop, setPop] = useState<{ gi: number; rect: DOMRect } | null>(null);
+  const grids = n.layoutGrids ?? [];
+
+  const addGrid = (pattern: GridPattern) => {
+    const newGrid: LayoutGrid = {
+      id: `grid-${Date.now()}`,
+      pattern,
+      ...(pattern === "grid"
+        ? { sectionSize: 10, offset: 0 }
+        : {
+            count: pattern === "columns" ? 12 : 8,
+            gutter: 20,
+            margin: 20,
+            alignment: "stretch" as GridAlignment,
+          }),
+      color: "rgba(255, 0, 0, 0.1)",
+      visible: true,
+    };
+    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: [...grids, newGrid] } });
+  };
+
+  const setGrid = (gi: number, patch: Partial<LayoutGrid>) => {
+    const next = [...grids];
+    next[gi] = { ...grids[gi], ...patch };
+    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+  };
+
+  // The swatch edits hue; grid paint keeps its own translucency.
+  const alphaOf = (c: string | undefined) => {
+    const m = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(c ?? "");
+    return m ? parseFloat(m[1]) : 0.1;
+  };
+  const hexOf = (c: string | undefined) => {
+    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
+    // Unparseable, so the caller sees red rather than a silently
+    // "close enough" colour.
+    if (!m) return DOC_ALERT;
+    const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
+    return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
+  };
+
+  const summary = (g: LayoutGrid) => {
+    const hex = hexOf(g.color).toUpperCase();
+    if (g.pattern === "grid") {
+      const sz = g.sectionSize ?? 10;
+      return `${sz} ${sz}px ${hex}`;
+    }
+    return `${g.count ?? (g.pattern === "columns" ? 12 : 8)} ${g.margin ?? 20} ${g.gutter ?? 20} ${hex}`;
+  };
+
+  return (
+    <Section
+      id="layoutGrid"
+      title="Layout grid"
+      actions={
+        <div className="ins-row-tight">
+          <button className="mini" title="Add square grid" onClick={() => addGrid("grid")}>
+            Grid
+          </button>
+          <button className="mini" title="Add columns" onClick={() => addGrid("columns")}>
+            Columns
+          </button>
+          <button className="mini" title="Add rows" onClick={() => addGrid("rows")}>
+            Rows
+          </button>
+          <button className="plus" title="Add layout grid" onClick={() => addGrid("columns")}>
+            <Icon name="plus" size={14} />
+          </button>
+        </div>
+      }
+    >
+      {grids.length === 0 && <p className="muted insp-pad">No layout grids.</p>}
+      {grids.length > 0 && (
+        <div className="insp-pad ins-col-md">
+          {grids.map((g, gi) => (
+            <div key={g.id} className="ins-grid-row">
+              <button
+                className="ins-grid-summary"
+                title="Edit layout grid"
+                onClick={(e) => setPop({ gi, rect: e.currentTarget.getBoundingClientRect() })}
+              >
+                <span className="ins-grid-chip" style={{ background: hexOf(g.color) }} />
+                {summary(g)}
+              </button>
+              <button
+                className="icon-btn"
+                title={g.visible !== false ? "Hide layout grid" : "Show layout grid"}
+                onClick={() => setGrid(gi, { visible: g.visible === false })}
+              >
+                <Icon name={g.visible !== false ? "eye" : "eye-off"} size={rowIconSize()} />
+              </button>
+              <button
+                className="icon-btn"
+                title="Delete layout grid"
+                onClick={() => {
+                  const next = grids.filter((_, j) => j !== gi);
+                  engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                  if (pop?.gi === gi) setPop(null);
+                }}
+              >
+                <Icon name="minus" size={rowIconSize()} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {pop && grids[pop.gi] && (
+        <XPopover
+          anchor={pop.rect}
+          title="Layout grid"
+          ariaLabel="Layout grid settings"
+          onClose={() => setPop(null)}
+        >
+          {(() => {
+            const g = grids[pop.gi];
+            const set = (patch: Partial<LayoutGrid>) => setGrid(pop.gi, patch);
+            return (
+              <>
+                <div className="grid-kind-seg" role="tablist" aria-label="Grid kind">
+                  {(["grid", "columns", "rows"] as GridPattern[]).map((k) => (
+                    <button
+                      key={k}
+                      role="tab"
+                      aria-selected={g.pattern === k}
+                      className={g.pattern === k ? "on" : ""}
+                      onClick={() =>
+                        set(
+                          k === "grid"
+                            ? { pattern: k, sectionSize: g.sectionSize ?? 10 }
+                            : {
+                                pattern: k,
+                                count: g.count ?? (k === "columns" ? 12 : 8),
+                                gutter: g.gutter ?? 20,
+                                margin: g.margin ?? 20,
+                                alignment: g.alignment ?? "stretch",
+                              },
+                        )
+                      }
+                    >
+                      {k === "grid" ? "Grid" : k === "columns" ? "Columns" : "Rows"}
+                    </button>
+                  ))}
+                </div>
+                {g.pattern === "grid" ? (
+                  <>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">Grid size</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={g.sectionSize ?? 10}
+                          className="ins-input"
+                          onChange={(e) => set({ sectionSize: Math.max(1, parseInt(e.target.value, 10) || 10) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Offset</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.offset ?? 0}
+                          className="ins-input"
+                          onChange={(e) => set({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="ins-between">
+                      <span className="ins-meta">Square layout grid color</span>
+                      <input
+                        type="color"
+                        aria-label="Grid color"
+                        value={hexOf(g.color)}
+                        className="ins-range-sm"
+                        onChange={(e) => {
+                          const r = parseInt(e.target.value.slice(1, 3), 16);
+                          const gr = parseInt(e.target.value.slice(3, 5), 16);
+                          const bl = parseInt(e.target.value.slice(5, 7), 16);
+                          set({ color: `rgba(${r}, ${gr}, ${bl}, ${alphaOf(g.color)})` });
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">Count</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={g.count ?? (g.pattern === "columns" ? 12 : 8)}
+                          className="ins-input"
+                          onChange={(e) => set({ count: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Type</span>
+                        <select
+                          aria-label="Grid alignment"
+                          value={g.alignment ?? "stretch"}
+                          className="ins-select-inline"
+                          onChange={(e) => {
+                            const a = e.target.value as GridAlignment;
+                            // Stretch fills the frame, so a fixed width no
+                            // longer applies; a fixed type without a width
+                            // falls back to stretch in paint.
+                            set(a === "stretch" ? { alignment: a, cell: undefined } : { alignment: a });
+                          }}
+                        >
+                          <option value="stretch">Stretch</option>
+                          <option value="min">{g.pattern === "columns" ? "Left" : "Top"}</option>
+                          <option value="center">Center</option>
+                          <option value="max">{g.pattern === "columns" ? "Right" : "Bottom"}</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">{g.pattern === "columns" ? "Width" : "Height"}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          disabled={(g.alignment ?? "stretch") === "stretch"}
+                          placeholder="Auto"
+                          value={g.cell ?? ""}
+                          className="ins-input"
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            set({ cell: Number.isFinite(v) ? Math.max(1, v) : undefined });
+                          }}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Margin</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.margin ?? 20}
+                          className="ins-input"
+                          onChange={(e) => set({ margin: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">Gutter</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.gutter ?? 20}
+                          className="ins-input"
+                          onChange={(e) => set({ gutter: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Offset</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.offset ?? 0}
+                          className="ins-input"
+                          onChange={(e) => set({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="ins-between">
+                      <span className="ins-meta">Color</span>
+                      <input
+                        type="color"
+                        aria-label="Grid color"
+                        value={hexOf(g.color)}
+                        className="ins-range-sm"
+                        onChange={(e) => {
+                          const r = parseInt(e.target.value.slice(1, 3), 16);
+                          const gr = parseInt(e.target.value.slice(3, 5), 16);
+                          const bl = parseInt(e.target.value.slice(5, 7), 16);
+                          set({ color: `rgba(${r}, ${gr}, ${bl}, ${alphaOf(g.color)})` });
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
+        </XPopover>
+      )}
+    </Section>
+  );
+}
+
 function BoxModelDiagram({ n }: { n: XNode }) {
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   const borderW = n.strokeVisible && n.strokeWidth > 0 ? n.strokeWidth : 0;
@@ -1937,22 +2290,22 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
 
   if (!n) {
     return (
-      <div className="insp-pad dev-empty" style={{ display: "grid", gap: 12 }}>
-        <div style={{ padding: 14, borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", gap: 10, alignItems: "center" }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--panel)", border: "1px solid var(--line)", display: "grid", placeItems: "center", flexShrink: 0 }}>◈</div>
+      <div  className="insp-pad dev-empty ins-col-xl">
+        <div className="ins-banner">
+          <div className="ins-tile">◈</div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 12 }}>Select a layer to inspect</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", lineHeight: 1.4 }}>Click any layer — code, specs, and assets appear here. Hover with ⌥ to measure distances.</div>
+            <div className="ins-strong">Select a layer to inspect</div>
+            <div className="ins-note">Click any layer — code, specs, and assets appear here. Hover with ⌥ to measure distances.</div>
           </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <div style={{ padding: 10, borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.04, textTransform: "uppercase" }}>Measure</div>
-            <div style={{ fontSize: 11, color: "var(--text)", marginTop: 4 }}><b>⌥ hover</b> with a selection to show redlines</div>
+        <div className="ins-grid-2">
+          <div className="ins-card-lg">
+            <div className="ins-caps">Measure</div>
+            <div className="ins-xs ins-text ins-mt-1"><b>⌥ hover</b> with a selection to show redlines</div>
           </div>
-          <div style={{ padding: 10, borderRadius: 8, background: "var(--panel)", border: "1px solid var(--line)" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "var(--muted)", letterSpacing: 0.04, textTransform: "uppercase" }}>Export</div>
-            <div style={{ fontSize: 11, color: "var(--text)", marginTop: 4 }}><b>⇧⌘E</b> bulk export all assets</div>
+          <div className="ins-card-lg">
+            <div className="ins-caps">Export</div>
+            <div className="ins-xs ins-text ins-mt-1"><b>⇧⌘E</b> bulk export all assets</div>
           </div>
         </div>
         <DevTokens snap={snap} />
@@ -1964,16 +2317,16 @@ function Inspect({ n, engine, snap }: { n?: XNode; engine: Engine; snap: Snapsho
   const code = renderDevCodeScoped(n, format, unit, scope, snap);
   return (
     <>
-      <div style={{ margin: "0 12px 10px", padding: "10px 12px", borderRadius: 10, background: "var(--input)", border: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--accent)", boxShadow: "0 0 0 4px var(--accent-wash)", flexShrink: 0 }} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>Ready for development</div>
-          <div style={{ fontSize: 10, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
+      <div className="ins-callout">
+        <span className="ins-dot-lg" />
+        <div className="ins-flex-1">
+          <div className="ins-value">Ready for development</div>
+          <div className="ins-ellip-sm">{n.name} • {n.kind} • {Math.round(n.w)}×{Math.round(n.h)}</div>
         </div>
-        <span style={{ fontSize: 10, padding: "3px 7px", borderRadius: 999, background: "var(--panel)", border: "1px solid var(--line)", color: "var(--muted)" }}>{snap.pages[snap.page].name}</span>
+        <span className="ins-tag">{snap.pages[snap.page].name}</span>
       </div>
       <div className="h-row dev-head">
-        <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: 999, background: "var(--accent)" }} /> Inspect</h3>
+        <h3 className="ins-row"><span className="ins-dot" /> Inspect</h3>
         <XSegmentedControl
           className="dev-seg"
           ariaLabel="Inspect view"
@@ -2217,7 +2570,7 @@ function DevTokens({ snap }: { snap: Snapshot }) {
 
 function generateDesignTokens(n: XNode): string {
   const tokens: Record<string, unknown> = {};
-  if (n.fillVisible !== false && n.fill && n.fill !== "#00000000") {
+  if (n.fillVisible !== false && n.fill && n.fill !== DOC_NO_FILL) {
     tokens.color = {
       value: n.fill,
       type: "color",
@@ -2507,7 +2860,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
         e.color,
       );
     } else {
-      L(e.kind === "layer-blur" ? "Layer blur" : "Blur", `${e.blur}`, "Style");
+      L(e.kind === "layer-blur" ? "Layer blur" : e.kind === "shader" ? "Shader" : "Blur", `${e.blur}`, "Style");
     }
   }
   if (n.cornerRadii?.some((r) => r > 0)) {
@@ -2929,14 +3282,14 @@ function MappingCard({
   const status = mappingSyncStatus(master, mapping);
   const unmapped = propNames.filter((p) => !draft.props.some((x) => x.prop === p));
   return (
-    <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, display: "grid", gap: 6, background: "var(--panel)" }}>
-      <div style={{ display: "flex", gap: 6 }}>
+    <div className="ins-card">
+      <div className="ins-row-plain">
         <select
           aria-label="Framework"
           title="Framework"
           value={draft.framework}
           onChange={(e) => save({ ...draft, framework: e.target.value as CodeMapping["framework"] })}
-          style={{ width: 92 }}
+          className="ins-w-92"
         >
           {CODE_FRAMEWORKS.map((f) => (
             <option key={f} value={f}>
@@ -2951,7 +3304,7 @@ function MappingCard({
           placeholder="Button"
           onChange={(e) => set({ componentName: e.target.value })}
           onBlur={commit}
-          style={{ flex: 1, minWidth: 0 }}
+          className="ins-flex-1"
         />
         <button
           className="icon-btn"
@@ -2965,7 +3318,7 @@ function MappingCard({
           <Icon name="trash" size={12} />
         </button>
       </div>
-      <div style={{ display: "flex", gap: 6 }}>
+      <div className="ins-row-plain">
         <input
           aria-label="Import path"
           title="Import path"
@@ -2973,7 +3326,7 @@ function MappingCard({
           placeholder='Import path, e.g. @/components/Button'
           onChange={(e) => set({ importPath: e.target.value })}
           onBlur={commit}
-          style={{ flex: 1, minWidth: 0 }}
+          className="ins-flex-1"
         />
         <input
           aria-label="Version"
@@ -2982,7 +3335,7 @@ function MappingCard({
           placeholder="v1"
           onChange={(e) => set({ version: e.target.value })}
           onBlur={commit}
-          style={{ width: 52 }}
+          className="ins-w-52"
         />
       </div>
       <input
@@ -2992,9 +3345,9 @@ function MappingCard({
         placeholder="Source file, e.g. src/components/Button.tsx"
         onChange={(e) => set({ file: e.target.value })}
         onBlur={commit}
-        style={{ width: "100%" }}
+        className="ins-w-full"
       />
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div className="ins-between">
         <span className="insp-label">Props</span>
         {unmapped.length > 0 && (
           <button
@@ -3012,7 +3365,7 @@ function MappingCard({
         )}
       </div>
       {draft.props.map((pm, ix) => (
-        <div key={`${pm.prop}-${ix}`} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <div key={`${pm.prop}-${ix}`} className="ins-row">
           <select
             aria-label="Component property"
             value={pm.prop}
@@ -3021,7 +3374,7 @@ function MappingCard({
               props[ix] = { ...pm, prop: e.target.value };
               save({ ...draft, props });
             }}
-            style={{ flex: 1, minWidth: 0 }}
+            className="ins-flex-1"
           >
             {propNames.map((p) => (
               <option key={p} value={p}>
@@ -3029,7 +3382,7 @@ function MappingCard({
               </option>
             ))}
           </select>
-          <span style={{ color: "var(--fg-muted)" }} aria-hidden>→</span>
+          <span className="ins-fg-muted" aria-hidden>→</span>
           <input
             aria-label={`Code prop for ${pm.prop}`}
             value={pm.codeProp ?? ""}
@@ -3040,7 +3393,7 @@ function MappingCard({
               setDraft({ ...draft, props });
             }}
             onBlur={commit}
-            style={{ flex: 1, minWidth: 0 }}
+            className="ins-flex-1"
           />
           <select
             aria-label={`Mapping kind for ${pm.prop}`}
@@ -3050,7 +3403,7 @@ function MappingCard({
               props[ix] = { ...pm, kind: e.target.value as CodePropMapping["kind"] };
               save({ ...draft, props });
             }}
-            style={{ width: 86 }}
+            className="ins-w-86"
           >
             <option value="prop">prop</option>
             <option value="children">children</option>
@@ -3066,7 +3419,7 @@ function MappingCard({
           </button>
         </div>
       ))}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div className="ins-row">
         <span
           style={{
             width: 8,
@@ -3075,7 +3428,7 @@ function MappingCard({
             background: status === "synced" ? "var(--accent)" : status === "stale" ? "var(--amber)" : "var(--fg-muted)",
           }}
         />
-        <span className="insp-label grow" style={{ flex: 1 }}>
+        <span  className="insp-label grow ins-grow">
           {status === "synced"
             ? `Verified${mapping.syncedAt ? ` · ${new Date(mapping.syncedAt).toLocaleString()}` : ""}`
             : status === "stale"
@@ -3108,26 +3461,26 @@ function CodeMappingEditor({ engine, master }: { engine: Engine; master: Compone
     Boolean,
   );
   return (
-    <div style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+    <div className="ins-sep">
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: 0, padding: 0, cursor: "pointer", color: "var(--text)" }}
+        className="ins-ghost"
       >
-        <span style={{ fontSize: 11, fontWeight: 700 }}>Code mappings</span>
-        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 999, background: "var(--input)", border: "1px solid var(--line)", color: "var(--muted)" }}>
+        <span className="ins-strong-xs">Code mappings</span>
+        <span className="ins-tag-plain">
           {mappings.length}
         </span>
-        <span style={{ flex: 1 }} />
+        <span className="ins-grow" />
         <Icon name="chevron-down" size={12} />
       </button>
       {open && (
-        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+        <div className="ins-col-lg ins-mt-2">
           {mappings.map((m) => (
             <MappingCard key={m.id} engine={engine} master={master} mapping={m} propNames={propNames} />
           ))}
           <button
-            style={{ fontSize: 11, padding: "4px 8px" }}
+            className="ins-btn-flat"
             onClick={() => {
               engine.dispatch({
                 type: "setCodeMapping",
@@ -3149,6 +3502,31 @@ function CodeMappingEditor({ engine, master }: { engine: Engine; master: Compone
     </div>
   );
 }
+
+/** The advertised families: bundled variable faces first (they resolve from
+ *  /public/fonts), then the CJK/RTL Noto shorthand list Figma also shows
+ *  (360040449673, 4972283635863), then the icon fonts (360040449513) where an
+ *  icon's Regular/Solid variant is the font weight (400/900). System fonts
+ *  discovered through the Local Font Access API merge beside them. */
+const FONT_BASE = [
+  "Inter",
+  "Roboto",
+  // SF Pro is a system font, not a distributable web font.
+  ...(/Mac|iPhone|iPad/.test(navigator.platform) ? ["SF Pro"] : []),
+  "Geist",
+  "Space Grotesk",
+  "Plus Jakarta Sans",
+  "Poppins",
+  "Outfit",
+  "Fira Code",
+  "JetBrains Mono",
+  "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR",
+  "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR",
+  "Noto Sans Arabic", "Noto Sans Hebrew",
+  "Font Awesome 6 Free", "Font Awesome 6 Brands",
+  "Font Awesome 5 Free", "Font Awesome 5 Brands",
+  "system-ui",
+];
 
 function Design({
   n,
@@ -3202,6 +3580,41 @@ function Design({
       cancelled = true;
     };
   }, []);
+  // The family dialog and the style menu are portalled pops anchored under
+  // their field (FontPicker.tsx); null = closed.
+  const [fontPop, setFontPop] = useState<{ left: number; top: number } | null>(null);
+  const [stylePop, setStylePop] = useState<{ left: number; top: number } | null>(null);
+  // Lazy: rangeStyle is computed below, and this runs at render time in JSX.
+  const fontEntries = (): { name: string; system: boolean }[] => {
+    const seen = new Set<string>();
+    const out: { name: string; system: boolean }[] = [];
+    const add = (name: string, system: boolean) => {
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      out.push({ name, system });
+    };
+    for (const f of FONT_BASE) add(f, false);
+    for (const f of localFonts) add(f, true);
+    if (n.fontFamily) add(n.fontFamily, false);
+    if (rangeStyle?.fontFamily) add(rangeStyle.fontFamily, false);
+    return out;
+  };
+  // Vector-path menu (capture: Edit object / Offset vector / Simplify vector)
+  // and the stroke-settings popover (Basic | Dynamic | Brush) — portalled pops
+  // anchored under their header buttons, same contract as the font pops.
+  const [vecMenu, setVecMenu] = useState<{ left: number; top: number } | null>(null);
+  const [boolMenu, setBoolMenu] = useState<{ left: number; top: number } | null>(null);
+  const [strokePop, setStrokePop] = useState<{ left: number; top: number } | null>(null);
+  const [strokeTab, setStrokeTab] = useState<"basic" | "dynamic" | "brush">("basic");
+  const vecMenuRef = useRef<HTMLDivElement>(null);
+  const boolMenuRef = useRef<HTMLDivElement>(null);
+  const strokePopRef = useRef<HTMLDivElement>(null);
+  useAnchoredPop(vecMenuRef, vecMenu ?? { left: 0, top: 0 }, [vecMenu]);
+  useAnchoredPop(boolMenuRef, boolMenu ?? { left: 0, top: 0 }, [boolMenu]);
+  useAnchoredPop(strokePopRef, strokePop ?? { left: 0, top: 0 }, [strokePop, strokeTab]);
+  useClickOutside('[aria-label="Vector path menu"]', () => setVecMenu(null));
+  useClickOutside('[aria-label="Boolean menu"]', () => setBoolMenu(null));
+  useClickOutside('[aria-label="Stroke settings"]', () => setStrokePop(null));
   const [fillDrag, setFillDrag] = useState<number | null>(null);
   const [fillOver, setFillOver] = useState<number | null>(null);
   const [strokeDrag, setStrokeDrag] = useState<number | null>(null);
@@ -3641,11 +4054,11 @@ function Design({
           ? {
               strokes: [
                 ...(m.strokes ?? []),
-                { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: m.strokeAlign },
+                { color: DOC_STROKE, opacity: 1, visible: true, width: 1, align: m.strokeAlign },
               ],
             }
           : {
-              strokePaint: isNone(m.strokePaint) ? "#1e1e1e" : m.strokePaint,
+              strokePaint: isNone(m.strokePaint) ? DOC_STROKE : m.strokePaint,
               strokeVisible: true,
               strokeWidth: m.strokeWidth || 1,
             },
@@ -3655,14 +4068,14 @@ function Design({
     const hasBase = n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible);
     if (!hasBase) {
       patch({
-        strokePaint: isNone(n.strokePaint) ? "#1e1e1e" : n.strokePaint,
+        strokePaint: isNone(n.strokePaint) ? DOC_STROKE : n.strokePaint,
         strokeVisible: true,
         strokeWidth: n.strokeWidth || 1,
       });
       return;
     }
     patch({
-      strokes: [...(n.strokes ?? []), { color: "#1e1e1e", opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
+      strokes: [...(n.strokes ?? []), { color: DOC_STROKE, opacity: 1, visible: true, width: 1, align: n.strokeAlign }],
     });
   };
 
@@ -3679,78 +4092,39 @@ function Design({
             </button>
           }
         >
-          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+          <div  className="insp-pad ins-col-sm">
             <div className="field">
-              <select
-                aria-label="Font family"
-                value={mixedProp((m) => m.fontFamily, textTargets) ? "__mixed" : rangeStyle?.fontFamily ?? n.fontFamily}
-                onChange={(e) => {
-                  if (e.target.value === "__mixed") return;
-                  if (multi) patchTypeMany({ fontFamily: e.target.value });
-                  else patchType({ fontFamily: e.target.value });
-                }}
-              >
-                {mixedProp((m) => m.fontFamily, textTargets) && <option value="__mixed">Mixed</option>}
-                {(() => {
-                  const base = [
-                    "Inter",
-                    "Roboto",
-                    // SF Pro is a system font, not a distributable web font.
-                    ...(/Mac|iPhone|iPad/.test(navigator.platform) ? ["SF Pro"] : []),
-                    "Geist",
-                    "Space Grotesk",
-                    "Plus Jakarta Sans",
-                    "Poppins",
-                    "Outfit",
-                    "Fira Code",
-                    "JetBrains Mono",
-                    // CJK (360040449673): Figma lists the Noto CJK fonts in
-                    // shorthand (SC/TC/JP/KR) and falls back to Noto for
-                    // unsupported characters. RTL (4972283635863): RTL fonts
-                    // are in the default list. These resolve from the system
-                    // when installed, like Figma's desktop fonts.
-                    "— Noto fonts —",
-                    "Noto Sans SC", "Noto Sans TC", "Noto Sans JP", "Noto Sans KR",
-                    "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR",
-                    "Noto Sans Arabic", "Noto Sans Hebrew",
-                    // Icon fonts (360040449513): Font Awesome; an icon's
-                    // Regular/Solid variant is the font weight (400/900).
-                    "— Icon fonts —",
-                    "Font Awesome 6 Free", "Font Awesome 6 Brands",
-                    "Font Awesome 5 Free", "Font Awesome 5 Brands",
-                    "system-ui",
-                  ];
-                  const merged = (() => {
-                    const seen = new Set(base.map((b) => b.toLowerCase()));
-                    const extra = localFonts.filter((f) => !seen.has(f.toLowerCase()));
-                    const list = [...base];
-                    if (extra.length) {
-                      list.push("— System fonts —");
-                      list.push(...extra);
-                    }
-                    if (n.fontFamily && !list.includes(n.fontFamily)) list.unshift(n.fontFamily);
-                    if (rangeStyle?.fontFamily && !list.includes(rangeStyle.fontFamily)) list.unshift(rangeStyle.fontFamily);
-                    return list;
-                  })();
-                  return merged.map((f) =>
-                    f.startsWith("—") ? (
-                      <option key={f} disabled>
-                        {f}
-                      </option>
-                    ) : (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ),
-                  );
-                })()}
-              </select>
+              <button
+                  type="button"
+                  className="field-btn"
+                  aria-label="Font family"
+                  data-value={mixedProp((m) => m.fontFamily, textTargets) ? "mixed" : rangeStyle?.fontFamily ?? n.fontFamily}
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setFontPop({ left: r.left, top: r.bottom + 4 });
+                  }}
+                >
+                  {mixedProp((m) => m.fontFamily, textTargets) ? "Mixed" : rangeStyle?.fontFamily ?? n.fontFamily}
+                </button>
+                {fontPop && (
+                  <FontPicker
+                    value={rangeStyle?.fontFamily ?? n.fontFamily}
+                    mixed={!!mixedProp((m) => m.fontFamily, textTargets)}
+                    fonts={fontEntries()}
+                    anchor={fontPop}
+                    onChange={(family) => {
+                      if (multi) patchTypeMany({ fontFamily: family });
+                      else patchType({ fontFamily: family });
+                    }}
+                    onClose={() => setFontPop(null)}
+                  />
+                )}
               <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontFamily" onOpenVariables={onOpenVariables} />
               {localFonts.length === 0 && (
                 <button
                   type="button"
-                  className="link muted"
-                  style={{ fontSize: 11, marginTop: 4 }}
+                  
+                  className="link muted ins-btn-mt"
                   onClick={async () => {
                     try {
                       const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
@@ -3775,27 +4149,32 @@ function Design({
             </div>
             <div className="grid2">
               <div className="field">
-                <select
+                <button
+                  type="button"
+                  className="field-btn"
                   aria-label="Font weight"
-                  value={mixedProp((m) => m.fontWeight, textTargets) ? "mixed" : rangeStyle?.fontWeight ?? n.fontWeight}
-                  onChange={(e) => {
-                    if (e.target.value === "mixed") return;
-                    const fontWeight = parseInt(e.target.value, 10);
-                    if (multi) patchTypeMany({ fontWeight });
-                    else patchType({ fontWeight });
+                  data-value={String(mixedProp((m) => m.fontWeight, textTargets) ? "mixed" : rangeStyle?.fontWeight ?? n.fontWeight)}
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setStylePop({ left: r.left, top: r.bottom + 4 });
                   }}
                 >
-                  {mixedProp((m) => m.fontWeight, textTargets) && <option value="mixed">Mixed</option>}
-                  <option value={100}>Thin (100)</option>
-                  <option value={200}>Extra Light (200)</option>
-                  <option value={300}>Light (300)</option>
-                  <option value={400}>Regular (400)</option>
-                  <option value={500}>Medium (500)</option>
-                  <option value={600}>Semi Bold (600)</option>
-                  <option value={700}>Bold (700)</option>
-                  <option value={800}>Extra Bold (800)</option>
-                  <option value={900}>Black (900)</option>
-                </select>
+                  {mixedProp((m) => m.fontWeight, textTargets)
+                    ? "Mixed"
+                    : styleName(rangeStyle?.fontWeight ?? n.fontWeight, (rangeStyle?.fontStyle ?? n.fontStyle ?? "normal") === "italic")}
+                </button>
+                {stylePop && (
+                  <FontStyleMenu
+                    weight={rangeStyle?.fontWeight ?? n.fontWeight}
+                    italic={(rangeStyle?.fontStyle ?? n.fontStyle ?? "normal") === "italic"}
+                    anchor={stylePop}
+                    onPick={({ fontWeight, fontStyle }) => {
+                      if (multi) patchTypeMany({ fontWeight, fontStyle });
+                      else patchType({ fontWeight, fontStyle });
+                    }}
+                    onClose={() => setStylePop(null)}
+                  />
+                )}
                 <BindControl engine={engine} snap={snap} targets={textTargets} prop="fontWeight" onOpenVariables={onOpenVariables} />
               </div>
               <Field
@@ -3827,14 +4206,14 @@ function Design({
                 onChangeMany={multi ? (vs) => patchNumMany("letterSpacing", vs, textTargets) : undefined}
               />
             </div>
-            <div className="seg" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", width: "100%", margin: "2px 0" }}>
+            <div  className="seg ins-grid-3seg">
               <Tooltip label="Auto width" shortcut="">
                 <button
                   className={n.sizingW === "hug" ? "on" : ""}
                   onClick={() => setSizing("hug", "hug")}
                 >
                   <Icon name="text-auto-width" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto W</span>
+                  <span className="auto-tag">Auto W</span>
                 </button>
               </Tooltip>
               <Tooltip label="Auto height" shortcut="">
@@ -3843,7 +4222,7 @@ function Design({
                   onClick={() => setSizing("fixed", "hug")}
                 >
                   <Icon name="text-auto-height" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Auto H</span>
+                  <span className="auto-tag">Auto H</span>
                 </button>
               </Tooltip>
               <Tooltip label="Fixed size" shortcut="">
@@ -3852,7 +4231,7 @@ function Design({
                   onClick={() => setSizing("fixed", "fixed")}
                 >
                   <Icon name="text-fixed" size={14} />
-                  <span style={{ fontSize: 10, marginLeft: 4 }}>Fixed</span>
+                  <span className="auto-tag">Fixed</span>
                 </button>
               </Tooltip>
             </div>
@@ -4108,7 +4487,7 @@ function Design({
                   </label>
                 </div>
               </div>
-              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+              <div  className="insp-pad ins-row-plain-sm">
                 <Field
                   label="U━"
                   value={n.underlineThickness ?? 1}
@@ -4127,7 +4506,7 @@ function Design({
                   … allowing you to control the text direction." */}
               {(hasRtlScript(n.text || "") || (n.textDirection !== undefined && n.textDirection !== "auto")) && (
                 <div className="dir-row">
-                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>Text direction</span>
+                  <span  className="muted ins-font-flex">Text direction</span>
                   <div className="seg icons">
                     <button
                       className={`mini${(n.textDirection ?? "auto") === "ltr" ? " on" : ""}`}
@@ -4157,7 +4536,7 @@ function Design({
                   the path on canvas; Flip moves the text to its other side. */}
               {n.onPath && (
                 <div className="dir-row">
-                  <span className="muted" style={{ flex: 1, font: "11px Inter, system-ui" }}>On a path</span>
+                  <span  className="muted ins-font-flex">On a path</span>
                   <button
                     className="mini"
                     title="Flip text orientation - the text turns over to the other side of the path"
@@ -4176,7 +4555,7 @@ function Design({
               )}
               {/* Links (360045942953): "Click Create link … Type or paste a URL
                   … Press Enter to apply the link." Underlined by default. */}
-              <div className="dir-row" style={{ padding: "2px 0" }}>
+              <div  className="dir-row ins-py-0-5">
                 <input
                   aria-label="Link URL"
                   placeholder="Link URL (⇧⌘U)"
@@ -4190,7 +4569,7 @@ function Design({
                       ...(url && n.textDecoration === "none" ? { textDecoration: "underline" as const } : {}),
                     });
                   }}
-                  style={{ flex: 1, minWidth: 0, font: "11px Inter, system-ui", padding: "3px 6px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--bg)", color: "var(--text)" }}
+                  className="ins-input-inline"
                 />
                 <button
                   className="icon-btn"
@@ -4318,7 +4697,7 @@ function Design({
                   </label>
                 </div>
               </div>
-              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+              <div  className="insp-pad ins-row-plain-sm">
                 <Field
                   label="ss"
                   value={Number(Object.keys(n.fontFeatures ?? {}).find((k) => /^ss\d\d$/.test(k))?.slice(2) ?? 0)}
@@ -4346,7 +4725,7 @@ function Design({
               </div>
               {/* Variable-font axes (5579502031511) - weight rides the regular
                   weight control; width, optical size and slant are axes. */}
-              <div className="insp-pad" style={{ display: "flex", gap: 4 }}>
+              <div  className="insp-pad ins-row-plain-sm">
                 <Field
                   label="wdth"
                   value={n.fontVariations?.wdth ?? 0}
@@ -4454,8 +4833,64 @@ function Design({
 
       {multi && (
         <>
-          <Section id="boolean" title="Boolean">
+          <Section
+          id="boolean"
+          title="Boolean"
+          actions={
+            <button
+              type="button"
+              className="plus"
+              aria-label="Boolean menu"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setBoolMenu({ left: r.left - 120, top: r.bottom + 4 });
+              }}
+            >
+              <Icon name="chevron-down" size={12} />
+            </button>
+          }
+        >
           <div className="insp-pad">
+            {boolMenu &&
+              createPortal(
+                <div ref={boolMenuRef} className="type-menu bool-menu" role="menu" aria-label="Boolean">
+                  {([
+                    ["union", "⌥⇧U"],
+                    ["subtract", "⌥⇧S"],
+                    ["intersect", "⌥⇧I"],
+                    ["exclude", "⌥⇧E"],
+                  ] as const).map(([op, chord]) => (
+                    <button
+                      key={op}
+                      type="button"
+                      role="menuitem"
+                      data-value={op}
+                      onClick={() => {
+                        if (snap.booleanPreview) engine.dispatch({ type: "setBooleanPreview", op });
+                        else engine.dispatch({ type: "boolean", op });
+                        setBoolMenu(null);
+                      }}
+                    >
+                      {op[0].toUpperCase() + op.slice(1)}
+                      <span className="sc">{sc(chord)}</span>
+                    </button>
+                  ))}
+                  <hr />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-value="flatten"
+                    onClick={() => {
+                      engine.dispatch({ type: "flatten" });
+                      setBoolMenu(null);
+                    }}
+                  >
+                    Flatten
+                    <span className="sc">{sc("⌥⇧F")}</span>
+                  </button>
+                </div>,
+                document.body,
+              )}
             <div className="seg icons">
               {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
                 <button
@@ -4477,10 +4912,9 @@ function Design({
                 </button>
               ))}
             </div>
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            <div className="ins-row-plain ins-mt-1-5">
               <button
-                className={snap.booleanPreview ? "on" : ""}
-                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                className={`ins-btn-flex-center${snap.booleanPreview ? " on" : ""}`}
                 title="Preview the result on the canvas before applying (Enter applies, Esc cancels)"
                 aria-pressed={!!snap.booleanPreview}
                 onClick={() =>
@@ -4491,19 +4925,20 @@ function Design({
                 <span>Preview</span>
               </button>
               <button
-                style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                className="ins-btn-flex-center"
                 onClick={() => engine.dispatch({ type: "flatten" })}
               >
                 <Icon name="flatten" size={14} />
                 <span>Flatten</span>
+                <span className="sc">{sc("⌥⇧F")}</span>
               </button>
             </div>
             {snap.booleanPreview && (
-              <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
-                <span style={{ fontSize: 10, color: "var(--dim)", textTransform: "capitalize" }}>
+              <div className="ins-row ins-mt-1-5">
+                <span className="ins-meta-cap">
                   {snap.booleanPreview}
                 </span>
-                <span style={{ flex: 1 }} />
+                <span className="ins-grow" />
                 <button
                   title="Apply the previewed boolean (Enter)"
                   onClick={() => {
@@ -4639,7 +5074,7 @@ function Design({
 
       <div className="hr" />
       <Section id="layout" title="Layout" actions={
-        <div style={{ display: "flex", gap: 2 }}>
+        <div className="ins-row-plain-xs">
           {/* Two ways in: add an auto layout frame with the defaults, or
               work the values out from how the objects already sit. */}
           {!n.layout && (
@@ -4671,7 +5106,7 @@ function Design({
           )}
         </div>
       }>
-      <div className="insp-group-title flush" style={{ marginBottom: 6 }}>Flow</div>
+      <div className="insp-group-title flush">Flow</div>
       <div className="dir-row">
         <div className="seg icons">
           <button
@@ -4866,7 +5301,7 @@ function Design({
           </div>
         )}
         {showMinMax && (
-          <div className="grid2" style={{ marginTop: 4 }}>
+          <div  className="grid2 ins-mt-1">
             <Field label="Min W" value={n.minW || 0} onChange={(v) => setMinMax("minW", v)} />
             <Field label="Max W" value={n.maxW || 0} onChange={(v) => setMinMax("maxW", v)} />
             <Field label="Min H" value={n.minH || 0} onChange={(v) => setMinMax("minH", v)} />
@@ -4881,7 +5316,7 @@ function Design({
         {gridParent && (
           // "You can also use the Column span and Row span fields in the right
           // sidebar" - shown only for an object that lives in a grid.
-          <div className="grid2" style={{ marginTop: 4 }}>
+          <div  className="grid2 ins-mt-1">
             <Field
               label="Col span"
               value={n.colSpan ?? 1}
@@ -4895,7 +5330,7 @@ function Design({
           </div>
         )}
         {hasAutoLayoutParent && (
-          <label className="check" style={{ marginTop: 6, paddingLeft: 0 }}>
+          <label  className="check ins-label-mt">
             <input
               type="checkbox"
               checked={!!n.absolutePosition}
@@ -4927,8 +5362,8 @@ function Design({
         </label>
       )}
       {n.kind === "frame" && n.overflow !== "visible" && (
-        <div className="insp-pad" style={{ display: "grid", gridTemplateColumns: "auto 1fr", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 11 }}>Overflow</span>
+        <div  className="insp-pad ins-grid-kv">
+          <span className="ins-xs">Overflow</span>
           <select
             aria-label="Scroll overflow"
             value={
@@ -4954,7 +5389,7 @@ function Design({
             <option value="scrollboth">Both directions</option>
           </select>
           {n.overflow !== "clip" && (
-            <span style={{ gridColumn: "1 / -1", fontSize: 10, color: "var(--muted)" }}>
+            <span className="ins-grid-note">
               Content must extend beyond the frame to scroll.
             </span>
           )}
@@ -5047,10 +5482,57 @@ function Design({
                     Edit points
                   </XButton>
                 )}
+                <button
+                  type="button"
+                  className="plus"
+                  aria-label="Vector path menu"
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setVecMenu({ left: r.left - 120, top: r.bottom + 4 });
+                  }}
+                >
+                  <Icon name="chevron-down" size={12} />
+                </button>
               </div>
             }
           >
             <div className="insp-pad">
+              {vecMenu &&
+                createPortal(
+                  <div ref={vecMenuRef} className="type-menu vec-path-menu" role="menu" aria-label="Vector path">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 });
+                        setVecMenu(null);
+                      }}
+                    >
+                      Edit object
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowOffsetControls(true);
+                        setVecMenu(null);
+                      }}
+                    >
+                      Offset vector
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowSimplifyControls(true);
+                        setVecMenu(null);
+                      }}
+                    >
+                      Simplify vector
+                    </button>
+                  </div>,
+                  document.body,
+                )}
               <div className="vec-card">
                 {/* Point alignment is the panel's own align idiom — `.align > .g`
                     icon buttons behind a shared Tooltip, exactly what the
@@ -5368,7 +5850,7 @@ function Design({
                       <Icon name="reset" size={14} />
                     </button>
                     <select
-                      style={{ width: 14, opacity: 0.6, border: 0, background: "transparent", cursor: "pointer", marginLeft: -4 }}
+                      className="ins-select-tiny"
                       title="Reset specific override"
                       value=""
                       onChange={(e) => {
@@ -5402,10 +5884,10 @@ function Design({
               }
             >
             <div className="insp-pad">
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div className="ins-between-mb">
                 <span className="insp-label">Variant</span>
                 <select
-                  style={{ flex: 1, maxWidth: 140 }}
+                  className="ins-select-grow"
                   aria-label="Variant"
                   value={n.variant || "Default"}
                   onChange={(e) => engine.dispatch({ type: "setVariant", id: n.id, name: e.target.value })}
@@ -5419,10 +5901,10 @@ function Design({
               </div>
 
               {!n.isComponent && n.componentId && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <div className="ins-between-mb">
                   <span className="insp-label">Swap instance</span>
                   <select
-                    style={{ flex: 1, maxWidth: 140 }}
+                    className="ins-select-grow"
                     value={n.componentId}
                     title="Replace this instance with another component"
                     onChange={(e) => {
@@ -5442,11 +5924,11 @@ function Design({
               {propDefs.filter((p) => p.type !== "variant").map((prop) => {
                 const currentVal = n.componentProperties?.[prop.name] ?? prop.defaultValue;
                 return (
-                  <div key={prop.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <div key={prop.id} className="ins-between-mb">
                     <span className="insp-label grow" title={prop.name}>
                       {prop.name}
                     </span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div className="ins-row">
                       {prop.type === "boolean" ? (
                         <input
                           type="checkbox"
@@ -5462,7 +5944,7 @@ function Design({
                         />
                       ) : prop.type === "instance-swap" ? (
                         <select
-                          style={{ width: 110, padding: "2px 4px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          className="ins-select-subtle"
                           value={String(currentVal)}
                           title="Component to show in the nested instance"
                           onChange={(e) =>
@@ -5483,7 +5965,7 @@ function Design({
                       ) : (
                         <input
                           type="text"
-                          style={{ width: 110, padding: "2px 6px", fontSize: 11, background: "var(--bg-subtle)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
+                          className="ins-input-subtle"
                           value={String(currentVal)}
                           onChange={(e) =>
                             engine.dispatch({
@@ -5497,7 +5979,7 @@ function Design({
                       )}
                       {n.isComponent && master && (
                         <button
-                          className="icon-btn"
+                          
                           title={`Delete property "${prop.name}"`}
                           onClick={() => {
                             engine.dispatch({
@@ -5507,7 +5989,7 @@ function Design({
                             });
                             toast(`Property "${prop.name}" deleted`);
                           }}
-                          style={{ padding: 2, opacity: 0.6 }}
+                          className="icon-btn ins-btn-quiet"
                         >
                           <Icon name="trash" size={12} />
                         </button>
@@ -5518,9 +6000,9 @@ function Design({
               })}
 
               {n.isComponent && master && (
-                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <div className="ins-row-plain ins-mt-2">
                   <button
-                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    className="ins-btn-flex"
                     onClick={() => {
                       const name = `Variant ${(master.variants?.length ?? 1) + 1}`;
                       engine.dispatch({ type: "addVariant", name });
@@ -5529,7 +6011,7 @@ function Design({
                     + Add variant
                   </button>
                   <button
-                    style={{ flex: 1, fontSize: 11, padding: "4px 8px" }}
+                    className="ins-btn-flex"
                     onClick={async () => {
                       // A picker for the type: the old prompt asked the user to
                       // spell "instance-swap" correctly or the click did nothing.
@@ -5667,7 +6149,7 @@ function Design({
             />
           )}
           <div className="insp-group-title">Spacing</div>
-          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+          <div  className="insp-pad ins-col-sm">
             {isGrid ? (
               // A grid has a gap per axis rather than one gap and a packing
               // rule: "Gap between rows" and "Gap between columns".
@@ -5828,12 +6310,12 @@ function Design({
             >
               <Icon name="independent" size={14} />
             </button>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gridColumn: "1 / -1", marginTop: 4 }}>
-              <div className="insp-group-title" style={{ gridColumn: "1 / -1" }}>Positioning</div>
-              <span style={{ fontSize: 10, color: "var(--dim)" }}>Canvas stacking</span>
+            <div className="ins-between-full">
+              <div  className="insp-group-title ins-span-all">Positioning</div>
+              <span className="ins-meta">Canvas stacking</span>
               <button
-                className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""}`}
-                style={{ fontSize: 10, padding: "2px 8px", width: "auto", height: 22 }}
+                
+                className={`icon-btn${n.layout.itemReverseZIndex ? " on" : ""} ins-btn-sm`}
                 title={
                   layoutStructLocked
                     ? layoutStructTitle
@@ -5861,271 +6343,7 @@ function Design({
       {n.kind === "frame" && (
         <>
           <div className="hr" />
-          <Section
-            id="layoutGrid"
-            title="Layout grid"
-            actions={
-              <button
-                className="plus"
-                title="Add layout grid"
-                onClick={() => {
-                  const current = n.layoutGrids ?? [];
-                  const newGrid: LayoutGrid = {
-                    id: `grid-${Date.now()}`,
-                    pattern: "columns",
-                    count: 12,
-                    gutter: 20,
-                    margin: 20,
-                    alignment: "stretch",
-                    color: "rgba(255, 0, 0, 0.1)",
-                    visible: true,
-                  };
-                  engine.dispatch({
-                    type: "patch",
-                    id: n.id,
-                    patch: { layoutGrids: [...current, newGrid] },
-                  });
-                }}
-              >
-                <Icon name="plus" size={14} />
-              </button>
-            }
-          >
-            {(n.layoutGrids ?? []).length > 0 && (
-              <div className="insp-pad" style={{ display: "grid", gap: 6 }}>
-                {(n.layoutGrids ?? []).map((g, gi) => {
-                  const setGrid = (patch: Partial<LayoutGrid>) => {
-                    const next = [...n.layoutGrids!];
-                    next[gi] = { ...g, ...patch };
-                    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                  };
-                  // The swatch edits hue; grid paint keeps its own translucency.
-                  const alphaOf = (c: string | undefined) => {
-                    const m = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(c ?? "");
-                    return m ? parseFloat(m[1]) : 0.1;
-                  };
-                  const hexOf = (c: string | undefined) => {
-                    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
-                    if (!m) return "#ff0000";
-                    const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
-                    return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
-                  };
-                  return (
-                  <div
-                    key={g.id}
-                    style={{
-                      background: "var(--bg-subtle)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 6,
-                      padding: "6px 8px",
-                      display: "grid",
-                      gap: 4,
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <select
-                        style={{ fontSize: 11, fontWeight: 500 }}
-                        aria-label="Grid pattern"
-                        value={g.pattern}
-                        onChange={(e) => {
-                          const next = [...n.layoutGrids!];
-                          next[gi] = { ...g, pattern: e.target.value as GridPattern };
-                          engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                        }}
-                      >
-                        <option value="columns">Columns</option>
-                        <option value="rows">Rows</option>
-                        <option value="grid">Grid</option>
-                      </select>
-                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <button
-                          className="icon-btn"
-                          title={g.visible !== false ? "Hide layout grid" : "Show layout grid"}
-                          onClick={() => {
-                            const next = [...n.layoutGrids!];
-                            next[gi] = { ...g, visible: g.visible === false ? true : false };
-                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                          }}
-                        >
-                          <Icon name={g.visible !== false ? "eye" : "eye-off"} size={rowIconSize()} />
-                        </button>
-                        <button
-                          className="icon-btn"
-                          title="Delete layout grid"
-                          onClick={() => {
-                            const next = n.layoutGrids!.filter((_, j) => j !== gi);
-                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                          }}
-                        >
-                          <Icon name="minus" size={rowIconSize()} />
-                        </button>
-                      </div>
-                    </div>
-                    {g.pattern === "grid" ? (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Size</span>
-                          <input
-                            type="number"
-                            min={1}
-                            value={g.sectionSize ?? 10}
-                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
-                              setGrid({ sectionSize: sz });
-                            }}
-                          />
-                        </div>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.offset ?? 0}
-                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
-                            }}
-                          />
-                        </div>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Color</span>
-                          <input
-                            type="color"
-                            aria-label="Grid color"
-                            value={hexOf(g.color)}
-                            style={{ width: "100%", height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
-                            onChange={(e) => {
-                              const r = parseInt(e.target.value.slice(1, 3), 16);
-                              const b = parseInt(e.target.value.slice(3, 5), 16);
-                              const bl = parseInt(e.target.value.slice(5, 7), 16);
-                              setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Count</span>
-                          <input
-                            type="number"
-                            min={1}
-                            value={g.count ?? (g.pattern === "columns" ? 12 : 8)}
-                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              const cnt = Math.max(1, parseInt(e.target.value, 10) || 1);
-                              const next = [...n.layoutGrids!];
-                              next[gi] = { ...g, count: cnt };
-                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                            }}
-                          />
-                        </div>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Gutter</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.gutter ?? 20}
-                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              const gut = Math.max(0, parseInt(e.target.value, 10) || 0);
-                              const next = [...n.layoutGrids!];
-                              next[gi] = { ...g, gutter: gut };
-                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                            }}
-                          />
-                        </div>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Margin</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.margin ?? 20}
-                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              const mg = Math.max(0, parseInt(e.target.value, 10) || 0);
-                              setGrid({ margin: mg });
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Type</span>
-                          <select
-                            aria-label="Grid alignment"
-                            value={g.alignment ?? "stretch"}
-                            style={{ fontSize: 11, padding: "2px 4px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              const a = e.target.value as GridAlignment;
-                              // Stretch fills the frame, so a fixed width no
-                              // longer applies; a fixed type without a width
-                              // falls back to stretch in paint.
-                              setGrid(a === "stretch"
-                                ? { alignment: a, cell: undefined }
-                                : { alignment: a });
-                            }}
-                          >
-                            <option value="stretch">Stretch</option>
-                            <option value="min">{g.pattern === "columns" ? "Left" : "Top"}</option>
-                            <option value="center">Center</option>
-                            <option value="max">{g.pattern === "columns" ? "Right" : "Bottom"}</option>
-                          </select>
-                        </div>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>{g.pattern === "columns" ? "Width" : "Height"}</span>
-                          <input
-                            type="number"
-                            min={1}
-                            disabled={(g.alignment ?? "stretch") === "stretch"}
-                            placeholder="Auto"
-                            value={g.cell ?? ""}
-                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              const v = parseInt(e.target.value, 10);
-                              const fixed = Number.isFinite(v) ? Math.max(1, v) : undefined;
-                              setGrid({ cell: fixed });
-                            }}
-                          />
-                        </div>
-                        <div style={{ display: "grid", gap: 2 }}>
-                          <span style={{ fontSize: 9, color: "var(--dim)" }}>Offset</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.offset ?? 0}
-                            style={{ width: "100%", padding: "2px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, color: "inherit" }}
-                            onChange={(e) => {
-                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 10, color: "var(--dim)" }}>Color</span>
-                        <input
-                          type="color"
-                          aria-label="Grid color"
-                          value={hexOf(g.color)}
-                          style={{ width: 60, height: 22, padding: 0, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4 }}
-                          onChange={(e) => {
-                            const r = parseInt(e.target.value.slice(1, 3), 16);
-                            const b = parseInt(e.target.value.slice(3, 5), 16);
-                            const bl = parseInt(e.target.value.slice(5, 7), 16);
-                            setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
-                          }}
-                        />
-                      </div>
-                      </>
-                    )}
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </Section>
+          <LayoutGrids n={n} engine={engine} />
         </>
       )}
 
@@ -6169,7 +6387,7 @@ function Design({
           />
         </div>
       </div>
-      <div className="insp-pad" style={{ marginTop: 4, display: "grid", gap: 4 }}>
+      <div  className="insp-pad ins-col-sm ins-mt-1">
         {cornersOpen && inInstance && (
           <span className="corner-lock">Individual corners are set on the component</span>
         )}
@@ -6310,8 +6528,8 @@ function Design({
         </label>
       )}
       {n.kind === "frame" && (
-        <div className="field" style={{ marginTop: 6 }}>
-          <label style={{ fontSize: 11, color: "var(--muted)" }}>Frame</label>
+        <div  className="field ins-mt-1-5">
+          <label>Frame</label>
           <select
             aria-label="Frame preset"
             title="Swap this frame to a preset size"
@@ -6347,11 +6565,11 @@ function Design({
             if (multi) {
               patchMany((m) =>
                 isNone(m.fill) && !m.fillVisible
-                  ? { fill: "#d9d9d9", fillVisible: true, fillOpacity: m.fillOpacity ?? 1 }
+                  ? { fill: DOC_FILL_NONE, fillVisible: true, fillOpacity: m.fillOpacity ?? 1 }
                   : {
                       fills: [
                         ...(m.fills ?? []),
-                        { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                        { type: "solid", color: DOC_SECOND_PAINT, opacity: 1, visible: true },
                       ],
                     },
               );
@@ -6363,7 +6581,7 @@ function Design({
               engine.dispatch({
                 type: "patch",
                 id: n.id,
-                patch: { fill: "#d9d9d9", fillVisible: true, fillOpacity: n.fillOpacity ?? 1 },
+                patch: { fill: DOC_FILL_NONE, fillVisible: true, fillOpacity: n.fillOpacity ?? 1 },
               });
               return;
             }
@@ -6373,7 +6591,7 @@ function Design({
               patch: {
                 fills: [
                   ...(n.fills ?? []),
-                  { type: "solid", color: "#ffffff", opacity: 1, visible: true },
+                  { type: "solid", color: DOC_SECOND_PAINT, opacity: 1, visible: true },
                 ],
               },
             });
@@ -6571,12 +6789,12 @@ function Design({
               // the stroke row uses), leaving the section empty; Fill "+"
               // then re-adds the default fill instead of stacking over a
               // hidden one.
-              if (multi) patchMany({ fill: "#00000000", fillVisible: false });
+              if (multi) patchMany({ fill: DOC_NO_FILL, fillVisible: false });
               else
                 engine.dispatch({
                   type: "patch",
                   id: n.id,
-                  patch: { fill: "#00000000", fillVisible: false },
+                  patch: { fill: DOC_NO_FILL, fillVisible: false },
                 });
             }}
             onMeta={(p) =>
@@ -6595,15 +6813,169 @@ function Design({
       </Section>
 
       <Section id="stroke" title="Stroke" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
-        <button
-          className="plus"
-          title="Add stroke"
-          disabled={boolChild}
-          onClick={() => addStroke()}
-        >
-          <Icon name="plus" size={14} />
-        </button>
+        <>
+          <button
+            className="plus"
+            aria-label="Stroke settings"
+            disabled={boolChild}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setStrokePop({ left: r.left - 220, top: r.bottom + 4 });
+            }}
+          >
+            <Icon name="dash" size={14} />
+          </button>
+          <button
+            className="plus"
+            title="Add stroke"
+            disabled={boolChild}
+            onClick={() => addStroke()}
+          >
+            <Icon name="plus" size={14} />
+          </button>
+        </>
       }>
+      {strokePop &&
+        createPortal(
+          <div ref={strokePopRef} className="type-menu stroke-pop" role="dialog" aria-label="Stroke settings">
+            <div className="stroke-pop-head">
+              <span className="stroke-pop-title">Stroke settings</span>
+              <button type="button" className="icon-btn" aria-label="Close" onClick={() => setStrokePop(null)}>
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+            <div className="seg stroke-pop-tabs">
+              {(["basic", "dynamic", "brush"] as const).map((tb) => (
+                <button key={tb} type="button" className={strokeTab === tb ? "on" : ""} onClick={() => setStrokeTab(tb)}>
+                  {tb === "basic" ? "Basic" : tb === "dynamic" ? "Dynamic" : "Brush"}
+                </button>
+              ))}
+            </div>
+            {strokeTab === "basic" && (
+              <div className="stroke-pop-body">
+                <label className="field">
+                  <span className="ins-meta-cap">Style</span>
+                  <select
+                    aria-label="Stroke style"
+                    value={dashStyleOf(n.strokeDashPattern)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      patch(
+                        v === "solid"
+                          ? { strokeDashPattern: [], strokeDash: 0, strokeGap: 0 }
+                          : v === "dashed"
+                            ? { strokeDashPattern: [8, 6], strokeDash: 8, strokeGap: 6 }
+                            : { strokeDashPattern: [2, 4], strokeDash: 2, strokeGap: 4 },
+                      );
+                    }}
+                  >
+                    <option value="solid">Solid</option>
+                    <option value="dashed">Dashed</option>
+                    <option value="dotted">Dotted</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="ins-meta-cap">Width profile</span>
+                  <select
+                    aria-label="Width profile"
+                    value={profileOf(n)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v !== "custom") patch({ strokeWidthProfile: PROFILE_PRESETS[v] });
+                    }}
+                  >
+                    <option value="uniform">Uniform</option>
+                    <option value="taper-out">Taper out</option>
+                    <option value="taper-in">Taper in</option>
+                    <option value="lens">Lens</option>
+                    {profileOf(n) === "custom" && <option value="custom">Custom</option>}
+                  </select>
+                </label>
+                <div className="stroke-pop-row">
+                  <span className="ins-meta-cap">Join</span>
+                  <div className="seg icons">
+                    {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
+                      <button
+                        key={j}
+                        type="button"
+                        className={n.strokeJoin === j ? "on" : ""}
+                        aria-label={`Join ${j}`}
+                        onClick={() => patch({ strokeJoin: j })}
+                      >
+                        <Icon name={`join-${j}`} size={14} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Field
+                  label="Miter angle"
+                  value={n.strokeMiterAngle ?? 0}
+                  onChange={(v) => patch({ strokeMiterAngle: Math.max(0, Math.min(180, v)) })}
+                />
+              </div>
+            )}
+            {strokeTab === "dynamic" && (
+              <div className="stroke-pop-body">
+                <Field
+                  label="Smoothing"
+                  value={n.strokeDynSmooth ?? 50}
+                  onChange={(v) => patch({ strokeDynSmooth: Math.max(0, Math.min(100, v)) })}
+                />
+                <Field label="Dash" value={n.strokeDash ?? 0} onChange={(v) => patch({ strokeDash: Math.max(0, v) })} />
+                <Field label="Gap" value={n.strokeGap ?? 0} onChange={(v) => patch({ strokeGap: Math.max(0, v) })} />
+                <div className="stroke-pop-row">
+                  <span className="ins-meta-cap">Dash cap</span>
+                  <div className="seg icons">
+                    {(["butt", "round", "square"] as const).map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        className={(n.strokeDashCap ?? "butt") === c ? "on" : ""}
+                        aria-label={`Dash cap ${c}`}
+                        onClick={() => patch({ strokeDashCap: c })}
+                      >
+                        <Icon name={c === "butt" ? "cap-none" : `cap-${c}`} size={14} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            {strokeTab === "brush" && (
+              <div className="stroke-pop-body">
+                <label className="field">
+                  <span className="ins-meta-cap">Start point</span>
+                  <select
+                    aria-label="Start point"
+                    value={n.strokeCapStart ?? n.strokeCap ?? "butt"}
+                    onChange={(e) => patch({ strokeCapStart: e.target.value as StrokeCap })}
+                  >
+                    {["butt", "round", "square", "arrow", "triangle", "reverse-triangle", "diamond"].map((c) => (
+                      <option key={c} value={c}>
+                        {c === "reverse-triangle" ? "Reverse triangle" : c[0].toUpperCase() + c.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="ins-meta-cap">End point</span>
+                  <select
+                    aria-label="End point"
+                    value={n.strokeCapEnd ?? n.strokeCap ?? "butt"}
+                    onChange={(e) => patch({ strokeCapEnd: e.target.value as StrokeCap })}
+                  >
+                    {["butt", "round", "square", "arrow", "triangle", "reverse-triangle", "diamond"].map((c) => (
+                      <option key={c} value={c}>
+                        {c === "reverse-triangle" ? "Reverse triangle" : c[0].toUpperCase() + c.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+          </div>,
+          document.body,
+        )}
       {!(n.strokeWidth > 0) && (
         <div className="insp-pad">
           <div className="empty-add">
@@ -6615,7 +6987,7 @@ function Design({
         </div>
       )}
       {n.strokeWidth > 0 && (!isNone(n.strokePaint) || n.strokeVisible) && (
-        <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+        <div  className="insp-pad ins-col-sm">
           <ColorRow
             title="Stroke"
             stroke
@@ -6672,11 +7044,11 @@ function Design({
             }
             onRemove={() =>
               multi
-                ? patchMany({ strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 })
+                ? patchMany({ strokePaint: DOC_NO_FILL, strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 })
                 : engine.dispatch({
                     type: "patch",
                     id: n.id,
-                    patch: { strokePaint: "#00000000", strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 },
+                    patch: { strokePaint: DOC_NO_FILL, strokeType: "solid", strokePattern: undefined, strokeVisible: false, strokeWidth: 0 },
                   })
             }
           />
@@ -6925,21 +7297,13 @@ function Design({
             </>
           )}
           {((n.kind === "line" || n.kind === "arrow" || n.kind === "vector") && !n.closed) && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 6, marginTop: 4, alignItems: "end" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, color: "var(--dim)" }}>Start point</span>
+            <div className="ins-grid-mid">
+              <div className="ins-col-flex-xs">
+                <span className="ins-cap">Start point</span>
                 <select
                   aria-label="Start cap"
                   value={n.strokeCapStart ?? "none"}
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    color: "inherit",
-                    fontSize: 11,
-                    padding: "2px 4px",
-                    height: 24,
-                  }}
+                  className="ins-select"
                   onChange={(e) => patch({ strokeCapStart: e.target.value as StrokeCap })}
                 >
                   <option value="none">None</option>
@@ -6953,30 +7317,22 @@ function Design({
                 </select>
               </div>
               <button
-                className="icon-btn"
+                
                 title="Swap start and end points"
                 aria-label="Swap start and end points"
-                style={{ marginBottom: 1 }}
+                className="icon-btn ins-mb-hair"
                 onClick={() =>
                   patch({ strokeCapStart: n.strokeCapEnd ?? "none", strokeCapEnd: n.strokeCapStart ?? "none" })
                 }
               >
                 <Icon name="flip-h" size={14} />
               </button>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 9, color: "var(--dim)" }}>End point</span>
+              <div className="ins-col-flex-xs">
+                <span className="ins-cap">End point</span>
                 <select
                   aria-label="End cap"
                   value={n.strokeCapEnd ?? n.strokeCap}
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid var(--border)",
-                    borderRadius: 4,
-                    color: "inherit",
-                    fontSize: 11,
-                    padding: "2px 4px",
-                    height: 24,
-                  }}
+                  className="ins-select"
                   onChange={(e) => {
                     const cap = e.target.value as StrokeCap;
                     patch({ strokeCapEnd: cap, strokeCap: cap });
@@ -7053,9 +7409,8 @@ function Design({
           });
         return (
           <div
-            className={`insp-pad paint-row stroke-paint-row${strokeDrag === i ? " dragging" : ""}${strokeOver === i ? " drop" : ""}`}
+            className={`ins-col-sm insp-pad paint-row stroke-paint-row${strokeDrag === i ? " dragging" : ""}${strokeOver === i ? " drop" : ""}`}
             key={i}
-            style={{ display: "grid", gap: 4 }}
             onDragOver={(e) => {
               if (strokeDrag === null) return;
               e.preventDefault();
@@ -7152,7 +7507,7 @@ function Design({
         <>
           <div className="hr" />
           <Section id="polygon" title={n.kind === "star" ? "Star" : "Polygon"}>
-          <div className="insp-pad" style={{ display: "grid", gap: 4 }}>
+          <div  className="insp-pad ins-col-sm">
             <Field
               label="#"
               value={n.count || (n.kind === "star" ? 5 : 3)}
@@ -7178,7 +7533,7 @@ function Design({
       {n.kind === "ellipse" && (
         <>
           <div className="hr" />
-          <div className="insp-pad" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+          <div  className="insp-pad ins-grid-3">
             <Field
               label="Sweep"
               hint="°"
@@ -7343,7 +7698,7 @@ function SelectionColors({
                     title={`${u.bucket} colours`}
                     anchor={picking.rect}
                     recents={collectColors(root)}
-                    value={{ color: u.hex, opacity: 100, type: "solid", second: "#ffffff", blend: "normal" }}
+                    value={{ color: u.hex, opacity: 100, type: "solid", second: DOC_SECOND_PAINT, blend: "normal" }}
                     onChange={(v) => {
                       recolorMatches(engine, root, u, v.color);
                       setPicking(null);
@@ -7416,7 +7771,7 @@ function EffectPopover({
           value={fx.color}
           opacity={Math.round(parseHex(fx.color).a * 100)}
           visible
-          recents={["#000000", "#00000040", "#ffffff"]}
+          recents={DOC_RECENT_INK}
           onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
@@ -7433,7 +7788,7 @@ function EffectPopover({
           value={fx.color}
           opacity={Math.round(parseHex(fx.color).a * 100)}
           visible
-          recents={["#ffffff", "#000000", "#00000040"]}
+          recents={DOC_RECENT_BRAND}
           onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
@@ -7464,7 +7819,7 @@ function EffectPopover({
           value={fx.color}
           opacity={Math.round(parseHex(fx.color).a * 100)}
           visible
-          recents={["#ffffff", "#000000"]}
+          recents={DOC_RECENT_PAIR}
           onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
           onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
         />
@@ -7474,6 +7829,26 @@ function EffectPopover({
           <Field label="Density" aria="Texture density" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
           <Field label="Scale" aria="Texture scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
         </div>
+      )}
+      {fx.kind === "shader" && (
+        <>
+          <ColorRow
+            title="Tint"
+            value={fx.color}
+            opacity={Math.round(parseHex(fx.color).a * 100)}
+            visible
+            recents={DOC_RECENT_BRAND}
+            onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+            onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+          />
+          <div className="grid2">
+            <Field label="Intensity" aria="Shader intensity" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+            <Field label="Scale" aria="Shader scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+          </div>
+          <div className="grid2">
+            <Field label="Angle" aria="Shader angle" value={fx.x} onChange={(x) => onChange({ x })} />
+          </div>
+        </>
       )}
       {effectCanBlend(fx.kind) && (
         <>
@@ -7533,6 +7908,7 @@ const EFFECT_LABEL: Record<string, string> = {
   noise: "Noise",
   glass: "Glass",
   texture: "Texture",
+  shader: "Shader",
 };
 
 function Effects({
@@ -7560,6 +7936,7 @@ function Effects({
     { id: "noise", label: "Noise" },
     { id: "glass", label: "Glass" },
     { id: "texture", label: "Texture" },
+    { id: "shader", label: "Shader" },
   ];
   const effects = n.effects ?? [];
   // One layer takes eight drop shadows, eight inner shadows, one blur of each
@@ -7631,7 +8008,7 @@ function Effects({
         disabled={locked}
         disabledTitle="Controlled by the boolean group"
         actions={
-          <div style={{ position: "relative", display: "flex" }}>
+          <div className="ins-rel">
             <button
               className="plus"
               title="Add effect"
@@ -7646,8 +8023,8 @@ function Effects({
             </button>
             {open && (
               <div
-                className="type-menu"
-                style={{ right: 8, top: 28, left: "auto", width: 180 }}
+                
+                className="type-menu ins-pop-right"
                 onMouseLeave={() => preview(null)}
               >
                 {kinds.map((k) => (
@@ -7692,7 +8069,7 @@ function Effects({
           </div>
         )}
         {effects.map((fx, i) => (
-          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
+          <div  key={i} className="insp-pad ins-mb-1">
             <div
               className={`color-row fx-row${over === i && drag !== null && drag !== i ? " drop" : ""}`}
               onDragOver={(e) => {
@@ -7726,16 +8103,8 @@ function Effects({
                 <span className="swatch" style={{ background: fx.color }} />
               )}
               <button
-                className="hex"
-                style={{
-                  flex: 1,
-                  textAlign: "left",
-                  background: "none",
-                  border: 0,
-                  padding: 0,
-                  cursor: "pointer",
-                  color: "inherit",
-                }}
+                
+                className="hex ins-ghost-left"
                 title={
                   (fx.kind === "background-blur" || fx.kind === "glass") &&
                   !bgBlurSeesThrough(fillCompositeAlpha(n))
@@ -7826,7 +8195,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
         title={`Modifiers · ${modifiers.length}`}
         defaultOpen={modifiers.length > 0}
         actions={
-          <div style={{ position: "relative", display: "flex" }}>
+          <div className="ins-rel">
             <button
               className="plus"
               title="Add non-destructive procedural modifier"
@@ -7839,15 +8208,8 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
             </button>
             {open && (
               <div
-                className="type-menu"
-                style={{
-                  position: "absolute",
-                  right: 0,
-                  top: 28,
-                  left: "auto",
-                  width: 170,
-                  zIndex: 200,
-                }}
+                
+                className="type-menu ins-pop"
               >
                 <button onClick={() => addModifier("roundedCorners")}>
                   Rounded corners
@@ -7880,8 +8242,8 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
           </div>
         )}
         {modifiers.map((m, i) => (
-          <div className="insp-pad" key={i} style={{ marginBottom: 4 }}>
-            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
+          <div  key={i} className="insp-pad ins-mb-1">
+            <div  className="color-row fx-row ins-row-pad">
               <button
                 className="mini"
                 title={m.enabled === false ? "Enable modifier" : "Disable modifier"}
@@ -7890,7 +8252,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
               >
                 <Icon name={m.enabled === false ? "eye-off" : "eye"} size={14} />
               </button>
-              <span style={{ flex: 1, fontSize: 11, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span className="ins-ellip-strong">
                 {m.type === "roundedCorners"
                   ? "Rounded Corners"
                   : m.type === "offset"
@@ -7904,7 +8266,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
               {m.type === "roundedCorners" && (
                 <input
                   type="number"
-                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  className="ins-input-num"
                   value={m.radius}
                   onChange={(e) => updateModifier(i, { radius: parseFloat(e.target.value) || 0 })}
                 />
@@ -7912,7 +8274,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
               {m.type === "offset" && (
                 <input
                   type="number"
-                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  className="ins-input-num"
                   value={m.distance}
                   onChange={(e) => updateModifier(i, { distance: parseFloat(e.target.value) || 0 })}
                 />
@@ -7921,7 +8283,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
                 <input
                   type="number"
                   step="0.5"
-                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  className="ins-input-num"
                   value={m.tolerance}
                   onChange={(e) => updateModifier(i, { tolerance: parseFloat(e.target.value) || 0.1 })}
                 />
@@ -7929,7 +8291,7 @@ function ModifiersSection({ n, engine }: { n: XNode; engine: Engine }) {
               {m.type === "stroke" && (
                 <input
                   type="number"
-                  style={{ width: 44, background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--fg)", borderRadius: 3, padding: "2px 4px", fontSize: 11, textAlign: "right" }}
+                  className="ins-input-num"
                   value={m.width}
                   onChange={(e) => updateModifier(i, { width: parseFloat(e.target.value) || 1 })}
                 />
@@ -7980,16 +8342,9 @@ function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
         title={`Expressions · ${entries.length}`}
         defaultOpen={entries.length > 0}
         actions={
-          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <div className="ins-row-tight">
             <select
-              style={{
-                background: "var(--input-bg)",
-                border: "1px solid var(--border)",
-                color: "var(--fg)",
-                fontSize: 11,
-                borderRadius: 3,
-                padding: "2px 4px",
-              }}
+              className="ins-select-bind"
               aria-label="Property to bind"
               value={propSelect}
               onChange={(e) => setPropSelect(e.target.value)}
@@ -8023,23 +8378,14 @@ function ExpressionsSection({ n, engine }: { n: XNode; engine: Engine }) {
           </div>
         )}
         {entries.map(([prop, expr]) => (
-          <div className="insp-pad" key={prop} style={{ marginBottom: 4 }}>
-            <div className="color-row fx-row" style={{ padding: "4px 8px", gap: 6, alignItems: "center" }}>
-              <span style={{ fontWeight: 600, fontSize: 11, color: "var(--accent, #10b981)", minWidth: 28 }}>
+          <div  key={prop} className="insp-pad ins-mb-1">
+            <div  className="color-row fx-row ins-row-pad">
+              <span className="insp-accent-num">
                 ƒ({prop})
               </span>
               <input
                 type="text"
-                style={{
-                  flex: 1,
-                  background: "var(--input-bg)",
-                  border: "1px solid var(--border)",
-                  color: "var(--fg)",
-                  borderRadius: 3,
-                  padding: "2px 6px",
-                  fontSize: 11,
-                  fontFamily: "var(--font-mono, monospace)",
-                }}
+                className="ins-input-expr"
                 value={expr}
                 onChange={(e) => updateExpr(prop, e.target.value)}
                 placeholder="e.g. parent.w * 0.5 + 20"
@@ -8428,9 +8774,9 @@ function WidthProfileEditor({
   return (
     <fieldset className="width-profile" disabled={!!reason} aria-label="Variable width" title={reason ?? undefined}>
       {reason && <p className="width-profile-reason">{reason}</p>}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-        <span style={{ fontSize: 10, color: "var(--dim)" }}>Variable width</span>
-        <span style={{ flex: 1 }} />
+      <div className="ins-row ins-mt-1">
+        <span className="ins-meta">Variable width</span>
+        <span className="ins-grow" />
         {active && (
           <button
             className="link"
@@ -8445,15 +8791,7 @@ function WidthProfileEditor({
       <svg
         ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
-        style={{
-          width: "100%",
-          height: "auto",
-          display: "block",
-          background: "var(--bg-subtle)",
-          borderRadius: 4,
-          cursor: "crosshair",
-          touchAction: "none",
-        }}
+        className="ins-curve"
         role="img"
         aria-disabled={!!reason}
         aria-label="Stroke width profile. Click to add a width point, drag to move it, double-click to delete."
@@ -8501,9 +8839,9 @@ function WidthProfileEditor({
             cy={H / 2}
             r={4}
             fill={active ? "var(--accent)" : "var(--dim)"}
-            stroke="#ffffff"
+            stroke="var(--panel)"
             strokeWidth={1}
-            style={{ cursor: "move" }}
+            className="ins-handle"
             onPointerDown={(e) => {
               e.stopPropagation();
               if (reason || e.button !== 0) return;
@@ -8685,6 +9023,51 @@ function PadField({
       {bind}
     </div>
   );
+}
+
+/** The stroke Style row's answer for a dash pattern: Solid / Dashed / Dotted. */
+function dashStyleOf(pattern?: number[]): "solid" | "dashed" | "dotted" {
+  const p = pattern ?? [];
+  if (!p.length) return "solid";
+  return Math.max(...p) <= 4 ? "dotted" : "dashed";
+}
+
+/** Named width-profile envelopes, the dropdown's options (capture: a profile
+ *  picker beside the weight). `position` runs 0→1 along the centreline. */
+const PROFILE_PRESETS: Record<string, { position: number; widthMultiplier: number }[]> = {
+  uniform: [
+    { position: 0, widthMultiplier: 1 },
+    { position: 1, widthMultiplier: 1 },
+  ],
+  "taper-out": [
+    { position: 0, widthMultiplier: 0.25 },
+    { position: 1, widthMultiplier: 1 },
+  ],
+  "taper-in": [
+    { position: 0, widthMultiplier: 1 },
+    { position: 1, widthMultiplier: 0.25 },
+  ],
+  lens: [
+    { position: 0, widthMultiplier: 0.25 },
+    { position: 0.5, widthMultiplier: 1 },
+    { position: 1, widthMultiplier: 0.25 },
+  ],
+};
+
+/** Which preset (if any) the node's current envelope matches. */
+function profileOf(n: XNode): string {
+  const p = (n.strokeWidthProfile ?? []).filter((q) => q.position >= 0 && q.position <= 1);
+  if (p.length < 2) return "uniform";
+  const m = p.map((q) => q.widthMultiplier);
+  const spread = Math.max(...m) - Math.min(...m);
+  if (spread < 1e-3) return "uniform";
+  const rise = m[m.length - 1] - m[0];
+  const fall = m[0] - m[m.length - 1];
+  if (rise > spread * 0.8) return "taper-out";
+  if (fall > spread * 0.8) return "taper-in";
+  const mid = m[Math.floor(m.length / 2)];
+  if (Math.abs(rise) < spread * 0.25 && mid - Math.min(...m) > spread * 0.6) return "lens";
+  return "custom";
 }
 
 function Field({
@@ -8941,7 +9324,7 @@ function Constraints({
           ))}
         </select>
       </div>
-      <p className="muted-inline" style={{ padding: "4px 0 0" }}>
+      <p  className="muted-inline ins-p-top">
         Pin this layer to its parent when the parent resizes.
       </p>
     </div>
@@ -8984,7 +9367,7 @@ function ExportSettings({
   };
   return (
     <div className="export-settings insp-pad">
-      <label className="export-color-profile" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      <label  className="export-color-profile ins-label-row">
         <span>Color profile</span>
         <select
           aria-label="Export color profile"
@@ -9187,7 +9570,7 @@ function ExportBlock({
         }
       >
         {presets.map((p, i) => (
-          <div key={i} className="insp-pad" style={{ marginBottom: 4 }}>
+          <div key={i}  className="insp-pad ins-mb-1">
             <div className="export-row">
               {/* Preview the export before download — the thumbnail
                   is the real render (SVG source, so it scales with the preset). */}
@@ -9420,7 +9803,7 @@ function canvasExportPath(
     }
     // PDF keeps transparency via a soft mask, so it must not be flattened.
     if (p.format === "JPG") {
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = DOC_FLATTEN_INK;
       ctx.fillRect(0, 0, width, height);
     }
     ctx.drawImage(image, 0, 0, width, height);
@@ -9570,6 +9953,31 @@ export function copyPngNodes(nodes: XNode[]) {
   );
 }
 
+/** Put the layer's vector source on the clipboard as SVG text — the same
+ *  string the export path writes, so what pastes into a code editor is what
+ *  the downloaded .svg would have contained. */
+export function copySvg(n: XNode, root?: XNode) {
+  const preset: ExportPreset = { format: "SVG", scale: 1, suffix: "", colorProfile: getRenderColorProfile() };
+  writeSvgClipboard(exportSvg(n, preset, root ? { root } : undefined), n.name);
+}
+
+/** SVG of several layers at their relative positions (see `worldClones`). */
+export function copySvgNodes(nodes: XNode[]) {
+  if (!nodes.length) return;
+  if (nodes.length === 1) {
+    copySvg(nodes[0]);
+    return;
+  }
+  writeSvgClipboard(exportClipSvg(nodes, getRenderColorProfile()), `${nodes.length} layers`);
+}
+
+function writeSvgClipboard(svg: string, label: string) {
+  navigator.clipboard.writeText(svg).then(
+    () => toast(`Copied ${label} as SVG`),
+    () => toast(`Clipboard cannot take text · could not copy ${label}`),
+  );
+}
+
 /** Every layer across the file a Pattern fill on `n` may repeat: not `n`,
  *  nothing inside it, none of its ancestors, and not the page roots. */
 function patternSourcesFor(snap: Snapshot, n: XNode): PatternSourceOption[] {
@@ -9707,7 +10115,7 @@ function Section({
           <fieldset
             disabled
             title={disabledTitle}
-            style={{ border: 0, margin: 0, padding: 0, minWidth: 0, opacity: 0.55 }}
+            className="ins-fieldset"
           >
             {children}
           </fieldset>
@@ -9951,7 +10359,7 @@ function ColorRow({
   visible = true,
   exportVisible = true,
   type = "solid",
-  second = "#ffffff",
+  second = DOC_SECOND_PAINT,
   blend = "Normal",
   image,
   imageFit = "fill",
@@ -10046,7 +10454,7 @@ function ColorRow({
   const isImage = type === "image" || !!image;
   const isPattern = type === "pattern";
   const hidden = !isImage && !isPattern && (!visible || isNone(value));
-  const hex = value.length >= 7 ? value.slice(0, 7) : "#000000";
+  const hex = value.length >= 7 ? value.slice(0, 7) : DOC_INK;
   // The hex field keeps its own draft while typing. Committing on every
   // keystroke meant an in-progress value like "f" was parsed as an invalid
   // colour and normalised to black, which wiped the field mid-entry and made
@@ -10204,7 +10612,7 @@ function fillBackground(root: XNode, n: XNode): string {
       if (q.visible !== false && q.type === "solid" && !isNone(q.color)) return q.color.slice(0, 7);
     }
   }
-  return "#ffffff";
+  return DOC_CONTRAST_BG;
 }
 
 /** WCAG large-text exemption: 24px, or 19px and bold. */
@@ -10312,17 +10720,17 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
       {open && (
         <div className="ctx zoom-menu" role="menu">
           <button role="menuitem" onClick={go(() => zoomTo(engine, "fit"))}>
-            Zoom to fit<span className="sc">⇧1</span>
+            Zoom to fit<span className="sc">{sc("⇧1")}</span>
           </button>
           <button
             role="menuitem"
             disabled={!snap.selection.length}
             onClick={go(() => zoomTo(engine, "selection"))}
           >
-            Zoom to selection<span className="sc">⇧2</span>
+            Zoom to selection<span className="sc">{sc("⇧2")}</span>
           </button>
           <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, 1))}>
-            Zoom to 100%<span className="sc">⇧0</span>
+            Zoom to 100%<span className="sc">{sc("⌘0")}</span>
           </button>
           <hr />
           <div className="menu-label">Presets</div>
@@ -10341,16 +10749,16 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           </div>
           <div className="zoom-grid">
             <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, 1)))}>
-              <Icon name="zoom-in" size={12} /> Zoom in<span className="sc">⇧=</span>
+              <Icon name="zoom-in" size={12} /> Zoom in<span className="sc">{sc("⌘+")}</span>
             </button>
             <button role="menuitem" onClick={go(() => zoomAboutCentre(engine, stepZoom(snap.zoom, -1)))}>
-              <Icon name="zoom-out" size={12} /> Zoom out<span className="sc">⇧−</span>
+              <Icon name="zoom-out" size={12} /> Zoom out<span className="sc">{sc("⌘−")}</span>
             </button>
           </div>
           <hr />
           <div className="menu-label">Canvas</div>
           <button role="menuitemcheckbox" aria-checked={snap.showRulers} onClick={go(() => engine.dispatch({ type: "toggleRulers" }))}>
-            Rulers<span className="sc">⇧R</span>
+            Rulers<span className="sc">{sc("⇧R")}</span>
             {snap.showRulers && <Icon name="check" size={12} className="tick" />}
           </button>
           <button
@@ -10360,7 +10768,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
           >
             Pixel grid
             {snap.zoom < 4 && <span className="hint">visible at 400%+</span>}
-            <span className="sc">⌘&apos;</span>
+            <span className="sc">{sc("⇧'")}</span>
             {page.pixelGrid && <Icon name="check" size={12} className="tick" />}
           </button>
           <button
@@ -10368,7 +10776,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             aria-checked={page.pixelSnap ?? true}
             onClick={go(() => engine.dispatch({ type: "patchPage", patch: { pixelSnap: !(page.pixelSnap ?? true) } }))}
           >
-            Snap to pixel grid<span className="sc">⌘⇧&apos;</span>
+            Snap to pixel grid<span className="sc">{sc("⌘⇧'")}</span>
             {page.pixelSnap ?? true ? <Icon name="check" size={12} className="tick" /> : null}
           </button>
           <div className="menu-label">Pixel preview</div>
@@ -10380,12 +10788,12 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
               onClick={go(() => engine.dispatch({ type: "setPixelPreview", preview: pv }))}
             >
               {pv === "off" ? "Off" : `${pv[0]}× device pixels`}
-              <span className="sc">{pv === "1x" ? "⌃P" : pv === "2x" ? "⌃⌥P" : ""}</span>
+              <span className="sc">{sc(pv === "1x" ? "⌃P" : pv === "2x" ? "⌃⌥P" : "")}</span>
               {snap.pixelPreview === pv && <Icon name="check" size={12} className="tick" />}
             </button>
           ))}
           <button role="menuitemcheckbox" aria-checked={snap.viewLayoutGuides} onClick={go(() => engine.dispatch({ type: "toggleLayoutGuides" }))}>
-            Layout guides<span className="sc">⇧G</span>
+            Layout guides<span className="sc">{sc("⇧G")}</span>
             {snap.viewLayoutGuides && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.propertyLabels} onClick={go(() => engine.dispatch({ type: "togglePropertyLabels" }))}>
@@ -10401,7 +10809,7 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             {snap.showComments && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={!!snap.outlineMode} onClick={go(() => engine.dispatch({ type: "toggleOutlines" }))}>
-            Layer outlines<span className="sc">⇧O</span>
+            Layer outlines<span className="sc">{sc("⇧O")}</span>
             {snap.outlineMode && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={!!snap.showMaskOutlines} onClick={go(() => engine.dispatch({ type: "toggleMaskOutlines" }))}>
@@ -10409,12 +10817,12 @@ function ZoomMenu({ engine, snap }: { engine: Engine; snap: Snapshot }) {
             {snap.showMaskOutlines && <Icon name="check" size={12} className="tick" />}
           </button>
           <button role="menuitemcheckbox" aria-checked={snap.showFlows !== false} onClick={go(() => engine.dispatch({ type: "toggleFlows" }))}>
-            Prototype flows<span className="sc">⇧F</span>
+            Prototype flows<span className="sc">{sc("⇧F")}</span>
             {snap.showFlows !== false && <Icon name="check" size={12} className="tick" />}
           </button>
           <hr />
           <button role="menuitem" onClick={go(() => window.dispatchEvent(new CustomEvent("x-native-hide-ui")))}>
-            Hide UI<span className="sc">⌘\</span>
+            Hide UI<span className="sc">{sc("⌘\\")}</span>
           </button>
         </div>
       )}

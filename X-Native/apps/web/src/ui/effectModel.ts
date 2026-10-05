@@ -15,6 +15,7 @@ export const EFFECT_LIMITS: Partial<Record<EffectKind, number>> = {
   noise: 2,
   texture: 1,
   glass: 1,
+  shader: 1,
 };
 
 export function countKind(effects: readonly Effect[], kind: EffectKind): number {
@@ -74,6 +75,7 @@ export function limitMessage(kind: EffectKind, limit: number): string {
     noise: "Noise",
     texture: "Texture",
     glass: "Glass",
+    shader: "Shader",
   }[kind];
   return `${label} · a layer takes ${limit === 1 ? "one" : limit} at a time`;
 }
@@ -85,7 +87,9 @@ export function limitMessage(kind: EffectKind, limit: number): string {
  * therefore not in the menu either.
  */
 export function effectCanBlend(kind: EffectKind): boolean {
-  return kind === "drop-shadow" || kind === "inner-shadow" || kind === "noise";
+  return (
+    kind === "drop-shadow" || kind === "inner-shadow" || kind === "noise" || kind === "shader"
+  );
 }
 
 /**

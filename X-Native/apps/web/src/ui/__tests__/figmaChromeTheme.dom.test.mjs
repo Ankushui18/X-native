@@ -14,8 +14,8 @@
  * top-level `:root` / `html[…]` rules, applied in document order and installed as
  * jsdom's `getComputedStyle` for custom properties only. Then it mounts the real
  * canvas on the real Skia backend (`realCanvas2d`), clicks the real menu row in
- * the real `NavRail`, and reads composited device pixels: emerald before the
- * click, Figma blue after, emerald again after switching back — and nothing at all
+ * the real `NavRail`, and reads composited device pixels: brand violet before the
+ * click, Figma azure after, violet again after switching back — and nothing at all
  * where the painted rotation handle used to live, in either palette.
  *
  * The model deliberately does not re-derive specificity. It applies the *last*
@@ -32,7 +32,7 @@
  * owns the whitelist is `canvasChrome.test.mjs` §5.
  *
  * It earned its keep on the first run. The click wrote the attribute, the sheet
- * said blue, and the pixels stayed emerald — because the preference had been
+ * said blue, and the pixels stayed on the old ink — because the preference had been
  * applied from a `useEffect` in `ThemeProvider`, and the write landed in the same
  * commit as the repaint it was supposed to drive. `theme.tsx` now writes it in the
  * setter, before the state update, and `canvasChromePref.test.mjs` pins that order
@@ -43,7 +43,8 @@
  * this file — jsdom's passive-effect order was said not to reproduce the browser's,
  * so the ordering was claimed uncatchable in pixels. It is catchable: the last run
  * of that break fails 5 assertions, with exactly the bug's signature (the ring, the
- * label, the rails and the thumbnail still emerald against a blue sheet). The zero
+ * label, the rails and the thumbnail still on the default ink against a blue
+ * sheet). The zero
  * had been produced by the sabotage *driver*, which re-read the pristine file for
  * every patch instead of the patched one, so a break expressed as two edits to one
  * file applied the second and silently undid the first — the harness measured
@@ -60,7 +61,7 @@
  *   - the rotation dot repainted at the band                     -> 2  (+2 in the parity file)
  *   - the layer label stopped following the selection            -> 2
  *   - the ruler markers stopped following the selection          -> 2
- *   - the minimap painted the selection in a literal emerald     -> 2  (+1 in `canvasChromePref`)
+ *   - the minimap painted the selection in a literal green       -> 2  (+1 in `canvasChromePref`)
  *   - the rulers' range wash did the same                        -> 0 here, 1 in `canvasChromePref`
  *   - the theme recoloured `--accent` in the sheet               -> 2 in `canvasChrome` §5
  *   - `accent` added back to the role map                        -> 1 in `canvasChrome` §5
@@ -223,18 +224,26 @@ const { CANVAS_CHROME_FALLBACK } = await import("../canvasChrome.ts");
 
 /* ------------------------------------------------------------- colour helpers */
 
-const EMERALD = { r: 0x10, g: 0xb9, b: 0x81 };
+// The two inks this file measures. In identity v3 the editor's selection chrome is
+// the brand *violet* and the opt-in Figma palette is the azure — two blues, so the
+// hue rule below separates them by which channel is strongest, and a scan that
+// muddled them would pass while proving nothing.
+const BRAND = { r: 0x5b, g: 0x3d, b: 0xf5 };
 const BLUE = { r: 0x0d, g: 0x99, b: 0xff };
-const hue = (p) =>
-  p.g > p.r + 12 && p.g > p.b + 12 ? "green" : p.b > p.r + 12 && p.b > p.g + 12 ? "blue" : "other";
+const hue = (p) => {
+  if (p.g > p.r + 12 && p.g > p.b + 12) return "green";
+  if (p.b > p.r + 12 && p.b > p.g + 12) return p.r > p.g + 12 ? "violet" : "azure";
+  if (p.r > p.g + 12 && p.r > p.b + 12) return "red";
+  return "other";
+};
 const close = (p, c) => Math.abs(p.r - c.r) <= 8 && Math.abs(p.g - c.g) <= 8 && Math.abs(p.b - c.b) <= 8;
 const scan = (grab, x0, y0, x1, y1) => {
-  const n = { green: 0, blue: 0, other: 0, emerald: 0, figma: 0 };
+  const n = { violet: 0, azure: 0, green: 0, red: 0, other: 0, brand: 0, figma: 0 };
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const p = grab(x, y);
       n[hue(p)]++;
-      if (close(p, EMERALD)) n.emerald++;
+      if (close(p, BRAND)) n.brand++;
       if (close(p, BLUE)) n.figma++;
     }
   }
@@ -250,19 +259,28 @@ t(`the reader found the sheet's root rules (${RULES.length} top-level blocks)`, 
   const dark = cascadeFor({ "data-theme": "dark" });
   const figma = cascadeFor({ "data-theme": "light", "data-canvas-chrome": "figma" });
   const figmaDark = cascadeFor({ "data-theme": "dark", "data-canvas-chrome": "figma" });
-  t("it resolves the light selection ink to the app's emerald", light["--cv-sel"] === "#10b981", String(light["--cv-sel"]));
-  t("the dark column agrees today (that is FR-U2b's 'not yet retuned')", dark["--cv-sel"] === "#10b981", String(dark["--cv-sel"]));
-  t("and the Figma attribute turns it blue", figma["--cv-sel"] === "#0d99ff", String(figma["--cv-sel"]));
-  t("in the dark scheme too", figmaDark["--cv-sel"] === "#0d99ff", String(figmaDark["--cv-sel"]));
+  t("it resolves the light selection ink to the brand violet", light["--cv-sel"] === "#5b3df5", String(light["--cv-sel"]));
+  t("and the dark column retunes it rather than repeating it (that is FR-U2b, done)",
+    dark["--cv-sel"] === "#8b7cff", String(dark["--cv-sel"]));
+  t("the Figma attribute turns it azure", figma["--cv-sel"] === "#0d99ff", String(figma["--cv-sel"]));
+  t("in the dark scheme too — the opt-in override is one palette, not two",
+    figmaDark["--cv-sel"] === "#0d99ff", String(figmaDark["--cv-sel"]));
   t("the grid follows it, at each scheme's own alpha",
-    figma["--grid"] === "rgba(13, 153, 255, 0.07)" && figmaDark["--grid"] === "rgba(13, 153, 255, 0.09)",
+    figma["--grid"] === "rgba(13, 153, 255, 0.07)" && figmaDark["--grid"] === "rgba(13, 153, 255, 0.1)",
     `${figma["--grid"]} / ${figmaDark["--grid"]}`);
-  t("while the panel accent stays the app's", figma["--accent"] === "#0e9f6e", String(figma["--accent"]));
+  // The accent is declared as a ramp reference (`--accent: var(--b-600)`), so the
+  // reader hands back the *declaration*, not a resolved colour — the contract is
+  // that the override does not restate it, and that the ramp lands on the brand.
+  t("while the panel accent stays the app's",
+    figma["--accent"] === light["--accent"] && figma["--b-600"] === "#5b3df5",
+    `${figma["--accent"]} → ${figma["--b-600"]}`);
+  t("and so does the drop target: the switch moves the selection, not the whole canvas",
+    figma["--cv-target"] === "#0d99ff" && light["--cv-target"] === "#00b3d4", `${figma["--cv-target"]} / ${light["--cv-target"]}`);
   t("the value came from the sheet, not from the fallbacks",
     figma["--cv-sel"] !== CANVAS_CHROME_FALLBACK.sel && light["--cv-sel"] === CANVAS_CHROME_FALLBACK.sel);
   t("an unknown attribute answers nothing rather than guessing",
     cascadeFor({ "data-canvas-chrome": "figma" })["--cv-sel"] === "#0d99ff"
-    && cascadeFor({ "data-theme": "graphite" })["--cv-sel"] === "#10b981");
+    && cascadeFor({ "data-theme": "graphite" })["--cv-sel"] === "#5b3df5");
 }
 
 /* ---------------------------------- 2. the app, mounted, clicked, and sampled */
@@ -335,11 +353,11 @@ const scanSurface = (el) => {
   const surf = el?.__probeCanvas;
   if (!surf || !surf.width) return null;
   const img = surf.getContext("2d").getImageData(0, 0, surf.width, surf.height);
-  const n = { green: 0, blue: 0, emerald: 0, figma: 0 };
+  const n = { violet: 0, azure: 0, green: 0, red: 0, other: 0, brand: 0, figma: 0 };
   for (let i = 0; i < img.data.length; i += 4) {
     const q = { r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] };
     n[hue(q)]++;
-    if (close(q, EMERALD)) n.emerald++;
+    if (close(q, BRAND)) n.brand++;
     if (close(q, BLUE)) n.figma++;
   }
   return n;
@@ -354,18 +372,19 @@ t(`every canvas role it asked for came out of the sheet (${[...misses].join(", "
   misses.size === 0);
 
 const before = scan(grab(), ...RING);
-t("the selected frame's ring is painted in the app's emerald", before.emerald > 200, `${before.emerald} exact-emerald px`);
-t("with no Figma blue anywhere in it", before.blue === 0 && before.figma === 0, JSON.stringify(before));
+t("the selected frame's ring is painted in the brand violet", before.brand > 200, `${before.brand} exact-brand px`);
+t("with no Figma azure anywhere in it", before.azure === 0 && before.figma === 0, JSON.stringify(before));
 const labelBefore = scan(grab(), ...LABEL);
-t("the frame's name is emerald while it is selected", labelBefore.emerald > 4, `${labelBefore.emerald} px`);
+t("the frame's name is violet while it is selected", labelBefore.brand > 4, `${labelBefore.brand} px`);
 const rulersBefore = scanSurface(rulersEl);
 const miniBefore = scanSurface(miniEl);
-t("the rails and the thumbnail carry the emerald too",
-  !!rulersBefore && !!miniBefore && rulersBefore.emerald > 4 && miniBefore.emerald > 20,
+t("the rails and the thumbnail carry the brand too",
+  !!rulersBefore && !!miniBefore && rulersBefore.brand > 4 && miniBefore.brand > 20,
   JSON.stringify({ rulers: rulersBefore, minimap: miniBefore }));
 const gapBefore = scan(grab(), ...OLD_HANDLE);
 t("nothing is painted where the rotation handle used to be",
-  gapBefore.green === 0 && gapBefore.blue === 0 && gapBefore.other > 0, JSON.stringify(gapBefore));
+  gapBefore.green === 0 && gapBefore.azure === 0 && gapBefore.violet === 0 && gapBefore.other > 0,
+  JSON.stringify(gapBefore));
 
 // The menu row is the control under test, so the click goes through it. Two
 // rules, learned while writing this: re-query immediately before clicking (React
@@ -394,26 +413,26 @@ await pick("Figma blue");
 t("the click writes the attribute the sheet keys off",
   document.documentElement.dataset.canvasChrome === "figma", JSON.stringify(document.documentElement.dataset));
 const after = scan(grab(), ...RING);
-t("the ring is Figma blue now — same pixels, other palette", after.figma > 200 && after.emerald === 0,
+t("the ring is Figma azure now — same pixels, other palette", after.figma > 200 && after.brand === 0,
   JSON.stringify(after));
 const labelAfter = scan(grab(), ...LABEL);
-t("the layer name followed it", labelAfter.figma > 4 && labelAfter.emerald === 0, JSON.stringify(labelAfter));
+t("the layer name followed it", labelAfter.figma > 4 && labelAfter.brand === 0, JSON.stringify(labelAfter));
 const rulersAfter = scanSurface(rulersEl);
 const miniAfter = scanSurface(miniEl);
-t("the ruler marker turned with it", !!rulersAfter && rulersAfter.figma > 4 && rulersAfter.emerald === 0,
+t("the ruler marker turned with it", !!rulersAfter && rulersAfter.figma > 4 && rulersAfter.brand === 0,
   JSON.stringify(rulersAfter));
-t("and so did the thumbnail's selection box", !!miniAfter && miniAfter.figma > 20 && miniAfter.emerald === 0,
+t("and so did the thumbnail's selection box", !!miniAfter && miniAfter.figma > 20 && miniAfter.brand === 0,
   JSON.stringify(miniAfter));
 t("and still nothing at the rotation band", (() => {
   const g = scan(grab(), ...OLD_HANDLE);
-  return g.green === 0 && g.blue === 0;
+  return g.green === 0 && g.azure === 0 && g.violet === 0;
 })());
 
 await pick("Editor");
 t("switching back removes the attribute instead of writing the default value",
   document.documentElement.dataset.canvasChrome === undefined, JSON.stringify(document.documentElement.dataset));
 const back = scan(grab(), ...RING);
-t("and the canvas is emerald again", back.emerald > 200 && back.blue === 0, JSON.stringify(back));
+t("and the canvas is violet again", back.brand > 200 && back.azure === 0, JSON.stringify(back));
 t("the choice persisted under its own key",
   window.localStorage.getItem("x-native-canvas-chrome") === "editor",
   String(window.localStorage.getItem("x-native-canvas-chrome")));

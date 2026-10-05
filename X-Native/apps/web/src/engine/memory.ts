@@ -1,3 +1,4 @@
+import { exactOffsetNode, exactOutlineNode } from "./exactGeometry";
 import type {
   AutoLayout,
   SharedStyle,
@@ -67,7 +68,6 @@ import {
 } from "./layout";
 import {
   booleanPath,
-  outlineStrokeNetwork,
   offsetPath,
   simplifyPath,
   vectorCleanup,
@@ -1018,15 +1018,25 @@ export function normalLayout(layout: AutoLayout | null): AutoLayout | null {
   return { ...layout, align: "min" };
 }
 
+/** The colours the demo document is painted with — *document* ink, not chrome:
+ *  a sample file keeps its colours when the appearance changes, so these are
+ *  values written into pages, not tokens. They carry the product's identity all
+ *  the same: the starter file is the first thing a new user sees, and it used to
+ *  be painted Figma blue in three places. */
+const SAMPLE_BRAND = "#5b3df5";
+const SAMPLE_BRAND_SOFT = "#6366f1";
+const SAMPLE_INK = "#0d1220";
+const SAMPLE_ACCENT = "#0092b5";
+
 export function demoPage(): Page {
   const title = node("text", "Title", 24, 28, 300, 32, {
     text: "Explore Store",
     fontSize: 24,
     fontWeight: 700,
-    fill: "#0d1220",
+    fill: SAMPLE_INK,
   });
   const notifSwitch = node("rect", "Notifications Switch", 316, 32, 48, 26, {
-    fill: "#10b981",
+    fill: SAMPLE_ACCENT,
     cornerRadii: [13, 13, 13, 13],
   });
   const searchInput = node("text", "Search Input", 24, 76, 342, 40, {
@@ -1040,7 +1050,7 @@ export function demoPage(): Page {
     fill: "#5a5f6b",
   });
   const pill = node("rect", "View Details Button", 0, 0, 136, 32, {
-    fill: "#0d99ff",
+    fill: SAMPLE_BRAND,
     cornerRadii: [16, 16, 16, 16],
   });
   const pillLabel = node("text", "Label", 17, 8, 102, 16, {
@@ -1070,7 +1080,7 @@ export function demoPage(): Page {
     text: "Smart Animate Card",
     fontSize: 16,
     fontWeight: 600,
-    fill: "#0d1220",
+    fill: SAMPLE_INK,
   });
   const cardBody = node("text", "Note", 0, 0, 300, 36, {
     text: "Click below to navigate with smooth Smart Animate transition.",
@@ -1105,14 +1115,14 @@ export function demoPage(): Page {
     text: "← Back",
     fontSize: 16,
     fontWeight: 600,
-    fill: "#0d99ff",
+    fill: SAMPLE_BRAND,
     interactions: [{ trigger: "onClick", action: "back", destination: "", animation: "dissolve", delay: 0 }],
   });
   const done = node("text", "Done", 24, 80, 320, 40, {
     text: "Success Screen 🎉",
     fontSize: 22,
     fontWeight: 700,
-    fill: "#0d1220",
+    fill: SAMPLE_INK,
   });
   const doneDesc = node("text", "DoneDesc", 24, 125, 342, 60, {
     text: "Navigated via organic S-curve interaction connector. Click ← Back or press Esc to return.",
@@ -1147,7 +1157,7 @@ export function demoPage(): Page {
     fill: "#64748b",
   });
   const closeSheet = node("rect", "Close Sheet Button", 24, 240, 342, 44, {
-    fill: "#0d99ff",
+    fill: SAMPLE_BRAND,
     cornerRadii: [12, 12, 12, 12],
     interactions: [{ trigger: "onClick", action: "closeOverlay", destination: "", animation: "dissolve", delay: 0 }],
   });
@@ -1477,8 +1487,8 @@ export class MemoryEngine implements Engine {
     // neither variables nor collections, so seed both and derive collections
     // from whatever variables exist.
     const seedVariables: VariableItem[] = doc?.variables ?? [
-      { id: "var-1", name: "primary", type: "color", value: "#0d99ff", collection: "Brand" },
-      { id: "var-2", name: "secondary", type: "color", value: "#6366f1", collection: "Brand" },
+      { id: "var-1", name: "primary", type: "color", value: SAMPLE_BRAND, collection: "Brand" },
+      { id: "var-2", name: "secondary", type: "color", value: SAMPLE_BRAND_SOFT, collection: "Brand" },
       { id: "var-3", name: "spacing-sm", type: "number", value: 8, collection: "Spacing" },
       { id: "var-4", name: "spacing-md", type: "number", value: 16, collection: "Spacing" },
       { id: "var-5", name: "radius-md", type: "number", value: 8, collection: "Radius" },
@@ -2009,32 +2019,6 @@ export class MemoryEngine implements Engine {
       this.listeners.forEach((f) => f());
     } catch {
       // WASM unavailable — TS result already applied, no action needed
-    }
-  }
-
-  /**
-   * Phase 12: Attempt to get offset path result from Rust (x-core::offset_path).
-   * If successful, patches the node with the precise result.
-   */
-  private async tryWasmOffsetPath(
-    id: string,
-    sourceSnapshot: XNode,
-    distance: number,
-    join: "miter" | "round" | "bevel",
-  ): Promise<void> {
-    try {
-      const { wasmOffsetPath, rustPathToPoints } = await import("./wasmVectorOps");
-      const result = await wasmOffsetPath(sourceSnapshot, distance, join);
-      if (!result || !result.path.length) return;
-      // Patch the node with the Rust result
-      const target = find(this.root(), id);
-      if (!target) return;
-      target.path = result.localPath ?? rustPathToPoints(result.path);
-      if (result.vectorNetwork) target.vectorNetwork = result.vectorNetwork;
-      target.closed = true;
-      this.listeners.forEach((f) => f());
-    } catch {
-      // WASM unavailable — TS result already applied
     }
   }
 
@@ -4624,13 +4608,10 @@ export class MemoryEngine implements Engine {
           const sw = n.strokeWidth > 0 ? n.strokeWidth : 1;
           const src = n.path.length ? n.path : shapePoly(n);
           const isClosed = n.path.length ? n.closed : n.kind !== "line" && n.kind !== "arrow";
-          // Phase 12: Try Rust pipeline for outline stroke (asynchronous upgrade).
-          // The TS path runs synchronously for immediate feedback; the WASM
-          // result patches the node when ready with mathematically precise
-          // even-odd winding, matching Figma's output exactly.
-          const sourceSnapshot = JSON.parse(JSON.stringify(n)) as XNode;
-          void this.tryWasmOutlineStroke(id, sourceSnapshot);
           if (usesVariableWidth(n)) {
+            // Variable-width ribbons still take the Rust upgrade when it loads.
+            const sourceSnapshot = JSON.parse(JSON.stringify(n)) as XNode;
+            void this.tryWasmOutlineStroke(id, sourceSnapshot);
             const baked = outlineVariableStroke(
               src,
               sw,
@@ -4642,7 +4623,18 @@ export class MemoryEngine implements Engine {
             n.path = baked;
             n.vectorNetwork = pathToVectorNetwork(baked, true);
           } else {
-            const out = outlineStrokeNetwork(src, sw, isClosed, n.strokeCap || "round", n.strokeJoin || "round");
+            // Exact polygon stroke, honouring stroke alignment and caps. No
+            // async Rust "upgrade" follows: its result ignored alignment.
+            const out = exactOutlineNode(
+              n,
+              src,
+              isClosed,
+              sw,
+              n.strokeAlign || "center",
+              n.strokeCap || "none",
+              n.strokeJoin || "miter",
+            );
+            if (!out) continue;
             n.path = out.path;
             n.vectorNetwork = out.network;
           }
@@ -4654,6 +4646,7 @@ export class MemoryEngine implements Engine {
           n.strokeWidth = 0;
           n.strokeVisible = false;
           n.strokeWidthProfile = undefined;
+          normalizeVectorNode(n);
         }
         break;
       }
@@ -4661,14 +4654,31 @@ export class MemoryEngine implements Engine {
         const targetIds = cmd.id ? [cmd.id] : [...s.selection];
         for (const id of targetIds) {
           const n = find(this.root(), id);
-          if (!n || hasExtraNetworkGeometry(n.vectorNetwork) || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) continue;
+          if (!n || isEffectivelyLocked(this.root(), n.id) || isInstanceMember(this.root(), n.id)) continue;
           const src = n.path.length ? n.path : shapePoly(n);
-          // Phase 12: Try Rust pipeline for offset path (asynchronous upgrade).
-          const sourceSnapshot = JSON.parse(JSON.stringify(n)) as XNode;
-          void this.tryWasmOffsetPath(id, sourceSnapshot, cmd.distance, cmd.join || "round");
-          n.path = offsetPath(src, cmd.distance, n.closed || (n.kind !== "line" && n.kind !== "arrow"), cmd.join || "round");
-          n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+          // Legacy rule, kept for open paths: anything that is not a line/arrow
+          // was offset as a polygon.
+          const closed = n.closed || (n.kind !== "line" && n.kind !== "arrow");
+          const join = cmd.join || "round";
+          // Exact offset only for real closed geometry: a closed path, a
+          // primitive, or a network with regions (donuts, flattened booleans).
+          // An open vector has no inside, so it keeps the previous behaviour
+          // until Figma's open-path offset is confirmed.
+          const isRealClosed = n.closed || (n.kind !== "line" && n.kind !== "arrow" && n.kind !== "vector");
+          const res = exactOffsetNode(n, src, isRealClosed, cmd.distance, join);
+          if (res === "open") {
+            if (hasExtraNetworkGeometry(n.vectorNetwork)) continue;
+            n.path = offsetPath(src, cmd.distance, closed, join);
+            n.vectorNetwork = pathToVectorNetwork(n.path, n.closed);
+            n.kind = "vector";
+            continue;
+          }
+          if (res === "empty") continue; // inset consumed the whole shape: keep the original
+          n.path = res.path;
+          n.vectorNetwork = res.network;
+          n.closed = true;
           n.kind = "vector";
+          normalizeVectorNode(n);
         }
         break;
       }
@@ -6182,7 +6192,9 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
           ? "#00000020"
           : kind === "noise"
             ? "#ffffff"
-            : "#000000",
+            : kind === "shader"
+              ? "#5b3df533"
+              : "#000000",
     x: 0,
     y: shadow ? 4 : 0,
     blur:
@@ -6195,7 +6207,9 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
             : shadow
               ? 4
               : 4,
-    spread: kind === "texture" ? 4 : 0,
+    spread: kind === "texture" ? 4 : kind === "shader" ? 12 : 0,
+    // Shader bands lean 30° off vertical by default; every other kind keeps x at 0.
+    ...(kind === "shader" ? { x: 30 } : {}),
     visible: true,
     blend: "Normal",
     // Checkbox starts unchecked, and only a drop shadow has one.

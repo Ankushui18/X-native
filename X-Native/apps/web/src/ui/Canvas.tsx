@@ -1,4 +1,6 @@
 import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
+import { sc } from "./sc";
+import { presenceMove, presenceSelect, usePresence } from "./presence";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Effect, Engine, ImageFit, Interaction, ListStyle, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, VariableWidthPoint, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
@@ -212,11 +214,69 @@ const PENCIL_TOLERANCE_PX = 2;
  * itself. Those must not follow the theme, or a saved document — and its SVG
  * export — would change colour with the viewer's appearance setting. */
 /** A new Slice's dashed stroke, written into the layer on creation. */
-const DOC_SLICE_STROKE = "#10b981";
+const DOC_SLICE_STROKE = "#5b3df5";
 /** Paint-bucket defaults: a region's fill when the node has none, and the
- *  brand emerald it gets when its fill was hidden. Both land in the document. */
+ *  brand colour it gets when its fill was hidden. Both land in the document. */
 const DOC_FILL_NONE = "#d9d9d9";
-const DOC_FILL_BRAND = "#10b981";
+const DOC_FILL_BRAND = "#5b3df5";
+/** "No fill" as a document value: a paint bucket clears a fill by writing this,
+ *  not by deleting the key, so the file says *why* the layer is empty. */
+const DOC_NO_FILL = "#00000000";
+/** An effect's own default tint when the file does not carry one. */
+const DOC_GLASS_TINT = "#ffffff";
+/** The pixel a colour picker shows before it has read one off the canvas. */
+const DOC_PICKER_FALLBACK = "#000000";
+/** Internal raster ink: the noise/speckle pass and the temp layers a mask is
+ *  composited through. Never chrome, never the theme. */
+const RASTER_NOISE_INK = "#ffffff";
+const RASTER_NOISE_BG = "#000000";
+const RASTER_TEMP_FILL = "#ffffff";
+
+/** Painted chrome's type and geometry — the canvas side of the sheet's scales.
+ *  A paint cannot read a CSS custom property without a `getComputedStyle` per
+ *  frame, so the numbers a badge draws with are named once, at the value the
+ *  ladder holds: `--fs-xs` for the label, `--r-control` for the corner,
+ *  `--h-xs` for the chip, `--sp-2` for the gutter that keeps a chip clear of
+ *  the box — and of the cursor — it annotates. */
+const CHROME_FONT = "500 11px Inter, system-ui";
+const CHROME_FONT_STRONG = "600 11px Inter, system-ui";
+const CHROME_RADIUS = 4;
+const CHROME_CHIP_H = 20;
+const CHROME_CHIP_PAD = 12;
+const CHROME_PAD_WIDE = 16;
+const CHROME_GAP = 8;
+
+/* The rest of the canvas paint voices. Chrome that is not a chip — the guide
+   badges, the canvas label, the dev readout — names its own font, corner and
+   stroke here, for the same reason CHROME_* exists: one place per voice. */
+const HAIRLINE = 1;                       // every 1px chrome stroke
+const CHROME_STROKE = 1.5;                // handles, drop outlines, station rings
+const CHROME_STROKE_BOLD = 2;             // the flow insertion line
+const GUIDE_FONT = "500 10px Inter, system-ui";   // measurement badge + gap pill
+const GUIDE_RADIUS = 3;                   // the guide family's distinct corner
+const GUIDE_BADGE_H = 14;
+const GUIDE_BADGE_PAD = 8;
+const GUIDE_PILL_H = 16;
+const GUIDE_PILL_PAD = 10;
+const HATCH_PITCH = 6;                 // auto-layout padding hatch, px at 100%
+const HATCH_PITCH_FLOOR = 4;           // legibility floor when zoomed out
+const LABEL_FONT = "600 12px Inter, system-ui";   // canvas label, constant at any zoom
+const MONO_CHIP_FONT = "bold 10px monospace";     // eyedropper readout chip
+const DEV_PIN_FONT = "bold 10px Inter, system-ui, sans-serif";
+const DEV_CARD_FONT = "11px Inter, system-ui, sans-serif";
+const DEV_CARD_HEAD_FONT = "bold 9px Inter, system-ui, sans-serif";
+const PROFILE_FONT = "11px sans-serif";           // width-profile station labels
+
+/** The selection size badge speaks Figma's readout exactly: at most two
+ *  decimals with trailing zeros trimmed ("13.31 × 3.49", "9.5 × 4.34",
+ *  "128 × 178"), and the axis's sizing word printed beside the number when
+ *  that axis hugs — "22 Hug × 26 Hug" is what the reference captures show
+ *  under a hugging auto-layout frame. A fill axis resolves to a plain number. */
+const dimNum = (v: number) => String(Math.round(v * 100) / 100);
+const dimAxis = (v: number, mode?: "fixed" | "hug" | "fill") =>
+  `${dimNum(v)}${mode === "hug" ? " Hug" : ""}`;
+const dimText = (w: number, h: number, wm?: "fixed" | "hug" | "fill", hm?: "fixed" | "hug" | "fill") =>
+  `${dimAxis(w, wm)} × ${dimAxis(h, hm)}`;
 
 const CREATE: Tool[] = [
   "frame",
@@ -524,7 +584,7 @@ function paintArcHandles(
   for (const h of arcHandlePoints(node, sx, sy, sw, sh)) {
     ctx.fillStyle = ink;
     ctx.strokeStyle = sel;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = CHROME_STROKE;
     ctx.beginPath();
     ctx.arc(h.x, h.y, 4.5, 0, Math.PI * 2);
     ctx.fill();
@@ -1833,6 +1893,14 @@ export function Canvas({
     walk(snap.pages[snap.page].root);
   }, [snap, engine]);
 
+  // Multiplayer presence: remote cursors ride the same screen-space chrome
+  // pass as the badges; each peer carries its own identity hue. The selection
+  // broadcast is its own effect so a click announces before the pointer moves.
+  const { peers: presencePeers } = usePresence();
+  const lastPresenceT = useRef(0);
+  useEffect(() => {
+    presenceSelect(snap.selection);
+  }, [snap.selection]);
   useEffect(() => {
     const c = ref.current;
     const box = wrap.current;
@@ -1876,11 +1944,12 @@ export function Canvas({
     const CHIP_LINE = chrome.chipLine;
     const CHIP_INK = chrome.chipInk;
     const SCRIM = chrome.scrim;
-    // Selection handles in Figma are always white squares with an accent
-    // outline — they live on the document, not on panels, so they stay
-    // white across themes. Reading one constant keeps the drift count at
-    // one literal instead of one per painted handle.
-    const HANDLE_FILL = "#ffffff";
+    // Selection handles are always white squares with an accent outline — they
+    // live on the document, not on panels, so they keep their ink across
+    // themes. That ink is the chrome record's own `ink` role, which is what the
+    // rotation dots and the badge text read too, so a handle can no longer
+    // drift from the chrome it belongs to.
+    const HANDLE_FILL = INK;
     ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, w, h);
     const pageRoot = snap.pages[snap.page].root;
@@ -1908,7 +1977,7 @@ export function Canvas({
       if (!page.pixelGrid || snap.zoom < 4) return;
       ctx.save();
       ctx.strokeStyle = page.pixelGridColor || grid;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       const step = snap.zoom;
       ctx.beginPath();
       for (let x = snap.panX % step; x < w; x += step) {
@@ -2074,6 +2143,12 @@ export function Canvas({
             if (op !== "source-over") ctx.globalCompositeOperation = op;
             paintNoise(ctx, sx, sy, sw, sh, e.blur, e.spread, e.color);
             ctx.restore();
+          } else if (e.kind === "shader") {
+            ctx.save();
+            const op = canvasBlend(e.blend);
+            if (op !== "source-over") ctx.globalCompositeOperation = op;
+            paintShader(ctx, sx, sy, sw, sh, e.blur, e.spread, e.x, e.color);
+            ctx.restore();
           } else {
             paintTexture(ctx, sx, sy, sw, sh, e.blur || 16, e.spread || 4);
           }
@@ -2084,7 +2159,7 @@ export function Canvas({
       if (snap.outlineMode) {
         ctx.save();
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.setLineDash([]);
         traceShape();
         ctx.stroke();
@@ -2142,7 +2217,9 @@ export function Canvas({
       // paint path below, op for op.
       const drops = fxList.filter((e) => e.kind === "drop-shadow" && e.visible && parseHex(e.color).a > 0);
       const topGroup = fxList.filter(
-        (e) => e.visible && (e.kind === "layer-blur" || e.kind === "noise" || e.kind === "texture"),
+        (e) =>
+          e.visible &&
+          (e.kind === "layer-blur" || e.kind === "noise" || e.kind === "texture" || e.kind === "shader"),
       );
       const blurAt = topGroup.findIndex((e) => e.kind === "layer-blur");
       const layerBlur = blurAt < 0 ? undefined : topGroup[blurAt];
@@ -2172,6 +2249,7 @@ export function Canvas({
             e.kind !== "layer-blur" &&
             e.kind !== "noise" &&
             e.kind !== "texture" &&
+            e.kind !== "shader" &&
             e.kind !== "background-blur",
         );
         const outer = ctx;
@@ -2372,7 +2450,7 @@ export function Canvas({
         ctx.clip();
         ctx.globalAlpha *= 0.28;
         // Document ink: an effect's own default tint, not chrome (FR-U2).
-        ctx.fillStyle = glass.color || "#ffffff";
+        ctx.fillStyle = glass.color || DOC_GLASS_TINT;
         ctx.fill();
         ctx.restore();
       }
@@ -2713,7 +2791,7 @@ export function Canvas({
             const offset = g.offset !== undefined ? g.offset : 0;
             const origin = ((offset % sz) + sz) % sz;
             ctx.strokeStyle = color;
-            ctx.lineWidth = 1;
+            ctx.lineWidth = HAIRLINE;
             ctx.beginPath();
             // Zero offset keeps the old rhythm (first line at one cell in);
             // a nonzero offset shifts the whole lattice over by it.
@@ -2907,7 +2985,9 @@ export function Canvas({
           strokeMaskOutline(run.mask, run.kids);
         }
       }
-      paintTopFx(fxList.filter((e) => (e.kind === "noise" || e.kind === "texture") && e.visible));
+      paintTopFx(
+        fxList.filter((e) => (e.kind === "noise" || e.kind === "texture" || e.kind === "shader") && e.visible),
+      );
       if (!maskTile && snap.showMaskOutlines && n.isMask && n.visible) {
         ctx.save();
         ctx.strokeStyle = MASK;
@@ -3087,7 +3167,7 @@ export function Canvas({
         // 12px while the canvas zooms.
         if (labelOnScreen) {
           ctx.save();
-          ctx.font = "600 12px Inter, system-ui";
+          ctx.font = LABEL_FONT;
           ctx.fillStyle = canvasLabel;
           ctx.textBaseline = "alphabetic";
           ctx.fillText(n.name, screenX + 8, screenY + 16);
@@ -3106,7 +3186,7 @@ export function Canvas({
         // Weight does not carry selection state here — colour does, exactly as in
         // Figma, where a selected frame's name is the same 11px medium as every
         // other label, only in the selection ink.
-        ctx.font = "500 11px Inter, system-ui";
+        ctx.font = CHROME_FONT;
         ctx.fillStyle = active ? SEL : canvasLabel;
         ctx.textBaseline = "alphabetic";
         ctx.fillText(n.name, screenX, screenY - 8);
@@ -3131,7 +3211,7 @@ export function Canvas({
         const ax = snap.panX + (anchorNode.x + v.x) * z;
         const ay = snap.panY + (anchorNode.y + v.y) * z;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         if (ghost) {
           ctx.beginPath();
           ctx.moveTo(ax, ay);
@@ -3150,7 +3230,7 @@ export function Canvas({
     }
     if (draft.length) {
       ctx.strokeStyle = SEL;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = CHROME_STROKE;
       const preview = ghost ? [...draft, ghost] : draft;
       tracePath(ctx, preview, snap.panX, snap.panY, z, false);
       ctx.stroke();
@@ -3160,7 +3240,7 @@ export function Canvas({
         const py = snap.panY + p.y * z;
         if ((p.ox && p.ox !== 0) || (p.oy && p.oy !== 0) || (p.ix && p.ix !== 0) || (p.iy && p.iy !== 0)) {
           ctx.strokeStyle = SEL;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.beginPath();
           ctx.moveTo(px + (p.ix || 0) * z, py + (p.iy || 0) * z);
           ctx.lineTo(px + (p.ox || 0) * z, py + (p.oy || 0) * z);
@@ -3187,7 +3267,7 @@ export function Canvas({
           // cue placed next to the cursor.
           ctx.beginPath();
           ctx.arc(px, py, 7, 0, Math.PI * 2);
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.stroke();
         }
       }
@@ -3203,7 +3283,7 @@ export function Canvas({
           const fy = snap.panY + startWp.y * z;
           const badgeText = "Flow 1";
           ctx.save();
-          ctx.font = "600 11px Inter, system-ui";
+          ctx.font = CHROME_FONT_STRONG;
           const tw = ctx.measureText(badgeText).width;
           const pw = tw + 28;
           const ph = 22;
@@ -3329,13 +3409,13 @@ export function Canvas({
             ctx.fillStyle = SEL;
             ctx.fill();
             ctx.strokeStyle = INK;
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = CHROME_STROKE;
             ctx.stroke();
 
             // Plus symbol inside handle
             ctx.beginPath();
             ctx.strokeStyle = INK;
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = CHROME_STROKE;
             ctx.moveTo(h.x - 3, h.y);
             ctx.lineTo(h.x + 3, h.y);
             ctx.moveTo(h.x, h.y - 3);
@@ -3386,7 +3466,7 @@ export function Canvas({
         ctx.arc(sax, say, 5, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = INK;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.stroke();
 
         // Destination indicator / arrow
@@ -3409,7 +3489,7 @@ export function Canvas({
           ctx.arc(sbx, sby, 5, 0, Math.PI * 2);
           ctx.fill();
           ctx.strokeStyle = INK;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.stroke();
         }
 
@@ -3443,12 +3523,12 @@ export function Canvas({
           ctx.arc(ax, ay, 9, 0, Math.PI * 2);
           ctx.fillStyle = SEL;
           ctx.fill();
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.strokeStyle = INK;
           ctx.stroke();
 
           ctx.fillStyle = INK;
-          ctx.font = "bold 10px Inter, system-ui, sans-serif";
+          ctx.font = DEV_PIN_FONT;
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText(String(idx + 1), ax, ay);
@@ -3459,13 +3539,13 @@ export function Canvas({
             const cardX = ax + 14;
             const cardY = ay - 14;
             const text = ann.note || "Spec note";
-            ctx.font = "11px Inter, system-ui, sans-serif";
+            ctx.font = DEV_CARD_FONT;
             const textWidth = Math.min(240, Math.max(130, ctx.measureText(text).width + 24));
             const cardH = 36;
 
             ctx.fillStyle = CHIP;
             ctx.strokeStyle = CHIP_LINE;
-            ctx.lineWidth = 1;
+            ctx.lineWidth = HAIRLINE;
             if (typeof ctx.roundRect === "function") {
               ctx.beginPath();
               ctx.roundRect(cardX, cardY, textWidth, cardH, 6);
@@ -3476,13 +3556,13 @@ export function Canvas({
             }
 
             ctx.fillStyle = SEL;
-            ctx.font = "bold 9px Inter, system-ui, sans-serif";
+            ctx.font = DEV_CARD_HEAD_FONT;
             ctx.textAlign = "left";
             ctx.textBaseline = "top";
             ctx.fillText(`SPEC #${idx + 1} · ${ann.author || "Dev"}`, cardX + 8, cardY + 6);
 
             ctx.fillStyle = CHIP_INK;
-            ctx.font = "11px Inter, system-ui, sans-serif";
+            ctx.font = DEV_CARD_FONT;
             const displayStr = text.length > 30 ? text.slice(0, 28) + "…" : text;
             ctx.fillText(displayStr, cardX + 8, cardY + 18);
             ctx.restore();
@@ -3509,7 +3589,7 @@ export function Canvas({
           ctx.translate(-(hx + hw / 2), -(hy + hh / 2));
         }
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.strokeRect(hx + 0.5, hy + 0.5, hw, hh);
         ctx.restore();
       }
@@ -3567,7 +3647,7 @@ export function Canvas({
           ctx.fillStyle = SEL;
           ctx.fill();
           ctx.strokeStyle = INK;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.beginPath();
           ctx.moveTo(cx - 4, cy);
           ctx.lineTo(cx + 4, cy);
@@ -3608,7 +3688,7 @@ export function Canvas({
       // grey dashed ring says "selected, not grabbable" (move/resize refuse
       // it; the resize handles below are suppressed for the same reason).
       ctx.strokeStyle = lockedSel ? LOCK : accent;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       if (lockedSel) ctx.setLineDash([4, 3]);
       ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
       ctx.setLineDash([]);
@@ -3644,7 +3724,7 @@ export function Canvas({
           // Diamond handles for editable vector/boolean/star/polygon nodes.
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.beginPath();
           ctx.moveTo(hx, hy - 4);
           ctx.lineTo(hx + 4, hy);
@@ -3662,7 +3742,7 @@ export function Canvas({
           const half = s / 2;
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.fillRect(hx - half + 0.5, hy - half + 0.5, s - 1, s - 1);
           ctx.strokeRect(hx - half + 0.5, hy - half + 0.5, s - 1, s - 1);
         }
@@ -3683,7 +3763,7 @@ export function Canvas({
           ctx.closePath();
           ctx.fillStyle = INK;
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.fill();
           ctx.stroke();
         }
@@ -3701,25 +3781,25 @@ export function Canvas({
         ? `${Math.round(find(root, wp.node.id)?.rotation ?? 0)}°`
         : lockedSel
           ? "Locked"
-          : `${Math.round(nb.w)} × ${Math.round(nb.h)}`;
-      ctx.font = "500 11px Inter, system-ui";
+          : dimText(nb.w, nb.h, wp.node.sizingW, wp.node.sizingH);
+      ctx.font = CHROME_FONT;
       const tw = ctx.measureText(dim).width;
-      const bw = tw + 16;
-      const bh = 20;
+      const bw = tw + CHROME_PAD_WIDE;
+      const bh = CHROME_CHIP_H;
       // FR-U4: the readout used to hang 8px below the box unconditionally, so a
       // selection whose bottom edge was at the canvas bottom lost it — usually
       // mid-resize of something tall, which is when it is wanted most.
       const badge = clampBadge(
-        { x: sx + sw / 2 - bw / 2, y: sy + sh + 8, w: bw, h: bh },
+        { x: sx + sw / 2 - bw / 2, y: sy + sh + CHROME_GAP, w: bw, h: bh },
         { w, h },
-        { flipY: sy - 8 - bh },
+        { flipY: sy - CHROME_GAP - bh },
       );
       const bx = badge.x;
       const by = badge.y;
       ctx.fillStyle = lockedSel && !isRotating ? LOCK : accent;
       if (typeof ctx.roundRect === "function") {
         ctx.beginPath();
-        ctx.roundRect(bx, by, bw, bh, 4);
+        ctx.roundRect(bx, by, bw, bh, CHROME_RADIUS);
         ctx.fill();
       } else {
         ctx.fillRect(bx, by, bw, bh);
@@ -3737,7 +3817,7 @@ export function Canvas({
         const bx = sx + gt.hx * sw;
         const by = sy + gt.hy * sh;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
@@ -3802,7 +3882,7 @@ export function Canvas({
         // Ratio handle (valley)
         ctx.fillStyle = INK;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.beginPath();
         ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
         ctx.fill();
@@ -3838,7 +3918,7 @@ export function Canvas({
         const cyCount = cy + Math.sin(aCount) * ry;
         ctx.fillStyle = INK;
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.beginPath();
         ctx.arc(cxCount, cyCount, 4.5, 0, Math.PI * 2);
         ctx.fill();
@@ -3886,7 +3966,7 @@ export function Canvas({
           ];
           const values = [radii.tl, radii.tr, radii.bl, radii.br];
           ctx.strokeStyle = accent;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.lineCap = "round";
           for (let i = 0; i < 4; i++) {
             if (values[i] <= 0) continue;
@@ -3954,14 +4034,14 @@ export function Canvas({
         ctx.fillStyle = INK;
         ctx.fill();
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.stroke();
         ctx.beginPath();
         ctx.moveTo(tx - 4, ty);
         ctx.lineTo(tx + 4, ty);
         ctx.moveTo(tx, ty - 4);
         ctx.lineTo(tx, ty + 4);
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.stroke();
         ctx.restore();
       }
@@ -3979,7 +4059,7 @@ export function Canvas({
         ctx.save();
         const allLocked = snap.selection.every((id) => isEffectivelyLocked(root, id));
         ctx.strokeStyle = allLocked ? LOCK : SEL;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         if (allLocked) ctx.setLineDash([4, 3]);
         ctx.strokeRect(sx + 0.5, sy + 0.5, sw, sh);
         ctx.setLineDash([]);
@@ -3992,31 +4072,31 @@ export function Canvas({
           // centre either way, so only the pixels change, not what you can hit.
           ctx.fillStyle = HANDLE_FILL;
           ctx.strokeStyle = SEL;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.fillRect(hx - 4 + 0.5, hy - 4 + 0.5, 7, 7);
           ctx.strokeRect(hx - 4 + 0.5, hy - 4 + 0.5, 7, 7);
         }
-        const dim = allLocked ? "Locked" : `${Math.round(bb.w)} × ${Math.round(bb.h)}`;
-        ctx.font = "500 11px Inter, system-ui";
-        const bw = ctx.measureText(dim).width + 16;
+        const dim = allLocked ? "Locked" : dimText(bb.w, bb.h);
+        ctx.font = CHROME_FONT;
+        const bw = ctx.measureText(dim).width + CHROME_PAD_WIDE;
         // FR-U4, the multi-selection badge: same clamp, same flip above the box.
         const badge = clampBadge(
-          { x: sx + sw / 2 - bw / 2, y: sy + sh + 8, w: bw, h: 20 },
+          { x: sx + sw / 2 - bw / 2, y: sy + sh + CHROME_GAP, w: bw, h: CHROME_CHIP_H },
           { w, h },
-          { flipY: sy - 8 - 20 },
+          { flipY: sy - CHROME_GAP - CHROME_CHIP_H },
         );
         const bx = badge.x;
         const by = badge.y;
         ctx.fillStyle = allLocked ? LOCK : SEL;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
-          ctx.roundRect(bx, by, bw, 20, 4);
+          ctx.roundRect(bx, by, bw, CHROME_CHIP_H, CHROME_RADIUS);
           ctx.fill();
-        } else ctx.fillRect(bx, by, bw, 20);
+        } else ctx.fillRect(bx, by, bw, CHROME_CHIP_H);
         ctx.fillStyle = INK;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(dim, bx + bw / 2, by + 10);
+        ctx.fillText(dim, bx + bw / 2, by + CHROME_CHIP_H / 2);
         ctx.textAlign = "left";
         ctx.textBaseline = "alphabetic";
         ctx.restore();
@@ -4027,7 +4107,7 @@ export function Canvas({
     if (guides.length) {
       ctx.save();
       ctx.strokeStyle = GUIDE;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       for (const g of guides) {
         ctx.setLineDash(g.center ? [4, 3] : []);
         ctx.beginPath();
@@ -4051,20 +4131,20 @@ export function Canvas({
     // chrome the measurement overlay uses.
     const paintGapPills = (list: GapBadge[]) => {
       ctx.save();
-      ctx.font = "500 10px Inter, system-ui";
+      ctx.font = GUIDE_FONT;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       for (const g of list) {
         const cx = g.axis === "x" ? snap.panX + g.at * z : snap.panX + g.cross * z;
         const cy = g.axis === "x" ? snap.panY + g.cross * z : snap.panY + g.at * z;
         const label = `${Math.round(g.size)}`;
-        const bw = ctx.measureText(label).width + 10;
+        const bw = ctx.measureText(label).width + GUIDE_PILL_PAD;
         ctx.fillStyle = GUIDE;
         if (typeof ctx.roundRect === "function") {
           ctx.beginPath();
-          ctx.roundRect(cx - bw / 2, cy - 8, bw, 16, 3);
+          ctx.roundRect(cx - bw / 2, cy - GUIDE_PILL_H / 2, bw, GUIDE_PILL_H, GUIDE_RADIUS);
           ctx.fill();
-        } else ctx.fillRect(cx - bw / 2, cy - 8, bw, 16);
+        } else ctx.fillRect(cx - bw / 2, cy - GUIDE_PILL_H / 2, bw, GUIDE_PILL_H);
         ctx.fillStyle = INK;
         ctx.fillText(label, cx, cy);
       }
@@ -4083,7 +4163,7 @@ export function Canvas({
     if (dropHint) {
       ctx.save();
       ctx.strokeStyle = TARGET;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = CHROME_STROKE;
       ctx.strokeRect(
         snap.panX + dropHint.fx * z,
         snap.panY + dropHint.fy * z,
@@ -4092,7 +4172,7 @@ export function Canvas({
       );
       const ln = dropHint.line;
       if (ln) {
-        ctx.lineWidth = 2;
+        ctx.lineWidth = CHROME_STROKE_BOLD;
         ctx.beginPath();
         if (ln.horiz) {
           const x = snap.panX + ln.at * z;
@@ -4118,7 +4198,7 @@ export function Canvas({
         ctx.fillStyle = SEL_WASH;
         ctx.fill();
         ctx.strokeStyle = SEL;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.setLineDash([6, 4]);
         ctx.stroke();
         ctx.restore();
@@ -4139,13 +4219,13 @@ export function Canvas({
           const dots = widthProfileStations(sel.path, sel.closed, prof);
           if (dots.length || widthHover || widthSel.length) {
             ctx.save();
-            ctx.font = "11px sans-serif";
+            ctx.font = PROFILE_FONT;
             for (const d of dots) {
               ctx.beginPath();
               ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 3.5, 0, Math.PI * 2);
               ctx.fillStyle = INK;
               ctx.fill();
-              ctx.lineWidth = 1.5;
+              ctx.lineWidth = CHROME_STROKE;
               ctx.strokeStyle = SEL;
               ctx.stroke();
             }
@@ -4155,7 +4235,7 @@ export function Canvas({
               if (!d) continue;
               ctx.beginPath();
               ctx.arc(snap.panX + (wp.x + d.x) * z, snap.panY + (wp.y + d.y) * z, 6, 0, Math.PI * 2);
-              ctx.lineWidth = 2;
+              ctx.lineWidth = CHROME_STROKE_BOLD;
               ctx.strokeStyle = SEL;
               ctx.stroke();
               ctx.fillStyle = INK;
@@ -4172,13 +4252,13 @@ export function Canvas({
               ctx.beginPath();
               ctx.arc(hx, hy, widthHover.onPoint != null ? 7 : 5, 0, Math.PI * 2);
               if (widthHover.onPoint != null) {
-                ctx.lineWidth = 2;
+                ctx.lineWidth = CHROME_STROKE_BOLD;
                 ctx.strokeStyle = GUIDE;
                 ctx.stroke();
               } else {
                 ctx.fillStyle = GUIDE;
                 ctx.fill();
-                ctx.lineWidth = 1;
+                ctx.lineWidth = HAIRLINE;
                 ctx.strokeStyle = INK;
                 ctx.stroke();
               }
@@ -4194,7 +4274,7 @@ export function Canvas({
     if (cutLine) {
       ctx.save();
       ctx.strokeStyle = SEL;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = CHROME_STROKE;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
       ctx.moveTo(snap.panX + cutLine.x1 * z, snap.panY + cutLine.y1 * z);
@@ -4316,7 +4396,7 @@ export function Canvas({
           if (isSelected) {
             ctx.save();
             ctx.strokeStyle = withAlpha(SEL, 0.75);
-            ctx.lineWidth = 1;
+            ctx.lineWidth = HAIRLINE;
             if (p.ix != null && p.iy != null && (p.ix !== 0 || p.iy !== 0)) {
               const hx = px + p.ix * z;
               const hy = py + p.iy * z;
@@ -4360,7 +4440,7 @@ export function Canvas({
             ctx.fill();
             ctx.fillStyle = SEL;
             ctx.strokeStyle = INK;
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = CHROME_STROKE;
             ctx.beginPath();
             ctx.moveTo(px, py - 5);
             ctx.lineTo(px + 5, py);
@@ -4389,7 +4469,7 @@ export function Canvas({
           ctx.save();
           ctx.strokeStyle = SEL;
           ctx.fillStyle = INK;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.setLineDash([3, 3]);
           ctx.strokeRect(snap.panX + hs[0][0] * z, snap.panY + hs[0][1] * z, (hs[4][0] - hs[0][0]) * z, (hs[4][1] - hs[0][1]) * z);
           ctx.setLineDash([]);
@@ -4403,16 +4483,16 @@ export function Canvas({
           const rotationDrag = drag.current?.mode === "vecResize" && drag.current.id === vecEdit ? drag.current : null;
           if (pointRotation != null && rotationDrag?.currentX != null && rotationDrag.currentY != null) {
             const label = `${pointRotation > 0 ? "+" : ""}${pointRotation}°`;
-            ctx.font = "500 11px Inter, system-ui";
-            const bw = ctx.measureText(label).width + 12;
+            ctx.font = CHROME_FONT;
+            const bw = ctx.measureText(label).width + CHROME_CHIP_PAD;
             const bx = snap.panX + rotationDrag.currentX * z + 12;
             const by = snap.panY + rotationDrag.currentY * z - 24;
             ctx.fillStyle = SEL;
             if (typeof ctx.roundRect === "function") {
               ctx.beginPath();
-              ctx.roundRect(bx, by, bw, 20, 4);
+              ctx.roundRect(bx, by, bw, CHROME_CHIP_H, CHROME_RADIUS);
               ctx.fill();
-            } else ctx.fillRect(bx, by, bw, 20);
+            } else ctx.fillRect(bx, by, bw, CHROME_CHIP_H);
             ctx.fillStyle = INK;
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
@@ -4447,7 +4527,11 @@ export function Canvas({
       snap.selection.length === 1 &&
       !drag.current;
 
-    if (isDevMode && snap.selection.length === 1) {
+    // Auto-layout padding, Figma-style: a selected flow frame hatches its
+    // padding band so the reserved space reads as reserved. The hatch is
+    // selection chrome — Design as well as Dev Mode — while the dashed content
+    // box that measures it stays a Dev Mode affordance.
+    if (snap.selection.length === 1) {
       const selWp = worldPos(root, snap.selection[0]);
       if (selWp && selWp.node.layout?.padding) {
         const [pl, pr, pt, pb] = selWp.node.layout.padding;
@@ -4456,17 +4540,44 @@ export function Canvas({
           const sy = snap.panY + selWp.y * z;
           const sw = selWp.node.w * z;
           const sh = selWp.node.h * z;
-          ctx.save();
-          ctx.fillStyle = withAlpha(SEL, 0.08);
-          ctx.strokeStyle = withAlpha(SEL, 0.4);
-          ctx.lineWidth = 1;
-          ctx.setLineDash([2, 2]);
-          if (pt > 0) ctx.fillRect(sx, sy, sw, pt * z);
-          if (pb > 0) ctx.fillRect(sx, sy + sh - pb * z, sw, pb * z);
-          if (pl > 0) ctx.fillRect(sx, sy + pt * z, pl * z, Math.max(0, selWp.node.h - pt - pb) * z);
-          if (pr > 0) ctx.fillRect(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, selWp.node.h - pt - pb) * z);
-          ctx.strokeRect(sx + pl * z, sy + pt * z, Math.max(0, selWp.node.w - pl - pr) * z, Math.max(0, selWp.node.h - pt - pb) * z);
-          ctx.restore();
+          const band = (bx: number, by: number, bw: number, bh: number) => {
+            if (bw <= 0 || bh <= 0) return;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(bx, by, bw, bh);
+            ctx.clip();
+            ctx.fillStyle = withAlpha(SEL, 0.06);
+            ctx.fillRect(bx, by, bw, bh);
+            // 45° hatch; the pitch follows zoom down to a legible floor.
+            const pitch = Math.max(HATCH_PITCH_FLOOR, HATCH_PITCH * z);
+            ctx.strokeStyle = withAlpha(SEL, 0.3);
+            ctx.lineWidth = HAIRLINE;
+            ctx.beginPath();
+            for (let d = -bh; d < bw + bh; d += pitch) {
+              ctx.moveTo(bx + d, by + bh);
+              ctx.lineTo(bx + d + bh, by);
+            }
+            ctx.stroke();
+            ctx.restore();
+          };
+          if (pt > 0) band(sx, sy, sw, pt * z);
+          if (pb > 0) band(sx, sy + sh - pb * z, sw, pb * z);
+          if (pl > 0) band(sx, sy + pt * z, pl * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          if (pr > 0)
+            band(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          if (isDevMode) {
+            ctx.save();
+            ctx.strokeStyle = withAlpha(SEL, 0.4);
+            ctx.lineWidth = HAIRLINE;
+            ctx.setLineDash([2, 2]);
+            ctx.strokeRect(
+              sx + pl * z,
+              sy + pt * z,
+              Math.max(0, selWp.node.w - pl - pr) * z,
+              Math.max(0, selWp.node.h - pt - pb) * z,
+            );
+            ctx.restore();
+          }
         }
       }
     }
@@ -4477,19 +4588,19 @@ export function Canvas({
         ctx.save();
         ctx.strokeStyle = GUIDE;
         ctx.fillStyle = GUIDE;
-        ctx.lineWidth = 1;
-        ctx.font = "500 10px Inter, system-ui";
+        ctx.lineWidth = HAIRLINE;
+        ctx.font = GUIDE_FONT;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
 
         const drawBadge = (label: string, x: number, y: number) => {
-          const bw = ctx.measureText(label).width + 8;
+          const bw = ctx.measureText(label).width + GUIDE_BADGE_PAD;
           ctx.fillStyle = GUIDE;
           if (typeof ctx.roundRect === "function") {
             ctx.beginPath();
-            ctx.roundRect(x - bw / 2, y - 7, bw, 14, 3);
+            ctx.roundRect(x - bw / 2, y - GUIDE_BADGE_H / 2, bw, GUIDE_BADGE_H, GUIDE_RADIUS);
             ctx.fill();
-          } else ctx.fillRect(x - bw / 2, y - 7, bw, 14);
+          } else ctx.fillRect(x - bw / 2, y - GUIDE_BADGE_H / 2, bw, GUIDE_BADGE_H);
           ctx.fillStyle = INK;
           ctx.fillText(label, x, y);
           ctx.fillStyle = GUIDE;
@@ -4567,7 +4678,7 @@ export function Canvas({
     if (band) {
       ctx.fillStyle = SEL_WASH;
       ctx.strokeStyle = SEL;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = HAIRLINE;
       ctx.fillRect(band.x, band.y, band.w, band.h);
       ctx.strokeRect(band.x + 0.5, band.y + 0.5, band.w, band.h);
     }
@@ -4580,13 +4691,13 @@ export function Canvas({
       if (snap.tool === "eraser") {
         ctx.save();
         ctx.strokeStyle = INK;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
         ctx.arc(cx, cy, ERASER_PX, 0, Math.PI * 2);
         ctx.stroke();
         ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
-        ctx.lineWidth = 1;
+        ctx.lineWidth = HAIRLINE;
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.arc(cx, cy, ERASER_PX + 0.5, 0, Math.PI * 2);
@@ -4610,13 +4721,13 @@ export function Canvas({
           ctx.lineWidth = 3;
           ctx.strokeStyle = INK;
           ctx.stroke();
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
           ctx.stroke();
 
           // Crosshair
           ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.beginPath();
           ctx.moveTo(loupeX - 8, loupeY);
           ctx.lineTo(loupeX + 8, loupeY);
@@ -4636,14 +4747,14 @@ export function Canvas({
                 ? `H ${Math.round(hsl.h)}° S ${Math.round(hsl.s * 100)}% L ${Math.round(hsl.l * 100)}%`
                 : `H ${Math.round(hsb.h)}° S ${Math.round(hsb.s * 100)}% B ${Math.round(hsb.v * 100)}%`;
           ctx.fillStyle = CHIP;
-          ctx.font = "bold 10px monospace";
+          ctx.font = MONO_CHIP_FONT;
           const tw = Math.max(60, ctx.measureText(readout).width + 14);
-          const th = 20;
+          const th = CHROME_CHIP_H;
           const bx = loupeX - tw / 2;
           const by = loupeY + loupeR + 6;
           if (typeof ctx.roundRect === "function") {
             ctx.beginPath();
-            ctx.roundRect(bx, by, tw, th, 4);
+            ctx.roundRect(bx, by, tw, th, CHROME_RADIUS);
             ctx.fill();
           } else {
             ctx.fillRect(bx, by, tw, th);
@@ -4730,25 +4841,73 @@ export function Canvas({
         for (const [rx, ry] of rotatePoints) {
           ctx.beginPath();
           ctx.arc(rx, ry, 5, 0, Math.PI * 2);
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = INK;
           ctx.fill();
           ctx.strokeStyle = TARGET;
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = CHROME_STROKE;
           ctx.stroke();
         }
         ctx.strokeStyle = TARGET;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = CHROME_STROKE;
         ctx.strokeRect(bsx, bsy, bsw, bsh);
         for (const hh of cropHandleRects({ x: bsx, y: bsy, w: bsw, h: bsh }, 8)) {
           ctx.fillStyle = TARGET;
           ctx.fillRect(hh.x, hh.y, 8, 8);
           ctx.strokeStyle = INK;
-          ctx.lineWidth = 1;
+          ctx.lineWidth = HAIRLINE;
           ctx.strokeRect(hh.x, hh.y, 8, 8);
         }
         ctx.restore();
       }
     }
+    // Multiplayer: remote cursors and selections. Each peer's identity hue
+    // paints its arrow, name pill and selection outline together — the colour
+    // is who they are, not chrome.
+    for (const p of presencePeers) {
+      const hue = peerHue(p.hue);
+      for (const id of p.sel) {
+        const rp = worldPos(root, id);
+        if (!rp) continue;
+        ctx.save();
+        ctx.globalAlpha = 0.65;
+        ctx.strokeStyle = hue;
+        ctx.lineWidth = HAIRLINE;
+        ctx.strokeRect(snap.panX + rp.x * z, snap.panY + rp.y * z, rp.node.w * z, rp.node.h * z);
+        ctx.restore();
+      }
+      const cx = snap.panX + p.x * z;
+      const cy = snap.panY + p.y * z;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + 3, cy + 17);
+      ctx.lineTo(cx + 7.5, cy + 12.5);
+      ctx.lineTo(cx + 13, cy + 11.5);
+      ctx.closePath();
+      ctx.fillStyle = hue;
+      ctx.strokeStyle = RASTER_NOISE_INK;
+      ctx.lineWidth = HAIRLINE;
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = CHROME_FONT;
+      const name = p.name;
+      const tw = ctx.measureText(name).width + CHROME_CHIP_PAD;
+      const px = cx + 12;
+      const py = cy + 16;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(px, py, tw, CHROME_CHIP_H, CHROME_RADIUS);
+        ctx.fill();
+      } else ctx.rect(px, py, tw, CHROME_CHIP_H);
+      ctx.fillStyle = hue;
+      ctx.fill();
+      ctx.fillStyle = RASTER_NOISE_INK;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(name, px + CHROME_CHIP_PAD / 2, py + CHROME_CHIP_H / 2);
+      ctx.restore();
+    }
+
     // Place-image badge at the cursor: how many are left to place.
     if (placing && cursorPos) {
       const r = wrap.current?.getBoundingClientRect();
@@ -4756,7 +4915,7 @@ export function Canvas({
         const left = placing.srcs.length - placing.i;
         const label = left === 1 ? "Click to place · Esc to stop" : `${left} to place · click · Esc to stop`;
         ctx.save();
-        ctx.font = "500 11px Inter, system-ui";
+        ctx.font = CHROME_FONT;
         const tw = ctx.measureText(label).width + 16;
         const bx = cursorPos.x - r.left + 14;
         const by = cursorPos.y - r.top + 14;
@@ -4773,7 +4932,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, chromePref, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, addPt, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel]);
+  }, [snap, band, edit, engine, theme, chromePref, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, addPt, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel, presencePeers]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -4788,7 +4947,7 @@ export function Canvas({
     const cached = eyedropPixel.current;
     const hasCachedPixel = !!cached && Math.hypot(cached.x - clientX, cached.y - clientY) <= 2;
     let hasPixel = hasCachedPixel;
-    let hex = hasCachedPixel && cached ? cached.hex : "#000000";
+    let hex = hasCachedPixel && cached ? cached.hex : DOC_PICKER_FALLBACK;
     if (canvas && rect && !hasCachedPixel) {
       const dpr = window.devicePixelRatio || 1;
       const px = Math.floor((clientX - rect.left) * dpr);
@@ -5352,7 +5511,7 @@ export function Canvas({
           const d = Math.hypot(px - hs[i][0], py - hs[i][1]);
           if (d >= 8 && d <= 22) {
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             engine.dispatch({ type: "begin" });
@@ -5379,7 +5538,7 @@ export function Canvas({
               return;
             }
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             engine.dispatch({ type: "begin" });
@@ -5409,7 +5568,7 @@ export function Canvas({
           const gy = snap.panY + (g.axis === "x" ? g.cross : g.at) * z;
           if (Math.hypot(px - gx, py - gy) < 10) {
             if (snap.selection.every((id) => isEffectivelyLocked(root, id))) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             engine.dispatch({ type: "begin" });
@@ -5918,7 +6077,7 @@ export function Canvas({
             const dims = cropImageDims(wp.node);
             if (dims) {
               if (isEffectivelyLocked(root, wp.node.id)) {
-                toast("Locked · ⇧⌘L to unlock");
+                toast(`Locked · ${sc("⇧⌘L")} to unlock`);
                 return;
               }
               const start = wp.node.imageCrop
@@ -5938,7 +6097,7 @@ export function Canvas({
         }
         if (!vecEdit && !onResizeHandle && rotationHandleHit(wp.node.kind, px, py, sx, sy, nb.w * z, nb.h * z)) {
           if (isEffectivelyLocked(root, wp.node.id)) {
-            toast("Locked · ⇧⌘L to unlock");
+            toast(`Locked · ${sc("⇧⌘L")} to unlock`);
             return;
           }
           const startAngle = Math.atan2(rawY - cy, rawX - cx);
@@ -5975,7 +6134,7 @@ export function Canvas({
               return;
             }
             if (isEffectivelyLocked(root, wp.node.id)) {
-              toast("Locked · ⇧⌘L to unlock");
+              toast(`Locked · ${sc("⇧⌘L")} to unlock`);
               return;
             }
             drag.current = {
@@ -6137,6 +6296,14 @@ export function Canvas({
   const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
     pointerClient.current = { x: e.clientX, y: e.clientY };
+    // Multiplayer presence: broadcast our pointer in world coords at 25Hz —
+    // the throttle guards the rect read in toWorld as much as the channel.
+    const nowMs = performance.now();
+    if (nowMs - lastPresenceT.current >= 40) {
+      lastPresenceT.current = nowMs;
+      const pw = toWorld(e.clientX, e.clientY);
+      presenceMove(pw.x, pw.y, snap.selection);
+    }
     if (eyedropArmed() || snap.tool === "eraser" || placing) {
       cursorPosRef.current = { x: e.clientX, y: e.clientY };
       setCursorPos(cursorPosRef.current);
@@ -7811,7 +7978,7 @@ export function Canvas({
           : snap.tool === "slice"
             ? {
                 name: "Slice",
-                fill: "#00000000",
+                fill: DOC_NO_FILL,
                 fillVisible: false,
                 strokePaint: DOC_SLICE_STROKE,
                 strokeVisible: true,
@@ -8491,7 +8658,7 @@ export function Canvas({
               fillType: "image",
               imageFit: "fill",
               name: it.name,
-              fill: "#00000000",
+              fill: DOC_NO_FILL,
               fillVisible: true,
             },
           });
@@ -8526,7 +8693,7 @@ export function Canvas({
           imageFit: "fill",
           imageTile: 100,
           imageCrop: undefined,
-          fill: "#00000000",
+          fill: DOC_NO_FILL,
           fillVisible: true,
           name: hit.nameLocked ? hit.name : img.name,
         },
@@ -8555,7 +8722,7 @@ export function Canvas({
           fillType: "image",
           imageFit: "fill",
           name: img.name,
-          fill: "#00000000",
+          fill: DOC_NO_FILL,
           fillVisible: true,
         },
       });
@@ -9454,19 +9621,6 @@ export function Canvas({
               e.stopPropagation();
             }}
             onFocus={(e) => e.currentTarget.select()}
-            style={{
-              font: "600 11px Inter, system-ui",
-              padding: "2px 6px",
-              border: "1px solid var(--accent)",
-              // Figma's inline rename field is a plain rectangle - the accent
-              // hairline, square corners, no radius. This one used to be 4px,
-              // which read as a chip rather than as a field in the document.
-              borderRadius: 0,
-              background: "var(--elevated)",
-              color: "var(--text)",
-              minWidth: 80,
-              boxShadow: "var(--elev-floating)",
-            }}
           />
         </div>
       )}
@@ -9476,17 +9630,7 @@ export function Canvas({
           className="link-input"
           style={{ left: emojiPick.left, top: emojiPick.top, position: "absolute", zIndex: 31 }}
         >
-          <div
-            style={{
-              display: "flex",
-              gap: 2,
-              padding: "4px 6px",
-              background: "var(--elevated)",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              boxShadow: "var(--elev-floating)",
-            }}
-          >
+          <div className="emoji-pick">
             {emojiCompletions(emojiPick.query).map(({ code, emoji }) => (
               <button
                 key={code}
@@ -9496,7 +9640,6 @@ export function Canvas({
                   e.preventDefault();
                   emojiApply(code, emoji);
                 }}
-                style={{ font: "16px Inter, system-ui" }}
               >
                 {emoji}
               </button>
@@ -9542,35 +9685,13 @@ export function Canvas({
               setLinkInput(null);
             }}
             onBlur={() => setLinkInput(null)}
-            style={{
-              font: "12px Inter, system-ui",
-              padding: "4px 8px",
-              border: "1px solid var(--accent)",
-              borderRadius: 4,
-              background: "var(--elevated)",
-              color: "var(--text)",
-              minWidth: 220,
-              boxShadow: "var(--elev-floating)",
-            }}
           />
         </div>
       )}
       {linkHover && (
         <div
           className="link-hover"
-          style={{
-            left: linkHover.left,
-            top: linkHover.top,
-            position: "absolute",
-            zIndex: 25,
-            pointerEvents: "none",
-            font: "11px Inter, system-ui",
-            padding: "3px 7px",
-            borderRadius: 4,
-            background: "var(--elev-floating)",
-            color: "var(--text)",
-            boxShadow: "var(--elev-floating)",
-          }}
+          style={{ left: linkHover.left, top: linkHover.top, position: "absolute", zIndex: 25, pointerEvents: "none" }}
         >
           {linkHover.url} · click to open
         </div>
@@ -9634,27 +9755,6 @@ export function Canvas({
           e.target.value = "";
         }}
       />
-      {snap.pages[snap.page].root.children.length === 0 &&
-        !draft.length &&
-        snap.tool === "select" &&
-        !edit &&
-        !snap.presentFrame && (
-        <div className="canvas-start">
-          <div className="canvas-start-card">
-            <b>Nothing on this page yet</b>
-            <p>
-              Press <kbd>F</kbd> for a frame, <kbd>R</kbd> for a rectangle, <kbd>T</kbd> for text — or{" "}
-              <kbd>⌘</kbd>
-              <kbd>K</kbd> to search every command.
-            </p>
-            <span>
-              Every shortcut in the app is listed under <kbd>⌥</kbd>
-              <kbd>⇧</kbd>
-              <kbd>?</kbd>.
-            </span>
-          </div>
-        </div>
-      )}
       {snap.tool === "zoom" && !snap.presentFrame && (
         <div className="canvas-hud">
           <span>Zoom tool</span>
@@ -10015,7 +10115,7 @@ function paintNoise(
   sh: number,
   density: number,
   size = 1,
-  color = "#ffffff",
+  color = RASTER_NOISE_INK,
 ) {
   const d = Math.max(0, Math.min(1, density / 100));
   if (d <= 0 || sw < 1 || sh < 1) return;
@@ -10050,7 +10150,7 @@ function paintTexture(
   if (sw < 1 || sh < 1) return;
   ctx.save();
   ctx.clip();
-  ctx.fillStyle = "#000000";
+  ctx.fillStyle = RASTER_NOISE_BG;
   ctx.globalAlpha = Math.max(0.04, Math.min(0.3, density / 100));
   const step = Math.max(2, Math.round(scale));
   for (let x = sx; x < sx + sw; x += step * 2) {
@@ -10059,6 +10159,54 @@ function paintTexture(
     }
   }
   ctx.restore();
+}
+
+/**
+ * Shader effect: a deterministic iridescent band wash — same input, same
+ * pixels, so the canvas and any raster export agree. `intensity` (0–100)
+ * scales the wash, `scale` the band pitch, `angle` the band direction.
+ */
+function paintShader(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  intensity: number,
+  scale: number,
+  angle: number,
+  color: string,
+) {
+  if (sw < 1 || sh < 1) return;
+  const { r, g, b, a } = parseHex(color);
+  if (a <= 0) return;
+  const strength = Math.max(0, Math.min(1, intensity / 100));
+  const step = Math.max(6, Math.round(scale) * 2 || 12);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sx, sy, sw, sh);
+  ctx.clip();
+  ctx.translate(sx + sw / 2, sy + sh / 2);
+  ctx.rotate((Math.max(-89, Math.min(89, angle || 0)) * Math.PI) / 180);
+  const diag = Math.ceil(Math.hypot(sw, sh));
+  const sheen = parseHex(RASTER_NOISE_INK);
+  for (let x = -diag, i = 0; x < diag; x += step, i++) {
+    // Band profile: tinted shoulders around a narrow sheen stripe.
+    const alpha = strength * a * (0.16 + 0.22 * Math.abs(Math.sin((i + 1) * 1.7)));
+    ctx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
+    ctx.fillRect(x, -diag, step, diag * 2);
+    if (i % 3 === 0) {
+      ctx.fillStyle = `rgba(${sheen.r},${sheen.g},${sheen.b},${(0.1 * strength).toFixed(3)})`;
+      ctx.fillRect(x, -diag, Math.max(1, step / 3), diag * 2);
+    }
+  }
+  ctx.restore();
+}
+
+/** A collaborator's identity colour: their cursor, name pill and avatar all
+ *  read from this one voice — generated from the session hue, never chrome. */
+function peerHue(hue: number): string {
+  return `hsl(${Math.round(hue)}, 72%, 52%)`;
 }
 
 function unrot(px: number, py: number, cx: number, cy: number, deg: number) {
@@ -11474,7 +11622,7 @@ function rasterizeBoolean(
     }
     const path = shapePoly(c);
     tracePath(o, path, sx, sy, z, c.closed || (c.kind !== "line" && c.kind !== "arrow"));
-    o.fillStyle = "#ffffff";
+    o.fillStyle = RASTER_TEMP_FILL;
     o.fill();
     o.restore();
   };

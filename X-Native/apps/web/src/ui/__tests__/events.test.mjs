@@ -80,6 +80,7 @@ const BUS = {
   "x-native-copy-code": { sent: ["ui/ContextMenu.tsx", "ui/chrome.tsx"], heard: ["App.tsx"], why: "the copy-as-code commands; App writes the clipboard" },
   "x-native-copy-link": { sent: ["ui/ContextMenu.tsx"], heard: ["App.tsx"], why: "the share/copy-link commands" },
   "x-native-copy-png": { sent: ["ui/ContextMenu.tsx", "ui/chrome.tsx"], heard: ["App.tsx"], why: "the copy-as-PNG commands" },
+  "x-native-copy-svg": { sent: ["ui/ContextMenu.tsx"], heard: ["App.tsx"], why: "the copy-as-SVG command; App writes the clipboard" },
   "x-native-crop-image": { sent: ["ui/ContextMenu.tsx", "ui/inspector.tsx"], heard: ["ui/Canvas.tsx"], why: "the image crop button and its menu entry" },
   "x-native-export-dialog": { sent: ["ui/chrome.tsx", "ui/inspector.tsx"], heard: ["App.tsx"], why: "⇧⌘E, File ▸ Export and the palette; App opens the sheet" },
   "x-native-find": { sent: ["ui/chrome.tsx"], heard: ["App.tsx"], why: "⌘F opens the find bar" },

@@ -106,10 +106,15 @@ function Host() {
 const host = document.createElement("div"); document.body.appendChild(host);
 const root = createRoot(host);
 await React.act(async () => root.render(React.createElement(Host)));
+// The font family/weight controls are button-triggered pops now (FontPicker):
+// open the trigger, click the row that carries the value.
 const select = async (label, value) => {
-  const input = host.querySelector(`select[aria-label="${label}"]`);
-  t(`${label} is available`, !!input);
-  await React.act(async () => { input.value = value; input.dispatchEvent(new window.Event("change", { bubbles: true })); });
+  const btn = host.querySelector(`[aria-label="${label}"]`);
+  t(`${label} is available`, !!btn);
+  await React.act(async () => { btn.click(); });
+  const row = document.body.querySelector(`[data-value="${value}"]`);
+  t(`${label} offers ${value}`, !!row);
+  await React.act(async () => { row.click(); });
 };
 await select("Font family", "Roboto");
 t("Inspector patches the selected text layer's family", live().fontFamily === "Roboto");

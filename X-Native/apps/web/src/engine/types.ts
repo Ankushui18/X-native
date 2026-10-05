@@ -142,7 +142,8 @@ export type EffectKind =
   | "background-blur"
   | "noise"
   | "glass"
-  | "texture";
+  | "texture"
+  | "shader";
 export type BooleanOp = "union" | "subtract" | "intersect" | "exclude";
 export type ProtoTrigger =
   | "onClick"

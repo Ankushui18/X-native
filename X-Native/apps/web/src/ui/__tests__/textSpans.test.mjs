@@ -49,10 +49,14 @@ await ui.act(() => {
   textarea.setSelectionRange(11, 11);
 });
 t("inspector focus has removed the textarea", !ui.host.querySelector("textarea.text-edit"));
+// Font family/weight ride the FontPicker pops: open the trigger, pick the row.
 async function choose(label, value) {
-  const el = host.querySelector(`select[aria-label="${label}"]`);
+  const el = host.querySelector(`[aria-label="${label}"]`);
   t(`${label} control exists`, !!el);
-  await React.act(async () => { el.value = value; el.dispatchEvent(new window.Event("change", { bubbles: true })); });
+  await React.act(async () => { el.click(); });
+  const row = document.body.querySelector(`[data-value="${value}"]`);
+  t(`${label} offers ${value}`, !!row);
+  await React.act(async () => { row.click(); });
 }
 await choose("Font family", "Roboto");
 await choose("Font weight", "700");
@@ -61,7 +65,7 @@ const runs = model.textRuns ?? [];
 t("two stored contiguous, nonoverlapping runs", runs.length === 2 && runs[0].start === 0 && runs[0].end === 6 && runs[1].start === 6 && runs[1].end === 11, JSON.stringify(runs));
 t("Hello retains Inter 400; World becomes Roboto 700", runs[0]?.fontFamily === "Inter" && runs[0]?.fontWeight === 400 && runs[1]?.fontFamily === "Roboto" && runs[1]?.fontWeight === 700, JSON.stringify(runs));
 t("layer defaults were not overwritten", model.fontFamily === "Inter" && model.fontWeight === 400);
-t("Inspector reflects selected run rather than layer defaults", host.querySelector('select[aria-label="Font family"]')?.value === "Roboto" && host.querySelector('select[aria-label="Font weight"]')?.value === "700");
+t("Inspector reflects selected run rather than layer defaults", host.querySelector('[aria-label="Font family"]')?.getAttribute("data-value") === "Roboto" && host.querySelector('[aria-label="Font weight"]')?.getAttribute("data-value") === "700");
 const strokes = ui.ctx.texts.filter((c) => c.inDoc && c.text === "Hello " || c.inDoc && c.text === "World");
 const pair = strokes.slice(-2);
 const measureCtx = ui.ctx;

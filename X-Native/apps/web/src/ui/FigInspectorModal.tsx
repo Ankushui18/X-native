@@ -127,64 +127,33 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
 
   return (
     <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 9999,
-        background: "rgba(0,0,0,0.65)",
-        backdropFilter: "blur(6px)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
+      className="fim-scrim"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        style={{
-          width: "90vw",
-          maxWidth: 1100,
-          height: "85vh",
-          background: "var(--panel)",
-          borderRadius: 12,
-          boxShadow: "0 24px 48px rgba(0,0,0,0.35)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-          border: "1px solid var(--line)",
-          color: "var(--text)",
-          fontSize: 12,
-        }}
+        className="fim-box"
       >
         {/* Header */}
         <div
-          style={{
-            padding: "12px 18px",
-            borderBottom: "1px solid var(--line)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            background: "var(--bg)",
-          }}
+          className="fim-head"
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="fim-head-title">
             <Icon name="folder" size={20} />
             <div>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>
+              <div className="fim-title">
                 Design File Inspector
               </div>
-              <div style={{ fontSize: 10, color: "var(--dim)" }}>
+              <div className="fim-label">
                 {report?.fileName ?? "No file loaded"} • Binary & Vector Network Analyzer
               </div>
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="fim-row8">
             <button
-              className="export-run"
-              style={{ padding: "4px 10px", fontSize: 11, background: "#10b981" }}
+              className="export-run fim-close"
               disabled={!rawBuffer || loading}
               onClick={handleImportToCanvas}
               title="Import all layers into the active X-Native canvas"
@@ -200,64 +169,31 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
 
         {/* Toolbar / Samples */}
         <div
-          style={{
-            padding: "8px 18px",
-            borderBottom: "1px solid var(--line)",
-            background: "var(--hover)",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
+          className="fim-toolbar"
         >
-          <span style={{ fontSize: 11, fontWeight: 500, color: "var(--dim)" }}>Sample Files:</span>
+          <span className="fim-toolbar-label">Sample Files:</span>
           <button
-            className="tab"
-            style={{
-              padding: "4px 8px",
-              borderRadius: 6,
-              fontSize: 11,
-              background: report?.fileName === "OpenFigs.fig" ? "var(--accent)" : "var(--bg)",
-              color: report?.fileName === "OpenFigs.fig" ? "#fff" : "var(--text)",
-            }}
+            className={`fim-chip${report?.fileName === "OpenFigs.fig" ? " on" : ""}`}
             onClick={() => loadSample("/samples/OpenFigs.fig", "OpenFigs.fig")}
           >
             OpenFigs.fig (v106, 21 Vector Blobs)
           </button>
           <button
-            className="tab"
-            style={{
-              padding: "4px 8px",
-              borderRadius: 6,
-              fontSize: 11,
-              background: report?.fileName === "circle.fig" ? "var(--accent)" : "var(--bg)",
-              color: report?.fileName === "circle.fig" ? "#fff" : "var(--text)",
-            }}
+            className={`fim-chip${report?.fileName === "circle.fig" ? " on" : ""}`}
             onClick={() => loadSample("/samples/circle.fig", "circle.fig")}
           >
             circle.fig (v101, Zstd Chunks)
           </button>
 
           <label
-            style={{
-              marginLeft: "auto",
-              padding: "4px 10px",
-              borderRadius: 6,
-              border: "1px solid var(--line)",
-              background: "var(--bg)",
-              cursor: "pointer",
-              fontSize: 11,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}
+            className="fim-toggle"
           >
             <Icon name="upload" size={12} />
             <span>Open Custom .fig…</span>
             <input
               type="file"
               accept=".fig"
-              style={{ display: "none" }}
+              className="fim-hidden"
               onChange={handleFileUpload}
             />
           </label>
@@ -265,12 +201,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
 
         {/* Sub-Navigation Tabs */}
         <div
-          style={{
-            display: "flex",
-            borderBottom: "1px solid var(--line)",
-            background: "var(--bg)",
-            padding: "0 18px",
-          }}
+          className="fim-tabs"
         >
           {[
             { id: "overview", label: "Overview & Chunks" },
@@ -281,14 +212,9 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           ].map((t) => (
             <button
               key={t.id}
-              className="tab"
+              className={`fim-tab${activeTab === t.id ? " on" : ""}`}
               aria-current={activeTab === t.id}
               onClick={() => setActiveTab(t.id as any)}
-              style={{
-                padding: "8px 14px",
-                borderBottom: activeTab === t.id ? "2px solid var(--accent)" : "none",
-                fontWeight: activeTab === t.id ? 600 : 400,
-              }}
             >
               {t.label}
             </button>
@@ -296,98 +222,78 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
         </div>
 
         {/* Body Area */}
-        <div style={{ flex: 1, overflowY: "auto", padding: 18, background: "var(--panel)" }}>
+        <div className="fim-body">
           {loading && (
-            <div style={{ padding: 40, textAlign: "center", color: "var(--dim)" }}>
+            <div className="fim-empty">
               Decoding and analyzing Kiwi binary format…
             </div>
           )}
 
           {error && (
             <div
-              style={{
-                padding: 16,
-                background: "rgba(239, 68, 68, 0.1)",
-                color: "#ef4444",
-                borderRadius: 8,
-                marginBottom: 16,
-              }}
+              className="fim-error"
             >
               {error}
             </div>
           )}
 
           {!loading && report && activeTab === "overview" && (
-            <div style={{ display: "grid", gap: 16 }}>
+            <div className="fim-grid16">
               {/* Metric Cards */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-                <div style={{ padding: 14, background: "var(--hover)", borderRadius: 8 }}>
-                  <div style={{ fontSize: 10, color: "var(--dim)" }}>PRELUDE & VERSION</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+              <div className="fim-metrics">
+                <div className="fim-metric">
+                  <div className="fim-label">PRELUDE & VERSION</div>
+                  <div className="fim-metric-value">
                     {report.prelude} v{report.version}
                   </div>
-                  <div style={{ fontSize: 10, color: "var(--dim)", marginTop: 2 }}>
+                  <div className="fim-metric-note">
                     Binary Container
                   </div>
                 </div>
 
-                <div style={{ padding: 14, background: "var(--hover)", borderRadius: 8 }}>
-                  <div style={{ fontSize: 10, color: "var(--dim)" }}>CHUNKS & PAYLOAD</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+                <div className="fim-metric">
+                  <div className="fim-label">CHUNKS & PAYLOAD</div>
+                  <div className="fim-metric-value">
                     {report.chunksCount} Chunks
                   </div>
-                  <div style={{ fontSize: 10, color: "var(--dim)", marginTop: 2 }}>
+                  <div className="fim-metric-note">
                     {report.chunks.map((c) => `${c.compression} (${Math.round(c.byteLength / 1024)}KB)`).join(" • ")}
                   </div>
                 </div>
 
-                <div style={{ padding: 14, background: "var(--hover)", borderRadius: 8 }}>
-                  <div style={{ fontSize: 10, color: "var(--dim)" }}>KIWI DEFINITIONS</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+                <div className="fim-metric">
+                  <div className="fim-label">KIWI DEFINITIONS</div>
+                  <div className="fim-metric-value">
                     {report.schemaDefsCount} Types
                   </div>
-                  <div style={{ fontSize: 10, color: "var(--dim)", marginTop: 2 }}>
+                  <div className="fim-metric-note">
                     Embedded field dictionary
                   </div>
                 </div>
 
-                <div style={{ padding: 14, background: "var(--hover)", borderRadius: 8 }}>
-                  <div style={{ fontSize: 10, color: "var(--dim)" }}>VECTOR BLOBS</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+                <div className="fim-metric">
+                  <div className="fim-label">VECTOR BLOBS</div>
+                  <div className="fim-metric-value">
                     {report.blobsCount} Blobs
                   </div>
-                  <div style={{ fontSize: 10, color: "var(--dim)", marginTop: 2 }}>
+                  <div className="fim-metric-note">
                     Vector paths & networks
                   </div>
                 </div>
               </div>
 
               {/* Node Types Breakdown */}
-              <div style={{ padding: 16, background: "var(--hover)", borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, marginBottom: 10 }}>Layers by Type</div>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div className="fim-card">
+                <div className="fim-card-title">Layers by Type</div>
+                <div className="fim-wrap">
                   {Object.entries(report.nodesByType).map(([type, count]) => (
                     <div
                       key={type}
-                      style={{
-                        padding: "6px 12px",
-                        background: "var(--bg)",
-                        borderRadius: 6,
-                        border: "1px solid var(--line)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                      }}
+                      className="fim-type"
                     >
-                      <span style={{ fontWeight: 600 }}>{type}</span>
+                      <span className="fim-strong">{type}</span>
                       <span
-                        style={{
-                          background: "var(--accent)",
-                          color: "#fff",
-                          borderRadius: 10,
-                          padding: "1px 6px",
-                          fontSize: 10,
-                        }}
+                        className="fim-count"
                       >
                         {count}
                       </span>
@@ -397,28 +303,20 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
               </div>
 
               {/* Chunks Details */}
-              <div style={{ padding: 16, background: "var(--hover)", borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, marginBottom: 10 }}>Container Chunks Structure</div>
-                <div style={{ display: "grid", gap: 8 }}>
+              <div className="fim-card">
+                <div className="fim-card-title">Container Chunks Structure</div>
+                <div className="fim-grid8">
                   {report.chunks.map((c) => (
                     <div
                       key={c.index}
-                      style={{
-                        padding: "8px 12px",
-                        background: "var(--bg)",
-                        borderRadius: 6,
-                        border: "1px solid var(--line)",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                      }}
+                      className="fim-chunk"
                     >
                       <div>
                         <strong>Chunk {c.index}:</strong> {c.index === 0 ? "Kiwi Binary Schema" : "NodeChanges & Blobs Message"}
                       </div>
-                      <div style={{ display: "flex", gap: 12, color: "var(--dim)" }}>
+                      <div className="fim-meta">
                         <span>Size: {c.byteLength} bytes ({Math.round(c.byteLength / 1024)} KB)</span>
-                        <span style={{ textTransform: "uppercase", color: "#10b981", fontWeight: 600 }}>
+                        <span className="fim-tag">
                           {c.compression}
                         </span>
                       </div>
@@ -430,31 +328,17 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           )}
 
           {!loading && report && activeTab === "nodes" && (
-            <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 16, height: "100%" }}>
+            <div className="fim-split">
               {/* Nodes List */}
               <div
-                style={{
-                  border: "1px solid var(--line)",
-                  borderRadius: 8,
-                  overflowY: "auto",
-                  background: "var(--bg)",
-                  display: "flex",
-                  flexDirection: "column",
-                }}
+                className="fim-pane"
               >
-                <div style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
+                <div className="fim-pane-head">
                   <select
                     aria-label="Filter by type"
                     value={filterType}
                     onChange={(e) => setFilterType(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "4px 8px",
-                      background: "var(--input)",
-                      color: "var(--text)",
-                      border: "1px solid var(--line)",
-                      borderRadius: 4,
-                    }}
+                    className="fim-search"
                   >
                     <option value="ALL">All Types ({report.nodes.length})</option>
                     {Object.keys(report.nodesByType).map((t) => (
@@ -464,27 +348,21 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                     ))}
                   </select>
                 </div>
-                <div style={{ flex: 1, overflowY: "auto" }}>
+                <div className="fim-scroll">
                   {filteredNodes.map((n) => (
                     <div
                       key={n.guid}
                       onClick={() => setSelectedNodeGuid(n.guid)}
-                      style={{
-                        padding: "8px 12px",
-                        borderBottom: "1px solid var(--line)",
-                        cursor: "pointer",
-                        background: selectedNodeGuid === n.guid ? "rgba(13,153,255,0.15)" : "transparent",
-                        borderLeft: selectedNodeGuid === n.guid ? "3px solid var(--accent)" : "3px solid transparent",
-                      }}
+                      className={`fim-node${selectedNodeGuid === n.guid ? " sel" : ""}`}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <strong style={{ fontSize: 11 }}>{n.name}</strong>
-                        <span style={{ fontSize: 9, color: "var(--dim)" }}>{n.guid}</span>
+                      <div className="fim-between">
+                        <strong className="fim-name">{n.name}</strong>
+                        <span className="fim-guid">{n.guid}</span>
                       </div>
-                      <div style={{ display: "flex", gap: 8, marginTop: 4, fontSize: 10, color: "var(--dim)" }}>
+                      <div className="fim-node-meta">
                         <span>{n.type}</span>
                         {n.w > 0 && <span>{Math.round(n.w)} × {Math.round(n.h)}</span>}
-                        {n.hasVectorGeometry && <span style={{ color: "#10b981" }}>• Vector ({n.vectorCommandsCount} cmds)</span>}
+                        {n.hasVectorGeometry && <span className="fim-ink-accent">• Vector ({n.vectorCommandsCount} cmds)</span>}
                       </div>
                     </div>
                   ))}
@@ -493,26 +371,19 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
 
               {/* Node Inspector */}
               <div
-                style={{
-                  border: "1px solid var(--line)",
-                  borderRadius: 8,
-                  padding: 16,
-                  overflowY: "auto",
-                  background: "var(--bg)",
-                }}
+                className="fim-detail"
               >
                 {selectedNode ? (
-                  <div style={{ display: "grid", gap: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div className="fim-grid14">
+                    <div className="fim-between-c">
                       <div>
-                        <h3 style={{ margin: 0, fontSize: 16 }}>{selectedNode.name}</h3>
-                        <div style={{ fontSize: 11, color: "var(--dim)" }}>
+                        <h3 className="fim-h3">{selectedNode.name}</h3>
+                        <div className="fim-dim11">
                           GUID: <code>{selectedNode.guid}</code> • Type: <code>{selectedNode.type}</code>
                         </div>
                       </div>
                       <button
-                        className="export-run"
-                        style={{ padding: "4px 8px", fontSize: 10 }}
+                        className="export-run fim-btn-xs"
                         onClick={() => {
                           copyText(JSON.stringify(selectedNode.raw, null, 2));
                           toast("Copied node properties");
@@ -522,10 +393,10 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                       </button>
                     </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                      <div style={{ padding: 10, background: "var(--hover)", borderRadius: 6 }}>
-                        <div style={{ color: "var(--dim)", fontSize: 10 }}>BOUNDS & PLACEMENT</div>
-                        <div style={{ marginTop: 4 }}>
+                    <div className="fim-pairs">
+                      <div className="fim-tile">
+                        <div className="fim-tile-label">BOUNDS & PLACEMENT</div>
+                        <div className="fim-mt4">
                           X: {selectedNode.x.toFixed(1)}, Y: {selectedNode.y.toFixed(1)}
                         </div>
                         <div>
@@ -533,20 +404,14 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                         </div>
                       </div>
 
-                      <div style={{ padding: 10, background: "var(--hover)", borderRadius: 6 }}>
-                        <div style={{ color: "var(--dim)", fontSize: 10 }}>PAINT & STROKE</div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                      <div className="fim-tile">
+                        <div className="fim-tile-label">PAINT & STROKE</div>
+                        <div className="fim-swatch-row">
                           <span>Fill:</span>
                           {selectedNode.fill && (
                             <span
-                              style={{
-                                display: "inline-block",
-                                width: 12,
-                                height: 12,
-                                borderRadius: 3,
-                                background: selectedNode.fill,
-                                border: "1px solid var(--line)",
-                              }}
+                              className="fim-swatch"
+                              style={{ background: selectedNode.fill }}
                             />
                           )}
                           <code>{selectedNode.fill ?? "None"}</code>
@@ -556,11 +421,11 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                     </div>
 
                     {selectedNode.hasVectorGeometry && (
-                      <div style={{ padding: 12, background: "rgba(16, 185, 129, 0.08)", borderRadius: 6, border: "1px solid rgba(16, 185, 129, 0.2)" }}>
-                        <div style={{ fontWeight: 600, color: "#10b981", marginBottom: 6 }}>
+                      <div className="fim-note">
+                        <div className="fim-note-title">
                           Vector Network Analysis
                         </div>
-                        <div style={{ display: "flex", gap: 16 }}>
+                        <div className="fim-row16">
                           <span>Commands: <strong>{selectedNode.vectorCommandsCount}</strong></span>
                           <span>Vertices: <strong>{selectedNode.vectorVerticesCount}</strong></span>
                           <span>Segments: <strong>{selectedNode.vectorSegmentsCount}</strong></span>
@@ -570,23 +435,16 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                     )}
 
                     <div>
-                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Raw Decoded Kiwi Object</div>
+                      <div className="fim-sub-title">Raw Decoded Kiwi Object</div>
                       <pre
-                        style={{
-                          padding: 10,
-                          borderRadius: 6,
-                          background: "var(--input)",
-                          fontSize: 10,
-                          maxHeight: 260,
-                          overflowY: "auto",
-                        }}
+                        className="fim-code"
                       >
                         {JSON.stringify(selectedNode.raw, null, 2)}
                       </pre>
                     </div>
                   </div>
                 ) : (
-                  <div style={{ color: "var(--dim)", textAlign: "center", padding: 40 }}>
+                  <div className="fim-empty">
                     Select a node from the list to inspect
                   </div>
                 )}
@@ -595,8 +453,8 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           )}
 
           {!loading && report && activeTab === "vectors" && (
-            <div style={{ display: "grid", gap: 16 }}>
-              <div style={{ color: "var(--dim)", fontSize: 11 }}>
+            <div className="fim-grid16">
+              <div className="fim-dim11">
                 Vector networks extracted from binary <code>commandsBlob</code> and <code>vectorNetworkBlob</code>:
               </div>
 
@@ -614,54 +472,35 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                 return (
                   <div
                     key={n.guid}
-                    style={{
-                      padding: 16,
-                      background: "var(--bg)",
-                      border: "1px solid var(--line)",
-                      borderRadius: 8,
-                      display: "grid",
-                      gridTemplateColumns: "180px 1fr",
-                      gap: 16,
-                    }}
+                    className="fim-figure"
                   >
                     {/* SVG Preview */}
                     <div
-                      style={{
-                        height: 180,
-                        background: "var(--hover)",
-                        borderRadius: 6,
-                        border: "1px solid var(--line)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        overflow: "hidden",
-                      }}
+                      className="fim-preview"
                     >
                       <svg
                         viewBox={`0 0 ${Math.max(1, n.w)} ${Math.max(1, n.h)}`}
-                        style={{ maxWidth: 160, maxHeight: 160 }}
                       >
                         <path
                           d={pathD}
-                          fill={n.fill || "#10b981"}
-                          stroke={n.stroke || "#ffffff"}
+                          fill={n.fill || "var(--accent)"}
+                          stroke={n.stroke || "var(--panel)"}
                           strokeWidth={Math.max(1, n.strokeWeight)}
                         />
                       </svg>
                     </div>
 
                     {/* Details */}
-                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div className="fim-col8">
+                      <div className="fim-between">
                         <div>
-                          <strong style={{ fontSize: 14 }}>{n.name}</strong>
-                          <span style={{ fontSize: 11, color: "var(--dim)", marginLeft: 8 }}>
+                          <strong className="fim-strong14">{n.name}</strong>
+                          <span className="fim-dim11-ml">
                             GUID {n.guid}
                           </span>
                         </div>
                         <button
-                          className="export-run"
-                          style={{ padding: "3px 8px", fontSize: 10 }}
+                          className="export-run fim-btn-xs"
                           onClick={() => {
                             copyText(pathD);
                             toast("Copied SVG path");
@@ -671,26 +510,19 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                         </button>
                       </div>
 
-                      <div style={{ display: "flex", gap: 14, fontSize: 11 }}>
+                      <div className="fim-row14">
                         <span>Total Commands: <strong>{n.vectorCommandsCount}</strong></span>
                         <span>Vertices: <strong>{n.vectorVerticesCount}</strong></span>
                         <span>Segments: <strong>{n.vectorSegmentsCount}</strong></span>
                         <span>Branching Degree ≥ 3: <strong>{n.branchingCount}</strong></span>
                       </div>
 
-                      <div style={{ marginTop: 6 }}>
-                        <div style={{ fontSize: 10, color: "var(--dim)", marginBottom: 4 }}>
+                      <div className="fim-mt6">
+                        <div className="fim-label-mb">
                           First Decoded Commands:
                         </div>
                         <pre
-                          style={{
-                            padding: 8,
-                            borderRadius: 4,
-                            background: "var(--input)",
-                            fontSize: 10,
-                            maxHeight: 90,
-                            overflowY: "auto",
-                          }}
+                          className="fim-code-sm"
                         >
                           {JSON.stringify(sampleCmds, null, 2)}
                         </pre>
@@ -703,48 +535,36 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           )}
 
           {!loading && report && activeTab === "schema" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 11, color: "var(--dim)" }}>
+            <div className="fim-col12">
+              <div className="fim-between-c">
+                <span className="fim-dim11">
                   The .fig binary contains {report.schemaDefsCount} self-describing Kiwi schema type definitions:
                 </span>
                 <input
                   placeholder="Search types (e.g. Vector, Paint, Node)..."
                   value={schemaSearch}
                   onChange={(e) => setSchemaSearch(e.target.value)}
-                  style={{
-                    padding: "4px 8px",
-                    background: "var(--input)",
-                    border: "1px solid var(--line)",
-                    borderRadius: 6,
-                    color: "var(--text)",
-                    width: 260,
-                  }}
+                  className="fim-select"
                 />
               </div>
 
               <div
-                style={{
-                  border: "1px solid var(--line)",
-                  borderRadius: 8,
-                  overflow: "hidden",
-                  background: "var(--bg)",
-                }}
+                className="fim-tablewrap"
               >
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <table className="fim-table">
                   <thead>
-                    <tr style={{ background: "var(--hover)", textAlign: "left" }}>
-                      <th style={{ padding: "8px 12px" }}>Type Name</th>
-                      <th style={{ padding: "8px 12px" }}>Kind</th>
-                      <th style={{ padding: "8px 12px" }}>Fields Count</th>
+                    <tr className="fim-thead">
+                      <th className="fim-th">Type Name</th>
+                      <th className="fim-th">Kind</th>
+                      <th className="fim-th">Fields Count</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredSchema.slice(0, 100).map((d) => (
-                      <tr key={d.name} style={{ borderTop: "1px solid var(--line)" }}>
-                        <td style={{ padding: "6px 12px", fontFamily: "monospace" }}>{d.name}</td>
-                        <td style={{ padding: "6px 12px", color: "var(--dim)" }}>{d.kind}</td>
-                        <td style={{ padding: "6px 12px" }}>{d.fieldsCount}</td>
+                      <tr key={d.name} className="fim-tr">
+                        <td className="fim-td-mono">{d.name}</td>
+                        <td className="fim-td-dim">{d.kind}</td>
+                        <td className="fim-td">{d.fieldsCount}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -754,14 +574,13 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
           )}
 
           {!loading && report && activeTab === "json" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%" }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 11, color: "var(--dim)" }}>
+            <div className="fim-col8-full">
+              <div className="fim-between">
+                <span className="fim-dim11">
                   Full decoded Kiwi message payload:
                 </span>
                 <button
-                  className="export-run"
-                  style={{ padding: "4px 10px", fontSize: 11 }}
+                  className="export-run fim-btn"
                   onClick={() => {
                     copyText(report.rawMessageJson);
                     toast("Copied JSON payload");
@@ -771,15 +590,7 @@ export function FigInspectorModal({ engine, onClose }: FigInspectorModalProps) {
                 </button>
               </div>
               <pre
-                style={{
-                  flex: 1,
-                  padding: 12,
-                  background: "var(--input)",
-                  borderRadius: 8,
-                  overflowY: "auto",
-                  fontSize: 10,
-                  border: "1px solid var(--line)",
-                }}
+                className="fim-code-lg"
               >
                 {report.rawMessageJson}
               </pre>

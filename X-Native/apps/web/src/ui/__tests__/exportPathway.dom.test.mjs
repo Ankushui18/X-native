@@ -54,7 +54,9 @@ console.log("1 · File ▸ Export assets…");
   t("...and a preferred profile for new files", rows.some((r) => /Preferred profile/.test(r.textContent || "")));
   const row = rows.find((r) => (r.textContent || "").includes("Export assets"));
   t("...one of them is Export assets…", !!row, rows.map((r) => r.textContent.trim()).join(" | "));
-  t("...advertising ⇧⌘E", (row?.textContent || "").includes("⇧⌘E"), row?.textContent);
+  // Chips are platform-correct now (ui/sc.ts): Mac keeps the ⌘ form, everywhere
+  // else Figma's Windows form — the pin accepts either.
+  t("...advertising ⇧⌘E / Ctrl+Shift+E", /⇧⌘E|Ctrl\+Shift\+E/.test(row?.textContent || ""), row?.textContent);
   await panel.click(row);
   t("clicking it asks for the export sheet", heard.length === 1, JSON.stringify(heard));
   t("...and closes the menu", !panel.one('[role="menu"]'));

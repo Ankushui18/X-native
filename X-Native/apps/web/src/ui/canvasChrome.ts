@@ -2,12 +2,13 @@
  * Canvas chrome roles (FR-U2).
  *
  * The 2D surfaces — the main canvas, the minimap, the rulers — used to carry
- * their own palette as module literals (`BRAND_ACCENT = "#10b981"`,
- * `COMP_PURPLE = "#a855f7"`, `dark ? "#171c22" : "#eef1f4"`, …), with a comment
- * asking whoever changed `--comp` in styles.css to "change both". Two greens
- * lived in the codebase as a result: the control accent (`--accent`, #0e9f6e
- * light / #10b981 dark) and the selection ink (#10b981 always), and the second
- * one could not follow the theme at all.
+ * their own palette as module literals (a hardcoded brand green, a component
+ * purple, `dark ? "#171c22" : "#eef1f4"`), with a comment asking whoever changed
+ * `--comp` in styles.css to "change both". Two greens lived in the codebase as a
+ * result: the control accent and the canvas selection ink, and the second one
+ * could not follow the theme at all. The values below are identity v3's: the
+ * selection family is the brand violet, the drop target its own cyan, the mask
+ * its amber — four distinct roles instead of one green wearing four hats.
  *
  * This module is the single door between the sheet and the canvases:
  *
@@ -90,26 +91,26 @@ export type CanvasChrome = Record<CanvasChromeKey, string>;
  * A token the cascade has not defined still paints, and paints as light chrome.
  */
 export const CANVAS_CHROME_FALLBACK: CanvasChrome = {
-  sel: "#10b981",
-  selWash: "rgba(16, 185, 129, 0.14)",
-  selGlow: "rgba(16, 185, 129, 0.35)",
+  sel: "#5b3df5",
+  selWash: "rgba(91, 61, 245, 0.14)",
+  selGlow: "rgba(91, 61, 245, 0.32)",
   ink: "#ffffff",
-  lock: "#9aa0a6",
-  guide: "#ff3b6b",
-  target: "#0d99ff",
-  mask: "#00c853",
-  chip: "rgba(15, 23, 42, 0.95)",
-  chipLine: "rgba(255, 255, 255, 0.15)",
-  chipInk: "#f8fafc",
-  well: "#eef1f4",
+  lock: "#8e93a8",
+  guide: "#ff2d55",
+  target: "#00b3d4",
+  mask: "#e39400",
+  chip: "rgba(13, 15, 28, 0.94)",
+  chipLine: "rgba(255, 255, 255, 0.16)",
+  chipInk: "#f4f5fa",
+  well: "#eef0f8",
   panel: "#ffffff",
-  line: "#e5e5e5",
-  dim: "#8c8c8c",
-  scrim: "rgba(13, 20, 38, 0.45)",
-  canvas: "#eef1f4",
-  grid: "rgba(16, 185, 129, 0.07)",
-  label: "rgba(17, 24, 39, 0.5)",
-  comp: "#a855f7",
+  line: "#d8dbe9",
+  dim: "#8a8fa6",
+  scrim: "rgba(13, 15, 28, 0.46)",
+  canvas: "#eef0f8",
+  grid: "rgba(91, 61, 245, 0.07)",
+  label: "rgba(23, 26, 43, 0.5)",
+  comp: "#0092b5",
 };
 
 /**

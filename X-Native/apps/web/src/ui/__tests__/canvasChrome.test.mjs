@@ -227,18 +227,21 @@ for (const [lit, token] of FORBIDDEN) {
   t(`no canvas surface hardcodes ${lit} (${token})${hits.length ? ` — found in ${hits.join(", ")}` : ""}`, hits.length === 0);
 }
 
-// The emerald is still allowed where it is *document* ink, but only as a named
-// constant, so the next reader can see why it does not move with the theme.
-const emeraldLines = canvas
+// Document ink is still allowed — a default fill, a new slice's stroke, a mask's
+// white — but only as a named constant, so the next reader can see why it does
+// not move with the theme. Identity v3 renamed every one of them: the anonymous
+// `ctx.fillStyle = "#ffffff"` lines are gone, and the file's colour literals now
+// all sit on the `DOC_*` / `RASTER_*` declarations that explain themselves.
+const canvasLiterals = canvas
   .split("\n")
   .map((l, i) => [i + 1, l])
-  .filter(([, l]) => /#10b981|#10B981/.test(l));
-const undocumented = emeraldLines.filter(([, l]) => !/^const DOC_/.test(l.trim()));
+  .filter(([, l]) => /(["'`])#[0-9a-fA-F]{3,8}\1/.test(l));
+const unnamed = canvasLiterals.filter(([, l]) => !/^const (DOC|RASTER)_[A-Z0-9_]+ =/.test(l.trim()));
 t(
-  `every #10b981 left in Canvas.tsx is a DOC_* document constant (${undocumented.map(([n]) => `line ${n}`).join(", ") || "none stray"})`,
-  undocumented.length === 0,
+  `every colour literal in Canvas.tsx is a named document constant (${unnamed.map(([n]) => `line ${n}`).join(", ") || `${canvasLiterals.length} named, none stray`})`,
+  unnamed.length === 0,
 );
-t("Canvas.tsx keeps at least one documented document-ink constant", /^const DOC_/m.test(canvas));
+t("Canvas.tsx keeps its documented document-ink constants", /^const DOC_/m.test(canvas) && /^const RASTER_/m.test(canvas));
 t(
   "and the paint path resolves the whole chrome bundle in one read",
   /readCanvasChrome\(\(token\) => css\.getPropertyValue\(token\)\)/.test(canvas),
@@ -260,49 +263,49 @@ t(
   const figmaDark = block(/^\s*html\[data-canvas-chrome="figma"\]\[data-theme="dark"\]\s*\{/m);
   t('styles.css offers an html[data-canvas-chrome="figma"] block', !!figma);
   if (figma && light && dark) {
-    const isEmerald = (v) => /#10b981|#10B981|16,\s*185,\s*129|#0e9f6e|14,\s*159,\s*110/.test(v);
-    const canvasRoles = keys.filter((k) => {
-      const token = CANVAS_CHROME_TOKENS[k];
-      return isEmerald(CANVAS_CHROME_FALLBACK[k]) && (token.startsWith("--cv-") || token === "--grid");
-    });
-    const missing = canvasRoles.map((k) => CANVAS_CHROME_TOKENS[k]).filter((token) => !(token in figma));
-    t(`the figma block restates every emerald canvas role (${missing.join(", ") || "none missing"})`,
+    // What the override is allowed to answer for: the *selection* family, the
+    // dot grid, and the drop target. Not "everything that used to be green" —
+    // under identity v3 the brand violet is the default and this block is the
+    // opt-in that restores Figma's blue, so the list is a design decision that
+    // has to be written down rather than inferred from a hue.
+    const CANVAS_CHROME_ROLES = ["--cv-sel", "--cv-sel-wash", "--cv-sel-glow", "--cv-target", "--grid"];
+    const declared = Object.keys(figma);
+    const missing = CANVAS_CHROME_ROLES.filter((token) => !declared.includes(token));
+    t(`the figma block restates the whole selection family (${missing.join(", ") || "none missing"})`,
       missing.length === 0);
-    // The blue is the sheet's existing drop-target blue, not a fourth literal to
-    // keep in step: a theme that invents its own hex is a theme nobody retunes.
-    const blue = light[CANVAS_CHROME_TOKENS.target];
+
+    // The blue is one value with one definition, thinned — never a fourth hex to
+    // keep in step. Every declared role must equal `--cv-target` from the block
+    // (or the block's own blue, thinned by whatever the light column thinned the
+    // violet by), so a 0.14 wash written as 0.4 fails and a second hue fails too.
+    const blue = (String(figma["--cv-target"] ?? "").trim()) || null;
     const alphaOf = (v) => (String(v).match(/[,/]\s*([\d.]+)\s*\)/) ?? [])[1];
-    const hexToRgba = (hex, a) => {
+    const rgba = (hex, a) => {
       const h = String(hex).trim().replace("#", "");
       const n = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
       return `rgba(${parseInt(n.slice(0, 2), 16)}, ${parseInt(n.slice(2, 4), 16)}, ${parseInt(n.slice(4, 6), 16)}, ${a})`;
     };
-    /** What a role has to become: the blue, thinned by whatever the light column
-     *  already thinned the emerald by. Recomputing it here is what keeps this a
-     *  contract rather than a copy of the sheet — a 0.14 wash written as 0.4
-     *  fails, and so does a hue nobody told anyone about. */
+    /** A declared role has to be the blue, thinned the way the light sheet
+     *  thinned the brand for that same role. */
     const expected = (token) => {
       const base = String(light[token] ?? "").trim();
-      return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(base) ? blue : hexToRgba(blue, alphaOf(base));
+      return /^rgba?\(/.test(base) ? rgba(blue, alphaOf(base)) : blue;
     };
-    const wrong = canvasRoles
-      .map((k) => CANVAS_CHROME_TOKENS[k])
-      .filter((token) => norm(figma[token] ?? "\u0000") !== norm(expected(token)));
-    t(`every emerald role turns into the sheet's blue, thinned the same way (${wrong.join(", ") || "all correct"})`,
+    const wrong = declared.filter((token) => token in light).filter((token) => norm(figma[token]) !== norm(expected(token)));
+    t(`every role it declares is the same blue, thinned the same way (${wrong.join(", ") || "all correct"})`,
       wrong.length === 0);
-    const washed = canvasRoles.map((k) => CANVAS_CHROME_TOKENS[k]).filter((token) => alphaOf(figma[token]) != null);
-    t(`and that includes the three washes (${washed.join(", ")})`, washed.length === 3);
+    t(`and the block invents no colour of its own beyond that blue (${blue})`, !!blue && /^#[0-9a-fA-F]{6}$/.test(blue));
 
     // The boundary, stated as a whitelist of what the block may contain rather than
     // a list of what it must not: a `[data-canvas-chrome]` rule that touched
     // `--accent` would recolour every button, focus ring and rail in the app, which
     // is the opposite of what the switch is for — and the list cannot come from the
     // token map, because the map's whole point is that the panel accent is not in it.
-    const strays = Object.keys(figma).filter((tk) => !tk.startsWith("--cv-") && tk !== "--grid");
+    const strays = declared.filter((tk) => !tk.startsWith("--cv-") && tk !== "--grid");
     t(`the override declares only canvas roles (${strays.join(", ") || "none stray"})`, strays.length === 0);
     t("and the door holds: no chrome role reads back through the panel accent",
       !tokenNames.includes("--accent") && !tokenNames.includes("--accent-wash"));
-    const extra = Object.keys(figma).filter((tk) => !canvasRoles.includes(keys.find((k) => CANVAS_CHROME_TOKENS[k] === tk)));
+    const extra = declared.filter((tk) => !CANVAS_CHROME_ROLES.includes(tk));
     t(`and nothing outside the selection family (${extra.join(", ") || "nothing"})`, extra.length === 0);
     // Cascade arithmetic, not cosmetics: equal specificity with the theme blocks,
     // so the *only* thing that makes the override win is coming later in the file.

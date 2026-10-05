@@ -84,30 +84,87 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  2026-10-04 for the letter-spacing unit (audit F10): one native select for
  *  px/% on the Type row and its title tooltip, mirroring the Leading unit
  *  control exactly — the parity fix needs the unit field, and the ledger is
- *  the mechanism that says so. */
+ *  the mechanism that says so.
+ *
+ *  LOWERED 2026-10-04 for identity v3 (the ION token system), in the same
+ *  commit that earned it. Every row below is the measured value after the
+ *  round, not the old ceiling with slack: the four surfaces that carried the
+ *  retired emerald and the ad-hoc dark glass —
+ *    ZenHUD.tsx        16/14/9/6/0 → 2/0/5/3/0   (composed from .zen-* classes)
+ *    RadialMenu.tsx     3/6/0/0/0  → 1/0/0/0/0   (SVG paint moved to the sheet)
+ *    icons.tsx          0/3/0/0/0  → 0/0/0/0/0   (brand mark reads .brand-*)
+ *    Canvas.tsx        11/14/13/16/1 → 11/9/13/16/1 (10 anonymous paint
+ *                       literals became 9 named document-ink constants)
+ *    FigInspectorModal 113/10/2/8/1 → 113/0/2/8/1 (its eight emerald/white/
+ *                       red literals are tokens now)
+ *    chrome.tsx        49/4/41/72/2 → 49/1/41/72/2
+ *    inspector.tsx     190/44/248/200/49 → 189/22/248/200/49
+ *                       (and → 13/22/248/200/49 in the 2026-10-05 sweep)
+ *  LOWERED 2026-10-05 for the modal sweep: FigInspectorModal's 113 inline
+ *  style objects became one .fim-* recipe block in the sheet, so the file
+ *  keeps a single inline value — the colour swatch's runtime fill —
+ *    FigInspectorModal 113/0/2/8/1 → 1/0/2/8/1
+ *  The same rewrite retired the file's one Figma-blue wash
+ *  (rgba(13,153,255,.15) → .fim-node.sel's var(--sel)) and its 8px radius
+ *  default, so the row reads the shared control rhythm now.
+ *  LOWERED 2026-10-05 for the inspector sweep: inspector.tsx's 185 inline
+ *  style objects became a named vocabulary in the sheet — layout primitives,
+ *  rows and stacks, the input/select/range recipes, tags and cards — so the
+ *  file keeps only the values a renderer has to compute:
+ *    inspector.tsx 185/22/248/200/49 → 13/22/248/200/49
+ *  The 13 survivors are document ink (a swatch's fill, a paint's colour), a
+ *  severity dot, a boolean preview's opacity, a computed font stack and two
+ *  template-string style panes. The sweep also retired every magic pixel the
+ *  panel carried inline and snapped sub-ladder padding to the spacing ladder.
+ *  The invariant those rows now hold is enforced from the other side by
+ *  tokens.test.mjs: a colour literal in src/ui must be *named* (a `const`, an
+ *  object property or a labelled table row) or it fails, and no rule in
+ *  styles.css below the token layers may paint a colour outright.
+ *  RAISED 2026-10-05 for the layout-grid popover + presence cluster, and the
+ *  same commit lowered its select count: the grid block's inline parameter
+ *  cards became one compact summary row (`10 10px #FF0000`) opening a popover
+ *  with a Grid | Columns | Rows segmented — the pattern select became three
+ *  buttons, while the rows, the ▷ Play preview and the collaborator avatars
+ *  earned the titles and buttons back:
+ *    inspector.tsx 13/22/248/214/51 → 15/22/257/220/50
+ *  The two new inline objects are runtime-coloured document data (the grid
+ *  swatch, a peer's identity hue) — the sanctioned kind from above. */
+
 const CEILING = {
   //                 inline colour title button select
-  "Canvas.tsx": [11, 14, 13, 16, 1],
+  // 2026-10-05: four floating surfaces left the component for the sheet — the
+  // frame-rename field, the link box, the link hover pill and the emoji
+  // picker all ride the control rhythm now (`.frame-name-edit input`,
+  // `.link-input input`, `.link-hover`, `.emoji-pick`).
+  "Canvas.tsx": [7, 9, 13, 16, 1],
   "Comments.tsx": [3, 0, 3, 5, 0],
   "ContextMenu.tsx": [1, 0, 0, 2, 0],
   // Raised 2026-10-03 for the dev-only Rust WASM POC trigger (one named button).
   "Dashboard.tsx": [1, 0, 12, 34, 1],
   "DialogHost.tsx": [0, 0, 1, 0, 0],
-  "FigInspectorModal.tsx": [113, 10, 2, 8, 1],
+  // Lowered 2026-10-05 (modal sweep): 113 inline style objects → one .fim-*
+  // recipe block in the sheet; the swatch keeps the single runtime fill.
+  "FigInspectorModal.tsx": [1, 0, 2, 8, 1],
   // Raised 2026-10-01 batch 21: add-stop (+) / remove-stop (−) buttons in the
   // gradient editor, both with `title=` and `aria-label=` (per the gradients
   // article the + and − next to "Stops" are the documented affordance). That
   // is one new title and one new button; the remove-stop title replaced the
   // trash-only icon so the title count goes up by one (from the new +).
   "FillPicker.tsx": [12, 2, 16, 19, 2],
+  // Raised 2026-10-05 for the Fonts dialog (reference captures: family field
+  // opens a searchable picker, style field opens the upright/italic menu).
+  // One inline value: each family row paints its own typeface at runtime.
+  // Five buttons (close, clear-search, the family row map, two style-menu
+  // maps) and one source-filter select; no title and no colour literal.
+  "FontPicker.tsx": [1, 0, 0, 5, 1],
   "Guides.tsx": [0, 0, 2, 0, 0],
   "Minimap.tsx": [0, 0, 0, 0, 0],
   "PresentationPlayer.tsx": [5, 0, 12, 9, 2],
-  "RadialMenu.tsx": [3, 6, 0, 0, 0],
+  "RadialMenu.tsx": [1, 0, 0, 0, 0],
   "Rulers.tsx": [0, 0, 0, 0, 0],
   "RustDocumentView.tsx": [2, 0, 0, 3, 0],
   "Tooltip.tsx": [1, 0, 0, 0, 0],
-  "ZenHUD.tsx": [16, 14, 9, 6, 0],
+  "ZenHUD.tsx": [2, 0, 5, 3, 0],
   "announce.tsx": [0, 0, 0, 0, 0],
   // Raised 2026-09-30 for the File menu (P0-2): a trigger and two rows, the
   // chrome's first menu of its own — no title and no inline style, so only
@@ -116,13 +173,25 @@ const CEILING = {
   // chrome): one `<button>` in the rail menu, drawn from `CANVAS_CHROME_OPTIONS`
   // so the row is the whole cost — no `title=`, no inline style, and the model
   // (`themeModel.ts`) keeps its [0, 0, 0, 0, 0].
-  "chrome.tsx": [49, 4, 41, 72, 2],
+  "chrome.tsx": [49, 1, 41, 72, 2],
   "devices.tsx": [21, 35, 1, 0, 0],
-  "icons.tsx": [0, 3, 0, 0, 0],
+  "icons.tsx": [0, 0, 0, 0, 0],
   // Raised 2026-10-01 batch 21: Overflow scroll dropdown in the Layout section
   // for frames — one extra native <select>, plus a three-column inline grid
   // around it and the helper text.
-  "inspector.tsx": [190, 44, 248, 200, 49],
+  // 2026-10-05: four inline styles became classes — the three size tags
+  // (`.auto-tag`) and the Flow group header's ad-hoc `marginBottom: 6`. The
+  // group headers now carry the rows' own gutter from the sheet.
+  // Lowered 2026-10-05 (inspector sweep): 185 inline style objects → the
+  // .ins-* vocabulary in the sheet; 13 runtime values stay inline.
+  // 2026-10-05: the font family/weight <select>s became the dialog and menu
+  // triggers — two fewer native selects, two more field buttons.
+  // Raised the same day for the capture-shaped menus/popovers: the vector-path
+  // menu (Edit object/Offset/Simplify), the boolean menu with its ⌥⇧ chips,
+  // and the stroke-settings popover (Basic/Dynamic/Brush) — header triggers,
+  // menu rows, tab buttons and the Style/profile/point selects all earn the
+  // row; the Flatten chip rides sc(), no title and no inline value added.
+  "inspector.tsx": [15, 22, 257, 220, 50],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };

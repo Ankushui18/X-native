@@ -1,6 +1,14 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { ProtoDevice } from "../engine/types";
 
+/** A device shell's three metal tones when a spec does not carry its own, and
+ *  the ink a device screen falls back to. These are the *mock's* colours, not the
+ *  app's chrome: they describe a phone, so they must not follow the theme. */
+const DEFAULT_SHELL_3: [string, string, string] = ["#55585e", "#26282c", "#43464b"];
+const DEFAULT_SHELL_2: [string, string] = ["#55585e", "#26282c"];
+const DEVICE_SCREEN_INK = "#ffffff";
+
+
 /**
  * Device frames for the prototype preview and presentation view.
  *
@@ -261,7 +269,7 @@ export function DeviceShell({
   const min = Math.min(w, h);
   const { bez, top, bottom, chin } = devicePadding(spec, w, h);
   const rShell = Math.max(bez + 2, min * spec.radiusRatio);
-  const [c1, c2, c3] = spec.shell ?? ["#55585e", "#26282c", "#43464b"];
+  const [c1, c2, c3] = spec.shell ?? DEFAULT_SHELL_3;
   // The glass: the design plus its status-bar and home-indicator bands.
   const gx = x - bez;
   const gy = y - top;
@@ -526,7 +534,7 @@ export function DevicePreview({
   const bez = spec ? Math.max(2, Math.min(sw, sh) * spec.bezelRatio * 2.1) : 1;
   const rOut = spec ? Math.max(bez + 1.5, Math.min(sw, sh) * spec.radiusRatio) : 4;
   const rIn = Math.max(1.5, rOut - bez * 0.7);
-  const [c1, c2] = spec?.shell ?? ["#55585e", "#26282c"];
+  const [c1, c2] = spec?.shell ?? DEFAULT_SHELL_2;
   return (
     <div
       style={{
@@ -553,7 +561,7 @@ export function DevicePreview({
           width: sw,
           height: sh,
           borderRadius: rIn,
-          background: fill || "#fff",
+          background: fill || DEVICE_SCREEN_INK,
           overflow: "hidden",
         }}
       >

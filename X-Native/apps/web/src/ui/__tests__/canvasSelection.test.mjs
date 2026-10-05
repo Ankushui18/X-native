@@ -1,8 +1,18 @@
 /** Batch 1: real Canvas event handlers + recorded canvas paint calls in jsdom.
  * This tests interaction wiring, not browser pixels or font/layout fidelity. */
+import { readFileSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { installDom } from "./domEnv.mjs";
 import { MemoryEngine, node, find, hitTest } from "../../engine/memory.ts";
 import { canvasClickTarget, drillChild, rotationHandleHit } from "../canvasSelection.ts";
+
+/** The sheet, as text: jsdom applies no stylesheet, so a rule the component no
+ *  longer carries inline has to be pinned where it now lives. */
+const sheet = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "styles.css"),
+  "utf8",
+);
 
 let pass = 0, fail = 0;
 const t = (name, ok) => {
@@ -275,11 +285,15 @@ const arcsNear = (x, y, r = 26) =>
   await ui.mouse("dblclick", 110, 90);
   t("visible frame label still opens rename", !!ui.host.querySelector(".frame-name-edit"));
   // Figma's inline rename field sits in the document as a plain rectangle -
-  // the accent hairline with square corners - not as a rounded chip.
+  // the accent hairline with square corners - not as a rounded chip. The
+  // recipe moved out of the component and into `.frame-name-edit input`, so
+  // the pin follows it: the rule is square and the component adds no radius of
+  // its own back on top.
   const renameField = ui.host.querySelector(".frame-name-edit input");
   t("frame rename field is square-cornered (pre-fix: 4px radius)",
-    !!renameField && renameField.style.borderRadius === "0px" &&
-    parseFloat(getComputedStyle(renameField).borderTopLeftRadius) === 0);
+    !!renameField &&
+    /\.frame-name-edit input \{[^}]*border-radius:\s*0;/.test(sheet) &&
+    !/border-radius/.test(renameField.getAttribute("style") || ""));
   await ui.close();
 }
 // The detailed audit explicitly exempts selected children from label culling,
