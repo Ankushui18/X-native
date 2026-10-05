@@ -44,7 +44,7 @@ export function styleName(weight: number, italic: boolean): string {
 /** Click-outside for a portalled pop: keep clicks inside the pop or on the
  *  control that opened it, close on anything else (same contract as the
  *  fill picker). */
-function useClickOutside(keepSelector: string, onClose: () => void) {
+export function useClickOutside(keepSelector: string, onClose: () => void) {
   useEffect(() => {
     const down = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
@@ -60,7 +60,7 @@ function useClickOutside(keepSelector: string, onClose: () => void) {
 /** Place a portalled pop under its trigger, flipping above when the panel is
  *  near the viewport bottom. Imperative geometry — the pop carries no inline
  *  style object; the one inline value in this file is a row's own typeface. */
-function useAnchoredPop(ref: React.RefObject<HTMLElement | null>, anchor: { left: number; top: number }, deps: unknown[] = []) {
+export function useAnchoredPop(ref: React.RefObject<HTMLElement | null>, anchor: { left: number; top: number }, deps: unknown[] = []) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;

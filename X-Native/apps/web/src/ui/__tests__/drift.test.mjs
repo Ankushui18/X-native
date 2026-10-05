@@ -177,7 +177,12 @@ const CEILING = {
   // .ins-* vocabulary in the sheet; 13 runtime values stay inline.
   // 2026-10-05: the font family/weight <select>s became the dialog and menu
   // triggers — two fewer native selects, two more field buttons.
-  "inspector.tsx": [13, 22, 248, 202, 47],
+  // Raised the same day for the capture-shaped menus/popovers: the vector-path
+  // menu (Edit object/Offset/Simplify), the boolean menu with its ⌥⇧ chips,
+  // and the stroke-settings popover (Basic/Dynamic/Brush) — header triggers,
+  // menu rows, tab buttons and the Style/profile/point selects all earn the
+  // row; the Flatten chip rides sc(), no title and no inline value added.
+  "inspector.tsx": [13, 22, 248, 214, 51],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };

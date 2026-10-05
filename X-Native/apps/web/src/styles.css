@@ -2774,6 +2774,44 @@ html[data-theme="dark"] .row .al-dot { background: var(--green); }
    captures show. The style menu reuses the .type-menu rhythm, only portalled
    and widened; the tick column mirrors the dialog. */
 .font-style-menu { position: fixed; width: 176px; z-index: 80; }
+/* The vector-path menu, the boolean menu and the stroke-settings popover
+   (inspector header buttons). Same .type-menu rhythm, portalled fixed, with
+   the shortcut chips the reference captures print on the boolean rows. */
+.vec-path-menu, .bool-menu { position: fixed; width: 184px; z-index: 80; }
+.bool-menu .sc { margin-left: auto; color: var(--dim); }
+.stroke-pop {
+  position: fixed;
+  width: 252px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.stroke-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.stroke-pop-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.stroke-pop-tabs { width: 100%; }
+.stroke-pop-tabs button { flex: 1; }
+.stroke-pop-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.stroke-pop-body .field { gap: var(--sp-2); }
+.stroke-pop-body .field > span:first-child { min-width: 76px; }
+.stroke-pop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
 .font-style-menu .tick,
 .font-pop-row .tick {
   width: var(--sp-4);

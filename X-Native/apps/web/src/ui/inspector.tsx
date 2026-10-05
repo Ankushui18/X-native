@@ -138,7 +138,7 @@ function isFractional(n: XNode) {
   return [n.x, n.y, n.w, n.h].some((v) => !Number.isInteger(v));
 }
 import { FillPicker, type FillValue, type PatternSourceOption } from "./FillPicker";
-import { FontPicker, FontStyleMenu, styleName } from "./FontPicker";
+import { FontPicker, FontStyleMenu, styleName, useAnchoredPop, useClickOutside } from "./FontPicker";
 import type { EyedropSource } from "./color";
 import { applyEyedropSource, promptCreateEyedropToken, type EyedropTargetProperty } from "./eyedropper";
 import { containsId } from "../engine/pattern";
@@ -3273,6 +3273,22 @@ function Design({
     if (rangeStyle?.fontFamily) add(rangeStyle.fontFamily, false);
     return out;
   };
+  // Vector-path menu (capture: Edit object / Offset vector / Simplify vector)
+  // and the stroke-settings popover (Basic | Dynamic | Brush) — portalled pops
+  // anchored under their header buttons, same contract as the font pops.
+  const [vecMenu, setVecMenu] = useState<{ left: number; top: number } | null>(null);
+  const [boolMenu, setBoolMenu] = useState<{ left: number; top: number } | null>(null);
+  const [strokePop, setStrokePop] = useState<{ left: number; top: number } | null>(null);
+  const [strokeTab, setStrokeTab] = useState<"basic" | "dynamic" | "brush">("basic");
+  const vecMenuRef = useRef<HTMLDivElement>(null);
+  const boolMenuRef = useRef<HTMLDivElement>(null);
+  const strokePopRef = useRef<HTMLDivElement>(null);
+  useAnchoredPop(vecMenuRef, vecMenu ?? { left: 0, top: 0 }, [vecMenu]);
+  useAnchoredPop(boolMenuRef, boolMenu ?? { left: 0, top: 0 }, [boolMenu]);
+  useAnchoredPop(strokePopRef, strokePop ?? { left: 0, top: 0 }, [strokePop, strokeTab]);
+  useClickOutside('[aria-label="Vector path menu"]', () => setVecMenu(null));
+  useClickOutside('[aria-label="Boolean menu"]', () => setBoolMenu(null));
+  useClickOutside('[aria-label="Stroke settings"]', () => setStrokePop(null));
   const [fillDrag, setFillDrag] = useState<number | null>(null);
   const [fillOver, setFillOver] = useState<number | null>(null);
   const [strokeDrag, setStrokeDrag] = useState<number | null>(null);
@@ -4491,8 +4507,64 @@ function Design({
 
       {multi && (
         <>
-          <Section id="boolean" title="Boolean">
+          <Section
+          id="boolean"
+          title="Boolean"
+          actions={
+            <button
+              type="button"
+              className="plus"
+              aria-label="Boolean menu"
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setBoolMenu({ left: r.left - 120, top: r.bottom + 4 });
+              }}
+            >
+              <Icon name="chevron-down" size={12} />
+            </button>
+          }
+        >
           <div className="insp-pad">
+            {boolMenu &&
+              createPortal(
+                <div ref={boolMenuRef} className="type-menu bool-menu" role="menu" aria-label="Boolean">
+                  {([
+                    ["union", "⌥⇧U"],
+                    ["subtract", "⌥⇧S"],
+                    ["intersect", "⌥⇧I"],
+                    ["exclude", "⌥⇧E"],
+                  ] as const).map(([op, chord]) => (
+                    <button
+                      key={op}
+                      type="button"
+                      role="menuitem"
+                      data-value={op}
+                      onClick={() => {
+                        if (snap.booleanPreview) engine.dispatch({ type: "setBooleanPreview", op });
+                        else engine.dispatch({ type: "boolean", op });
+                        setBoolMenu(null);
+                      }}
+                    >
+                      {op[0].toUpperCase() + op.slice(1)}
+                      <span className="sc">{sc(chord)}</span>
+                    </button>
+                  ))}
+                  <hr />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-value="flatten"
+                    onClick={() => {
+                      engine.dispatch({ type: "flatten" });
+                      setBoolMenu(null);
+                    }}
+                  >
+                    Flatten
+                    <span className="sc">{sc("⌥⇧F")}</span>
+                  </button>
+                </div>,
+                document.body,
+              )}
             <div className="seg icons">
               {(["union", "subtract", "intersect", "exclude"] as const).map((op) => (
                 <button
@@ -4532,6 +4604,7 @@ function Design({
               >
                 <Icon name="flatten" size={14} />
                 <span>Flatten</span>
+                <span className="sc">{sc("⌥⇧F")}</span>
               </button>
             </div>
             {snap.booleanPreview && (
@@ -5083,10 +5156,57 @@ function Design({
                     Edit points
                   </XButton>
                 )}
+                <button
+                  type="button"
+                  className="plus"
+                  aria-label="Vector path menu"
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setVecMenu({ left: r.left - 120, top: r.bottom + 4 });
+                  }}
+                >
+                  <Icon name="chevron-down" size={12} />
+                </button>
               </div>
             }
           >
             <div className="insp-pad">
+              {vecMenu &&
+                createPortal(
+                  <div ref={vecMenuRef} className="type-menu vec-path-menu" role="menu" aria-label="Vector path">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        engine.dispatch({ type: "setVecEdit", id: n.id, pointIndex: 0 });
+                        setVecMenu(null);
+                      }}
+                    >
+                      Edit object
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowOffsetControls(true);
+                        setVecMenu(null);
+                      }}
+                    >
+                      Offset vector
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setShowSimplifyControls(true);
+                        setVecMenu(null);
+                      }}
+                    >
+                      Simplify vector
+                    </button>
+                  </div>,
+                  document.body,
+                )}
               <div className="vec-card">
                 {/* Point alignment is the panel's own align idiom — `.align > .g`
                     icon buttons behind a shared Tooltip, exactly what the
@@ -6626,15 +6746,169 @@ function Design({
       </Section>
 
       <Section id="stroke" title="Stroke" disabled={boolChild} disabledTitle="Controlled by the boolean group" actions={
-        <button
-          className="plus"
-          title="Add stroke"
-          disabled={boolChild}
-          onClick={() => addStroke()}
-        >
-          <Icon name="plus" size={14} />
-        </button>
+        <>
+          <button
+            className="plus"
+            aria-label="Stroke settings"
+            disabled={boolChild}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setStrokePop({ left: r.left - 220, top: r.bottom + 4 });
+            }}
+          >
+            <Icon name="dash" size={14} />
+          </button>
+          <button
+            className="plus"
+            title="Add stroke"
+            disabled={boolChild}
+            onClick={() => addStroke()}
+          >
+            <Icon name="plus" size={14} />
+          </button>
+        </>
       }>
+      {strokePop &&
+        createPortal(
+          <div ref={strokePopRef} className="type-menu stroke-pop" role="dialog" aria-label="Stroke settings">
+            <div className="stroke-pop-head">
+              <span className="stroke-pop-title">Stroke settings</span>
+              <button type="button" className="icon-btn" aria-label="Close" onClick={() => setStrokePop(null)}>
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+            <div className="seg stroke-pop-tabs">
+              {(["basic", "dynamic", "brush"] as const).map((tb) => (
+                <button key={tb} type="button" className={strokeTab === tb ? "on" : ""} onClick={() => setStrokeTab(tb)}>
+                  {tb === "basic" ? "Basic" : tb === "dynamic" ? "Dynamic" : "Brush"}
+                </button>
+              ))}
+            </div>
+            {strokeTab === "basic" && (
+              <div className="stroke-pop-body">
+                <label className="field">
+                  <span className="ins-meta-cap">Style</span>
+                  <select
+                    aria-label="Stroke style"
+                    value={dashStyleOf(n.strokeDashPattern)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      patch(
+                        v === "solid"
+                          ? { strokeDashPattern: [], strokeDash: 0, strokeGap: 0 }
+                          : v === "dashed"
+                            ? { strokeDashPattern: [8, 6], strokeDash: 8, strokeGap: 6 }
+                            : { strokeDashPattern: [2, 4], strokeDash: 2, strokeGap: 4 },
+                      );
+                    }}
+                  >
+                    <option value="solid">Solid</option>
+                    <option value="dashed">Dashed</option>
+                    <option value="dotted">Dotted</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="ins-meta-cap">Width profile</span>
+                  <select
+                    aria-label="Width profile"
+                    value={profileOf(n)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v !== "custom") patch({ strokeWidthProfile: PROFILE_PRESETS[v] });
+                    }}
+                  >
+                    <option value="uniform">Uniform</option>
+                    <option value="taper-out">Taper out</option>
+                    <option value="taper-in">Taper in</option>
+                    <option value="lens">Lens</option>
+                    {profileOf(n) === "custom" && <option value="custom">Custom</option>}
+                  </select>
+                </label>
+                <div className="stroke-pop-row">
+                  <span className="ins-meta-cap">Join</span>
+                  <div className="seg icons">
+                    {(["miter", "bevel", "round"] as StrokeJoin[]).map((j) => (
+                      <button
+                        key={j}
+                        type="button"
+                        className={n.strokeJoin === j ? "on" : ""}
+                        aria-label={`Join ${j}`}
+                        onClick={() => patch({ strokeJoin: j })}
+                      >
+                        <Icon name={`join-${j}`} size={14} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Field
+                  label="Miter angle"
+                  value={n.strokeMiterAngle ?? 0}
+                  onChange={(v) => patch({ strokeMiterAngle: Math.max(0, Math.min(180, v)) })}
+                />
+              </div>
+            )}
+            {strokeTab === "dynamic" && (
+              <div className="stroke-pop-body">
+                <Field
+                  label="Smoothing"
+                  value={n.strokeDynSmooth ?? 50}
+                  onChange={(v) => patch({ strokeDynSmooth: Math.max(0, Math.min(100, v)) })}
+                />
+                <Field label="Dash" value={n.strokeDash ?? 0} onChange={(v) => patch({ strokeDash: Math.max(0, v) })} />
+                <Field label="Gap" value={n.strokeGap ?? 0} onChange={(v) => patch({ strokeGap: Math.max(0, v) })} />
+                <div className="stroke-pop-row">
+                  <span className="ins-meta-cap">Dash cap</span>
+                  <div className="seg icons">
+                    {(["butt", "round", "square"] as const).map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        className={(n.strokeDashCap ?? "butt") === c ? "on" : ""}
+                        aria-label={`Dash cap ${c}`}
+                        onClick={() => patch({ strokeDashCap: c })}
+                      >
+                        <Icon name={c === "butt" ? "cap-none" : `cap-${c}`} size={14} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            {strokeTab === "brush" && (
+              <div className="stroke-pop-body">
+                <label className="field">
+                  <span className="ins-meta-cap">Start point</span>
+                  <select
+                    aria-label="Start point"
+                    value={n.strokeCapStart ?? n.strokeCap ?? "butt"}
+                    onChange={(e) => patch({ strokeCapStart: e.target.value as StrokeCap })}
+                  >
+                    {["butt", "round", "square", "arrow", "triangle", "reverse-triangle", "diamond"].map((c) => (
+                      <option key={c} value={c}>
+                        {c === "reverse-triangle" ? "Reverse triangle" : c[0].toUpperCase() + c.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="ins-meta-cap">End point</span>
+                  <select
+                    aria-label="End point"
+                    value={n.strokeCapEnd ?? n.strokeCap ?? "butt"}
+                    onChange={(e) => patch({ strokeCapEnd: e.target.value as StrokeCap })}
+                  >
+                    {["butt", "round", "square", "arrow", "triangle", "reverse-triangle", "diamond"].map((c) => (
+                      <option key={c} value={c}>
+                        {c === "reverse-triangle" ? "Reverse triangle" : c[0].toUpperCase() + c.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+          </div>,
+          document.body,
+        )}
       {!(n.strokeWidth > 0) && (
         <div className="insp-pad">
           <div className="empty-add">
@@ -8660,6 +8934,51 @@ function PadField({
       {bind}
     </div>
   );
+}
+
+/** The stroke Style row's answer for a dash pattern: Solid / Dashed / Dotted. */
+function dashStyleOf(pattern?: number[]): "solid" | "dashed" | "dotted" {
+  const p = pattern ?? [];
+  if (!p.length) return "solid";
+  return Math.max(...p) <= 4 ? "dotted" : "dashed";
+}
+
+/** Named width-profile envelopes, the dropdown's options (capture: a profile
+ *  picker beside the weight). `position` runs 0→1 along the centreline. */
+const PROFILE_PRESETS: Record<string, { position: number; widthMultiplier: number }[]> = {
+  uniform: [
+    { position: 0, widthMultiplier: 1 },
+    { position: 1, widthMultiplier: 1 },
+  ],
+  "taper-out": [
+    { position: 0, widthMultiplier: 0.25 },
+    { position: 1, widthMultiplier: 1 },
+  ],
+  "taper-in": [
+    { position: 0, widthMultiplier: 1 },
+    { position: 1, widthMultiplier: 0.25 },
+  ],
+  lens: [
+    { position: 0, widthMultiplier: 0.25 },
+    { position: 0.5, widthMultiplier: 1 },
+    { position: 1, widthMultiplier: 0.25 },
+  ],
+};
+
+/** Which preset (if any) the node's current envelope matches. */
+function profileOf(n: XNode): string {
+  const p = (n.strokeWidthProfile ?? []).filter((q) => q.position >= 0 && q.position <= 1);
+  if (p.length < 2) return "uniform";
+  const m = p.map((q) => q.widthMultiplier);
+  const spread = Math.max(...m) - Math.min(...m);
+  if (spread < 1e-3) return "uniform";
+  const rise = m[m.length - 1] - m[0];
+  const fall = m[0] - m[m.length - 1];
+  if (rise > spread * 0.8) return "taper-out";
+  if (fall > spread * 0.8) return "taper-in";
+  const mid = m[Math.floor(m.length / 2)];
+  if (Math.abs(rise) < spread * 0.25 && mid - Math.min(...m) > spread * 0.6) return "lens";
+  return "custom";
 }
 
 function Field({
