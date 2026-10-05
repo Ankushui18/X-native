@@ -6645,6 +6645,38 @@ html[data-theme="dark"] .zoom-menu {
 .ins-row-pad { display: flex; align-items: center; gap: var(--sp-1-5); padding: var(--sp-1) var(--sp-2); }
 .ins-between { display: flex; align-items: center; justify-content: space-between; }
 .ins-between-mb { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-1-5); }
+
+/* Multiplayer presence: the collaborator cluster in the panel head. A peer's
+   background is their identity hue, supplied at runtime. */
+.presence-cluster { display: flex; align-items: center; }
+.presence-cluster .avatar + .avatar { margin-left: calc(var(--sp-1) * -1); box-shadow: 0 0 0 var(--hairline) var(--panel); }
+.avatar.peer { background: var(--b-500); }
+.avatar.more { background: var(--input); color: var(--muted); }
+
+/* Layout-grid rows: the compact `10 10px #FF0000` summary that opens the
+   parameter popover, plus the popover's Grid | Columns | Rows segmented. */
+.ins-grid-row { display: flex; align-items: center; gap: var(--sp-1); }
+.ins-grid-summary {
+  flex: 1 auto; display: flex; align-items: center; gap: var(--sp-1-5);
+  height: var(--h-field); padding: 0 var(--sp-2);
+  border: var(--hairline) solid var(--line-2); border-radius: var(--r-control);
+  background: var(--input); color: var(--text); font: var(--t-num); text-align: left; cursor: pointer;
+}
+.ins-grid-summary:hover { background: var(--hover); }
+.ins-grid-chip {
+  width: var(--sp-2-5); height: var(--sp-2-5); border-radius: var(--r-1);
+  border: var(--hairline) solid var(--line-2); flex: 0 0 auto;
+}
+.grid-kind-seg {
+  display: flex; gap: var(--sp-0-5); padding: var(--sp-0-5);
+  background: var(--well); border-radius: var(--r-control); margin-bottom: var(--sp-2);
+}
+.grid-kind-seg button {
+  flex: 1; height: var(--h-xs); border: 0; border-radius: var(--r-control);
+  background: transparent; color: var(--muted); font: var(--t-control); cursor: pointer;
+}
+.grid-kind-seg button:hover { background: var(--hover); color: var(--text); }
+.grid-kind-seg button.on { background: var(--panel); color: var(--text); font-weight: var(--fw-semibold); }
 .ins-between-full { display: flex; align-items: center; justify-content: space-between; grid-column: 1 / -1; margin-top: var(--sp-1); }
 .ins-col-xs { display: grid; gap: var(--sp-0-5); }
 .ins-col-sm { display: grid; gap: var(--sp-1); }

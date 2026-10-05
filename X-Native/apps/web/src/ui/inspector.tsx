@@ -139,6 +139,7 @@ function isFractional(n: XNode) {
 }
 import { FillPicker, type FillValue, type PatternSourceOption } from "./FillPicker";
 import { FontPicker, FontStyleMenu, styleName, useAnchoredPop, useClickOutside } from "./FontPicker";
+import { usePresence } from "./presence";
 import type { EyedropSource } from "./color";
 import { applyEyedropSource, promptCreateEyedropToken, type EyedropTargetProperty } from "./eyedropper";
 import { containsId } from "../engine/pattern";
@@ -222,11 +223,30 @@ export function RightPanel({
   const wp = id ? worldPos(root, id) : null;
   const n = wp?.node;
   const inspect = snap.rightTab === "inspect";
+  // Multiplayer: the collaborator cluster rides the panel head next to "You".
+  const { peers: presence } = usePresence();
   return (
     <aside className="panel right" aria-label="Inspector">
       <div className="right-head">
-        <div className="avatar" title="You">
-          X
+        <div className="presence-cluster" aria-label="Collaborators">
+          <div className="avatar" title="You">
+            X
+          </div>
+          {presence.slice(0, 3).map((p) => (
+            <div
+              key={p.id}
+              className="avatar peer"
+              title={p.name}
+              style={{ background: `hsl(${Math.round(p.hue)}, 72%, 52%)` }}
+            >
+              {p.name.slice(0, 1)}
+            </div>
+          ))}
+          {presence.length > 3 && (
+            <div className="avatar more" title={presence.slice(3).map((p) => p.name).join(", ")}>
+              +{presence.length - 3}
+            </div>
+          )}
         </div>
         <span className="grow" />
         <Tooltip label={inspect ? "Exit Dev Mode" : "Dev Mode"} shortcut="⇧D">
@@ -1003,6 +1023,13 @@ function Prototype({
                 <option value="keyPress">Key / Gamepad press</option>
                 <option value="onDrag">On drag</option>
               </select>
+              <button
+                className="mini"
+                title="Preview this interaction"
+                onClick={() => engine.dispatch({ type: "presentGo", id: ix.destination || n.id })}
+              >
+                ▷ Play
+              </button>
               <button
                 className="mini minus"
                 title="Remove interaction"
@@ -1863,6 +1890,305 @@ function generateLayerJson(n: XNode): string {
   return JSON.stringify(payload, null, 2);
 }
 
+/**
+ * Layout grids: Figma's shape — the header offers the three kinds plus `+`,
+ * and each grid is one compact summary row (`10 10px #FF0000`) whose click
+ * opens the parameter popover (Grid | Columns | Rows segmented at the top).
+ * Every field writes the same LayoutGrid model the renderer already reads.
+ */
+function LayoutGrids({ n, engine }: { n: XNode; engine: Engine }) {
+  const [pop, setPop] = useState<{ gi: number; rect: DOMRect } | null>(null);
+  const grids = n.layoutGrids ?? [];
+
+  const addGrid = (pattern: GridPattern) => {
+    const newGrid: LayoutGrid = {
+      id: `grid-${Date.now()}`,
+      pattern,
+      ...(pattern === "grid"
+        ? { sectionSize: 10, offset: 0 }
+        : {
+            count: pattern === "columns" ? 12 : 8,
+            gutter: 20,
+            margin: 20,
+            alignment: "stretch" as GridAlignment,
+          }),
+      color: "rgba(255, 0, 0, 0.1)",
+      visible: true,
+    };
+    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: [...grids, newGrid] } });
+  };
+
+  const setGrid = (gi: number, patch: Partial<LayoutGrid>) => {
+    const next = [...grids];
+    next[gi] = { ...grids[gi], ...patch };
+    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+  };
+
+  // The swatch edits hue; grid paint keeps its own translucency.
+  const alphaOf = (c: string | undefined) => {
+    const m = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(c ?? "");
+    return m ? parseFloat(m[1]) : 0.1;
+  };
+  const hexOf = (c: string | undefined) => {
+    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
+    // Unparseable, so the caller sees red rather than a silently
+    // "close enough" colour.
+    if (!m) return DOC_ALERT;
+    const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
+    return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
+  };
+
+  const summary = (g: LayoutGrid) => {
+    const hex = hexOf(g.color).toUpperCase();
+    if (g.pattern === "grid") {
+      const sz = g.sectionSize ?? 10;
+      return `${sz} ${sz}px ${hex}`;
+    }
+    return `${g.count ?? (g.pattern === "columns" ? 12 : 8)} ${g.margin ?? 20} ${g.gutter ?? 20} ${hex}`;
+  };
+
+  return (
+    <Section
+      id="layoutGrid"
+      title="Layout grid"
+      actions={
+        <div className="ins-row-tight">
+          <button className="mini" title="Add square grid" onClick={() => addGrid("grid")}>
+            Grid
+          </button>
+          <button className="mini" title="Add columns" onClick={() => addGrid("columns")}>
+            Columns
+          </button>
+          <button className="mini" title="Add rows" onClick={() => addGrid("rows")}>
+            Rows
+          </button>
+          <button className="plus" title="Add layout grid" onClick={() => addGrid("columns")}>
+            <Icon name="plus" size={14} />
+          </button>
+        </div>
+      }
+    >
+      {grids.length === 0 && <p className="muted insp-pad">No layout grids.</p>}
+      {grids.length > 0 && (
+        <div className="insp-pad ins-col-md">
+          {grids.map((g, gi) => (
+            <div key={g.id} className="ins-grid-row">
+              <button
+                className="ins-grid-summary"
+                title="Edit layout grid"
+                onClick={(e) => setPop({ gi, rect: e.currentTarget.getBoundingClientRect() })}
+              >
+                <span className="ins-grid-chip" style={{ background: hexOf(g.color) }} />
+                {summary(g)}
+              </button>
+              <button
+                className="icon-btn"
+                title={g.visible !== false ? "Hide layout grid" : "Show layout grid"}
+                onClick={() => setGrid(gi, { visible: g.visible === false })}
+              >
+                <Icon name={g.visible !== false ? "eye" : "eye-off"} size={rowIconSize()} />
+              </button>
+              <button
+                className="icon-btn"
+                title="Delete layout grid"
+                onClick={() => {
+                  const next = grids.filter((_, j) => j !== gi);
+                  engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
+                  if (pop?.gi === gi) setPop(null);
+                }}
+              >
+                <Icon name="minus" size={rowIconSize()} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {pop && grids[pop.gi] && (
+        <XPopover
+          anchor={pop.rect}
+          title="Layout grid"
+          ariaLabel="Layout grid settings"
+          onClose={() => setPop(null)}
+        >
+          {(() => {
+            const g = grids[pop.gi];
+            const set = (patch: Partial<LayoutGrid>) => setGrid(pop.gi, patch);
+            return (
+              <>
+                <div className="grid-kind-seg" role="tablist" aria-label="Grid kind">
+                  {(["grid", "columns", "rows"] as GridPattern[]).map((k) => (
+                    <button
+                      key={k}
+                      role="tab"
+                      aria-selected={g.pattern === k}
+                      className={g.pattern === k ? "on" : ""}
+                      onClick={() =>
+                        set(
+                          k === "grid"
+                            ? { pattern: k, sectionSize: g.sectionSize ?? 10 }
+                            : {
+                                pattern: k,
+                                count: g.count ?? (k === "columns" ? 12 : 8),
+                                gutter: g.gutter ?? 20,
+                                margin: g.margin ?? 20,
+                                alignment: g.alignment ?? "stretch",
+                              },
+                        )
+                      }
+                    >
+                      {k === "grid" ? "Grid" : k === "columns" ? "Columns" : "Rows"}
+                    </button>
+                  ))}
+                </div>
+                {g.pattern === "grid" ? (
+                  <>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">Grid size</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={g.sectionSize ?? 10}
+                          className="ins-input"
+                          onChange={(e) => set({ sectionSize: Math.max(1, parseInt(e.target.value, 10) || 10) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Offset</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.offset ?? 0}
+                          className="ins-input"
+                          onChange={(e) => set({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="ins-between">
+                      <span className="ins-meta">Square layout grid color</span>
+                      <input
+                        type="color"
+                        aria-label="Grid color"
+                        value={hexOf(g.color)}
+                        className="ins-range-sm"
+                        onChange={(e) => {
+                          const r = parseInt(e.target.value.slice(1, 3), 16);
+                          const gr = parseInt(e.target.value.slice(3, 5), 16);
+                          const bl = parseInt(e.target.value.slice(5, 7), 16);
+                          set({ color: `rgba(${r}, ${gr}, ${bl}, ${alphaOf(g.color)})` });
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">Count</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={g.count ?? (g.pattern === "columns" ? 12 : 8)}
+                          className="ins-input"
+                          onChange={(e) => set({ count: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Type</span>
+                        <select
+                          aria-label="Grid alignment"
+                          value={g.alignment ?? "stretch"}
+                          className="ins-select-inline"
+                          onChange={(e) => {
+                            const a = e.target.value as GridAlignment;
+                            // Stretch fills the frame, so a fixed width no
+                            // longer applies; a fixed type without a width
+                            // falls back to stretch in paint.
+                            set(a === "stretch" ? { alignment: a, cell: undefined } : { alignment: a });
+                          }}
+                        >
+                          <option value="stretch">Stretch</option>
+                          <option value="min">{g.pattern === "columns" ? "Left" : "Top"}</option>
+                          <option value="center">Center</option>
+                          <option value="max">{g.pattern === "columns" ? "Right" : "Bottom"}</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">{g.pattern === "columns" ? "Width" : "Height"}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          disabled={(g.alignment ?? "stretch") === "stretch"}
+                          placeholder="Auto"
+                          value={g.cell ?? ""}
+                          className="ins-input"
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            set({ cell: Number.isFinite(v) ? Math.max(1, v) : undefined });
+                          }}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Margin</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.margin ?? 20}
+                          className="ins-input"
+                          onChange={(e) => set({ margin: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid2">
+                      <div className="field">
+                        <span className="ins-cap">Gutter</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.gutter ?? 20}
+                          className="ins-input"
+                          onChange={(e) => set({ gutter: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                      <div className="field">
+                        <span className="ins-cap">Offset</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={g.offset ?? 0}
+                          className="ins-input"
+                          onChange={(e) => set({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="ins-between">
+                      <span className="ins-meta">Color</span>
+                      <input
+                        type="color"
+                        aria-label="Grid color"
+                        value={hexOf(g.color)}
+                        className="ins-range-sm"
+                        onChange={(e) => {
+                          const r = parseInt(e.target.value.slice(1, 3), 16);
+                          const gr = parseInt(e.target.value.slice(3, 5), 16);
+                          const bl = parseInt(e.target.value.slice(5, 7), 16);
+                          set({ color: `rgba(${r}, ${gr}, ${bl}, ${alphaOf(g.color)})` });
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+              </>
+            );
+          })()}
+        </XPopover>
+      )}
+    </Section>
+  );
+}
+
 function BoxModelDiagram({ n }: { n: XNode }) {
   const [pl, pr, pt, pb] = n.layout?.padding ?? [0, 0, 0, 0];
   const borderW = n.strokeVisible && n.strokeWidth > 0 ? n.strokeWidth : 0;
@@ -2534,7 +2860,7 @@ function devProperties(n: XNode, snap: Snapshot, unit: DevUnit): DevProp[] {
         e.color,
       );
     } else {
-      L(e.kind === "layer-blur" ? "Layer blur" : "Blur", `${e.blur}`, "Style");
+      L(e.kind === "layer-blur" ? "Layer blur" : e.kind === "shader" ? "Shader" : "Blur", `${e.blur}`, "Style");
     }
   }
   if (n.cornerRadii?.some((r) => r > 0)) {
@@ -6017,266 +6343,7 @@ function Design({
       {n.kind === "frame" && (
         <>
           <div className="hr" />
-          <Section
-            id="layoutGrid"
-            title="Layout grid"
-            actions={
-              <button
-                className="plus"
-                title="Add layout grid"
-                onClick={() => {
-                  const current = n.layoutGrids ?? [];
-                  const newGrid: LayoutGrid = {
-                    id: `grid-${Date.now()}`,
-                    pattern: "columns",
-                    count: 12,
-                    gutter: 20,
-                    margin: 20,
-                    alignment: "stretch",
-                    color: "rgba(255, 0, 0, 0.1)",
-                    visible: true,
-                  };
-                  engine.dispatch({
-                    type: "patch",
-                    id: n.id,
-                    patch: { layoutGrids: [...current, newGrid] },
-                  });
-                }}
-              >
-                <Icon name="plus" size={14} />
-              </button>
-            }
-          >
-            {(n.layoutGrids ?? []).length > 0 && (
-              <div  className="insp-pad ins-col-md">
-                {(n.layoutGrids ?? []).map((g, gi) => {
-                  const setGrid = (patch: Partial<LayoutGrid>) => {
-                    const next = [...n.layoutGrids!];
-                    next[gi] = { ...g, ...patch };
-                    engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                  };
-                  // The swatch edits hue; grid paint keeps its own translucency.
-                  const alphaOf = (c: string | undefined) => {
-                    const m = /rgba?\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/.exec(c ?? "");
-                    return m ? parseFloat(m[1]) : 0.1;
-                  };
-                  const hexOf = (c: string | undefined) => {
-                    const m = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c ?? "");
-                    // Unparseable, so the caller sees red rather than a silently
-                    // "close enough" colour.
-                    if (!m) return DOC_ALERT;
-                    const hx = (v: string) => Math.max(0, Math.min(255, parseInt(v, 10))).toString(16).padStart(2, "0");
-                    return `#${hx(m[1])}${hx(m[2])}${hx(m[3])}`;
-                  };
-                  return (
-                  <div
-                    key={g.id}
-                    className="ins-card-subtle"
-                  >
-                    <div className="ins-between">
-                      <select
-                        className="ins-select-strong"
-                        aria-label="Grid pattern"
-                        value={g.pattern}
-                        onChange={(e) => {
-                          const next = [...n.layoutGrids!];
-                          next[gi] = { ...g, pattern: e.target.value as GridPattern };
-                          engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                        }}
-                      >
-                        <option value="columns">Columns</option>
-                        <option value="rows">Rows</option>
-                        <option value="grid">Grid</option>
-                      </select>
-                      <div className="ins-row-tight">
-                        <button
-                          className="icon-btn"
-                          title={g.visible !== false ? "Hide layout grid" : "Show layout grid"}
-                          onClick={() => {
-                            const next = [...n.layoutGrids!];
-                            next[gi] = { ...g, visible: g.visible === false ? true : false };
-                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                          }}
-                        >
-                          <Icon name={g.visible !== false ? "eye" : "eye-off"} size={rowIconSize()} />
-                        </button>
-                        <button
-                          className="icon-btn"
-                          title="Delete layout grid"
-                          onClick={() => {
-                            const next = n.layoutGrids!.filter((_, j) => j !== gi);
-                            engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                          }}
-                        >
-                          <Icon name="minus" size={rowIconSize()} />
-                        </button>
-                      </div>
-                    </div>
-                    {g.pattern === "grid" ? (
-                      <div className="ins-grid-3">
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Size</span>
-                          <input
-                            type="number"
-                            min={1}
-                            value={g.sectionSize ?? 10}
-                            className="ins-input"
-                            onChange={(e) => {
-                              const sz = Math.max(1, parseInt(e.target.value, 10) || 10);
-                              setGrid({ sectionSize: sz });
-                            }}
-                          />
-                        </div>
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Offset</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.offset ?? 0}
-                            className="ins-input"
-                            onChange={(e) => {
-                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
-                            }}
-                          />
-                        </div>
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Color</span>
-                          <input
-                            type="color"
-                            aria-label="Grid color"
-                            value={hexOf(g.color)}
-                            className="ins-range"
-                            onChange={(e) => {
-                              const r = parseInt(e.target.value.slice(1, 3), 16);
-                              const b = parseInt(e.target.value.slice(3, 5), 16);
-                              const bl = parseInt(e.target.value.slice(5, 7), 16);
-                              setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
-                            }}
-                          />
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                      <div className="ins-grid-3">
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Count</span>
-                          <input
-                            type="number"
-                            min={1}
-                            value={g.count ?? (g.pattern === "columns" ? 12 : 8)}
-                            className="ins-input"
-                            onChange={(e) => {
-                              const cnt = Math.max(1, parseInt(e.target.value, 10) || 1);
-                              const next = [...n.layoutGrids!];
-                              next[gi] = { ...g, count: cnt };
-                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                            }}
-                          />
-                        </div>
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Gutter</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.gutter ?? 20}
-                            className="ins-input"
-                            onChange={(e) => {
-                              const gut = Math.max(0, parseInt(e.target.value, 10) || 0);
-                              const next = [...n.layoutGrids!];
-                              next[gi] = { ...g, gutter: gut };
-                              engine.dispatch({ type: "patch", id: n.id, patch: { layoutGrids: next } });
-                            }}
-                          />
-                        </div>
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Margin</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.margin ?? 20}
-                            className="ins-input"
-                            onChange={(e) => {
-                              const mg = Math.max(0, parseInt(e.target.value, 10) || 0);
-                              setGrid({ margin: mg });
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <div className="ins-grid-3">
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Type</span>
-                          <select
-                            aria-label="Grid alignment"
-                            value={g.alignment ?? "stretch"}
-                            className="ins-select-inline"
-                            onChange={(e) => {
-                              const a = e.target.value as GridAlignment;
-                              // Stretch fills the frame, so a fixed width no
-                              // longer applies; a fixed type without a width
-                              // falls back to stretch in paint.
-                              setGrid(a === "stretch"
-                                ? { alignment: a, cell: undefined }
-                                : { alignment: a });
-                            }}
-                          >
-                            <option value="stretch">Stretch</option>
-                            <option value="min">{g.pattern === "columns" ? "Left" : "Top"}</option>
-                            <option value="center">Center</option>
-                            <option value="max">{g.pattern === "columns" ? "Right" : "Bottom"}</option>
-                          </select>
-                        </div>
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">{g.pattern === "columns" ? "Width" : "Height"}</span>
-                          <input
-                            type="number"
-                            min={1}
-                            disabled={(g.alignment ?? "stretch") === "stretch"}
-                            placeholder="Auto"
-                            value={g.cell ?? ""}
-                            className="ins-input"
-                            onChange={(e) => {
-                              const v = parseInt(e.target.value, 10);
-                              const fixed = Number.isFinite(v) ? Math.max(1, v) : undefined;
-                              setGrid({ cell: fixed });
-                            }}
-                          />
-                        </div>
-                        <div className="ins-col-xs">
-                          <span className="ins-cap">Offset</span>
-                          <input
-                            type="number"
-                            min={0}
-                            value={g.offset ?? 0}
-                            className="ins-input"
-                            onChange={(e) => {
-                              setGrid({ offset: Math.max(0, parseInt(e.target.value, 10) || 0) });
-                            }}
-                          />
-                        </div>
-                      </div>
-                      <div className="ins-between">
-                        <span className="ins-meta">Color</span>
-                        <input
-                          type="color"
-                          aria-label="Grid color"
-                          value={hexOf(g.color)}
-                          className="ins-range-sm"
-                          onChange={(e) => {
-                            const r = parseInt(e.target.value.slice(1, 3), 16);
-                            const b = parseInt(e.target.value.slice(3, 5), 16);
-                            const bl = parseInt(e.target.value.slice(5, 7), 16);
-                            setGrid({ color: `rgba(${r}, ${b}, ${bl}, ${alphaOf(g.color)})` });
-                          }}
-                        />
-                      </div>
-                      </>
-                    )}
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </Section>
+          <LayoutGrids n={n} engine={engine} />
         </>
       )}
 
@@ -7763,6 +7830,26 @@ function EffectPopover({
           <Field label="Scale" aria="Texture scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
         </div>
       )}
+      {fx.kind === "shader" && (
+        <>
+          <ColorRow
+            title="Tint"
+            value={fx.color}
+            opacity={Math.round(parseHex(fx.color).a * 100)}
+            visible
+            recents={DOC_RECENT_BRAND}
+            onChange={(color) => onChange({ color: withAlpha(color, parseHex(fx.color).a) })}
+            onOpacity={(v) => onChange({ color: withAlpha(fx.color, v / 100) })}
+          />
+          <div className="grid2">
+            <Field label="Intensity" aria="Shader intensity" value={fx.blur} onChange={(v) => onChange({ blur: v })} />
+            <Field label="Scale" aria="Shader scale" value={fx.spread} onChange={(v) => onChange({ spread: v })} />
+          </div>
+          <div className="grid2">
+            <Field label="Angle" aria="Shader angle" value={fx.x} onChange={(x) => onChange({ x })} />
+          </div>
+        </>
+      )}
       {effectCanBlend(fx.kind) && (
         <>
           <button className="blend-row" onClick={() => setBlendOpen((v) => !v)}>
@@ -7821,6 +7908,7 @@ const EFFECT_LABEL: Record<string, string> = {
   noise: "Noise",
   glass: "Glass",
   texture: "Texture",
+  shader: "Shader",
 };
 
 function Effects({
@@ -7848,6 +7936,7 @@ function Effects({
     { id: "noise", label: "Noise" },
     { id: "glass", label: "Glass" },
     { id: "texture", label: "Texture" },
+    { id: "shader", label: "Shader" },
   ];
   const effects = n.effects ?? [];
   // One layer takes eight drop shadows, eight inner shadows, one blur of each

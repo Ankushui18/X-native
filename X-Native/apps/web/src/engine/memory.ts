@@ -6192,7 +6192,9 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
           ? "#00000020"
           : kind === "noise"
             ? "#ffffff"
-            : "#000000",
+            : kind === "shader"
+              ? "#5b3df533"
+              : "#000000",
     x: 0,
     y: shadow ? 4 : 0,
     blur:
@@ -6205,7 +6207,9 @@ export function defaultEffect(kind: Effect["kind"]): Effect {
             : shadow
               ? 4
               : 4,
-    spread: kind === "texture" ? 4 : 0,
+    spread: kind === "texture" ? 4 : kind === "shader" ? 12 : 0,
+    // Shader bands lean 30° off vertical by default; every other kind keeps x at 0.
+    ...(kind === "shader" ? { x: 30 } : {}),
     visible: true,
     blend: "Normal",
     // Checkbox starts unchecked, and only a drop shadow has one.

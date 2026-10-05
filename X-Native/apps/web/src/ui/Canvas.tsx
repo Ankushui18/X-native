@@ -1,5 +1,6 @@
 import { allowTopologyEdit, topologyEditBlocked, NETWORK_EDIT_LIMIT } from "./vectorCapabilities";
 import { sc } from "./sc";
+import { presenceMove, presenceSelect, usePresence } from "./presence";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Effect, Engine, ImageFit, Interaction, ListStyle, NodeKind, PathPoint, ProtoAnim, ProtoTrigger, RulerGuide, Snapshot, StrokeCap, Tool, VectorNetwork, VariableWidthPoint, XNode } from "../engine/types";
 import { checkCondition, triggerInteractions } from "../engine/protoEval";
@@ -257,6 +258,8 @@ const GUIDE_BADGE_H = 14;
 const GUIDE_BADGE_PAD = 8;
 const GUIDE_PILL_H = 16;
 const GUIDE_PILL_PAD = 10;
+const HATCH_PITCH = 6;                 // auto-layout padding hatch, px at 100%
+const HATCH_PITCH_FLOOR = 4;           // legibility floor when zoomed out
 const LABEL_FONT = "600 12px Inter, system-ui";   // canvas label, constant at any zoom
 const MONO_CHIP_FONT = "bold 10px monospace";     // eyedropper readout chip
 const DEV_PIN_FONT = "bold 10px Inter, system-ui, sans-serif";
@@ -1890,6 +1893,14 @@ export function Canvas({
     walk(snap.pages[snap.page].root);
   }, [snap, engine]);
 
+  // Multiplayer presence: remote cursors ride the same screen-space chrome
+  // pass as the badges; each peer carries its own identity hue. The selection
+  // broadcast is its own effect so a click announces before the pointer moves.
+  const { peers: presencePeers } = usePresence();
+  const lastPresenceT = useRef(0);
+  useEffect(() => {
+    presenceSelect(snap.selection);
+  }, [snap.selection]);
   useEffect(() => {
     const c = ref.current;
     const box = wrap.current;
@@ -2132,6 +2143,12 @@ export function Canvas({
             if (op !== "source-over") ctx.globalCompositeOperation = op;
             paintNoise(ctx, sx, sy, sw, sh, e.blur, e.spread, e.color);
             ctx.restore();
+          } else if (e.kind === "shader") {
+            ctx.save();
+            const op = canvasBlend(e.blend);
+            if (op !== "source-over") ctx.globalCompositeOperation = op;
+            paintShader(ctx, sx, sy, sw, sh, e.blur, e.spread, e.x, e.color);
+            ctx.restore();
           } else {
             paintTexture(ctx, sx, sy, sw, sh, e.blur || 16, e.spread || 4);
           }
@@ -2200,7 +2217,9 @@ export function Canvas({
       // paint path below, op for op.
       const drops = fxList.filter((e) => e.kind === "drop-shadow" && e.visible && parseHex(e.color).a > 0);
       const topGroup = fxList.filter(
-        (e) => e.visible && (e.kind === "layer-blur" || e.kind === "noise" || e.kind === "texture"),
+        (e) =>
+          e.visible &&
+          (e.kind === "layer-blur" || e.kind === "noise" || e.kind === "texture" || e.kind === "shader"),
       );
       const blurAt = topGroup.findIndex((e) => e.kind === "layer-blur");
       const layerBlur = blurAt < 0 ? undefined : topGroup[blurAt];
@@ -2230,6 +2249,7 @@ export function Canvas({
             e.kind !== "layer-blur" &&
             e.kind !== "noise" &&
             e.kind !== "texture" &&
+            e.kind !== "shader" &&
             e.kind !== "background-blur",
         );
         const outer = ctx;
@@ -2965,7 +2985,9 @@ export function Canvas({
           strokeMaskOutline(run.mask, run.kids);
         }
       }
-      paintTopFx(fxList.filter((e) => (e.kind === "noise" || e.kind === "texture") && e.visible));
+      paintTopFx(
+        fxList.filter((e) => (e.kind === "noise" || e.kind === "texture" || e.kind === "shader") && e.visible),
+      );
       if (!maskTile && snap.showMaskOutlines && n.isMask && n.visible) {
         ctx.save();
         ctx.strokeStyle = MASK;
@@ -4505,7 +4527,11 @@ export function Canvas({
       snap.selection.length === 1 &&
       !drag.current;
 
-    if (isDevMode && snap.selection.length === 1) {
+    // Auto-layout padding, Figma-style: a selected flow frame hatches its
+    // padding band so the reserved space reads as reserved. The hatch is
+    // selection chrome — Design as well as Dev Mode — while the dashed content
+    // box that measures it stays a Dev Mode affordance.
+    if (snap.selection.length === 1) {
       const selWp = worldPos(root, snap.selection[0]);
       if (selWp && selWp.node.layout?.padding) {
         const [pl, pr, pt, pb] = selWp.node.layout.padding;
@@ -4514,17 +4540,44 @@ export function Canvas({
           const sy = snap.panY + selWp.y * z;
           const sw = selWp.node.w * z;
           const sh = selWp.node.h * z;
-          ctx.save();
-          ctx.fillStyle = withAlpha(SEL, 0.08);
-          ctx.strokeStyle = withAlpha(SEL, 0.4);
-          ctx.lineWidth = HAIRLINE;
-          ctx.setLineDash([2, 2]);
-          if (pt > 0) ctx.fillRect(sx, sy, sw, pt * z);
-          if (pb > 0) ctx.fillRect(sx, sy + sh - pb * z, sw, pb * z);
-          if (pl > 0) ctx.fillRect(sx, sy + pt * z, pl * z, Math.max(0, selWp.node.h - pt - pb) * z);
-          if (pr > 0) ctx.fillRect(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, selWp.node.h - pt - pb) * z);
-          ctx.strokeRect(sx + pl * z, sy + pt * z, Math.max(0, selWp.node.w - pl - pr) * z, Math.max(0, selWp.node.h - pt - pb) * z);
-          ctx.restore();
+          const band = (bx: number, by: number, bw: number, bh: number) => {
+            if (bw <= 0 || bh <= 0) return;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(bx, by, bw, bh);
+            ctx.clip();
+            ctx.fillStyle = withAlpha(SEL, 0.06);
+            ctx.fillRect(bx, by, bw, bh);
+            // 45° hatch; the pitch follows zoom down to a legible floor.
+            const pitch = Math.max(HATCH_PITCH_FLOOR, HATCH_PITCH * z);
+            ctx.strokeStyle = withAlpha(SEL, 0.3);
+            ctx.lineWidth = HAIRLINE;
+            ctx.beginPath();
+            for (let d = -bh; d < bw + bh; d += pitch) {
+              ctx.moveTo(bx + d, by + bh);
+              ctx.lineTo(bx + d + bh, by);
+            }
+            ctx.stroke();
+            ctx.restore();
+          };
+          if (pt > 0) band(sx, sy, sw, pt * z);
+          if (pb > 0) band(sx, sy + sh - pb * z, sw, pb * z);
+          if (pl > 0) band(sx, sy + pt * z, pl * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          if (pr > 0)
+            band(sx + sw - pr * z, sy + pt * z, pr * z, Math.max(0, selWp.node.h - pt - pb) * z);
+          if (isDevMode) {
+            ctx.save();
+            ctx.strokeStyle = withAlpha(SEL, 0.4);
+            ctx.lineWidth = HAIRLINE;
+            ctx.setLineDash([2, 2]);
+            ctx.strokeRect(
+              sx + pl * z,
+              sy + pt * z,
+              Math.max(0, selWp.node.w - pl - pr) * z,
+              Math.max(0, selWp.node.h - pt - pb) * z,
+            );
+            ctx.restore();
+          }
         }
       }
     }
@@ -4807,6 +4860,54 @@ export function Canvas({
         ctx.restore();
       }
     }
+    // Multiplayer: remote cursors and selections. Each peer's identity hue
+    // paints its arrow, name pill and selection outline together — the colour
+    // is who they are, not chrome.
+    for (const p of presencePeers) {
+      const hue = peerHue(p.hue);
+      for (const id of p.sel) {
+        const rp = worldPos(root, id);
+        if (!rp) continue;
+        ctx.save();
+        ctx.globalAlpha = 0.65;
+        ctx.strokeStyle = hue;
+        ctx.lineWidth = HAIRLINE;
+        ctx.strokeRect(snap.panX + rp.x * z, snap.panY + rp.y * z, rp.node.w * z, rp.node.h * z);
+        ctx.restore();
+      }
+      const cx = snap.panX + p.x * z;
+      const cy = snap.panY + p.y * z;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + 3, cy + 17);
+      ctx.lineTo(cx + 7.5, cy + 12.5);
+      ctx.lineTo(cx + 13, cy + 11.5);
+      ctx.closePath();
+      ctx.fillStyle = hue;
+      ctx.strokeStyle = RASTER_NOISE_INK;
+      ctx.lineWidth = HAIRLINE;
+      ctx.fill();
+      ctx.stroke();
+      ctx.font = CHROME_FONT;
+      const name = p.name;
+      const tw = ctx.measureText(name).width + CHROME_CHIP_PAD;
+      const px = cx + 12;
+      const py = cy + 16;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(px, py, tw, CHROME_CHIP_H, CHROME_RADIUS);
+        ctx.fill();
+      } else ctx.rect(px, py, tw, CHROME_CHIP_H);
+      ctx.fillStyle = hue;
+      ctx.fill();
+      ctx.fillStyle = RASTER_NOISE_INK;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(name, px + CHROME_CHIP_PAD / 2, py + CHROME_CHIP_H / 2);
+      ctx.restore();
+    }
+
     // Place-image badge at the cursor: how many are left to place.
     if (placing && cursorPos) {
       const r = wrap.current?.getBoundingClientRect();
@@ -4831,7 +4932,7 @@ export function Canvas({
         ctx.restore();
       }
     }
-  }, [snap, band, edit, engine, theme, chromePref, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, addPt, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel]);
+  }, [snap, band, edit, engine, theme, chromePref, draft, vecEdit, vecSubTool, hoverId, panelHover, ghost, guides, gapBadges, smartGaps, dropHint, altMeasure, protoDrag, selectedConn, animFrame, closeHint, rotTarget, addPt, cursorPos, cropId, placing, fontRevision, cutLine, lassoPath, widthSel, widthHover, eyedropModel, presencePeers]);
 
   const toWorld = (cx: number, cy: number) => {
     const r = wrap.current!.getBoundingClientRect();
@@ -6195,6 +6296,14 @@ export function Canvas({
   const [zoomOutCursor, setZoomOutCursor] = useState(false);
   const onMove = (e: React.MouseEvent) => {
     pointerClient.current = { x: e.clientX, y: e.clientY };
+    // Multiplayer presence: broadcast our pointer in world coords at 25Hz —
+    // the throttle guards the rect read in toWorld as much as the channel.
+    const nowMs = performance.now();
+    if (nowMs - lastPresenceT.current >= 40) {
+      lastPresenceT.current = nowMs;
+      const pw = toWorld(e.clientX, e.clientY);
+      presenceMove(pw.x, pw.y, snap.selection);
+    }
     if (eyedropArmed() || snap.tool === "eraser" || placing) {
       cursorPosRef.current = { x: e.clientX, y: e.clientY };
       setCursorPos(cursorPosRef.current);
@@ -10050,6 +10159,54 @@ function paintTexture(
     }
   }
   ctx.restore();
+}
+
+/**
+ * Shader effect: a deterministic iridescent band wash — same input, same
+ * pixels, so the canvas and any raster export agree. `intensity` (0–100)
+ * scales the wash, `scale` the band pitch, `angle` the band direction.
+ */
+function paintShader(
+  ctx: CanvasRenderingContext2D,
+  sx: number,
+  sy: number,
+  sw: number,
+  sh: number,
+  intensity: number,
+  scale: number,
+  angle: number,
+  color: string,
+) {
+  if (sw < 1 || sh < 1) return;
+  const { r, g, b, a } = parseHex(color);
+  if (a <= 0) return;
+  const strength = Math.max(0, Math.min(1, intensity / 100));
+  const step = Math.max(6, Math.round(scale) * 2 || 12);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sx, sy, sw, sh);
+  ctx.clip();
+  ctx.translate(sx + sw / 2, sy + sh / 2);
+  ctx.rotate((Math.max(-89, Math.min(89, angle || 0)) * Math.PI) / 180);
+  const diag = Math.ceil(Math.hypot(sw, sh));
+  const sheen = parseHex(RASTER_NOISE_INK);
+  for (let x = -diag, i = 0; x < diag; x += step, i++) {
+    // Band profile: tinted shoulders around a narrow sheen stripe.
+    const alpha = strength * a * (0.16 + 0.22 * Math.abs(Math.sin((i + 1) * 1.7)));
+    ctx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
+    ctx.fillRect(x, -diag, step, diag * 2);
+    if (i % 3 === 0) {
+      ctx.fillStyle = `rgba(${sheen.r},${sheen.g},${sheen.b},${(0.1 * strength).toFixed(3)})`;
+      ctx.fillRect(x, -diag, Math.max(1, step / 3), diag * 2);
+    }
+  }
+  ctx.restore();
+}
+
+/** A collaborator's identity colour: their cursor, name pill and avatar all
+ *  read from this one voice — generated from the session hue, never chrome. */
+function peerHue(hue: number): string {
+  return `hsl(${Math.round(hue)}, 72%, 52%)`;
 }
 
 function unrot(px: number, py: number, cx: number, cy: number, deg: number) {

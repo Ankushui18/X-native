@@ -119,7 +119,16 @@ const UI = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
  *  The invariant those rows now hold is enforced from the other side by
  *  tokens.test.mjs: a colour literal in src/ui must be *named* (a `const`, an
  *  object property or a labelled table row) or it fails, and no rule in
- *  styles.css below the token layers may paint a colour outright. */
+ *  styles.css below the token layers may paint a colour outright.
+ *  RAISED 2026-10-05 for the layout-grid popover + presence cluster, and the
+ *  same commit lowered its select count: the grid block's inline parameter
+ *  cards became one compact summary row (`10 10px #FF0000`) opening a popover
+ *  with a Grid | Columns | Rows segmented — the pattern select became three
+ *  buttons, while the rows, the ▷ Play preview and the collaborator avatars
+ *  earned the titles and buttons back:
+ *    inspector.tsx 13/22/248/214/51 → 15/22/257/220/50
+ *  The two new inline objects are runtime-coloured document data (the grid
+ *  swatch, a peer's identity hue) — the sanctioned kind from above. */
 
 const CEILING = {
   //                 inline colour title button select
@@ -182,7 +191,7 @@ const CEILING = {
   // and the stroke-settings popover (Basic/Dynamic/Brush) — header triggers,
   // menu rows, tab buttons and the Style/profile/point selects all earn the
   // row; the Flatten chip rides sc(), no title and no inline value added.
-  "inspector.tsx": [13, 22, 248, 214, 51],
+  "inspector.tsx": [15, 22, 257, 220, 50],
   "theme.tsx": [0, 0, 0, 0, 0],
   "x-ui.tsx": [3, 0, 14, 15, 1],
 };
