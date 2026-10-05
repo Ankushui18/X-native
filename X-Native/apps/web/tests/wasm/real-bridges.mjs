@@ -884,12 +884,26 @@ const geo = await ensureGeo(geoBytes);
 assert.ok(geo, "native geometry module must load, not silently fall back");
 const rect = (ox, oy) => ({ ox, oy, poly: [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }] });
 const shapes = [rect(-20, -10), rect(0, -10)];
+const exactBooleanBounds = {
+  union: [-20, -10, 80, 40],
+  subtract: [-20, -10, 20, 40],
+  intersect: [0, -10, 40, 40],
+  exclude: [-20, -10, 80, 40],
+};
 for (const op of ["union", "subtract", "intersect", "exclude"]) {
   const out = decodeGeoResponse(geo.call(encodeGeoRequest(op, shapes)));
   assert.ok(out.contours.length > 0, `${op} must produce real native contours`);
   assert.ok(out.w > 0 && out.h > 0 && out.x < 10 && out.y < 0);
-  // Auto's oracle must protect the shipped result even if native raster differs.
-  assert.ok(compareBooleanResults(booleanPath(op, shapes), booleanPathTs(op, shapes)).ok);
+
+  // booleanPath now intentionally uses exact Clipper output. booleanPathTs is
+  // the retained 160-cell raster diagnostic, so comparing those two would
+  // fail on the precision improvements this production path is meant to keep.
+  const exact = booleanPath(op, shapes);
+  assert.ok(exact, `${op} must produce an exact production result`);
+  assert.deepEqual([exact.x, exact.y, exact.w, exact.h], exactBooleanBounds[op],
+    `${op} must retain exact bounds instead of raster-cell shrinkage`);
+  assert.equal(exact.network.regions[0].loops.length, op === "exclude" ? 2 : 1,
+    `${op} must preserve its exact contour topology`);
 }
 assert.equal(decodeGeoResponse(geo.call(encodeGeoRequest("intersect", [rect(0, 0), rect(500, 0)]))).contours.length, 0);
 const req = encodeGeoRequest("union", shapes);
